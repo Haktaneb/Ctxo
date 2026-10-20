@@ -1,5 +1,11 @@
 # @ctxo/plugin-api
 
+## 0.7.3
+
+### Patch Changes
+
+- 8db20d8: Patch release: dependency maintenance (zod 4.6.7) and CI action updates (setup-node 7.1.0, upload-artifact 7.0.2, test-reporter 3.2.0).
+
 ## 0.7.2
 
 ### Patch Changes
