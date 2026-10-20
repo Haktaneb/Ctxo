@@ -244,6 +244,19 @@ index:
 
 - `JsonIndexReader` must skip `contexts-view.json` (it parses every unknown JSON file as a FileIndex).
 
+### 7.4a Experiment: change-set unit for co-change (K20)
+
+- Commits are not always the unit of a logical change. Our own flow lands one PR as many small commits (test, code, docs), so files changed in different commits of one PR never count as co-changing.
+- Add `cochange.unit: commit | merge` (default `commit`, so the oracle comparison stays like for like).
+- In `merge` mode, the default branch's first-parent history defines change sets, using git only (no hosting API):
+  - a merge commit `M` is one change set with the files of `git diff M^1 M`;
+  - a squash-merged commit is its own change set;
+  - commits without a recoverable boundary (rebase or fast-forward merges) stay single change sets.
+
+  The mass threshold and all other rules apply per change set.
+- Measure both modes on the fixture: contexts-view candidates against the oracle's units (splits, merges, coverage), plus the co-change pair count. Record the numbers in the PR.
+- The owner decides after measurement: keep `merge` as an option, make it the recommended mode, or track it as a separate feature issue. No issue is opened without the owner's approval.
+
 ### 7.5 Acceptance (PR 1A)
 
 - Same input twice gives byte-identical `contexts-view.json`.
@@ -998,6 +1011,7 @@ domain:
 | K17 | Unowned files: warning by default, error through `domain.coverage.unowned: error`; the context-map check runs when the file exists |
 | K18 | Close every non-C# gap in this issue set: SQL call sites, annotations and test symbols for TypeScript, Java and Go, with the tokenizer in a shared library package |
 | K19 | Conventions are learned by discover, propose, confirm (`ctxo domain discover`, `init --domain`, doctor warnings); config is the source of truth; ID safeguards hold with any config |
+| K20 | PR 1A measures a change-set unit for co-change (`cochange.unit: commit \| merge`, first-parent merges from git only); default stays `commit`; the owner decides after measurement whether it becomes the recommended mode or a separate feature issue |
 
 ### Calls made in this design (owner may override)
 
