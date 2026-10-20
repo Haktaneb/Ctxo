@@ -223,6 +223,43 @@ export interface CommitRecord {
   readonly author: string;
 }
 
+// ── Change Log (from git adapter) ───────────────────────────────
+
+/** git name-status letters Ctxo keeps; A added, M modified, D deleted, R renamed, C copied, T type changed. */
+export type FileChangeStatus = 'A' | 'M' | 'D' | 'R' | 'C' | 'T';
+
+export interface FileChange {
+  readonly status: FileChangeStatus;
+  /** Path after the change: repo-relative, forward slashes. */
+  readonly path: string;
+  /** Path before the change; set only for renames (R) and copies (C). */
+  readonly oldPath?: string;
+}
+
+/** One non-merge commit and the files it changed. */
+export interface CommitChangeSet {
+  /** Full commit SHA (git %H). */
+  readonly hash: string;
+  /** Subject line (git %s). */
+  readonly message: string;
+  /** Author date, strict ISO 8601 (git %aI). */
+  readonly date: string;
+  /** Author name (git %an). */
+  readonly author: string;
+  /** Committer date in unix seconds (git %ct). */
+  readonly committedAt: number;
+  readonly changes: readonly FileChange[];
+}
+
+export interface ChangeLog {
+  /** Short SHA of HEAD (git %h), which may itself be a merge commit. */
+  readonly head: string;
+  /** Committer date of HEAD in unix seconds (git %ct). */
+  readonly headCommittedAt: number;
+  /** Non-merge commits reachable from HEAD, newest first. */
+  readonly commits: readonly CommitChangeSet[];
+}
+
 // ── Blame Line (from git adapter) ───────────────────────────────
 
 export interface BlameLine {

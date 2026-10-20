@@ -1,9 +1,100 @@
 import { simpleGit, type SimpleGit } from 'simple-git';
 import type { IGitPort } from '../../ports/i-git-port.js';
-import type { CommitRecord, ChurnData } from '../../core/types.js';
+import type {
+  CommitRecord,
+  ChurnData,
+  ChangeLog,
+  CommitChangeSet,
+  FileChange,
+  FileChangeStatus,
+} from '../../core/types.js';
 import { createLogger } from '../../core/logger.js';
 
 const log = createLogger('ctxo:git');
+
+const NUL = '\x00';
+const RECORD_SEPARATOR = '\x1e';
+const FIELD_SEPARATOR = '\x1f';
+
+/**
+ * One record per commit: a record separator, then hash, author date (ISO), committer unix
+ * time, author name and subject, joined by field separators.
+ */
+const CHANGE_LOG_FORMAT = '--format=%x1e%H%x1f%aI%x1f%ct%x1f%an%x1f%s';
+
+/**
+ * Config overrides that keep git's output parseable whatever the user has configured.
+ * - core.quotepath=off: paths come out verbatim instead of quoted and octal-escaped.
+ * - log.showSignature=false: when on, gpg verification text (CRLF on Windows) is written
+ *   into the log stream ahead of each commit.
+ */
+const STABLE_OUTPUT_CONFIG: readonly string[] = [
+  '-c', 'core.quotepath=off',
+  '-c', 'log.showSignature=false',
+];
+
+function toForwardSlashes(path: string): string {
+  return path.replace(/\\/g, '/');
+}
+
+function isFileChangeStatus(value: string): value is FileChangeStatus {
+  return value === 'A' || value === 'M' || value === 'D' || value === 'R' || value === 'C' || value === 'T';
+}
+
+/**
+ * Parses the NUL-separated tokens of `--name-status -z`: `<status> <path>`, or for renames and
+ * copies `<status><score> <old path> <new path>` (for example `R100`). Only status tokens are
+ * trimmed, because git puts a newline between a commit header and its first status; paths are
+ * never altered beyond separator normalisation. Statuses outside FileChangeStatus (for example
+ * U) are skipped, and a truncated trailing entry is dropped.
+ */
+function parseNameStatus(tokens: readonly string[]): FileChange[] {
+  const changes: FileChange[] = [];
+  let i = 0;
+  while (i < tokens.length) {
+    const kind = (tokens[i] ?? '').trim().charAt(0);
+    if (kind === '') {
+      i += 1; // terminator after the last path, or a bare newline
+    } else if (kind === 'R' || kind === 'C') {
+      const oldPath = tokens[i + 1];
+      const path = tokens[i + 2];
+      i += 3;
+      if (oldPath !== undefined && path !== undefined) {
+        changes.push({ status: kind, path: toForwardSlashes(path), oldPath: toForwardSlashes(oldPath) });
+      }
+    } else {
+      const path = tokens[i + 1];
+      i += 2;
+      if (path !== undefined && isFileChangeStatus(kind)) {
+        changes.push({ status: kind, path: toForwardSlashes(path) });
+      }
+    }
+  }
+  return changes;
+}
+
+/** Parses `git log` output produced with CHANGE_LOG_FORMAT, `--name-status` and `-z`. */
+function parseChangeLog(raw: string): CommitChangeSet[] {
+  const commits: CommitChangeSet[] = [];
+  for (const record of raw.split(RECORD_SEPARATOR)) {
+    // "<header>\0\n<status>\0<path>\0...": the header ends at the first NUL. Text before the
+    // first separator, or a record without a complete header, is skipped.
+    const [header = '', ...tokens] = record.split(NUL);
+    const [hash, date, time, author, ...subject] = header.split(FIELD_SEPARATOR);
+    const committedAt = Number.parseInt(time ?? '', 10);
+    if (!hash || date === undefined || author === undefined || Number.isNaN(committedAt)) continue;
+
+    commits.push({
+      hash,
+      message: subject.join(FIELD_SEPARATOR).trim(),
+      date,
+      author,
+      committedAt,
+      changes: parseNameStatus(tokens),
+    });
+  }
+  return commits;
+}
 
 export class SimpleGitAdapter implements IGitPort {
   private readonly git: SimpleGit;
@@ -116,6 +207,49 @@ export class SimpleGitAdapter implements IGitPort {
       return Number.isFinite(n) && n >= 0 ? n : undefined;
     } catch (err) {
       log.error(`Failed to count commits since ${base}: ${(err as Error).message}`);
+      return undefined;
+    }
+  }
+
+  async getChangeLog(maxCommits: number | 'all'): Promise<ChangeLog | undefined> {
+    try {
+      // HEAD gets its own call because the log below skips merge commits and HEAD may be one.
+      // It is read first on purpose: if a commit lands between the two calls, `head` can only
+      // end up older than the log (it looks stale), never newer (it would look current while
+      // missing a commit).
+      const headRaw = await this.git.raw([...STABLE_OUTPUT_CONFIG, 'log', '-1', '--format=%h%x1f%ct', 'HEAD']);
+      const [head, headTime] = headRaw.trim().split(FIELD_SEPARATOR);
+      const headCommittedAt = Number.parseInt(headTime ?? '', 10);
+      if (!head || Number.isNaN(headCommittedAt)) {
+        throw new Error(`unexpected HEAD description ${JSON.stringify(headRaw)}`);
+      }
+
+      const args = [...STABLE_OUTPUT_CONFIG, 'log', '--no-merges', '-M', '--name-status', '-z', CHANGE_LOG_FORMAT];
+      if (maxCommits !== 'all') args.push(`--max-count=${maxCommits}`);
+      args.push('HEAD');
+
+      return { head, headCommittedAt, commits: parseChangeLog(await this.git.raw(args)) };
+    } catch (err) {
+      log.error(`Failed to read change log: ${(err as Error).message}`);
+      return undefined;
+    }
+  }
+
+  async getCommitFileChanges(rev: string): Promise<FileChange[] | undefined> {
+    // A revision is never an option; refuse anything that git would parse as one.
+    if (rev.startsWith('-')) {
+      log.error(`Refusing to read file changes for option-like revision ${rev}`);
+      return undefined;
+    }
+
+    try {
+      const raw = await this.git.raw([
+        ...STABLE_OUTPUT_CONFIG,
+        'diff-tree', '--root', '--no-commit-id', '-r', '-M', '--name-status', '-z', rev,
+      ]);
+      return parseNameStatus(raw.split(NUL));
+    } catch (err) {
+      log.error(`Failed to read file changes of ${rev}: ${(err as Error).message}`);
       return undefined;
     }
   }
