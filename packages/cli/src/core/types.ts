@@ -208,11 +208,61 @@ export interface CoChangeEntry {
   readonly frequency: number;
 }
 
+/** The window a co-change matrix was built from and the filters that shaped it. */
+export interface CoChangeWindowMeta {
+  /** Configured commit limit: the last N non-merge commits from HEAD, or 'all'. */
+  readonly maxCommits: number | 'all';
+  /** Configured duration limit such as "12m", anchored to HEAD's committer date. */
+  readonly since?: string;
+  /** Short SHA of HEAD when the matrix was built. */
+  readonly head: string;
+  /** Commits inside the window. */
+  readonly commitsScanned: number;
+  /** Window commits that fed the counts. */
+  readonly commitsUsed: number;
+  /** Window commits skipped for touching more than `maxFilesPerCommit` included files. */
+  readonly massSkipped: number;
+  readonly maxFilesPerCommit: number;
+  readonly minShared: number;
+}
+
 export interface CoChangeMatrix {
   readonly version: 1;
   readonly timestamp: number;
+  /** Absent in matrices written before the window was recorded. */
+  readonly window?: CoChangeWindowMeta;
   readonly entries: readonly CoChangeEntry[];
 }
+
+const CoChangeEntrySchema = z.object({
+  file1: z.string().min(1),
+  file2: z.string().min(1),
+  sharedCommits: z.number().int().min(1),
+  frequency: z.number().min(0).max(1),
+});
+
+const CoChangeWindowMetaSchema = z.object({
+  maxCommits: z.union([z.number().int().min(1), z.literal('all')]),
+  since: z.string().optional(),
+  head: z.string().min(1),
+  commitsScanned: z.number().int().min(0),
+  commitsUsed: z.number().int().min(0),
+  massSkipped: z.number().int().min(0),
+  maxFilesPerCommit: z.number().int().min(1),
+  minShared: z.number().int().min(1),
+});
+
+/**
+ * Validates `co-changes.json`. `entries` is required and `window` optional, so files written before
+ * the window was recorded still load. Unknown keys are dropped rather than rejected, so a file from
+ * a newer Ctxo stays readable.
+ */
+export const CoChangeMatrixSchema: z.ZodType<CoChangeMatrix> = z.object({
+  version: z.literal(1),
+  timestamp: z.number(),
+  window: CoChangeWindowMetaSchema.optional(),
+  entries: z.array(CoChangeEntrySchema),
+});
 
 // ── Commit Record (from git adapter) ────────────────────────────
 

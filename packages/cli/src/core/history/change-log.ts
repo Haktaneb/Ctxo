@@ -1,3 +1,4 @@
+import { compareCodepoint } from '../compare-codepoint.js';
 import type { CommitChangeSet } from '../types.js';
 
 /** A non-merge commit with its changed paths mapped to the newest name of each file. */
@@ -9,10 +10,6 @@ export interface CanonicalCommit {
   readonly committedAt: number;
   /** Canonical file names the commit touched: sorted by code point, no duplicates. */
   readonly files: readonly string[];
-}
-
-function compareCodepoint(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 /**
