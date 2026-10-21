@@ -5,7 +5,9 @@ import { tmpdir } from 'node:os';
 import { SqliteStorageAdapter } from '../../storage/sqlite-storage-adapter.js';
 import { MaskingPipeline } from '../../../core/masking/masking-pipeline.js';
 import { JsonIndexWriter } from '../../storage/json-index-writer.js';
+import { CoChangeReader } from '../../storage/co-change-reader.js';
 import { handleGetPrImpact } from '../get-pr-impact.js';
+import type { ICoChangePort } from '../../../ports/i-co-change-port.js';
 import type { IGitPort } from '../../../ports/i-git-port.js';
 import type { CommunitySnapshot, FileIndex } from '../../../core/types.js';
 
@@ -137,7 +139,7 @@ describe('handleGetPrImpact', () => {
 
   it('includes coChangedWith when co-change data exists', async () => {
     const git = createMockGit(['src/a.ts']);
-    const handler = handleGetPrImpact(storage, git, new MaskingPipeline(), undefined, tempDir);
+    const handler = handleGetPrImpact(storage, git, new MaskingPipeline(), undefined, tempDir, undefined, new CoChangeReader(tempDir));
     const result = await handler({ since: 'HEAD~1' });
     const payload = JSON.parse(result.content[0]!.text);
 
@@ -145,6 +147,49 @@ describe('handleGetPrImpact', () => {
     expect(file).toBeDefined();
     expect(file.coChangedWith).toBeDefined();
     expect(file.coChangedWith).toContain('src/b.ts');
+  });
+
+  it('reads co-change through the injected port, not from co-changes.json itself', async () => {
+    // The file on disk pairs a.ts with b.ts; the port says a.ts goes with c.ts.
+    const port: ICoChangePort = {
+      readCoChangeMap: () => new Map([
+        ['src/a.ts', [{ file1: 'src/a.ts', file2: 'src/c.ts', sharedCommits: 3, frequency: 0.6 }]],
+      ]),
+    };
+    const git = createMockGit(['src/a.ts']);
+    const handler = handleGetPrImpact(storage, git, new MaskingPipeline(), undefined, tempDir, undefined, port);
+    const result = await handler({ since: 'HEAD~1' });
+    const payload = JSON.parse(result.content[0]!.text);
+
+    const file = payload.files.find((f: { file: string }) => f.file === 'src/a.ts');
+    expect(file.coChangedWith).toEqual(['src/c.ts']);
+  });
+
+  it('reports no coChangedWith when no co-change port is wired', async () => {
+    const git = createMockGit(['src/a.ts']);
+    const handler = handleGetPrImpact(storage, git, new MaskingPipeline(), undefined, tempDir);
+    const result = await handler({ since: 'HEAD~1' });
+    const payload = JSON.parse(result.content[0]!.text);
+
+    const file = payload.files.find((f: { file: string }) => f.file === 'src/a.ts');
+    expect(file).toBeDefined();
+    expect(file).not.toHaveProperty('coChangedWith');
+  });
+
+  it('does not reorder the shared co-change map when it lists the partners of a file', async () => {
+    // The reader hands every caller the same cached map: get_pr_impact must not sort its lists in place.
+    const strong = { file1: 'src/a.ts', file2: 'src/c.ts', sharedCommits: 6, frequency: 0.9 };
+    const weak = { file1: 'src/a.ts', file2: 'src/b.ts', sharedCommits: 2, frequency: 0.3 };
+    const shared = [weak, strong];
+    const port: ICoChangePort = { readCoChangeMap: () => new Map([['src/a.ts', shared]]) };
+    const git = createMockGit(['src/a.ts']);
+    const handler = handleGetPrImpact(storage, git, new MaskingPipeline(), undefined, tempDir, undefined, port);
+    const result = await handler({ since: 'HEAD~1' });
+    const payload = JSON.parse(result.content[0]!.text);
+
+    const file = payload.files.find((f: { file: string }) => f.file === 'src/a.ts');
+    expect(file.coChangedWith).toEqual(['src/c.ts', 'src/b.ts']);
+    expect(shared).toEqual([weak, strong]);
   });
 
   it('applies confidence filter', async () => {

@@ -2,7 +2,9 @@ import { z } from 'zod';
 import type { IGitPort } from '../../ports/i-git-port.js';
 import type { IStoragePort } from '../../ports/i-storage-port.js';
 import type { IMaskingPort } from '../../ports/i-masking-port.js';
+import type { ICoChangePort } from '../../ports/i-co-change-port.js';
 import { BlastRadiusCalculator } from '../../core/blast-radius/blast-radius-calculator.js';
+import { findCoChangedFiles } from '../../core/blast-radius/co-changed-files.js';
 import { wrapResponse } from '../../core/response-envelope.js';
 import { buildSnapshotStaleness } from '../../core/overlay/snapshot-staleness.js';
 import type { ClusterLabelMasker } from '../../core/overlay/cluster-label-masker.js';
@@ -58,6 +60,7 @@ export function handleGetBlastRadius(
   ctxoRoot = '.ctxo',
   git?: IGitPort,
   clusterLabelMasker?: ClusterLabelMasker,
+  coChange?: ICoChangePort,
 ) {
   const calculator = new BlastRadiusCalculator();
   const getGraph = () => getGraphAndFiles(ctxoRoot, storage);
@@ -80,7 +83,9 @@ export function handleGetBlastRadius(
         };
       }
 
-      const result = calculator.calculate(graph, symbolId);
+      // Read per call: the port caches by mtime, so a matrix rewritten while the server runs is picked up.
+      const coChangeMap = coChange?.readCoChangeMap();
+      const result = calculator.calculate(graph, symbolId, coChangeMap);
 
       // Apply confidence filter if requested
       let symbols = result.impactedSymbols;
@@ -120,6 +125,17 @@ export function handleGetBlastRadius(
         if (clusterBreakdown.multiClusterHint) {
           body.multiClusterHint = clusterBreakdown.multiClusterHint;
         }
+      }
+
+      if (coChangeMap) {
+        // Files that change together with the root's file but have no dependency path to it. Every
+        // impacted symbol has such a path, so the set comes from the unfiltered result: the confidence
+        // and intent filters above shape the impactedSymbols list, not what counts as having a path.
+        const rootFile = symbolId.split('::')[0]!;
+        const impactedFiles = new Set(result.impactedSymbols.map((s) => s.symbolId.split('::')[0]!));
+        impactedFiles.add(rootFile);
+        const coChangedFiles = findCoChangedFiles(coChangeMap, rootFile, impactedFiles);
+        if (coChangedFiles.length > 0) body.coChangedFiles = coChangedFiles;
       }
 
       const stalenessMeta = git ? await buildSnapshotStaleness(storage, git) : undefined;

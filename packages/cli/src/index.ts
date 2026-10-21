@@ -7,6 +7,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createLogger } from './core/logger.js';
 import { SqliteStorageAdapter } from './adapters/storage/sqlite-storage-adapter.js';
+import { CoChangeReader } from './adapters/storage/co-change-reader.js';
 import { MaskingPipeline, type MaskingPatternConfig } from './core/masking/masking-pipeline.js';
 import { handleGetLogicSlice } from './adapters/mcp/get-logic-slice.js';
 import { handleGetWhyContext } from './adapters/mcp/get-why-context.js';
@@ -26,6 +27,7 @@ import { handleGetPrImpact } from './adapters/mcp/get-pr-impact.js';
 import { SessionRecorderAdapter } from './adapters/stats/session-recorder-adapter.js';
 import { withRecording } from './adapters/stats/with-recording.js';
 import type { ISessionRecorderPort } from './ports/i-session-recorder-port.js';
+import type { ICoChangePort } from './ports/i-co-change-port.js';
 import { detectWorkspace } from './adapters/workspace/single-package-workspace.js';
 import { setWorkspaceMeta } from './core/response-envelope.js';
 import { loadConfig, maskingClusterLabelPatterns, statsEnabled } from './core/config/load-config.js';
@@ -93,6 +95,8 @@ async function main(): Promise<void> {
     maskingClusterLabelPatterns(loadConfig(ctxoRoot).config),
   );
   const git = new SimpleGitAdapter(process.cwd());
+  // One reader for the whole server (every HTTP session too): it caches the co-change matrix by mtime.
+  const coChange = new CoChangeReader(ctxoRoot);
 
   // Session recording (opt-out via config.yaml stats.enabled: false)
   const recorder: ISessionRecorderPort | null = readStatsEnabled(ctxoRoot)
@@ -106,13 +110,13 @@ async function main(): Promise<void> {
   const { StalenessDetector } = await import('./core/staleness/staleness-detector.js');
   const staleness = new StalenessDetector(process.cwd(), ctxoRoot);
 
-  registerTools(server, storage, masking, git, staleness, recorder, ctxoRoot, clusterLabelMasker);
+  registerTools(server, storage, masking, git, staleness, recorder, ctxoRoot, clusterLabelMasker, coChange);
 
   // Start MCP server — HTTP mode or stdio mode
   if (httpPortStr) {
     await startHttpTransport(async () => {
       const s = new McpServer({ name: 'ctxo', version: PKG_VERSION });
-      registerTools(s, storage, masking, git, staleness, recorder, ctxoRoot, clusterLabelMasker);
+      registerTools(s, storage, masking, git, staleness, recorder, ctxoRoot, clusterLabelMasker, coChange);
       return s;
     }, parseInt(httpPortStr, 10));
   } else {
@@ -131,6 +135,7 @@ function registerTools(
   recorder: ISessionRecorderPort | null,
   ctxoRoot = '.ctxo',
   clusterLabelMasker?: ClusterLabelMasker,
+  coChange?: ICoChangePort,
 ) {
   // Tool annotations — all Ctxo tools are read-only index queries
   const toolAnnotations = {
@@ -185,12 +190,12 @@ function registerTools(
     (args) => changeIntelligenceHandler(args),
   );
 
-  const blastRadiusHandler = withRecording('get_blast_radius', handleGetBlastRadius(storage, masking, staleness, ctxoRoot, git, clusterLabelMasker), recorder);
+  const blastRadiusHandler = withRecording('get_blast_radius', handleGetBlastRadius(storage, masking, staleness, ctxoRoot, git, clusterLabelMasker, coChange), recorder);
 
   server.registerTool(
     'get_blast_radius',
     {
-      description: 'BEFORE modifying any function or class, call this to understand impact. Returns all symbols that would break if the target changes, split into confirmed (direct importers), likely (co-changed), and potential (transitive) tiers with risk scores. Use `confidence` to filter by tier, `intent` to filter by keyword. Large results are auto-truncated with `_meta.hint` for drill-in. For what a symbol DEPENDS ON (downstream), use get_logic_slice instead. For full PR-level analysis, use get_pr_impact.',
+      description: 'BEFORE modifying any function or class, call this to understand impact. Returns all symbols that would break if the target changes, split into confirmed (direct importers), likely (co-changed or `uses`), and potential (transitive) tiers with risk scores. When co-change history exists, `coChangedFiles` lists up to 10 files that often change together with the target\'s file but have no dependency path to it (informational: not counted in the tiers or risk scores). Use `confidence` to filter by tier, `intent` to filter by keyword. Large results are auto-truncated with `_meta.hint` for drill-in. For what a symbol DEPENDS ON (downstream), use get_logic_slice instead. For full PR-level analysis, use get_pr_impact.',
       inputSchema: {
         symbolId: z.string().min(1).describe('The symbol ID (format: file::name::kind)'),
         confidence: z.enum(['confirmed', 'likely', 'potential']).optional().describe('Filter by confidence tier'),
@@ -230,7 +235,7 @@ function registerTools(
     (args) => deadCodeHandler(args),
   );
 
-  const contextForTaskHandler = withRecording('get_context_for_task', handleGetContextForTask(storage, masking, staleness, ctxoRoot), recorder);
+  const contextForTaskHandler = withRecording('get_context_for_task', handleGetContextForTask(storage, masking, staleness, ctxoRoot, coChange), recorder);
 
   server.registerTool(
     'get_context_for_task',
@@ -344,7 +349,7 @@ function registerTools(
     (args) => symbolImportanceHandler(args),
   );
 
-  const prImpactHandler = withRecording('get_pr_impact', handleGetPrImpact(storage, git, masking, staleness, ctxoRoot, clusterLabelMasker), recorder);
+  const prImpactHandler = withRecording('get_pr_impact', handleGetPrImpact(storage, git, masking, staleness, ctxoRoot, clusterLabelMasker, coChange), recorder);
 
   server.registerTool(
     'get_pr_impact',
