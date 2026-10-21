@@ -95,12 +95,42 @@ export class CliRouter {
 
     switch (command) {
       case 'index': {
-        const fileIdx = args.indexOf('--file');
-        const fileArg = fileIdx !== -1 ? args[fileIdx + 1] : undefined;
-        if (fileIdx !== -1 && (!fileArg || fileArg.startsWith('--'))) {
-          console.error('[ctxo] --file requires a path argument');
-          process.exit(1);
-          return;
+        // --files takes every value up to the next flag, --commit takes one revision, and --file is the
+        // older spelling of --files with a single path. All of them can be repeated or combined.
+        const filesArg: string[] = [];
+        let commitArg: string | undefined;
+        for (let i = 1; i < args.length; i++) {
+          const arg = args[i];
+          if (arg === '--file') {
+            const value = args[i + 1];
+            if (!value || value.startsWith('--')) {
+              console.error('[ctxo] --file requires a path argument');
+              process.exit(1);
+              return;
+            }
+            filesArg.push(value);
+            i += 1;
+          } else if (arg === '--files') {
+            const before = filesArg.length;
+            while (i + 1 < args.length && !args[i + 1]!.startsWith('--')) {
+              filesArg.push(args[i + 1]!);
+              i += 1;
+            }
+            if (filesArg.length === before) {
+              console.error('[ctxo] --files requires at least one path');
+              process.exit(1);
+              return;
+            }
+          } else if (arg === '--commit') {
+            const value = args[i + 1];
+            if (!value || value.startsWith('--')) {
+              console.error('[ctxo] --commit requires a revision (for example HEAD)');
+              process.exit(1);
+              return;
+            }
+            commitArg = value;
+            i += 1;
+          }
         }
         const checkArg = args.includes('--check');
         const skipHistory = args.includes('--skip-history');
@@ -131,7 +161,8 @@ export class CliRouter {
           return;
         }
         await new IndexCommand(this.projectRoot).run({
-          file: fileArg,
+          files: filesArg.length > 0 ? filesArg : undefined,
+          commit: commitArg,
           check: checkArg,
           skipHistory,
           skipCommunity,
@@ -327,6 +358,9 @@ Usage:
   ctxo index --skip-community    Skip Louvain community detection for faster indexing
   ctxo index --cochange-commits <n|all>   Co-change window in commits (default 2000, or "all")
   ctxo index --cochange-since <duration>  Co-change window by age from HEAD (30d, 2w, 12m, 1y)
+  ctxo index --files <path...>   Re-index only these files (repo-relative); the rest of the index is kept
+  ctxo index --file <path>       Same as --files with one path
+  ctxo index --commit <rev>      Re-index the files changed by one commit, drop the ones it deleted or renamed
   ctxo sync                 Rebuild SQLite cache from committed JSON index
   ctxo watch                Start file watcher for incremental re-indexing
   ctxo verify-index         CI gate: fail if index is stale

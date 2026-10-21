@@ -257,3 +257,104 @@ describe('cli-router index co-change flags', () => {
     expect(help).toContain('--cochange-since <duration>');
   });
 });
+
+describe('cli-router index --files, --file and --commit', () => {
+  let indexRuns: Array<Record<string, unknown>>;
+  let indexConstructed: number;
+  let errorSpy: MockInstance<typeof console.error>;
+  let exitSpy: MockInstance<typeof process.exit>;
+
+  beforeEach(async () => {
+    indexRuns = [];
+    indexConstructed = 0;
+    // Replace IndexCommand first: if a flag slips through validation, nothing may index the real repo.
+    const original = await import('../index-command.js');
+    vi.spyOn(original, 'IndexCommand' as any).mockImplementation(
+      function (this: unknown) {
+        indexConstructed += 1;
+        return {
+          run: async (options: Record<string, unknown>) => { indexRuns.push(options); },
+        };
+      } as any,
+    );
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  async function route(...args: string[]): Promise<void> {
+    await new CliRouter(process.cwd()).route(['index', ...args]);
+  }
+
+  it('passes every value of --files up to the next flag', async () => {
+    await route('--files', 'src/a.ts', 'src/b.ts', 'docs/my notes.md', '--max-history', '5');
+
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(indexRuns).toHaveLength(1);
+    expect(indexRuns[0]).toMatchObject({ files: ['src/a.ts', 'src/b.ts', 'docs/my notes.md'], maxHistory: 5 });
+    expect(indexRuns[0]!['commit']).toBeUndefined();
+  });
+
+  it('collects the values of a repeated --files', async () => {
+    await route('--files', 'src/a.ts', '--skip-history', '--files', 'src/b.ts');
+
+    expect(indexRuns[0]).toMatchObject({ files: ['src/a.ts', 'src/b.ts'], skipHistory: true });
+  });
+
+  it('passes --commit with its one revision', async () => {
+    await route('--commit', 'HEAD', '--skip-community');
+
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(indexRuns[0]).toMatchObject({ commit: 'HEAD', skipCommunity: true });
+    expect(indexRuns[0]!['files']).toBeUndefined();
+  });
+
+  it('keeps --file as an alias of --files with one path', async () => {
+    await route('--file', 'src/a.ts');
+
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(indexRuns[0]).toMatchObject({ files: ['src/a.ts'] });
+  });
+
+  it('combines --file, --files and --commit', async () => {
+    await route('--file', 'src/a.ts', '--files', 'src/b.ts', 'src/c.ts', '--commit', 'abc1234');
+
+    expect(indexRuns[0]).toMatchObject({ files: ['src/a.ts', 'src/b.ts', 'src/c.ts'], commit: 'abc1234' });
+  });
+
+  it('leaves files and commit unset when the flags are absent', async () => {
+    await route('--max-history', '5');
+
+    expect(indexRuns).toHaveLength(1);
+    expect(indexRuns[0]!['files']).toBeUndefined();
+    expect(indexRuns[0]!['commit']).toBeUndefined();
+  });
+
+  it.each([[['--files']], [['--files', '--check']]])('exits with error for %j without a path', async (args) => {
+    await route(...args);
+
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('--files requires at least one path'));
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(indexConstructed).toBe(0);
+  });
+
+  it.each([[['--commit']], [['--commit', '--check']]])('exits with error for %j without a revision', async (args) => {
+    await route(...args);
+
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('--commit requires a revision'));
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(indexConstructed).toBe(0);
+  });
+
+  it('documents --files, --file and --commit in the help', async () => {
+    await new CliRouter(process.cwd()).route(['--help']);
+
+    const help = errorSpy.mock.calls.map((args) => String(args[0])).join('\n');
+    expect(help).toContain('--files <path...>');
+    expect(help).toContain('--file <path>');
+    expect(help).toContain('--commit <rev>');
+  });
+});

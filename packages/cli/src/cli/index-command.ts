@@ -1,7 +1,8 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, existsSync, statSync, readdirSync } from 'node:fs';
-import { join, relative, extname } from 'node:path';
+import { join, relative, extname, isAbsolute, resolve } from 'node:path';
 import { createRequire } from 'node:module';
+import { compareCodepoint } from '../core/compare-codepoint.js';
 import { ContentHasher } from '../core/staleness/content-hasher.js';
 import { LanguageAdapterRegistry } from '../adapters/language/language-adapter-registry.js';
 import { loadPlugins } from './plugin-loader.js';
@@ -44,6 +45,7 @@ import type {
   CommunitySnapshot,
   DriftEventsArtifact,
   EdgeQuality,
+  FileChange,
   FileIndex,
   SymbolKind,
 } from '../core/types.js';
@@ -114,7 +116,20 @@ export class IndexCommand {
   }
 
   async run(options: {
+    /** One repo-relative path to re-index: the older spelling of `files: [file]` (`--file`). */
     file?: string;
+    /**
+     * Repo-relative paths to re-index (`--files`). An incremental run: the other files keep their
+     * committed entries, and everything global (registry, co-change, communities, artifacts, SQLite)
+     * is computed from the merged index, not from these files alone.
+     */
+    files?: string[];
+    /**
+     * Re-index the files changed by this commit and drop the ones it deleted or renamed away
+     * (`--commit`). Meant for the commit just made, which is what the post-commit hook runs on. A merge
+     * commit lists no files, so nothing is re-indexed, but the global products are still refreshed.
+     */
+    commit?: string;
     check?: boolean;
     skipSideEffects?: boolean;
     skipHistory?: boolean;
@@ -138,6 +153,13 @@ export class IndexCommand {
     }
 
     const ignore = this.loadIgnoreConfig();
+    const gitAdapter = new SimpleGitAdapter(this.projectRoot);
+
+    // An incremental run is selected by paths (--files, --file), by a commit (--commit), or both.
+    const incremental = options.files !== undefined || options.commit !== undefined || Boolean(options.file);
+    // The commit is read before anything heavy starts, so a revision git cannot resolve fails at once,
+    // without a plugin having been loaded.
+    const commitChanges = options.commit !== undefined ? await readCommitChanges(gitAdapter, options.commit) : [];
 
     // Set up adapters via plugin discovery (TS, Go, C# all plugin-backed)
     const registry = new LanguageAdapterRegistry();
@@ -150,15 +172,31 @@ export class IndexCommand {
     const writer = new JsonIndexWriter(this.ctxoRoot);
     const schemaManager = new SchemaManager(this.ctxoRoot);
     const hasher = new ContentHasher();
-    const gitAdapter = new SimpleGitAdapter(this.projectRoot);
     const revertDetector = new RevertDetector();
 
-    // Discover files (single file, monorepo workspaces, or full project)
+    // The committed JSON index, read at most once per run. An incremental run needs it first, for the
+    // entries it removes and for the symbol registry; the merged index needs it for the global products.
+    let committedIndices: FileIndex[] | undefined;
+    const committedIndex = (): FileIndex[] => (committedIndices ??= new JsonIndexReader(this.ctxoRoot).readAll());
+
+    // Discover files (an explicit selection, monorepo workspaces, or the full project)
     let files: string[];
-    if (options.file) {
-      const fullPath = join(this.projectRoot, options.file);
-      files = [fullPath];
-      console.error(`[ctxo] Incremental re-index: ${options.file}`);
+    // Files of the committed index that this run drops: deleted, renamed away, or gone from the working tree.
+    let removedPaths: ReadonlySet<string> = new Set();
+    if (incremental) {
+      const selection = this.selectIncrementalFiles(
+        [...(options.files ?? []), ...(options.file ? [options.file] : [])],
+        commitChanges,
+        registry,
+        ignore,
+        new Set(committedIndex().map((idx) => idx.file)),
+      );
+      files = selection.changed.map((path) => join(this.projectRoot, path));
+      removedPaths = new Set(selection.removed);
+      console.error(
+        `[ctxo] Incremental re-index: ${selection.changed.length} file(s) to index, ${selection.removed.length} to remove` +
+          (options.commit !== undefined ? ` (commit ${options.commit})` : ''),
+      );
     } else {
       // Check for monorepo workspaces — discover files across all roots
       const workspaces = this.discoverWorkspaces(ignore.ignoreProject);
@@ -240,6 +278,18 @@ export class IndexCommand {
       }
     }
 
+    // An incremental run extracts edges for a few files, but those files refer to symbols defined in all
+    // the others. Their kinds come from the committed index, minus the entries this run replaces or
+    // removes, so a reference resolves to the same kind as in a full run.
+    if (incremental) {
+      const replaced = new Set<string>(removedPaths);
+      for (const { relativePath } of pendingIndices) replaced.add(relativePath);
+      for (const idx of committedIndex()) {
+        if (replaced.has(idx.file)) continue;
+        for (const symbol of idx.symbols) symbolRegistry.set(symbol.symbolId, symbol.kind);
+      }
+    }
+
     // Pre-load all sources into ts-morph for cross-file resolution
     const allSources = new Map<string, string>();
     for (const entry of pendingIndices) {
@@ -263,17 +313,25 @@ export class IndexCommand {
     // Clean up pre-loaded sources
     tsMorphLike?.clearProjectSources();
 
-    // The merged index (committed JSON plus the files indexed now) is read at most once per run:
-    // the co-change phase and community detection both need it.
+    // The merged index (committed JSON, minus the removed files, plus the files indexed now) is built at
+    // most once per run. The co-change phase, community detection, the architecture artifacts and the
+    // SQLite cache all take it as their input, whichever files this run re-indexes.
     let mergedIndices: FileIndex[] | undefined;
-    const mergedIndex = (): FileIndex[] => (mergedIndices ??= this.buildGraphInputIndices(pendingIndices));
+    const mergedIndex = (): FileIndex[] =>
+      (mergedIndices ??= this.buildGraphInputIndices(committedIndex(), pendingIndices, removedPaths));
+
+    // The global products (co-change, communities, architecture artifacts) are refreshed whenever the run
+    // changed the index. A --commit run refreshes them even when it re-indexed no file: a merge commit
+    // lists none, and a commit that only touched documents still moves HEAD, which the co-change window
+    // and the snapshot record. A --files run that selected nothing has nothing to refresh.
+    const refreshGlobals = pendingIndices.length > 0 || removedPaths.size > 0 || options.commit !== undefined;
 
     // Phases 2 and 2b: one git pass (the change log) feeds both the per-file intent[] and the
     // co-change matrix of the whole repository. The co-change window comes from `cochange.*` in
     // config.yaml and `--cochange-*`; `--max-history` only sets how much history each file keeps.
     // Non-fatal like phases 2c and 2d: an unexpected failure here must not stop the index from
     // being written, and co-changes.json is only ever replaced by a complete matrix.
-    if (!options.skipHistory && pendingIndices.length > 0) {
+    if (!options.skipHistory && refreshGlobals) {
       try {
         const coChange = resolveCoChangeConfig(ignore.config, {
           maxCommits: options.cochangeCommits,
@@ -322,24 +380,24 @@ export class IndexCommand {
 
     // Phase 2c: Community detection + snapshot
     //
-    // Full indexing:    run Louvain over pendingIndices (all indexed files).
-    // Incremental (--file): merge the just-updated fileIndex(es) with the rest of the committed
-    //                       JSON index on disk so Louvain sees the *complete* graph. Running it
-    //                       over the 1-file subgraph alone would produce a meaningless
-    //                       N-singleton snapshot (modularity 0).
+    // Full indexing:    run Louvain over the merged index (every indexed file).
+    // Incremental (--files, --commit): the same merged index, so Louvain sees the *complete* graph:
+    //                       the just-updated fileIndex(es) spliced into the rest of the committed JSON
+    //                       index, minus the removed files. Running it over the few updated files alone
+    //                       would produce a meaningless N-singleton snapshot (modularity 0).
     // Opt-out (--skip-community): skip entirely. Warn if a stale snapshot exists on disk.
     let communitySnapshot: CommunitySnapshot | undefined;
 
-    if (options.skipCommunity && pendingIndices.length > 0) {
+    if (options.skipCommunity && refreshGlobals) {
       if (existsSync(join(this.ctxoRoot, 'index', 'communities.json'))) {
         console.error(
           `[ctxo] WARN stale communities.json present — --skip-community preserved existing snapshot. Run \`ctxo index\` (full) to refresh.`,
         );
       }
-    } else if (pendingIndices.length > 0) {
+    } else if (refreshGlobals) {
       try {
         const graphIndices = mergedIndex();
-        communitySnapshot = this.buildCommunitySnapshot(
+        communitySnapshot = await this.buildCommunitySnapshot(
           graphIndices,
           {
             csharpTier,
@@ -349,7 +407,7 @@ export class IndexCommand {
           },
           gitAdapter,
         );
-        const scope = options.file ? ' (incremental, full-graph recompute)' : '';
+        const scope = incremental ? ' (incremental, full-graph recompute)' : '';
         console.error(
           `[ctxo] Community detection${scope}: ${countCommunities(communitySnapshot)} clusters (modularity ${communitySnapshot.modularity.toFixed(3)})`,
         );
@@ -359,20 +417,32 @@ export class IndexCommand {
     }
 
     // Phase 3: Write all indices
-    const indices: FileIndex[] = [];
-    for (const { fileIndex } of pendingIndices) {
-      writer.write(fileIndex);
-      indices.push(fileIndex);
+    // The merged index is built first: it reads the committed JSON as it was before this run wrote anything.
+    const merged = mergedIndex();
+
+    // Removed files leave the index before the new entries are written. On a case-insensitive file system
+    // a case-only rename names one JSON file twice, so deleting afterwards would take the entry just
+    // written for the new name. A file that cannot be deleted is reported and the run goes on, since the
+    // merged index of this run already leaves it out.
+    for (const path of removedPaths) {
+      try {
+        writer.delete(path);
+      } catch (err) {
+        console.error(`[ctxo] Could not remove ${path} from the index: ${(err as Error).message}`);
+      }
     }
+    for (const { fileIndex } of pendingIndices) writer.write(fileIndex);
 
     // Write schema version
     schemaManager.writeVersion();
 
-    // Populate SQLite cache (skip rebuildFromJson since we just wrote the JSON)
+    // Populate SQLite cache (skip rebuildFromJson since we just wrote the JSON). The cache holds the whole
+    // index, not just the files of this run, so it is rebuilt from the merged index: initEmpty() clears the
+    // tables, which init() would not (it re-inserts rows and duplicates edges).
     const storage = new SqliteStorageAdapter(this.ctxoRoot, { allowProductionPath: true });
     try {
       await storage.initEmpty();
-      storage.bulkWrite(indices);
+      storage.bulkWrite(merged);
       if (communitySnapshot) {
         storage.writeCommunities(communitySnapshot);
       }
@@ -386,7 +456,9 @@ export class IndexCommand {
     // - pages/ctxo-visualizer.html Architecture tab reads these directly.
     // - Future MCP tools can surface the same data without recomputing.
     if (communitySnapshot) {
-      this.writeArchitectureArtifacts(indices, communitySnapshot);
+      // The full graph, like the snapshot it is compared with: the edges of a few files alone would hide
+      // every violation that starts in a file this run did not re-index.
+      this.writeArchitectureArtifacts(merged, communitySnapshot);
     }
 
     // Ensure .ctxo/.cache/ is in .gitignore (skip during verify runs)
@@ -399,7 +471,9 @@ export class IndexCommand {
     const tsCount = pendingIndices.filter(e => /\.(ts|tsx|js|jsx)$/.test(e.relativePath)).length;
     const goCount = pendingIndices.filter(e => e.relativePath.endsWith('.go')).length;
     const javaCount = pendingIndices.filter(e => e.relativePath.endsWith('.java')).length;
-    console.error(`[ctxo] Index complete: ${processed} files indexed`);
+    console.error(
+      `[ctxo] Index complete: ${processed} files indexed${removedPaths.size > 0 ? `, ${removedPaths.size} removed` : ''}`,
+    );
     if (tsCount > 0) console.error(`[ctxo]   TypeScript/JS: ${tsCount} files (full tier)`);
     if (csCount > 0) console.error(`[ctxo]   C#: ${csCount} files (${csharpTier} tier${csharpTier === 'syntax' ? ' - .NET SDK 8+ for full analysis' : ''})`);
     if (goCount > 0) console.error(`[ctxo]   Go: ${goCount} files (${goTier} tier${goTier === 'syntax' ? ' - Go 1.22+ for full analysis' : ''})`);
@@ -678,30 +752,105 @@ export class IndexCommand {
   }
 
   /**
-   * Produce the FileIndex list used as input to community detection and the co-change phase.
+   * Which files an incremental run re-indexes, and which entries of the committed index it drops.
+   *
+   * The candidates are the paths asked for plus the files the commit added, modified or renamed to. Only
+   * a file that a full run would index is kept: a language plugin handles it, `index.ignore` does not
+   * match it, and it lies inside a workspace that `index.ignoreProjects` leaves in. A candidate that is
+   * gone from the working tree is dropped from the index instead of being re-indexed.
+   *
+   * What the commit deleted, and the old path of what it renamed, are dropped without looking at the
+   * working tree: on a case-insensitive file system a case-only rename leaves the old name "existing".
+   * Only paths that have an entry in the committed index are reported as removed.
+   */
+  private selectIncrementalFiles(
+    paths: readonly string[],
+    commitChanges: readonly FileChange[],
+    registry: LanguageAdapterRegistry,
+    ignore: { ignoreFile: (p: string) => boolean; ignoreProject: (p: string) => boolean },
+    indexedFiles: ReadonlySet<string>,
+  ): { changed: string[]; removed: string[] } {
+    const candidates = new Set<string>();
+    const listed = new Set<string>();
+    const dropped = new Set<string>();
+
+    for (const raw of paths) {
+      const path = toRepoPath(this.projectRoot, raw);
+      if (path === undefined) {
+        console.error(`[ctxo] Skipped ${raw}: not a path inside the project`);
+        continue;
+      }
+      candidates.add(path);
+      listed.add(path);
+    }
+    for (const change of commitChanges) {
+      if (change.status === 'D') {
+        dropped.add(change.path);
+        continue;
+      }
+      candidates.add(change.path);
+      if (change.status === 'R' && change.oldPath !== undefined) dropped.add(change.oldPath);
+    }
+
+    const workspaces = this.discoverWorkspaces(ignore.ignoreProject);
+    const isIndexable = (path: string): boolean =>
+      registry.getAdapter(path) !== undefined &&
+      !ignore.ignoreFile(path) &&
+      workspaces.some((workspace) => isInsideDirectory(workspace, join(this.projectRoot, path)));
+
+    const changed: string[] = [];
+    let skippedListed = 0;
+    for (const path of [...candidates].sort(compareCodepoint)) {
+      if (!isIndexable(path)) {
+        // A commit changes plenty of files nothing indexes (docs, JSON); only a file asked for by name is worth a word.
+        if (listed.has(path)) skippedListed += 1;
+      } else if (existsSync(join(this.projectRoot, path))) {
+        changed.push(path);
+      } else {
+        dropped.add(path);
+      }
+    }
+    if (skippedListed > 0) {
+      console.error(
+        `[ctxo] Skipped ${skippedListed} listed file(s) that a full run would not index (no language plugin, index.ignore, or outside the workspaces)`,
+      );
+    }
+
+    const reindexed = new Set(changed);
+    const removed = [...dropped]
+      .filter((path) => indexedFiles.has(path) && !reindexed.has(path))
+      .sort(compareCodepoint);
+    return { changed, removed };
+  }
+
+  /**
+   * Produce the FileIndex list used as input to community detection, the co-change phase, the
+   * architecture artifacts and the SQLite cache.
    *
    * Always the committed JSON index with the indices of this run spliced in: a fresh index replaces
-   * the committed entry of the same file. A full run therefore also carries the committed entries of
-   * files it did not re-index, for example files since deleted (callers that need existing files
-   * check the working tree) or files whose language plugin is not installed on this machine.
-   * Incremental `--file` run: pendingIndices holds only the just-updated file(s). We load the
-   * rest of the committed JSON index from disk and splice in the fresh in-memory indices so
-   * Louvain sees the COMPLETE project graph. Without this, Louvain would run on a 1-file
-   * subgraph and emit a meaningless modularity-0 snapshot.
+   * the committed entry of the same file, and the entries of `removedPaths` are left out. A full run
+   * therefore also carries the committed entries of files it did not re-index, for example files since
+   * deleted (callers that need existing files check the working tree) or files whose language plugin
+   * is not installed on this machine.
+   * Incremental run (`--files`, `--commit`): pendingIndices holds only the just-updated files. The rest
+   * of the committed JSON index is spliced in around them so Louvain sees the COMPLETE project graph.
+   * Without this, Louvain would run on a few-file subgraph and emit a meaningless modularity-0 snapshot.
+   * `removedPaths` is applied here, and not by reading the index again after the JSON is deleted,
+   * because this runs in Phase 2b, before Phase 3 deletes anything.
    */
   private buildGraphInputIndices(
+    committed: readonly FileIndex[],
     pendingIndices: ReadonlyArray<{ relativePath: string; fileIndex: FileIndex }>,
+    removedPaths: ReadonlySet<string>,
   ): FileIndex[] {
     const pendingByPath = new Map<string, FileIndex>();
     for (const { fileIndex } of pendingIndices) {
       pendingByPath.set(fileIndex.file, fileIndex);
     }
 
-    const reader = new JsonIndexReader(this.ctxoRoot);
-    const committed = reader.readAll();
-
     const merged: FileIndex[] = [];
     for (const idx of committed) {
+      if (removedPaths.has(idx.file)) continue;
       const override = pendingByPath.get(idx.file);
       if (override) {
         merged.push(override);
@@ -715,11 +864,11 @@ export class IndexCommand {
     return merged;
   }
 
-  private buildCommunitySnapshot(
+  private async buildCommunitySnapshot(
     indices: readonly FileIndex[],
     tiers: { csharpTier: string; goTier: string; javaTier: string; tsCount: number },
     gitAdapter: SimpleGitAdapter,
-  ): CommunitySnapshot {
+  ): Promise<CommunitySnapshot> {
     const graph = new SymbolGraph();
     for (const fileIndex of indices) {
       for (const symbol of fileIndex.symbols) graph.addNode(symbol);
@@ -739,7 +888,7 @@ export class IndexCommand {
     return {
       version: 1,
       computedAt: new Date().toISOString(),
-      commitSha: safeHeadSha(gitAdapter),
+      commitSha: await safeHeadSha(gitAdapter, this.projectRoot),
       modularity: detectResult.modularity,
       communities: detectResult.communities,
       godNodes: detectResult.godNodes,
@@ -833,19 +982,59 @@ function pickEdgeQuality(tiers: {
   return 'full';
 }
 
-function safeHeadSha(gitAdapter: SimpleGitAdapter): string {
+/**
+ * The short SHA of HEAD as git prints it, or 'nocommit' when there is none. It is not cut to a fixed
+ * length: the snapshot staleness check compares it with `getHeadSha()`, which is whatever
+ * `git rev-parse --short HEAD` gives for this repository.
+ */
+async function safeHeadSha(gitAdapter: SimpleGitAdapter, projectRoot: string): Promise<string> {
   try {
-    const maybeSha = (gitAdapter as unknown as { getHeadSha?: () => string | undefined }).getHeadSha?.();
-    if (maybeSha) return maybeSha.slice(0, 8);
+    const sha = await gitAdapter.getHeadSha();
+    if (sha) return sha;
   } catch {
     /* fall through */
   }
   try {
-    const out = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { encoding: 'utf-8' });
-    return out.trim();
+    // cwd matters: without it git answers for whichever repository the process happens to run in.
+    const out = execFileSync('git', ['rev-parse', '--short', 'HEAD'], {
+      cwd: projectRoot,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return out.trim() || 'nocommit';
   } catch {
     return 'nocommit';
   }
+}
+
+/**
+ * The files one commit changed, for `--commit`. Throws when git cannot say (unknown revision, or git
+ * failed), because a run that cannot tell what to re-index must not pretend it did.
+ */
+async function readCommitChanges(gitAdapter: SimpleGitAdapter, rev: string): Promise<FileChange[]> {
+  const changes = await gitAdapter.getCommitFileChanges(rev);
+  if (changes === undefined) {
+    throw new Error(`--commit ${rev}: cannot read the files this commit changed (unknown revision, or git failed)`);
+  }
+  return changes;
+}
+
+/**
+ * `input` as a repo-relative path with forward slashes, or undefined when it is empty or points outside
+ * the project. Accepts backslashes, a leading `./`, and an absolute path inside the project.
+ */
+function toRepoPath(projectRoot: string, input: string): string | undefined {
+  const trimmed = input.trim().replace(/\\/g, '/');
+  if (trimmed === '') return undefined;
+  const relativePath = relative(projectRoot, resolve(projectRoot, trimmed));
+  if (relativePath === '' || isAbsolute(relativePath) || relativePath.split(/[\\/]/)[0] === '..') return undefined;
+  return relativePath.replace(/\\/g, '/');
+}
+
+/** True when `absolute` lies inside `directory` (and is not the directory itself). */
+function isInsideDirectory(directory: string, absolute: string): boolean {
+  const relativePath = relative(directory, absolute);
+  return relativePath !== '' && !isAbsolute(relativePath) && relativePath.split(/[\\/]/)[0] !== '..';
 }
 
 function countCommunities(snapshot: CommunitySnapshot): number {
