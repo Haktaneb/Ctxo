@@ -174,8 +174,8 @@ export class IndexCommand {
     const hasher = new ContentHasher();
     const revertDetector = new RevertDetector();
 
-    // The committed JSON index, read at most once per run. An incremental run needs it first, for the
-    // entries it removes and for the symbol registry; the merged index needs it for the global products.
+    // The committed JSON index, read at most once per run, and only by an incremental run: it needs it
+    // first, for the entries it removes and for the symbol registry, and then for the merged index.
     let committedIndices: FileIndex[] | undefined;
     const committedIndex = (): FileIndex[] => (committedIndices ??= new JsonIndexReader(this.ctxoRoot).readAll());
 
@@ -313,12 +313,16 @@ export class IndexCommand {
     // Clean up pre-loaded sources
     tsMorphLike?.clearProjectSources();
 
-    // The merged index (committed JSON, minus the removed files, plus the files indexed now) is built at
-    // most once per run. The co-change phase, community detection, the architecture artifacts and the
-    // SQLite cache all take it as their input, whichever files this run re-indexes.
-    let mergedIndices: FileIndex[] | undefined;
-    const mergedIndex = (): FileIndex[] =>
-      (mergedIndices ??= this.buildGraphInputIndices(committedIndex(), pendingIndices, removedPaths));
+    // The index that the co-change file set, community detection, the architecture artifacts and the SQLite
+    // cache are all built from, assembled at most once per run. A full run indexed every file it discovers,
+    // so those files are the project; an incremental run re-indexed a few, so the rest comes from the
+    // committed index (minus the removed files).
+    let graphInputIndices: FileIndex[] | undefined;
+    const graphInput = (): FileIndex[] =>
+      (graphInputIndices ??= this.buildGraphInputIndices(
+        pendingIndices,
+        incremental ? { committed: committedIndex(), removedPaths } : undefined,
+      ));
 
     // The global products (co-change, communities, architecture artifacts) are refreshed whenever the run
     // changed the index. A --commit run refreshes them even when it re-indexed no file: a merge commit
@@ -370,7 +374,7 @@ export class IndexCommand {
             head: changeLog.head,
             headCommittedAt: changeLog.headCommittedAt,
             coChange,
-            indexedFiles: mergedIndex().map((idx) => idx.file),
+            indexedFiles: graphInput().map((idx) => idx.file),
           });
         }
       } catch (err) {
@@ -380,8 +384,8 @@ export class IndexCommand {
 
     // Phase 2c: Community detection + snapshot
     //
-    // Full indexing:    run Louvain over the merged index (every indexed file).
-    // Incremental (--files, --commit): the same merged index, so Louvain sees the *complete* graph:
+    // Full indexing:    run Louvain over the files this run indexed (all of the project).
+    // Incremental (--files, --commit): the merged index, so Louvain sees the *complete* graph:
     //                       the just-updated fileIndex(es) spliced into the rest of the committed JSON
     //                       index, minus the removed files. Running it over the few updated files alone
     //                       would produce a meaningless N-singleton snapshot (modularity 0).
@@ -396,7 +400,7 @@ export class IndexCommand {
       }
     } else if (refreshGlobals) {
       try {
-        const graphIndices = mergedIndex();
+        const graphIndices = graphInput();
         communitySnapshot = await this.buildCommunitySnapshot(
           graphIndices,
           {
@@ -417,13 +421,14 @@ export class IndexCommand {
     }
 
     // Phase 3: Write all indices
-    // The merged index is built first: it reads the committed JSON as it was before this run wrote anything.
-    const merged = mergedIndex();
+    // What the index holds after this run is assembled first: an incremental run reads the committed JSON
+    // as it was before this run wrote anything.
+    const indexed = graphInput();
 
     // Removed files leave the index before the new entries are written. On a case-insensitive file system
     // a case-only rename names one JSON file twice, so deleting afterwards would take the entry just
     // written for the new name. A file that cannot be deleted is reported and the run goes on, since the
-    // merged index of this run already leaves it out.
+    // index this run builds its products from already leaves it out.
     for (const path of removedPaths) {
       try {
         writer.delete(path);
@@ -436,13 +441,14 @@ export class IndexCommand {
     // Write schema version
     schemaManager.writeVersion();
 
-    // Populate SQLite cache (skip rebuildFromJson since we just wrote the JSON). The cache holds the whole
-    // index, not just the files of this run, so it is rebuilt from the merged index: initEmpty() clears the
-    // tables, which init() would not (it re-inserts rows and duplicates edges).
+    // Populate SQLite cache (skip rebuildFromJson since we just wrote the JSON). It holds what the snapshot
+    // and the artifacts are built from: the files of this run after a full run, and after an incremental
+    // run the merged index, not just the few files it re-indexed. initEmpty() clears the tables, which
+    // init() would not (it re-inserts rows and duplicates edges).
     const storage = new SqliteStorageAdapter(this.ctxoRoot, { allowProductionPath: true });
     try {
       await storage.initEmpty();
-      storage.bulkWrite(merged);
+      storage.bulkWrite(indexed);
       if (communitySnapshot) {
         storage.writeCommunities(communitySnapshot);
       }
@@ -456,9 +462,9 @@ export class IndexCommand {
     // - pages/ctxo-visualizer.html Architecture tab reads these directly.
     // - Future MCP tools can surface the same data without recomputing.
     if (communitySnapshot) {
-      // The full graph, like the snapshot it is compared with: the edges of a few files alone would hide
-      // every violation that starts in a file this run did not re-index.
-      this.writeArchitectureArtifacts(merged, communitySnapshot);
+      // The full graph, like the snapshot it is compared with: after an incremental run the edges of a few
+      // files alone would hide every violation that starts in a file this run did not re-index.
+      this.writeArchitectureArtifacts(indexed, communitySnapshot);
     }
 
     // Ensure .ctxo/.cache/ is in .gitignore (skip during verify runs)
@@ -827,22 +833,24 @@ export class IndexCommand {
    * Produce the FileIndex list used as input to community detection, the co-change phase, the
    * architecture artifacts and the SQLite cache.
    *
-   * Always the committed JSON index with the indices of this run spliced in: a fresh index replaces
-   * the committed entry of the same file, and the entries of `removedPaths` are left out. A full run
-   * therefore also carries the committed entries of files it did not re-index, for example files since
-   * deleted (callers that need existing files check the working tree) or files whose language plugin
-   * is not installed on this machine.
-   * Incremental run (`--files`, `--commit`): pendingIndices holds only the just-updated files. The rest
-   * of the committed JSON index is spliced in around them so Louvain sees the COMPLETE project graph.
-   * Without this, Louvain would run on a few-file subgraph and emit a meaningless modularity-0 snapshot.
-   * `removedPaths` is applied here, and not by reading the index again after the JSON is deleted,
-   * because this runs in Phase 2b, before Phase 3 deletes anything.
+   * Full index run (`base` undefined): returns the indices of this run as they are. A full run indexes
+   * every file it discovers, so they are the whole project. The committed JSON of a file that is no
+   * longer discovered (deleted, or newly matched by `index.ignore`) stays on disk, because a full run
+   * does not prune it, but it must not live on in SQLite, the snapshot or the artifacts.
+   * Incremental run (`--files`, `--commit`, `base` given): pendingIndices holds only the just-updated
+   * files. The committed JSON index is spliced in around them, a fresh index replacing the committed
+   * entry of the same file and the entries of `base.removedPaths` left out, so Louvain sees the COMPLETE
+   * project graph. Without this, Louvain would run on a few-file subgraph and emit a meaningless
+   * modularity-0 snapshot. `removedPaths` is applied here, and not by reading the index again after the
+   * JSON is deleted, because this runs in Phase 2b, before Phase 3 deletes anything.
    */
   private buildGraphInputIndices(
-    committed: readonly FileIndex[],
     pendingIndices: ReadonlyArray<{ relativePath: string; fileIndex: FileIndex }>,
-    removedPaths: ReadonlySet<string>,
+    base?: { committed: readonly FileIndex[]; removedPaths: ReadonlySet<string> },
   ): FileIndex[] {
+    if (base === undefined) return pendingIndices.map(({ fileIndex }) => fileIndex);
+
+    const { committed, removedPaths } = base;
     const pendingByPath = new Map<string, FileIndex>();
     for (const { fileIndex } of pendingIndices) {
       pendingByPath.set(fileIndex.file, fileIndex);

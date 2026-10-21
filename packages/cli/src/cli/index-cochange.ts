@@ -26,8 +26,9 @@ export interface WriteCoChangeMatrixOptions {
   readonly headCommittedAt: number;
   readonly coChange: ResolvedCoChangeConfig;
   /**
-   * Every file of the merged index. One that is gone from the working tree drops out: a full run
-   * never prunes the JSON of a deleted file, so its entry can outlive its source.
+   * The indexed files: those a full run indexed, or every file of the merged index after an
+   * incremental run. One that is gone from the working tree drops out: the committed index an
+   * incremental run builds on can still hold the entry of a file deleted since.
    */
   readonly indexedFiles: readonly string[];
 }

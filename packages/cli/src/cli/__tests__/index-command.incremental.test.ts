@@ -128,6 +128,29 @@ function commitGreetAndTypes(project: TempProject, count: number): void {
   }
 }
 
+/** The file of the two-cluster project whose edge to src/b/b1.ts is the only one that leaves a cluster. */
+const BRIDGE = 'src/a/a3.ts';
+
+/**
+ * Writes (without committing) two tightly connected clusters of three files, a1 to a3 and b1 to b3,
+ * joined by one edge from a3 to b1. With no snapshot history, that edge is the project's only
+ * boundary violation.
+ */
+function writeTwoClusters(project: TempProject): void {
+  const cluster = (name: string, others: string[]): string =>
+    others.map((other) => `import { ${other} } from './${other}';`).join('\n') +
+    `\nexport function ${name}(): number {\n  return ${others.map((other) => `${other}()`).join(' + ')};\n}\n`;
+  project.write('src/a/a1.ts', cluster('a1', ['a2', 'a3']));
+  project.write('src/a/a2.ts', cluster('a2', ['a1', 'a3']));
+  project.write(
+    BRIDGE,
+    "import { b1 } from '../b/b1';\n" + cluster('a3', ['a1', 'a2']).replace('return a1() + a2()', 'return b1() + a1() + a2()'),
+  );
+  project.write('src/b/b1.ts', cluster('b1', ['b2', 'b3']));
+  project.write('src/b/b2.ts', cluster('b2', ['b1', 'b3']));
+  project.write('src/b/b3.ts', cluster('b3', ['b1', 'b2']));
+}
+
 function indexJson(dir: string, file: string): string {
   return join(dir, '.ctxo', 'index', `${file}.json`);
 }
@@ -305,20 +328,9 @@ describe('IndexCommand incremental runs', () => {
     });
 
     it('computes boundary-violations.json from the full graph', async () => {
-      // Two tightly connected clusters joined by one edge, from a3 to b1. a1 has no edge that leaves
-      // its cluster, so re-indexing a1 alone sees no violation unless the full graph is used.
-      const cluster = (name: string, others: string[]): string =>
-        others.map((other) => `import { ${other} } from './${other}';`).join('\n') +
-        `\nexport function ${name}(): number {\n  return ${others.map((other) => `${other}()`).join(' + ')};\n}\n`;
-      project.write('src/a/a1.ts', cluster('a1', ['a2', 'a3']));
-      project.write('src/a/a2.ts', cluster('a2', ['a1', 'a3']));
-      project.write(
-        'src/a/a3.ts',
-        "import { b1 } from '../b/b1';\n" + cluster('a3', ['a1', 'a2']).replace('return a1() + a2()', 'return b1() + a1() + a2()'),
-      );
-      project.write('src/b/b1.ts', cluster('b1', ['b2', 'b3']));
-      project.write('src/b/b2.ts', cluster('b2', ['b1', 'b3']));
-      project.write('src/b/b3.ts', cluster('b3', ['b1', 'b2']));
+      // a1 has no edge that leaves its cluster, so re-indexing a1 alone sees no violation unless the
+      // full graph is used.
+      writeTwoClusters(project);
       project.commit('feat: two clusters with one bridge');
       await new IndexCommand(project.dir).run();
       const full = readViolations(project.dir);
@@ -331,6 +343,53 @@ describe('IndexCommand incremental runs', () => {
       expect(incremental.violations.length).toBe(full.violations.length);
       expect(incremental.commitSha).toBe(project.head());
       expectNotReindexed(project, 'src/b/b2.ts');
+    });
+  });
+
+  // A full run indexes what it discovers, and that set is the whole project. The JSON of a file that is
+  // no longer discovered stays on disk (a full run never prunes it), but it must not live on in SQLite,
+  // the snapshot, the artifacts or the co-change matrix. Only an incremental run builds on the
+  // committed index, because it re-indexes just a few files.
+  const LEAVES_THE_PROJECT: Array<[string, (leaving: TempProject) => void]> = [
+    ['deleted', (leaving) => rmSync(join(leaving.dir, BRIDGE))],
+    [
+      'newly matched by index.ignore',
+      (leaving) => writeConfig(leaving.dir, `index:\n  ignore:\n    - "${BRIDGE}"\n`),
+    ],
+  ];
+
+  describe.each(LEAVES_THE_PROJECT)('a full run after the bridge file is %s', (_how, leaveTheProject) => {
+    it('leaves it out of SQLite, the snapshot, the artifacts and the co-change matrix', async () => {
+      writeTwoClusters(project);
+      project.commit('feat: two clusters with one bridge');
+      for (let n = 1; n <= 2; n++) {
+        // The bridge and a1 change together, so the co-change matrix pairs them.
+        project.append(BRIDGE, `// change ${n}`);
+        project.append('src/a/a1.ts', `// change ${n}`);
+        project.commit(`feat: change ${n}`);
+      }
+      const mentionsBridge = (value: unknown): boolean => JSON.stringify(value).includes(BRIDGE);
+
+      await new IndexCommand(project.dir).run();
+      const before = await readSqliteContents(project.dir);
+      expect(before.files).toContain(BRIDGE);
+      expect(mentionsBridge(readSnapshot(project.dir).communities)).toBe(true);
+      expect(mentionsBridge(readViolations(project.dir).violations)).toBe(true);
+      expect(mentionsBridge(readCoChanges(project.dir).entries)).toBe(true);
+
+      leaveTheProject(project);
+      await new IndexCommand(project.dir).run();
+
+      // Its JSON is still on disk, and it was not touched by this run.
+      expect(hasIndexEntry(project.dir, BRIDGE)).toBe(true);
+      const cache = await readSqliteContents(project.dir);
+      expect(cache.files).not.toContain(BRIDGE);
+      expect(cache.symbolIds.some((id) => id.startsWith(`${BRIDGE}::`))).toBe(false);
+      expect(mentionsBridge(readSnapshot(project.dir).communities)).toBe(false);
+      expect(mentionsBridge(readViolations(project.dir).violations)).toBe(false);
+      expect(mentionsBridge(readCoChanges(project.dir).entries)).toBe(false);
+      // What is left is the rest of the project, still complete.
+      expect(cache.files).toEqual(before.files.filter((file) => file !== BRIDGE));
     });
   });
 
