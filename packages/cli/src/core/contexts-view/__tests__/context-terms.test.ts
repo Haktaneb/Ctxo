@@ -58,6 +58,27 @@ describe('harvestTopTerms', () => {
     expect(harvestTopTerms(['f1.ts'], symbols, DEFAULT_TECHNICAL_TERMS, 3)).toHaveLength(3);
   });
 
+  it('takes terms from type names and enum members only, not class members', () => {
+    const symbols = byFile({
+      'f1.cs': [
+        sym('f1.cs', 'Ns.Account', 'class'),
+        sym('f1.cs', 'Ns.Account.Borrow', 'method'),
+        sym('f1.cs', 'Ns.Account.MemberId', 'variable'),
+      ],
+    });
+    expect(harvestTopTerms(['f1.cs'], symbols, DEFAULT_TECHNICAL_TERMS)).toEqual([
+      { term: 'account', files: 1 },
+    ]);
+  });
+
+  it('counts a term that appears twice in one file once', () => {
+    const symbols = byFile({
+      'f1.ts': [sym('f1.ts', 'LoanPolicy', 'class'), sym('f1.ts', 'LoanLimit', 'type')],
+    });
+    const terms = harvestTopTerms(['f1.ts'], symbols, DEFAULT_TECHNICAL_TERMS);
+    expect(terms.find((t) => t.term === 'loan')).toEqual({ term: 'loan', files: 1 });
+  });
+
   it('uses the supplied technical term list instead of the default', () => {
     const symbols = byFile({ 'f1.ts': [sym('f1.ts', 'LoanService', 'class')] });
     expect(harvestTopTerms(['f1.ts'], symbols, ['Loan']).map((t) => t.term)).toEqual(['service']);
@@ -111,6 +132,47 @@ describe('findTermCollisions', () => {
       'b.ts': [sym('b.ts', 'Dup', 'class'), sym('b.ts', 'Dup.y', 'method')],
     });
     expect(findTermCollisions([{ id: 1, files: ['a.ts', 'b.ts'] }], single)).toEqual([]);
+  });
+
+  it('collapses arity-suffixed overloads so they match Roslyn-style member names', () => {
+    const symbols = byFile({
+      'a.cs': [
+        sym('a.cs', 'Lending.Account', 'class'),
+        sym('a.cs', 'Lending.Account.Borrow(1)', 'method'),
+        sym('a.cs', 'Lending.Account.Borrow(2)', 'method'),
+      ],
+      'b.cs': [sym('b.cs', 'Billing.Account', 'class'), sym('b.cs', 'Billing.Account.Borrow', 'method')],
+    });
+    expect(findTermCollisions([{ id: 1, files: ['a.cs'] }, { id: 2, files: ['b.cs'] }], symbols)).toEqual([]);
+    const withMembers = byFile({
+      'a.cs': [
+        sym('a.cs', 'Lending.Account', 'class'),
+        sym('a.cs', 'Lending.Account.Borrow(1)', 'method'),
+        sym('a.cs', 'Lending.Account.Borrow(2)', 'method'),
+        sym('a.cs', 'Lending.Account.Pay(0)', 'method'),
+      ],
+      'b.cs': [sym('b.cs', 'Billing.Account', 'class')],
+    });
+    const result = findTermCollisions([{ id: 1, files: ['a.cs'] }, { id: 2, files: ['b.cs'] }], withMembers);
+    expect(result[0]!.occurrences[0]!.members).toEqual(['Borrow', 'Pay']);
+  });
+
+  it('excludes deeper names from member sets', () => {
+    const symbols = byFile({
+      'a.ts': [sym('a.ts', 'Acct', 'class'), sym('a.ts', 'Acct.Inner.x', 'variable'), sym('a.ts', 'Acct.y', 'method')],
+      'b.ts': [sym('b.ts', 'Acct', 'class'), sym('b.ts', 'Acct.z', 'method')],
+    });
+    const result = findTermCollisions([{ id: 1, files: ['a.ts'] }, { id: 2, files: ['b.ts'] }], symbols);
+    expect(result[0]!.occurrences[0]!.members).toEqual(['y']);
+  });
+
+  it('rounds minJaccard to 3 decimals', () => {
+    const symbols = byFile({
+      'a.ts': [sym('a.ts', 'Acct', 'class'), sym('a.ts', 'Acct.a', 'method'), sym('a.ts', 'Acct.b', 'method')],
+      'b.ts': [sym('b.ts', 'Acct', 'class'), sym('b.ts', 'Acct.b', 'method'), sym('b.ts', 'Acct.c', 'method')],
+    });
+    const result = findTermCollisions([{ id: 1, files: ['a.ts'] }, { id: 2, files: ['b.ts'] }], symbols);
+    expect(result[0]!.minJaccard).toBe(0.333);
   });
 
   it('matches names case-insensitively', () => {

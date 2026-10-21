@@ -45,9 +45,24 @@ function memberNames(typeName: string, symbols: readonly SymbolNode[]): string[]
   for (const symbol of symbols) {
     if (!symbol.name.startsWith(prefix)) continue;
     const rest = symbol.name.slice(prefix.length);
-    if (rest.length > 0 && !rest.includes('.')) members.add(rest);
+    if (rest.includes('.')) continue;
+    // The C# tree-sitter fallback suffixes methods with their arity, `Borrow(2)`; overloads collapse.
+    const member = rest.replace(/\(\d+\)$/, '');
+    if (member.length > 0) members.add(member);
   }
   return [...members].sort(compareCodepoint);
+}
+
+/** Enum members: `variable` symbols named `<type>.<member>` directly under a `type` symbol. */
+function enumMemberNames(typeName: string, symbols: readonly SymbolNode[]): string[] {
+  const prefix = `${typeName}.`;
+  const members: string[] = [];
+  for (const symbol of symbols) {
+    if (symbol.kind !== 'variable' || !symbol.name.startsWith(prefix)) continue;
+    const rest = symbol.name.slice(prefix.length);
+    if (rest.length > 0 && !rest.includes('.')) members.push(rest);
+  }
+  return members;
 }
 
 /**
@@ -70,7 +85,7 @@ export function harvestTopTerms(
     for (const symbol of symbols) {
       if (!isTypeSymbol(symbol)) continue;
       names.push(shortName(symbol.name));
-      for (const member of memberNames(symbol.name, symbols)) names.push(member);
+      if (symbol.kind === 'type') names.push(...enumMemberNames(symbol.name, symbols));
     }
 
     const terms = new Set<string>();
