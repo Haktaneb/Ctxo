@@ -81,6 +81,7 @@ export function loadConfig(ctxoRoot: string): LoadedConfig {
 
   validateGlobs(result.data.index?.ignore, 'index.ignore', invalidGlobs);
   validateGlobs(result.data.index?.ignoreProjects, 'index.ignoreProjects', invalidGlobs);
+  validateGlobs(result.data.index?.tests, 'index.tests', invalidGlobs);
   validateGlobs(result.data.cochange?.include, 'cochange.include', invalidGlobs);
   validateGlobs(result.data.cochange?.exclude, 'cochange.exclude', invalidGlobs);
   for (const pattern of invalidGlobs) {
@@ -100,6 +101,10 @@ export function indexIgnorePatterns(config: CtxoConfig): string[] {
 
 export function indexIgnoreProjectPatterns(config: CtxoConfig): string[] {
   return (config.index?.ignoreProjects ?? []).filter(isValidGlob);
+}
+
+export function indexTestPatterns(config: CtxoConfig): string[] {
+  return (config.index?.tests ?? []).filter(isValidGlob);
 }
 
 export function maskingClusterLabelPatterns(config: CtxoConfig): string[] {

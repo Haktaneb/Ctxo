@@ -7,6 +7,7 @@ import {
   statsEnabled,
   indexIgnorePatterns,
   indexIgnoreProjectPatterns,
+  indexTestPatterns,
   makeGlobMatcher,
   maskingClusterLabelPatterns,
   watchSnapshotMinFileChanges,
@@ -93,6 +94,29 @@ index:
 `);
     const loaded = loadConfig(ctxoRoot);
     expect(loaded.errors.length).toBeGreaterThan(0);
+  });
+
+  it('index.tests keeps valid globs and reports invalid ones', () => {
+    const tooLong = 'a'.repeat(65_537);
+    writeConfig(`version: "1.0"
+index:
+  tests:
+    - "**/it/**"
+    - "${tooLong}"
+`);
+    const loaded = loadConfig(ctxoRoot);
+    expect(loaded.errors).toEqual([]);
+    expect(indexTestPatterns(loaded.config)).toEqual(['**/it/**']);
+    expect(loaded.invalidGlobs).toContain(`index.tests: ${tooLong}`);
+  });
+
+  it('index still rejects an unknown key', () => {
+    writeConfig(`version: "1.0"
+index:
+  tests: []
+  bogusKey: true
+`);
+    expect(loadConfig(ctxoRoot).errors.length).toBeGreaterThan(0);
   });
 
   it('reports invalid YAML gracefully (no throw)', () => {

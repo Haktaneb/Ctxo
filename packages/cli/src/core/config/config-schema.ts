@@ -18,6 +18,7 @@ export const IndexConfigSchema = z
   .object({
     ignore: z.array(z.string().min(1)).optional(),
     ignoreProjects: z.array(z.string().min(1)).optional(),
+    tests: z.array(z.string().min(1)).optional(),
   })
   .strict();
 
