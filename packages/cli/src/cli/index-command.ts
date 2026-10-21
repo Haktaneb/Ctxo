@@ -8,6 +8,7 @@ import { LanguageAdapterRegistry } from '../adapters/language/language-adapter-r
 import { loadPlugins } from './plugin-loader.js';
 import { InstallCommand } from './install-command.js';
 import { changeLogSize, writeCoChangeMatrix } from './index-cochange.js';
+import { computeAndWriteContextsView } from './index-contexts-view.js';
 import {
   communityDetectorOptions,
   loadConfig,
@@ -461,6 +462,7 @@ export class IndexCommand {
     //                       would produce a meaningless N-singleton snapshot (modularity 0).
     // Opt-out (--skip-community): skip entirely. Warn if a stale snapshot exists on disk.
     let communitySnapshot: CommunitySnapshot | undefined;
+    let symbolPageRank: ReadonlyMap<string, number> | undefined;
 
     if (options.skipCommunity && refreshProducts) {
       if (existsSync(join(this.ctxoRoot, 'index', 'communities.json'))) {
@@ -471,7 +473,7 @@ export class IndexCommand {
     } else if (refreshProducts) {
       try {
         const graphIndices = graphInput();
-        communitySnapshot = await this.buildCommunitySnapshot(
+        const built = await this.buildCommunitySnapshot(
           graphIndices,
           {
             csharpTier,
@@ -482,6 +484,8 @@ export class IndexCommand {
           gitAdapter,
           communityDetectorOptions(ignore.config),
         );
+        communitySnapshot = built.snapshot;
+        symbolPageRank = built.pagerank;
         const scope = incremental ? ' (incremental, full-graph recompute)' : '';
         console.error(
           `[ctxo] Community detection${scope}: ${countCommunities(communitySnapshot)} clusters (modularity ${communitySnapshot.modularity.toFixed(3)})`,
@@ -549,6 +553,23 @@ export class IndexCommand {
       // The full graph, like the snapshot it is compared with: after an incremental run the edges of a few
       // files alone would hide every violation that starts in a file this run did not re-index.
       this.writeArchitectureArtifacts(indexed, communitySnapshot);
+
+      // The contexts view reads the same merged index, so an incremental run writes what a full run would.
+      // Non-fatal like the artifacts above.
+      if (symbolPageRank) {
+        try {
+          computeAndWriteContextsView({
+            projectRoot: this.projectRoot,
+            ctxoRoot: this.ctxoRoot,
+            config: ignore.config,
+            indices: indexed,
+            snapshot: communitySnapshot,
+            symbolPageRank,
+          });
+        } catch (err) {
+          console.error(`[ctxo] Contexts view skipped: ${(err as Error).message}`);
+        }
+      }
     }
 
     // Ensure .ctxo/.cache/ is in .gitignore (skip during verify runs)
@@ -1034,7 +1055,7 @@ export class IndexCommand {
     tiers: { csharpTier: string; goTier: string; javaTier: string; tsCount: number },
     gitAdapter: SimpleGitAdapter,
     detectorOptions: CommunityDetectorOptions,
-  ): Promise<CommunitySnapshot> {
+  ): Promise<{ snapshot: CommunitySnapshot; pagerank: ReadonlyMap<string, number> }> {
     const graph = new SymbolGraph();
     for (const fileIndex of indices) {
       for (const symbol of fileIndex.symbols) graph.addNode(symbol);
@@ -1051,7 +1072,7 @@ export class IndexCommand {
     const edgeQuality = pickEdgeQuality(tiers);
     const detectResult = detector.detect(graph, pagerankMap, edgeQuality);
 
-    return {
+    const snapshot: CommunitySnapshot = {
       version: 1,
       computedAt: new Date().toISOString(),
       commitSha: await safeHeadSha(gitAdapter, this.projectRoot),
@@ -1061,6 +1082,7 @@ export class IndexCommand {
       edgeQuality: detectResult.edgeQuality,
       crossClusterEdges: detectResult.crossClusterEdges,
     };
+    return { snapshot, pagerank: pagerankMap };
   }
 
   /**

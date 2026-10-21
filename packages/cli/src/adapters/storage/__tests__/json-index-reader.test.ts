@@ -92,6 +92,18 @@ describe('JsonIndexReader', () => {
       expect(reader.readEntries()).toEqual([]);
     });
 
+    it('readAll skips contexts-view.json without logging a schema error', () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      new JsonIndexWriter(tempDir).write(buildFileIndex());
+      writeFileSync(join(tempDir, 'index', 'contexts-view.json'), JSON.stringify({ version: 1, candidates: [] }), 'utf-8');
+
+      const files = reader.readAll().map((index) => index.file);
+
+      expect(files).toEqual(['src/foo.ts']);
+      expect(errorSpy).not.toHaveBeenCalled();
+      errorSpy.mockRestore();
+    });
+
     it('readAll returns the same indices', () => {
       const writer = new JsonIndexWriter(tempDir);
       writer.write(buildFileIndex());

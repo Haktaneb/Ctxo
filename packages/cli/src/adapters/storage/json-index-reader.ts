@@ -18,6 +18,7 @@ export const INDEX_ARTIFACT_FILES: readonly string[] = [
   'communities.json',
   'drift-events.json',
   'boundary-violations.json',
+  'contexts-view.json',
 ];
 
 /** The folder of archived community snapshots inside the index folder: not entries either. */
