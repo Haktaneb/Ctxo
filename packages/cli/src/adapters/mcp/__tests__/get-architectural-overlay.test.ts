@@ -444,8 +444,18 @@ describe('GetArchitecturalOverlayHandler mode contexts', () => {
     const payload = await call(view, { mode: 'contexts', candidate: 2 });
     const second = view.candidates[1]!;
 
-    expect(Object.keys(payload).sort()).toEqual(['_meta', 'candidate', 'collisions', 'commitSha', 'hubs']);
+    expect(Object.keys(payload).sort()).toEqual([
+      '_meta',
+      'candidate',
+      'collisions',
+      'collisionsTotal',
+      'commitSha',
+      'hint',
+      'hubs',
+      'hubsTotal',
+    ]);
     expect(payload.commitSha).toBe('abc1234');
+    expect(payload.hint).toBe('Run ctxo contexts --json for full member sets.');
     expect(payload.candidate).toEqual({ ...second, files: second.files.slice(0, 15) });
     expect(payload.candidate.fileCount).toBe(40);
     expect(payload.candidate.topTerms).toHaveLength(10);
@@ -454,34 +464,114 @@ describe('GetArchitecturalOverlayHandler mode contexts', () => {
     expect(payload.hubs).toEqual(
       [view.hubs[1]!, view.hubs[13]!].map(({ file, reasons, dependents, damping }) => ({ file, reasons, dependents, damping })),
     );
+    expect(payload.hubsTotal).toBe(2);
     expect(payload.collisions.map((c: { name: string }) => c.name)).toEqual(['entity0', 'entity4']);
+    expect(payload.collisionsTotal).toBe(2);
+    // Only candidate 2's own occurrences, without file and candidate; the other candidates are named in `candidates`.
+    const own = view.collisions[4]!.occurrences[1]!;
     expect(payload.collisions[1]).toEqual({
       name: 'entity4',
       minJaccard: 0.1,
-      occurrences: view.collisions[4]!.occurrences.map((occurrence) => ({ ...occurrence, memberCount: 3 })),
+      candidates: [1, 2, 3, 4],
       occurrenceCount: 4,
+      occurrences: [{ symbolId: own.symbolId, members: own.members, memberCount: 3 }],
     });
   });
 
-  it('candidate caps occurrences and members at 15 with counts, keeping all of its own occurrences', async () => {
-    const view = fixtureView();
-    const payload = await call(view, { mode: 'contexts', candidate: 12 });
-    const entity0 = payload.collisions.find((c: { name: string }) => c.name === 'entity0');
+  it('candidate caps its own occurrences and their members at 5 with counts', async () => {
+    // 20 occurrences of candidate 1 and 10 of candidate 2, 20 members each.
+    const mixed = collision('entity', 30, 20);
+    const view = buildView([candidate(1, 'orders', 3), candidate(2, 'billing', 3)], {
+      collisions: [
+        {
+          ...mixed,
+          occurrences: mixed.occurrences.map((occurrence, i) => ({ ...occurrence, candidate: i < 20 ? 1 : 2 })),
+        },
+      ],
+    });
 
-    expect(entity0.occurrenceCount).toBe(120);
-    expect(entity0.occurrences).toHaveLength(15);
-    // Candidate 12 holds every 12th occurrence (10 of them, the last at index 119): the cap keeps them all and
-    // fills up with the first others, and the list stays in view order.
-    expect(entity0.occurrences.map((o: { candidate: number }) => o.candidate)).toEqual([
-      1, 2, 3, 4, 5, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12,
-    ]);
-    expect(entity0.occurrences.at(-1).symbolId).toBe(view.collisions[0]!.occurrences[119]!.symbolId);
-    for (const occurrence of entity0.occurrences) {
-      expect(occurrence.members).toHaveLength(15);
-      expect(occurrence.memberCount).toBe(20);
-    }
-    expect(view.collisions[0]!.occurrences).toHaveLength(120);
+    const payload = await call(view, { mode: 'contexts', candidate: 1 });
+    const [entity] = payload.collisions;
+
+    expect(entity.candidates).toEqual([1, 2]);
+    expect(entity.occurrenceCount).toBe(30);
+    expect(entity.occurrences).toEqual(
+      view.collisions[0]!.occurrences.slice(0, 5).map((o) => ({
+        symbolId: o.symbolId,
+        members: o.members.slice(0, 5),
+        memberCount: 20,
+      })),
+    );
+    expect(view.collisions[0]!.occurrences).toHaveLength(30);
     expect(view.collisions[0]!.occurrences[0]!.members).toHaveLength(20);
+  });
+
+  it('candidate detail stays within the response limit when the candidate takes part in many large collisions', async () => {
+    // Candidate 2 takes part in 20 collisions. Each has 20 occurrences across the other candidates plus one of
+    // candidate 2, and every occurrence has 20 members.
+    const others = [1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+    const collisions: TermCollision[] = Array.from({ length: 20 }, (_, n) => {
+      const name = `entity${String(n).padStart(2, '0')}`;
+      const occurrence = (candidateId: number, i: number) => {
+        const file = `src/Modules/M${String(i).padStart(3, '0')}/Domain/${name}.cs`;
+        return {
+          candidate: candidateId,
+          file,
+          symbolId: `${file}::${name}::class`,
+          members: Array.from({ length: 20 }, (_, m) => `Member${String(m).padStart(2, '0')}`),
+        };
+      };
+      return {
+        name,
+        minJaccard: 0.1,
+        occurrences: [occurrence(2, 0), ...Array.from({ length: 20 }, (_, i) => occurrence(others[i % 11]!, i + 1))],
+      };
+    });
+    const view = buildView(
+      MODULES.map((name, i) => candidate(i + 1, `src/Modules/${name}`, 40)),
+      { hubs: fixtureView().hubs, collisions },
+    );
+
+    const payload = await call(view, { mode: 'contexts', candidate: 2 });
+
+    expect(payload._meta.totalBytes).toBeLessThanOrEqual(8192);
+    expect(payload._meta.truncated).toBe(false);
+    expect(payload.collisionsTotal).toBe(20);
+    expect(payload.collisions).toHaveLength(10);
+    expect(payload.hubsTotal).toBe(2);
+    const ownSymbolIds = new Set(
+      view.collisions.flatMap((c) => c.occurrences.filter((o) => o.candidate === 2).map((o) => o.symbolId)),
+    );
+    for (const entry of payload.collisions) {
+      expect(Object.keys(entry).sort()).toEqual(['candidates', 'minJaccard', 'name', 'occurrenceCount', 'occurrences']);
+      expect(entry.candidates).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+      expect(entry.occurrenceCount).toBe(21);
+      expect(entry.occurrences).toHaveLength(1);
+      expect(entry.occurrences.every((o: { symbolId: string }) => ownSymbolIds.has(o.symbolId))).toBe(true);
+      expect(entry.occurrences[0].members).toHaveLength(5);
+      expect(entry.occurrences[0].memberCount).toBe(20);
+    }
+  });
+
+  it('candidate detail caps its hubs at 50 and its collisions at 10, with totals', async () => {
+    const hubs: ContextHub[] = Array.from({ length: 60 }, (_, i) => ({
+      file: `src/h${i}.ts`,
+      reasons: ['fan-in'],
+      dependents: 30,
+      damping: 0.2,
+      candidate: 1,
+    }));
+    const collisions = Array.from({ length: 55 }, (_, i) => collision(`name${String(i).padStart(2, '0')}`, 2, 1));
+    const view = buildView([candidate(1, 'orders', 3), candidate(2, 'billing', 3)], { hubs, collisions });
+
+    const payload = await call(view, { mode: 'contexts', candidate: 1 });
+
+    expect(payload.hubs).toHaveLength(50);
+    expect(payload.hubsTotal).toBe(60);
+    expect(payload.collisions.map((c: { name: string }) => c.name)).toEqual(
+      collisions.slice(0, 10).map((c) => c.name),
+    );
+    expect(payload.collisionsTotal).toBe(55);
   });
 
   it('an unknown candidate id is a graceful miss', async () => {

@@ -9,6 +9,7 @@ import { buildSnapshotStaleness } from '../../core/overlay/snapshot-staleness.js
 import type { ClusterLabelMasker } from '../../core/overlay/cluster-label-masker.js';
 import type { CommunitySnapshot, GodNode } from '../../core/types.js';
 import type { ContextsView } from '../../core/contexts-view/contexts-view-builder.js';
+import type { TermCollision } from '../../core/contexts-view/context-terms.js';
 import type { IContextsViewPort } from '../../ports/i-contexts-view-port.js';
 import type { StalenessCheck } from './get-logic-slice.js';
 
@@ -86,15 +87,20 @@ export function buildCommunityOverlay(
   };
 }
 
-/** Hubs and collisions listed in the summary (R24); the totals say how many there are. */
+/** Hubs and collisions listed in the summary, and hubs in the detail (R24); the totals say how many there are. */
 const HUB_COLLISION_LIMIT = 50;
 /** Top terms per candidate in the summary. */
 const SUMMARY_TERM_LIMIT = 5;
-/** Files of the candidate, occurrences per collision and members per occurrence in the detail. */
-const DETAIL_LIST_LIMIT = 15;
+/** Files of the candidate in the detail. */
+const DETAIL_FILE_LIMIT = 15;
+/** Collisions in the detail. */
+const DETAIL_COLLISION_LIMIT = 10;
+/** The candidate's own occurrences per collision, and members per occurrence, in the detail. */
+const DETAIL_OCCURRENCE_LIMIT = 5;
 
 const NO_VIEW_HINT = 'No contexts view available. Run ctxo index to generate one.';
 const SUMMARY_HINT = 'Pass candidate: <id> for one candidate in full; run ctxo contexts --json for the whole view.';
+const DETAIL_HINT = 'Run ctxo contexts --json for full member sets.';
 
 /** Masks candidate labels, after seeding the masker in sorted order so the `[masked-cluster-N]` numbering is stable. */
 function labelMaskerFor(view: ContextsView, labelMasker: ClusterLabelMasker | undefined): (label: string) => string {
@@ -102,6 +108,16 @@ function labelMaskerFor(view: ContextsView, labelMasker: ClusterLabelMasker | un
   if (!masker) return (label) => label;
   for (const label of [...new Set(view.candidates.map((c) => c.label))].sort(compareCodepoint)) masker.mask(label);
   return (label) => masker.mask(label);
+}
+
+/** The summary fields of a collision: its name, minimum Jaccard, the ids of the candidates it spans and its size. */
+function collisionSummary(collision: TermCollision) {
+  return {
+    name: collision.name,
+    minJaccard: collision.minJaccard,
+    candidates: [...new Set(collision.occurrences.map((occurrence) => occurrence.candidate))].sort((a, b) => a - b),
+    occurrenceCount: collision.occurrences.length,
+  };
 }
 
 /** Every candidate in brief, plus the capped hubs and collisions: small enough to list the whole view. */
@@ -123,12 +139,7 @@ function contextsSummary(view: ContextsView, maskLabel: (label: string) => strin
       ...(hub.candidate !== undefined ? { candidate: hub.candidate } : {}),
     })),
     hubsTotal: view.hubs.length,
-    collisions: view.collisions.slice(0, HUB_COLLISION_LIMIT).map((collision) => ({
-      name: collision.name,
-      minJaccard: collision.minJaccard,
-      candidates: [...new Set(collision.occurrences.map((occurrence) => occurrence.candidate))].sort((a, b) => a - b),
-      occurrenceCount: collision.occurrences.length,
-    })),
+    collisions: view.collisions.slice(0, HUB_COLLISION_LIMIT).map(collisionSummary),
     collisionsTotal: view.collisions.length,
     unclustered: { count: view.unclustered.count },
     hint: SUMMARY_HINT,
@@ -136,9 +147,12 @@ function contextsSummary(view: ContextsView, maskLabel: (label: string) => strin
 }
 
 /**
- * One candidate in full (files capped), the hubs assigned to it and the collisions it takes part in. A
- * collision lists at most `DETAIL_LIST_LIMIT` occurrences: all of this candidate's that fit, then the first
- * of the others, kept in view order.
+ * One candidate in full (files capped), the hubs assigned to it (at most `HUB_COLLISION_LIMIT`) and the
+ * collisions it takes part in (at most `DETAIL_COLLISION_LIMIT`), each list with its total. A collision carries
+ * its summary fields plus this candidate's own occurrences only, at most `DETAIL_OCCURRENCE_LIMIT`, each as
+ * `{ symbolId, members, memberCount }` with the first members in view order: the file is part of the symbol
+ * ID, and the other candidates are named in `candidates`. No array here is truncatable, so these caps are
+ * what keeps the response within the limit.
  */
 function contextsDetail(
   view: ContextsView,
@@ -149,35 +163,34 @@ function contextsDetail(
   if (!candidate) {
     return { found: false, hint: `No candidate ${id} in the contexts view. Call without candidate for the list.` };
   }
+  const hubs = view.hubs.filter((hub) => hub.candidate === id);
+  const collisions = view.collisions.filter((collision) =>
+    collision.occurrences.some((occurrence) => occurrence.candidate === id),
+  );
   return {
     commitSha: view.commitSha,
     candidate: {
       ...candidate,
       label: maskLabel(candidate.label),
-      files: candidate.files.slice(0, DETAIL_LIST_LIMIT),
+      files: candidate.files.slice(0, DETAIL_FILE_LIMIT),
     },
-    hubs: view.hubs
-      .filter((hub) => hub.candidate === id)
+    hubs: hubs
+      .slice(0, HUB_COLLISION_LIMIT)
       .map((hub) => ({ file: hub.file, reasons: hub.reasons, dependents: hub.dependents, damping: hub.damping })),
-    collisions: view.collisions
-      .filter((collision) => collision.occurrences.some((occurrence) => occurrence.candidate === id))
-      .map((collision) => {
-        const own = collision.occurrences.filter((occurrence) => occurrence.candidate === id);
-        const others = collision.occurrences.filter((occurrence) => occurrence.candidate !== id);
-        const kept = new Set([...own, ...others].slice(0, DETAIL_LIST_LIMIT));
-        return {
-          name: collision.name,
-          minJaccard: collision.minJaccard,
-          occurrences: collision.occurrences
-            .filter((occurrence) => kept.has(occurrence))
-            .map((occurrence) => ({
-              ...occurrence,
-              members: occurrence.members.slice(0, DETAIL_LIST_LIMIT),
-              memberCount: occurrence.members.length,
-            })),
-          occurrenceCount: collision.occurrences.length,
-        };
-      }),
+    hubsTotal: hubs.length,
+    collisions: collisions.slice(0, DETAIL_COLLISION_LIMIT).map((collision) => ({
+      ...collisionSummary(collision),
+      occurrences: collision.occurrences
+        .filter((occurrence) => occurrence.candidate === id)
+        .slice(0, DETAIL_OCCURRENCE_LIMIT)
+        .map((occurrence) => ({
+          symbolId: occurrence.symbolId,
+          members: occurrence.members.slice(0, DETAIL_OCCURRENCE_LIMIT),
+          memberCount: occurrence.members.length,
+        })),
+    })),
+    collisionsTotal: collisions.length,
+    hint: DETAIL_HINT,
   };
 }
 
