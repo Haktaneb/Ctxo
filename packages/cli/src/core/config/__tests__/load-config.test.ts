@@ -8,6 +8,7 @@ import {
   indexIgnorePatterns,
   indexIgnoreProjectPatterns,
   indexTestPatterns,
+  factsRequested,
   makeGlobMatcher,
   maskingClusterLabelPatterns,
   watchSnapshotMinFileChanges,
@@ -36,6 +37,19 @@ describe('loadConfig', () => {
     expect(statsEnabled(loaded.config)).toBe(true);
     expect(indexIgnorePatterns(loaded.config)).toEqual([]);
     expect(indexIgnoreProjectPatterns(loaded.config)).toEqual([]);
+  });
+
+  it('index.facts accepts a boolean and rejects other values', () => {
+    writeConfig('version: "1.0"\nindex:\n  facts: true\n');
+    expect(loadConfig(ctxoRoot).errors).toEqual([]);
+    writeConfig('version: "1.0"\nindex:\n  facts: "yes"\n');
+    expect(loadConfig(ctxoRoot).errors.length).toBeGreaterThan(0);
+  });
+
+  it('factsRequested is false by default and true with index.facts: true', () => {
+    expect(factsRequested(loadConfig(ctxoRoot).config)).toBe(false);
+    writeConfig('version: "1.0"\nindex:\n  facts: true\n');
+    expect(factsRequested(loadConfig(ctxoRoot).config)).toBe(true);
   });
 
   it('parses index.ignore and index.ignoreProjects', () => {

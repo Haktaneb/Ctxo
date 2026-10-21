@@ -107,6 +107,11 @@ export function indexIgnoreProjectPatterns(config: CtxoConfig): string[] {
   return (config.index?.ignoreProjects ?? []).filter(isValidGlob);
 }
 
+/** True when facts extraction is requested (`index.facts: true`). */
+export function factsRequested(config: CtxoConfig): boolean {
+  return config.index?.facts === true;
+}
+
 export function indexTestPatterns(config: CtxoConfig): string[] {
   return (config.index?.tests ?? []).filter(isValidGlob);
 }

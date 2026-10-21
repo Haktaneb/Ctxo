@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { CtxoLanguagePlugin } from '@ctxo/plugin-api';
-import { SUPPORTED_API_VERSION } from '@ctxo/plugin-api';
+import { SUPPORTED_API_VERSIONS } from '@ctxo/plugin-api';
 import { createLogger } from '../../core/logger.js';
 
 const log = createLogger('ctxo:plugin-discovery');
@@ -145,10 +145,10 @@ async function tryLoad(
     if (!candidate || typeof candidate !== 'object') {
       return { specifier, reason: 'module export is not an object' };
     }
-    if (candidate.apiVersion !== SUPPORTED_API_VERSION) {
+    if (!(SUPPORTED_API_VERSIONS as readonly unknown[]).includes(candidate.apiVersion)) {
       return {
         specifier,
-        reason: `unsupported apiVersion ${String(candidate.apiVersion)} (want '${SUPPORTED_API_VERSION}')`,
+        reason: `unsupported apiVersion ${String(candidate.apiVersion)} (supported: ${SUPPORTED_API_VERSIONS.join(', ')})`,
       };
     }
     if (typeof candidate.createAdapter !== 'function') {

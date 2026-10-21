@@ -11,6 +11,7 @@ import { changeLogSize, writeCoChangeMatrix } from './index-cochange.js';
 import { computeAndWriteContextsView } from './index-contexts-view.js';
 import {
   communityDetectorOptions,
+  factsRequested,
   loadConfig,
   indexIgnorePatterns,
   indexIgnoreProjectPatterns,
@@ -165,7 +166,7 @@ export class IndexCommand {
 
     // Set up adapters via plugin discovery (TS, Go, C# all plugin-backed)
     const registry = new LanguageAdapterRegistry();
-    const { tsMorphLike, roslynAdapter, csharpTier, goTier, javaTier } = await this.registerDiscoveredPlugins(registry, ignore.ignoreProjectPatterns);
+    const { tsMorphLike, roslynAdapter, csharpTier, goTier, javaTier } = await this.registerDiscoveredPlugins(registry, ignore.ignoreProjectPatterns, factsRequested(ignore.config));
     this.supportedExtensions = registry.getSupportedExtensions();
 
     // Emit a language-aware pre-scan so users see the plan before the work runs
@@ -632,6 +633,7 @@ export class IndexCommand {
   private async registerDiscoveredPlugins(
     registry: LanguageAdapterRegistry,
     ignoreProjectPatterns: string[] = [],
+    facts = false,
   ): Promise<{
     tsMorphLike: TsMorphLike | undefined;
     roslynAdapter: RoslynLike | null;
@@ -639,7 +641,7 @@ export class IndexCommand {
     goTier: string;
     javaTier: string;
   }> {
-    const loaded = await loadPlugins(this.projectRoot, { ignoreProjects: ignoreProjectPatterns });
+    const loaded = await loadPlugins(this.projectRoot, { ignoreProjects: ignoreProjectPatterns, facts });
     let tsMorphLike: TsMorphLike | undefined;
     let roslynAdapter: RoslynLike | null = null;
     let csharpTier = 'unavailable';

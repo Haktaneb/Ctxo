@@ -12,7 +12,7 @@ import { RevertDetector } from '../core/why-context/revert-detector.js';
 import { SymbolGraph } from '../core/graph/symbol-graph.js';
 import { PageRankCalculator } from '../core/importance/pagerank-calculator.js';
 import { CommunityDetector, type CommunityDetectorOptions } from '../core/overlay/community-detector.js';
-import { communityDetectorOptions, loadConfig, watchSnapshotMinFileChanges } from '../core/config/load-config.js';
+import { communityDetectorOptions, factsRequested, loadConfig, watchSnapshotMinFileChanges } from '../core/config/load-config.js';
 import type { FileIndex, CommitIntent, AntiPattern, CommunitySnapshot } from '../core/types.js';
 import type { IIncrementalReindex, IncrementalReindexCapable } from '@ctxo/plugin-api';
 
@@ -33,9 +33,12 @@ export class WatchCommand {
 
     const registry = new LanguageAdapterRegistry();
 
+    // Config is read before the plugins load, so the facts capability reaches every createAdapter.
+    const watchConfig = loadConfig(this.ctxoRoot).config;
+
     // Plugins via discovery
     const keepAliveByExt = new Map<string, IIncrementalReindex>();
-    for (const { plugin, adapter } of await loadPlugins(this.projectRoot)) {
+    for (const { plugin, adapter } of await loadPlugins(this.projectRoot, { facts: factsRequested(watchConfig) })) {
       if (typeof adapter.initialize === 'function') {
         try {
           await adapter.initialize(this.projectRoot);
@@ -75,7 +78,6 @@ export class WatchCommand {
     // monorepos (full PageRank + Louvain recompute). Only recompute once at
     // least `snapshotMinFileChanges` distinct files have been re-indexed
     // since the last snapshot, so rapid-fire saves don't stall the editor.
-    const watchConfig = loadConfig(this.ctxoRoot).config;
     const snapshotThreshold = watchSnapshotMinFileChanges(watchConfig);
     const detectorOptions = communityDetectorOptions(watchConfig);
     const pathsChangedSinceSnapshot = new Set<string>();
