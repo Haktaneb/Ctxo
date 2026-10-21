@@ -110,6 +110,9 @@ export class JsonIndexReader {
           }
         }
       }
+      // A facts value that is present but not an array is treated as absent: facts are optional metadata
+      // and must not cost the file. It counts as one dropped fact list in the warning.
+      const factsPresent = raw_data['facts'] !== undefined;
       const rawFacts = Array.isArray(raw_data['facts']) ? raw_data['facts'] : undefined;
       const validFacts = rawFacts?.filter((f) => CodeFactSchema.safeParse(f).success);
       const validEdges = rawEdges.filter((e) => GraphEdgeSchema.safeParse(e).success);
@@ -117,7 +120,9 @@ export class JsonIndexReader {
       const validAntiPatterns = rawAntiPatterns.filter((a) => AntiPatternSchema.safeParse(a).success);
 
       const droppedSymbols = rawSymbols.length - validSymbols.length;
-      const droppedFacts = rawFacts && validFacts ? rawFacts.length - validFacts.length : 0;
+      const droppedFacts = rawFacts && validFacts
+        ? rawFacts.length - validFacts.length
+        : factsPresent ? 1 : 0;
       const droppedEdges = rawEdges.length - validEdges.length;
       const droppedIntent = rawIntent.length - validIntent.length;
       const droppedAntiPatterns = rawAntiPatterns.length - validAntiPatterns.length;
@@ -136,7 +141,7 @@ export class JsonIndexReader {
         edges: validEdges,
         intent: validIntent,
         antiPatterns: validAntiPatterns,
-        ...(validFacts ? { facts: validFacts } : {}),
+        facts: validFacts,
       });
 
       if (!recovered.success) {

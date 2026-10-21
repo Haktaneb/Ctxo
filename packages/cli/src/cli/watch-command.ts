@@ -13,8 +13,11 @@ import { SymbolGraph } from '../core/graph/symbol-graph.js';
 import { PageRankCalculator } from '../core/importance/pagerank-calculator.js';
 import { CommunityDetector, type CommunityDetectorOptions } from '../core/overlay/community-detector.js';
 import { communityDetectorOptions, factsRequested, loadConfig, watchSnapshotMinFileChanges } from '../core/config/load-config.js';
-import type { FileIndex, CommitIntent, AntiPattern, CommunitySnapshot } from '../core/types.js';
-import type { IIncrementalReindex, IncrementalReindexCapable } from '@ctxo/plugin-api';
+import { extractFileFacts } from './index-facts.js';
+import type {
+  FileIndex, CommitIntent, AntiPattern, CommunitySnapshot, SymbolNode, GraphEdge, ComplexityMetrics,
+} from '../core/types.js';
+import type { CodeFact, IIncrementalReindex, IncrementalReindexCapable } from '@ctxo/plugin-api';
 
 const DEBOUNCE_MS = 300;
 const COMMUNITY_SNAPSHOT_DEBOUNCE_MS = 5000;
@@ -35,10 +38,11 @@ export class WatchCommand {
 
     // Config is read before the plugins load, so the facts capability reaches every createAdapter.
     const watchConfig = loadConfig(this.ctxoRoot).config;
+    const watchFacts = factsRequested(watchConfig);
 
     // Plugins via discovery
     const keepAliveByExt = new Map<string, IIncrementalReindex>();
-    for (const { plugin, adapter } of await loadPlugins(this.projectRoot, { facts: factsRequested(watchConfig) })) {
+    for (const { plugin, adapter } of await loadPlugins(this.projectRoot, { facts: watchFacts })) {
       if (typeof adapter.initialize === 'function') {
         try {
           await adapter.initialize(this.projectRoot);
@@ -101,27 +105,16 @@ export class WatchCommand {
             const antiPatterns: AntiPattern[] = revertDetector.detect(commits);
             const source = readFileSync(filePath, 'utf-8');
 
-            const fileIndex: FileIndex = {
-              file: relativePath,
+            const fileIndex = buildWatchFileIndex(relativePath, {
               lastModified: Math.floor(Date.now() / 1000),
               contentHash: hasher.hash(source),
-              symbols: result.symbols.map(s => ({
-                symbolId: s.symbolId, name: s.name,
-                kind: s.kind as FileIndex['symbols'][0]['kind'],
-                startLine: s.startLine, endLine: s.endLine,
-              })),
-              edges: result.edges
-                .filter(e => !e.to.startsWith('ns:'))
-                .map(e => ({
-                  from: e.from, to: e.to,
-                  kind: e.kind as FileIndex['edges'][0]['kind'],
-                })),
-              complexity: result.complexity.map(c => ({
-                symbolId: c.symbolId, cyclomatic: c.cyclomatic,
-              })),
+              symbols: result.symbols,
+              edges: result.edges,
+              complexity: result.complexity,
               intent,
               antiPatterns,
-            };
+              facts: watchFacts ? await extractFileFacts(adapter, relativePath, source) : undefined,
+            });
 
             writer.write(fileIndex);
             storage.writeSymbolFile(fileIndex);
@@ -144,8 +137,7 @@ export class WatchCommand {
         }));
         const antiPatterns: AntiPattern[] = revertDetector.detect(commits);
 
-        const fileIndex: FileIndex = {
-          file: relativePath,
+        const fileIndex = buildWatchFileIndex(relativePath, {
           lastModified,
           contentHash: hasher.hash(source),
           symbols,
@@ -153,7 +145,8 @@ export class WatchCommand {
           complexity,
           intent,
           antiPatterns,
-        };
+          facts: watchFacts ? await extractFileFacts(adapter, relativePath, source) : undefined,
+        });
 
         writer.write(fileIndex);
         storage.writeSymbolFile(fileIndex);
@@ -242,6 +235,37 @@ export class WatchCommand {
     process.on('SIGTERM', cleanup);
   }
 
+}
+
+/** What a watch re-index gathers for one file, before it becomes a `FileIndex`. */
+export interface WatchFileIndexParts {
+  readonly lastModified: number;
+  readonly contentHash: string;
+  readonly symbols: readonly SymbolNode[];
+  readonly edges: readonly GraphEdge[];
+  readonly complexity: readonly ComplexityMetrics[];
+  readonly intent: readonly CommitIntent[];
+  readonly antiPatterns: readonly AntiPattern[];
+  readonly facts?: readonly CodeFact[];
+}
+
+/**
+ * The `FileIndex` a watch re-index writes. Symbols are kept whole, so annotations and offsets survive;
+ * edges to `ns:` namespace placeholders are dropped; `facts` is set only when given.
+ */
+export function buildWatchFileIndex(file: string, parts: WatchFileIndexParts): FileIndex {
+  const fileIndex: FileIndex = {
+    file,
+    lastModified: parts.lastModified,
+    contentHash: parts.contentHash,
+    symbols: [...parts.symbols],
+    edges: parts.edges.filter((e) => !e.to.startsWith('ns:')),
+    complexity: [...parts.complexity],
+    intent: [...parts.intent],
+    antiPatterns: [...parts.antiPatterns],
+  };
+  if (parts.facts) fileIndex.facts = [...parts.facts];
+  return fileIndex;
 }
 
 export function buildWatchCommunitySnapshot(

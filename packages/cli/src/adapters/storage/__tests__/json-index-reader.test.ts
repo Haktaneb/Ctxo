@@ -337,6 +337,31 @@ describe('JsonIndexReader', () => {
     expect(results[0]!.facts).toEqual([good]);
   });
 
+  it('readAll keeps a file whose facts value is not an array and treats it as absent', () => {
+    const indexDir = join(tempDir, 'index', 'src');
+    mkdirSync(indexDir, { recursive: true });
+    const data = {
+      file: 'src/Api.cs',
+      lastModified: 1,
+      symbols: [{ symbolId: 'src/Api.cs::Api::class', name: 'Api', kind: 'class', startLine: 1, endLine: 9 }],
+      edges: [],
+      intent: [],
+      antiPatterns: [],
+      facts: 'not-an-array',
+    };
+    writeFileSync(join(indexDir, 'Api.cs.json'), JSON.stringify(data), 'utf-8');
+
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const results = reader.readAll();
+    const warnings = spy.mock.calls.map((c) => String(c[0])).filter((w) => w.includes('WARN'));
+    spy.mockRestore();
+
+    expect(results).toHaveLength(1);
+    expect(results[0]!.symbols).toHaveLength(1);
+    expect(results[0]!.facts).toBeUndefined();
+    expect(warnings).toHaveLength(1);
+  });
+
   it('annotations and facts survive a JsonIndexWriter round trip', () => {
     const base = buildFileIndex();
     const symbol = { ...base.symbols[0]!, annotations: [{ name: 'Route', args: ['loans'], named: { Name: 'list' } }] };

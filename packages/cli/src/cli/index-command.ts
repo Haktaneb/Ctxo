@@ -9,6 +9,7 @@ import { loadPlugins } from './plugin-loader.js';
 import { InstallCommand } from './install-command.js';
 import { changeLogSize, writeCoChangeMatrix } from './index-cochange.js';
 import { computeAndWriteContextsView } from './index-contexts-view.js';
+import { extractFileFacts } from './index-facts.js';
 import {
   communityDetectorOptions,
   factsRequested,
@@ -331,6 +332,16 @@ export class IndexCommand {
         entry.fileIndex.edges = await adapter.extractEdges(entry.relativePath, entry.source);
       } catch (err) {
         console.error(`[ctxo] Edge extraction failed for ${entry.relativePath}: ${(err as Error).message}`);
+      }
+    }
+
+    // Phase 1c: facts, only when requested (index.facts: true). They go into the JSON index, never SQLite.
+    if (factsRequested(ignore.config)) {
+      for (const entry of pendingIndices) {
+        const adapter = registry.getAdapter(entry.relativePath);
+        if (!adapter) continue;
+        const facts = await extractFileFacts(adapter, entry.relativePath, entry.source);
+        if (facts) entry.fileIndex.facts = facts;
       }
     }
 

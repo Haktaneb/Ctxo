@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { SqliteStorageAdapter } from '../../adapters/storage/sqlite-storage-adapter.js';
 import * as detectorModule from '../../core/overlay/community-detector.js';
 import type { FileIndex } from '../../core/types.js';
-import { WatchCommand, buildWatchCommunitySnapshot } from '../watch-command.js';
+import { WatchCommand, buildWatchCommunitySnapshot, buildWatchFileIndex } from '../watch-command.js';
 
 describe('WatchCommand', () => {
   it('computes relative paths correctly with path.relative', () => {
@@ -100,5 +100,29 @@ describe('buildWatchCommunitySnapshot', () => {
       storage.close();
       rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
+  });
+});
+
+describe('buildWatchFileIndex', () => {
+  const base = { lastModified: 1, contentHash: 'h', complexity: [], intent: [], antiPatterns: [] };
+
+  it('buildWatchFileIndex keeps annotations and offsets of keep-alive symbols and drops ns: edges', () => {
+    const symbols = [{
+      symbolId: 'a.fake::t::table', name: 't', kind: 'table' as const, startLine: 0, endLine: 1,
+      startOffset: 2, endOffset: 9, annotations: [{ name: 'columns', args: ['id'] }],
+    }];
+    const edges = [
+      { from: 'a.fake::p::procedure', to: 't::table', kind: 'writes' as const },
+      { from: 'a.fake::p::procedure', to: 'ns:foo', kind: 'imports' as const },
+    ];
+    const index = buildWatchFileIndex('a.fake', { ...base, symbols, edges });
+    expect(index.symbols).toEqual(symbols);
+    expect(index.edges).toEqual([edges[0]]);
+  });
+
+  it('buildWatchFileIndex writes facts only when given', () => {
+    const fact = { kind: 'endpoint' as const, symbolId: 'a.fake::p::procedure', line: 1, text: 'GET /x' };
+    expect('facts' in buildWatchFileIndex('a.fake', { ...base, symbols: [], edges: [] })).toBe(false);
+    expect(buildWatchFileIndex('a.fake', { ...base, symbols: [], edges: [], facts: [fact] }).facts).toEqual([fact]);
   });
 });
