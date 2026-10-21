@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -7,7 +7,7 @@ import { MaskingPipeline } from '../../../core/masking/masking-pipeline.js';
 import { JsonIndexWriter } from '../../storage/json-index-writer.js';
 import { handleGetPrImpact } from '../get-pr-impact.js';
 import type { IGitPort } from '../../../ports/i-git-port.js';
-import type { FileIndex } from '../../../core/types.js';
+import type { CommunitySnapshot, FileIndex } from '../../../core/types.js';
 
 function buildIndices(): FileIndex[] {
   return [
@@ -216,5 +216,39 @@ describe('handleGetPrImpact', () => {
     expect(payload.boundaryViolations).toBeDefined();
     expect(payload.clustersAffected).toBeDefined();
     expect(Array.isArray(payload.clustersAffected)).toBe(true);
+  });
+
+  it('get_pr_impact boundaryViolations carries distinctCommits', async () => {
+    const snapshotAt = (commitSha: string): CommunitySnapshot => ({
+      version: 1,
+      computedAt: '2026-04-16T10:00:00.000Z',
+      commitSha,
+      modularity: 0.5,
+      communities: [
+        { symbolId: 'src/a.ts::A::function', communityId: 0, communityLabel: 'alpha' },
+        { symbolId: 'src/b.ts::B::class', communityId: 1, communityLabel: 'beta' },
+        { symbolId: 'src/c.ts::C::interface', communityId: 2, communityLabel: 'gamma' },
+      ],
+      godNodes: [],
+      edgeQuality: 'full',
+      crossClusterEdges: 2,
+    });
+    storage.writeCommunities(snapshotAt('abc1234'));
+    // Three history snapshots over two commits: two files for sha1, one for sha2.
+    vi.spyOn(storage, 'listCommunityHistory').mockReturnValue([
+      snapshotAt('sha1'),
+      snapshotAt('sha1'),
+      snapshotAt('sha2'),
+    ]);
+    const git = createMockGit(['src/a.ts']);
+    const handler = handleGetPrImpact(storage, git, new MaskingPipeline(), undefined, tempDir);
+
+    const result = await handler({ since: 'HEAD~1' });
+    const payload = JSON.parse(result.content[0]!.text);
+
+    expect(payload.boundaryViolations).toBeDefined();
+    expect(payload.boundaryViolations.distinctCommits).toBe(2);
+    expect(payload.boundaryViolations.snapshotsAvailable).toBe(3);
+    expect(payload.boundaryViolations.confidence).toBe('low');
   });
 });

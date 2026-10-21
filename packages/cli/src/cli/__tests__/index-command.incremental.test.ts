@@ -25,6 +25,7 @@ import type {
   BoundaryViolationsArtifact,
   CoChangeMatrix,
   CommunitySnapshot,
+  DriftEventsArtifact,
   FileIndex,
 } from '../../core/types.js';
 
@@ -200,6 +201,10 @@ function readViolations(dir: string): BoundaryViolationsArtifact {
   return JSON.parse(
     readFileSync(join(dir, '.ctxo', 'index', 'boundary-violations.json'), 'utf-8'),
   ) as BoundaryViolationsArtifact;
+}
+
+function readDrift(dir: string): DriftEventsArtifact {
+  return JSON.parse(readFileSync(join(dir, '.ctxo', 'index', 'drift-events.json'), 'utf-8')) as DriftEventsArtifact;
 }
 
 function writeConfig(dir: string, yaml: string): void {
@@ -803,6 +808,46 @@ describe('IndexCommand incremental runs', () => {
       await new IndexCommand(project.dir).run();
 
       expect(withoutComputedAt(readSnapshot(project.dir))).toEqual(incremental);
+    });
+  });
+
+  // Drift and boundary confidence is built on distinct commits: several runs on one commit are one data
+  // point, and the commit being indexed is not its own history.
+  describe('the architecture artifacts count history in distinct commits', () => {
+    const depth = (dir: string): Array<{ snapshotsAvailable: number; distinctCommits: number }> =>
+      [readDrift(dir), readViolations(dir)].map(({ snapshotsAvailable, distinctCommits }) => ({
+        snapshotsAvailable,
+        distinctCommits,
+      }));
+
+    it('writes distinctCommits next to snapshotsAvailable, and a rerun on the same commit adds nothing', async () => {
+      await new IndexCommand(project.dir).run();
+      expect(depth(project.dir)).toEqual(Array(2).fill({ snapshotsAvailable: 0, distinctCommits: 0 }));
+
+      commitGreetAndTypes(project, 1);
+      await new IndexCommand(project.dir).run();
+      await new IndexCommand(project.dir).run();
+      expect(depth(project.dir)).toEqual(Array(2).fill({ snapshotsAvailable: 1, distinctCommits: 1 }));
+
+      commitGreetAndTypes(project, 1);
+      await new IndexCommand(project.dir).run();
+      expect(depth(project.dir)).toEqual(Array(2).fill({ snapshotsAvailable: 2, distinctCommits: 2 }));
+    });
+
+    it('does not count a snapshot of the current commit that an older version left in history', async () => {
+      await new IndexCommand(project.dir).run();
+      commitGreetAndTypes(project, 1);
+      await new IndexCommand(project.dir).run();
+      // Older versions archived the previous run's snapshot even at the same HEAD, so history could hold
+      // the current commit. Seed such a leftover as the newest history file.
+      const historyDir = join(project.dir, '.ctxo', 'index', 'communities.history');
+      const current = readSnapshot(project.dir);
+      writeFileSync(join(historyDir, `2999-01-01T00-00-00-000Z-${current.commitSha}.json`), JSON.stringify(current), 'utf-8');
+
+      await new IndexCommand(project.dir).run();
+
+      // Two files in history, but only the first commit is an earlier commit.
+      expect(depth(project.dir)).toEqual(Array(2).fill({ snapshotsAvailable: 2, distinctCommits: 1 }));
     });
   });
 

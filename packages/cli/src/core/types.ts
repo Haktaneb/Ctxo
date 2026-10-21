@@ -422,7 +422,10 @@ export interface DriftEventsArtifact {
   readonly computedAt: string;
   readonly commitSha: string;
   readonly confidence: ConfidenceLevel;
+  /** Snapshots in the history the detector was given (a file count, kept for compatibility). */
   readonly snapshotsAvailable: number;
+  /** Commits other than `commitSha` that the history covers; `confidence` is built on this. */
+  readonly distinctCommits: number;
   readonly hint?: string;
   readonly events: readonly DriftEvent[];
 }
@@ -432,7 +435,10 @@ export interface BoundaryViolationsArtifact {
   readonly computedAt: string;
   readonly commitSha: string;
   readonly confidence: ConfidenceLevel;
+  /** Snapshots in the history the detector was given (a file count, kept for compatibility). */
   readonly snapshotsAvailable: number;
+  /** Commits other than `commitSha` that the history covers; `confidence` is built on this. */
+  readonly distinctCommits: number;
   readonly hint?: string;
   readonly violations: readonly BoundaryViolation[];
 }

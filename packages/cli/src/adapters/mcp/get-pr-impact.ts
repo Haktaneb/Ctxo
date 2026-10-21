@@ -218,6 +218,7 @@ export function handleGetPrImpact(
           violations: relevant,
           confidence: violationResult.confidence,
           snapshotsAvailable: violationResult.snapshotsAvailable,
+          distinctCommits: violationResult.distinctCommits,
           ...(violationResult.hint ? { hint: violationResult.hint } : {}),
         };
         clustersAffected = computeClustersAffected(snapshot, changedSymbolIds);

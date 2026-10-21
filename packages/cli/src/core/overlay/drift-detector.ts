@@ -1,4 +1,5 @@
 import type { CommunityEntry, CommunitySnapshot, DriftEvent } from '../types.js';
+import { distinctCommitCount, priorCommitSnapshots } from './snapshot-history.js';
 
 export type DriftStability = 'stable' | 'transient' | 'unverified';
 
@@ -18,7 +19,10 @@ export interface DriftStabilitySummary {
 export interface DriftDetectionResult {
   readonly events: DriftEventWithStability[];
   readonly confidence: 'high' | 'medium' | 'low';
+  /** Snapshots in the history that was passed in (a file count, kept for compatibility). */
   readonly snapshotsAvailable: number;
+  /** Commits other than the current one that the history covers; `confidence` is built on this. */
+  readonly distinctCommits: number;
   readonly stability: DriftStabilitySummary;
   readonly hint?: string;
 }
@@ -52,16 +56,22 @@ export class DriftDetector {
     history: readonly CommunitySnapshot[],
   ): DriftDetectionResult {
     const snapshotsAvailable = history.length;
-    const previous = history[0];
-    const anchor = history[1];
+    const distinctCommits = distinctCommitCount(history, current.commitSha);
+    const confidence = confidenceFor(distinctCommits);
+    const hint = hintFor(distinctCommits);
+    // `previous` is the newest history entry from a different commit than `current`; `anchor` is the
+    // newest one from a third, older commit. A snapshot of the current commit, or a second snapshot of
+    // one commit, is not another point in time to compare with.
+    const [previous, anchor] = priorCommitSnapshots(history, current.commitSha);
 
     if (!previous) {
       return {
         events: [],
-        confidence: 'low',
+        confidence,
         snapshotsAvailable,
+        distinctCommits,
         stability: { stable: 0, transient: 0, unverified: 0 },
-        hint: 'No prior snapshot available — install the post-commit hook (`ctxo init`), run `ctxo watch`, or add `ctxo index --check` to CI so the drift history accumulates.',
+        hint,
       };
     }
 
@@ -142,10 +152,11 @@ export class DriftDetector {
 
     return {
       events,
-      confidence: confidenceFor(snapshotsAvailable),
+      confidence,
       snapshotsAvailable,
+      distinctCommits,
       stability,
-      hint: hintFor(snapshotsAvailable),
+      hint,
     };
   }
 
@@ -211,13 +222,13 @@ function jaccard(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
   return union === 0 ? 0 : intersection / union;
 }
 
-function confidenceFor(snapshots: number): 'high' | 'medium' | 'low' {
-  if (snapshots >= 7) return 'high';
-  if (snapshots >= 3) return 'medium';
+function confidenceFor(distinctCommits: number): 'high' | 'medium' | 'low' {
+  if (distinctCommits >= 7) return 'high';
+  if (distinctCommits >= 3) return 'medium';
   return 'low';
 }
 
-function hintFor(snapshots: number): string | undefined {
-  if (snapshots >= 3) return undefined;
-  return 'Install post-commit hook or run `ctxo index` more often to build a richer drift history.';
+function hintFor(distinctCommits: number): string | undefined {
+  if (distinctCommits >= 3) return undefined;
+  return 'Install the post-commit hook (`ctxo init`) or run `ctxo index` after commits to build history; `ctxo index --check` does not record snapshots.';
 }

@@ -538,8 +538,9 @@ export class IndexCommand {
     }
 
     // Phase 2d: Persist derived architectural artifacts (drift events + boundary
-    // violations). These are computed AFTER `writeCommunities` so that the
-    // freshly-archived previous snapshot is available at history[0]. Consumers:
+    // violations). These are computed AFTER `writeCommunities` so that history
+    // already holds the previous commit's snapshot (see writeArchitectureArtifacts).
+    // Consumers:
     // - pages/ctxo-visualizer.html Architecture tab reads these directly.
     // - Future MCP tools can surface the same data without recomputing.
     if (communitySnapshot) {
@@ -1060,9 +1061,12 @@ export class IndexCommand {
 
   /**
    * Writes drift-events.json and boundary-violations.json next to
-   * communities.json. Must be called AFTER storage.writeCommunities so the
-   * prior snapshot has already been archived into communities.history/ and
-   * can serve as history[0] for the detectors.
+   * communities.json. Must be called AFTER storage.writeCommunities, which
+   * archives the previous current snapshot into communities.history/ when HEAD
+   * has moved since the last run. On a rerun at the same HEAD nothing is
+   * archived (history holds one snapshot per commit), so history[0] is then the
+   * snapshot of the last different commit. The detectors compare only with
+   * earlier commits and count distinct commits, whatever else the history holds.
    */
   private writeArchitectureArtifacts(
     indices: readonly FileIndex[],
@@ -1096,6 +1100,7 @@ export class IndexCommand {
         commitSha: snapshot.commitSha,
         confidence: driftResult.confidence,
         snapshotsAvailable: driftResult.snapshotsAvailable,
+        distinctCommits: driftResult.distinctCommits,
         ...(driftResult.hint ? { hint: driftResult.hint } : {}),
         events: driftResult.events,
       };
@@ -1105,6 +1110,7 @@ export class IndexCommand {
         commitSha: snapshot.commitSha,
         confidence: violationsResult.confidence,
         snapshotsAvailable: violationsResult.snapshotsAvailable,
+        distinctCommits: violationsResult.distinctCommits,
         ...(violationsResult.hint ? { hint: violationsResult.hint } : {}),
         violations: violationsResult.violations,
       };
