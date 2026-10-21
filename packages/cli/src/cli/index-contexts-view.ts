@@ -22,6 +22,8 @@ export interface ContextsViewStepOptions {
   /** This run's snapshot: god nodes and commitSha. */
   readonly snapshot: CommunitySnapshot;
   readonly symbolPageRank: ReadonlyMap<string, number>;
+  /** Whether an absolute path exists in the working tree; `existsSync` unless a test counts the checks. */
+  readonly exists?: (path: string) => boolean;
 }
 
 /** The file part of a symbol ID (`<file>::<name>::<kind>`). */
@@ -38,13 +40,23 @@ function fileOfSymbol(symbolId: string): string {
  */
 export function computeAndWriteContextsView(options: ContextsViewStepOptions): ContextsView {
   const { projectRoot, ctxoRoot, config, indices, snapshot, symbolPageRank } = options;
+  const exists = options.exists ?? existsSync;
 
   const settings = resolveContextsViewConfig(config);
   const isTest = createTestFileClassifier(indexTestPatterns(config));
   const isIgnored = makeGlobMatcher(indexIgnorePatterns(config));
   const isExcluded = makeGlobMatcher([...settings.exclude]);
-  const isNode = (file: string): boolean =>
-    !isTest(file) && !isIgnored(file) && !isExcluded(file) && existsSync(join(projectRoot, file));
+  // The file graph asks about each file once per index entry and up to four times per co-change pair, and
+  // every answer costs a stat and a dozen glob matches, so each file is decided once.
+  const nodeDecisions = new Map<string, boolean>();
+  const isNode = (file: string): boolean => {
+    let decision = nodeDecisions.get(file);
+    if (decision === undefined) {
+      decision = !isTest(file) && !isIgnored(file) && !isExcluded(file) && exists(join(projectRoot, file));
+      nodeDecisions.set(file, decision);
+    }
+    return decision;
+  };
 
   const godNodeFiles = new Set(snapshot.godNodes.map((god) => fileOfSymbol(god.symbolId)));
   const filePageRank = new Map<string, number>();

@@ -1,11 +1,30 @@
 import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from 'vitest';
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { IndexCommand } from '../index-command.js';
+import * as pluginLoader from '../plugin-loader.js';
 import { ContextsViewReader } from '../../adapters/storage/contexts-view-reader.js';
 import type { ContextsView } from '../../core/contexts-view/contexts-view-builder.js';
 import { isolateGitEnv, type IsolatedGitEnv } from './git-test-env.js';
-import { cleanupTempProjects, createProject, type TempProject } from './helpers/temp-project.js';
+import {
+  cleanupTempProjects,
+  createProject,
+  IDENTITY,
+  trackTempDir,
+  type TempProject,
+} from './helpers/temp-project.js';
 
 const BILLING = ['src/billing/a.ts', 'src/billing/b.ts', 'src/billing/c.ts'];
 
@@ -162,5 +181,75 @@ describe('IndexCommand contexts view', () => {
     await new IndexCommand(project.dir).run();
 
     expect(readFileSync(viewPath(project.dir), 'utf-8')).toBe(good);
+  });
+});
+
+// A repository no language plugin indexes (Python here) still has a history: with cochange.include, a full
+// run computes co-change for the included files and a contexts view from co-change alone.
+describe('IndexCommand contexts view without a language plugin', () => {
+  const BILLING_PY = ['billing/invoice.py', 'billing/ledger.py', 'billing/tax.py'];
+  const SHIPPING_PY = ['shipping/label.py', 'shipping/parcel.py', 'shipping/route.py'];
+  let gitEnv: IsolatedGitEnv;
+
+  beforeEach(() => {
+    gitEnv = isolateGitEnv();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(pluginLoader, 'loadPlugins').mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    gitEnv.restore();
+    cleanupTempProjects();
+  });
+
+  /** A repository of .py files only: billing and shipping each change together three times after the first commit. */
+  function pythonRepo(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'ctxo-pyrepo-'));
+    trackTempDir(dir);
+    let day = 0;
+    const git = (args: string[], env: Record<string, string> = {}): void => {
+      execFileSync('git', args, { cwd: dir, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+    };
+    const commit = (message: string, files: readonly string[]): void => {
+      for (const file of files) {
+        mkdirSync(join(dir, dirname(file)), { recursive: true });
+        appendFileSync(join(dir, file), `# ${message}\n`);
+      }
+      day += 1;
+      const when = `${1_700_000_000 + day * 86_400} +0000`;
+      git(['add', '-A']);
+      git([...IDENTITY, 'commit', '-q', '-m', message], { GIT_AUTHOR_DATE: when, GIT_COMMITTER_DATE: when });
+    };
+    git(['init', '-q']);
+    mkdirSync(join(dir, '.git', 'info'), { recursive: true });
+    appendFileSync(join(dir, '.git', 'info', 'exclude'), '.ctxo/\n.gitignore\n');
+    commit('init', [...BILLING_PY, ...SHIPPING_PY]);
+    for (let n = 1; n <= 3; n++) {
+      commit(`billing ${n}`, BILLING_PY);
+      commit(`shipping ${n}`, SHIPPING_PY);
+    }
+    writeConfig(dir, 'cochange:\n  include:\n    - "**/*.py"\n');
+    return dir;
+  }
+
+  it('a full run with an empty index writes co-changes.json and a co-change-only contexts view', async () => {
+    const dir = pythonRepo();
+
+    await new IndexCommand(dir).run({});
+
+    const coChanges = JSON.parse(readFileSync(join(dir, '.ctxo', 'index', 'co-changes.json'), 'utf-8')) as {
+      entries: Array<{ file1: string; file2: string }>;
+    };
+    expect(coChanges.entries.length).toBeGreaterThan(0);
+    expect(coChanges.entries.every((entry) => entry.file1.endsWith('.py') && entry.file2.endsWith('.py'))).toBe(true);
+    const view = readView(dir);
+    expect(view.candidates.map(({ id, label, files }) => ({ id, label, files }))).toEqual([
+      { id: 1, label: 'billing', files: BILLING_PY },
+      { id: 2, label: 'shipping', files: SHIPPING_PY },
+    ]);
+    // Co-change only: no symbol edge between candidates.
+    expect(view.candidates.every((candidate) => candidate.crossEdges.length === 0)).toBe(true);
+    expect(view.coverage).toEqual({ files: 6, covered: 6, ratio: 1 });
   });
 });

@@ -382,11 +382,16 @@ export class IndexCommand {
     // has nothing to rebuild. A full run that only pruned rebuilds them only when no entry survives, because
     // then the project really is empty: with entries left, a run that discovered nothing (no language plugin
     // loaded here, say right after a clone) would replace the committed snapshot with an empty one.
+    // A full run on an empty index also rebuilds them when cochange.include names files: no language plugin
+    // indexes them, but their co-change makes a contexts view, and with no committed entry there is no
+    // snapshot of indexed files to protect.
+    const emptyIndex = !incremental && survivingEntries === 0;
+    const coChangeIncludesFiles = resolveCoChangeConfig(ignore.config).include.length > 0;
     const refreshProducts =
       pendingIndices.length > 0 ||
       removedPaths.size > 0 ||
       options.commit !== undefined ||
-      (stalePaths.length > 0 && survivingEntries === 0);
+      (emptyIndex && (stalePaths.length > 0 || coChangeIncludesFiles));
 
     // Co-change is built from git history and the committed entries, not from what this run discovered, so
     // it also follows a run that only pruned.

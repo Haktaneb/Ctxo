@@ -117,11 +117,13 @@ function jaccard(a: readonly string[], b: readonly string[]): number {
 
 /**
  * Type names (case-insensitive) that appear in two or more candidates with member sets whose Jaccard
- * similarity is below 0.5 for at least one pair of occurrences in different candidates.
+ * similarity is below 0.5 for at least one pair of occurrences in different candidates. `similarity` is
+ * Jaccard; a test can pass its own to count the comparisons.
  */
 export function findTermCollisions(
   candidates: readonly TermSource[],
   symbolsByFile: ReadonlyMap<string, readonly SymbolNode[]>,
+  similarity: (a: readonly string[], b: readonly string[]) => number = jaccard,
 ): TermCollision[] {
   const byName = new Map<string, TermOccurrence[]>();
 
@@ -147,12 +149,13 @@ export function findTermCollisions(
   const collisions: TermCollision[] = [];
   for (const [name, occurrences] of byName) {
     let min = Infinity;
-    for (let i = 0; i < occurrences.length; i++) {
-      for (let j = i + 1; j < occurrences.length; j++) {
+    // Jaccard is never below 0, so once a pair reaches it no later pair can lower the minimum.
+    for (let i = 0; i < occurrences.length && min > 0; i++) {
+      for (let j = i + 1; j < occurrences.length && min > 0; j++) {
         const a = occurrences[i]!;
         const b = occurrences[j]!;
         if (a.candidate === b.candidate) continue;
-        min = Math.min(min, jaccard(a.members, b.members));
+        min = Math.min(min, similarity(a.members, b.members));
       }
     }
     if (min === Infinity || min >= COLLISION_JACCARD_THRESHOLD) continue;

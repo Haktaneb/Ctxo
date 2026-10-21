@@ -175,6 +175,46 @@ describe('findTermCollisions', () => {
     expect(result[0]!.minJaccard).toBe(0.333);
   });
 
+  /** `count` files each declaring `Order`, spread over four candidates; `members(i)` names the members of file i. */
+  function orderGroup(count: number, members: (i: number) => string[]) {
+    const entries: Record<string, SymbolNode[]> = {};
+    const files: string[][] = [[], [], [], []];
+    for (let i = 0; i < count; i++) {
+      const file = `f${String(i).padStart(3, '0')}.ts`;
+      entries[file] = [
+        sym(file, 'Order', 'class'),
+        ...members(i).map((member) => sym(file, `Order.${member}`, 'method')),
+      ];
+      files[i % 4]!.push(file);
+    }
+    return { symbols: byFile(entries), candidates: files.map((list, i) => ({ id: i + 1, files: list })) };
+  }
+
+  it('a large same-name group still gives minJaccard 0 when only its last occurrence shares no member', () => {
+    // Every pair of the first 199 shares `id` and differs in one member (Jaccard 1/3); the last one shares nothing.
+    const { symbols, candidates } = orderGroup(200, (i) => (i === 199 ? ['weight'] : ['id', `m${i}`]));
+
+    const result = findTermCollisions(candidates, symbols);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]!.minJaccard).toBe(0);
+    expect(result[0]!.occurrences).toHaveLength(200);
+  });
+
+  it('stops comparing a group once a pair of occurrences shares no member', () => {
+    const { symbols, candidates } = orderGroup(200, (i) => [`m${i}`]);
+    let compared = 0;
+    const disjoint = (): number => {
+      compared++;
+      return 0;
+    };
+
+    const result = findTermCollisions(candidates, symbols, disjoint);
+
+    expect(result[0]!.minJaccard).toBe(0);
+    expect(compared).toBe(1);
+  });
+
   it('matches names case-insensitively', () => {
     const symbols = byFile({
       'a.ts': [sym('a.ts', 'Account', 'class'), sym('a.ts', 'Account.one', 'method')],
