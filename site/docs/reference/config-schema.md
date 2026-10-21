@@ -82,7 +82,7 @@ contextsView:             # candidate contexts (file level)
 | `contextsView.weights.coChange` | number >= 0 | `1.0` | Weight of the co-change signal in a file-pair edge. |
 | `contextsView.exclude` | string[] | `[]` | Picomatch globs for files to leave out of the file graph. |
 | `contextsView.hubs.auto` | boolean | `true` | Detect hubs automatically (fan-in and god nodes). |
-| `contextsView.hubs.topPercent` | number, 0 to 100 | `1` | A file is a fan-in hub when it is in the top N% of files by dependents. |
+| `contextsView.hubs.topPercent` | number > 0 and <= 100 | `1` | A file is a fan-in hub when it is in the top N% of files by dependents. |
 | `contextsView.hubs.minDependents` | integer >= 1 | `10` | Minimum distinct dependent files for a fan-in hub. |
 | `contextsView.hubs.paths` | string[] | `[]` | Picomatch globs for files that lose all their edges (configured hubs). |
 | `contextsView.resolution` | number > 0 | `1.0` | Louvain resolution for the file graph. |

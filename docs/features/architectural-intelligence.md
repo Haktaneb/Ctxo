@@ -164,7 +164,7 @@ A PR review signal that catches **new cross-cluster edges**:
 
 The symbol-level clusters above answer "which symbols move together". A context map needs one level up: "which **files** form a candidate bounded context". Louvain over symbols tends to put a shared interface and hundreds of symbols in one community, so the contexts view clusters **files** instead, blends two signals, and damps the files everybody depends on. It never names a domain: the label is a suggestion, the terms and collisions are input for a glossary session.
 
-How it is built (on every `ctxo index`, written to `.ctxo/index/contexts-view.json`):
+How it is built (on every index run that re-indexes files, written to `.ctxo/index/contexts-view.json`):
 
 1. **Graph.** Nodes are indexed non-test files (minus `index.ignore` and `contextsView.exclude`) plus co-change-only files brought in by `cochange.include`. Test files come from one shared classifier (default globs plus `index.tests`).
 2. **Weights.** Dependency weight is the log-normalised count of distinct symbol edges between two files (`calls`, `extends`, `implements`, `uses` count 1.0, `imports` 0.5). Co-change weight is the pair's `frequency` from `co-changes.json`. Combined: `weights.dependency * dep + weights.coChange * co`, both 1.0 by default.
@@ -195,7 +195,7 @@ What you get:
 
 `candidate: <id>` returns one candidate in full (up to 15 files, cross-candidate edges by kind, top co-change pairs), its hubs (up to 50) and its collisions (up to 10, each with that candidate's own occurrences, 5 members each, plus `memberCount`). `ctxo contexts` prints a table to stderr and `ctxo contexts --json` prints the whole artifact to stdout. See the [`ctxo contexts` page](../../site/docs/cli/contexts.md).
 
-**Refresh cadence.** The view is recomputed on every `ctxo index` run (full or incremental), which includes the post-commit hook's `ctxo index --commit HEAD`. `--skip-community` skips it, and `ctxo watch` does not refresh it: run `ctxo index` before reading the view after a long watch session.
+**Refresh cadence.** The view is recomputed on every index run that re-indexes files (full or incremental) and on every post-commit hook run (`ctxo index --commit HEAD`); a run with nothing to re-index does not rewrite it. `--skip-community` skips it, and `ctxo watch` does not refresh it: run `ctxo index` before reading the view after a long watch session.
 
 **Tuning.** Defaults were validated on a private production repository (12 candidates, 99% coverage, 17 hubs, 5 collisions, a 0.85 s step in a 31 s warm index). `ctxo contexts` shows what the current config produces; change one `contextsView` setting at a time. Decisions and evidence are in [ADR-016's addendum](../architecture/ADR/adr-016-co-change-engine-and-snapshot-policy.md).
 

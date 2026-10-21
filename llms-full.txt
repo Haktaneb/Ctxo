@@ -349,7 +349,7 @@ Design record: docs/architecture/ADR/adr-016-co-change-engine-and-snapshot-polic
 
 Candidate bounded contexts, computed by `ctxo index` and written to `.ctxo/index/contexts-view.json` (committed). Louvain runs on a file graph whose edges blend dependency weight (distinct symbol edges, log-normalised) and co-change frequency; hub files (fan-in or god nodes) have their edges damped by `1 / log2(2 + dependents)` and are listed separately. Groups smaller than `minCandidateFiles` fold into a neighbour; files with no edge are `unclustered`. Each candidate has a suggested label (longest common directory; PageRank fallback at the repo root), a `fingerprint`, cohesion, top terms, cross-candidate edges and co-change pairs. Collisions are type names that appear in two candidates with different member shapes (Jaccard below 0.5). No domain is named automatically.
 
-Refresh: every `ctxo index` run (full, `--files`, `--commit`, so also the post-commit hook); skipped by `--skip-community`; not refreshed by `ctxo watch`.
+Refresh: every index run that re-indexes files (full, `--files`, `--commit`, so also every post-commit hook run); skipped by `--skip-community`; not refreshed by `ctxo watch`.
 
 Surfaces: `get_architectural_overlay({ mode: "contexts" })` (summary first, `candidate: <id>` for one in full) and `ctxo contexts [--json]` (table to stderr, full artifact to stdout; without a view it exits 0 with `found: false`).
 

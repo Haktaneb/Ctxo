@@ -100,8 +100,9 @@ If `contexts-view.json` is missing or unreadable, the table mode prints
 
 ## When the view is refreshed
 
-- On every `ctxo index` run, full or incremental (`--files`, `--commit`), which
-  includes the post-commit hook.
+- On every `ctxo index` run that re-indexes files, full or incremental (`--files`,
+  `--commit`), and on every post-commit hook run. A run with nothing to re-index
+  does not rewrite it.
 - Not on `ctxo index --skip-community`.
 - Not by [`ctxo watch`](./watch.md). Run `ctxo index` after a long watch session
   before reading the view.

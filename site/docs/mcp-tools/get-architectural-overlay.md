@@ -253,5 +253,5 @@ Community data comes from `.ctxo/index/communities.json`, written during `ctxo i
 :::
 
 - **Low modularity (< 0.3) often means low-quality edges** (syntax-only tree-sitter fallback). Check `edgeQuality`.
-- **Contexts need a recent `ctxo index`.** The view is recomputed on every index run and by the post-commit hook, but not by `ctxo watch`, and not with `--skip-community`. Without a view, `mode: "contexts"` returns `found: false`.
+- **Contexts need a recent `ctxo index`.** The view is recomputed on every index run that re-indexes files (and on every post-commit hook run), but not by `ctxo watch`, and not with `--skip-community`. Without a view, `mode: "contexts"` returns `found: false`.
 - **Labels can collide across clusters with identical path prefixes** — disambiguation adds a numeric suffix (e.g. `src/shared (2)`).

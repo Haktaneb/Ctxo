@@ -78,8 +78,8 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo with five packages. Per-packag
   bounded contexts from file-level Louvain over a blend of dependency and co-change edges, with hub
   files damped. Each candidate has a suggested label, fingerprint, cohesion, top terms,
   cross-candidate edges and co-change pairs; type names whose shapes differ between candidates are
-  listed as collisions. The view is recomputed on every index run and the post-commit hook, skipped
-  by `--skip-community`, and not refreshed by `ctxo watch`.
+  listed as collisions. The view is recomputed on every index run that re-indexes files (and on every post-commit
+  hook run), skipped by `--skip-community`, and not refreshed by `ctxo watch`.
 - `get_architectural_overlay` gains `mode: "contexts"` (summary of every candidate, with hubs and
   collisions capped at 50) and a `candidate: <id>` argument that returns one candidate in full.
   `candidates` joins the truncatable fields of the response envelope.
