@@ -837,7 +837,9 @@ describe('IndexCommand incremental runs', () => {
     it('does not make a full run delete a snapshot from the history', async () => {
       commitGreetAndTypes(project, 1);
       await new IndexCommand(project.dir).run();
-      await new IndexCommand(project.dir).run(); // the second run archives the first snapshot
+      // History holds one snapshot per commit, so only a run on a new commit archives the first snapshot.
+      commitGreetAndTypes(project, 1);
+      await new IndexCommand(project.dir).run();
       const historyDir = join(project.dir, '.ctxo', 'index', 'communities.history');
       const archived = readdirSync(historyDir).filter((name) => name.endsWith('.json'));
       expect(archived.length).toBeGreaterThan(0);
