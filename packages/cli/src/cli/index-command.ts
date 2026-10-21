@@ -193,13 +193,14 @@ export class IndexCommand {
     // Files of the committed index that this run drops: deleted, renamed away, or gone from the working tree.
     let removedPaths: ReadonlySet<string> = new Set();
     if (incremental) {
-      const selection = this.selectIncrementalFiles(
+      const selection = await this.selectIncrementalFiles(
         [...(options.files ?? []), ...(options.file ? [options.file] : [])],
         commitChanges,
         registry,
         ignore.ignoreFile,
         workspaces.kept,
         new Set(committedIndex().map((idx) => idx.file)),
+        gitAdapter,
       );
       files = selection.changed.map((path) => join(this.projectRoot, path));
       removedPaths = new Set(selection.removed);
@@ -350,10 +351,14 @@ export class IndexCommand {
     // A full run also prunes the index entries that went stale: the source file is gone from the working
     // tree, or index.ignore / index.ignoreProjects now excludes it. Left in place they would come back into
     // the merged index of the next incremental run. An entry of a file that exists and is not excluded is
-    // never pruned, even when no plugin loaded here handles it: another machine may have indexed it.
+    // never pruned, even when no plugin loaded here handles it: another machine may have indexed it. Nor is
+    // the entry of a path that git tracks but marks skip-worktree (a sparse checkout).
     const stalePaths = incremental
       ? []
-      : this.findStaleEntries(committedIndex(), new Set(pendingIndices.map(({ fileIndex }) => fileIndex.file)), isIgnored);
+      : await this.withoutSkipWorktree(
+          this.findStaleEntries(committedIndex(), new Set(pendingIndices.map(({ fileIndex }) => fileIndex.file)), isIgnored),
+          gitAdapter,
+        );
 
     // The global products (co-change, communities, architecture artifacts) are refreshed whenever the run
     // changed the index, also when the last indexed file left it. A --commit run refreshes them even when it
@@ -813,20 +818,22 @@ export class IndexCommand {
    * The candidates are the paths asked for plus the files the commit added, modified or renamed to. Only
    * a file that a full run would index is kept: a language plugin handles it, `index.ignore` does not
    * match it, and it lies inside a workspace that `index.ignoreProjects` leaves in. A candidate that is
-   * gone from the working tree is dropped from the index instead of being re-indexed.
+   * gone from the working tree is dropped from the index instead of being re-indexed, unless git tracks
+   * it as skip-worktree (a sparse checkout): then it is merely not checked out and its entry stays.
    *
    * What the commit deleted, and the old path of what it renamed, are dropped without looking at the
    * working tree: on a case-insensitive file system a case-only rename leaves the old name "existing".
    * Only paths that have an entry in the committed index are reported as removed.
    */
-  private selectIncrementalFiles(
+  private async selectIncrementalFiles(
     paths: readonly string[],
     commitChanges: readonly FileChange[],
     registry: LanguageAdapterRegistry,
     ignoreFile: (path: string) => boolean,
     workspaces: readonly string[],
     indexedFiles: ReadonlySet<string>,
-  ): { changed: string[]; removed: string[] } {
+    gitAdapter: SimpleGitAdapter,
+  ): Promise<{ changed: string[]; removed: string[] }> {
     const candidates = new Set<string>();
     const listed = new Set<string>();
     const dropped = new Set<string>();
@@ -855,6 +862,7 @@ export class IndexCommand {
       workspaces.some((workspace) => isInsideDirectory(workspace, join(this.projectRoot, path)));
 
     const changed: string[] = [];
+    const missing: string[] = [];
     let skippedListed = 0;
     for (const path of [...candidates].sort(compareCodepoint)) {
       if (!isIndexable(path)) {
@@ -863,9 +871,12 @@ export class IndexCommand {
       } else if (existsSync(join(this.projectRoot, path))) {
         changed.push(path);
       } else {
-        dropped.add(path);
+        missing.push(path);
       }
     }
+    // A candidate that is missing from the working tree is dropped from the index, unless git tracks it
+    // as skip-worktree: then it is merely not checked out, and its entry stays.
+    for (const path of await this.withoutSkipWorktree(missing, gitAdapter)) dropped.add(path);
     if (skippedListed > 0) {
       console.error(
         `[ctxo] Skipped ${skippedListed} listed file(s) that a full run would not index (no language plugin, index.ignore, or outside the workspaces)`,
@@ -877,6 +888,25 @@ export class IndexCommand {
       .filter((path) => indexedFiles.has(path) && !reindexed.has(path))
       .sort(compareCodepoint);
     return { changed, removed };
+  }
+
+  /**
+   * Keeps the candidates whose index entry may be deleted. A path that git tracks but marks skip-worktree
+   * (a sparse checkout) is absent from the working tree on purpose, so a missing source says nothing about
+   * it, and its entry is committed data that other machines rely on. One git call lists those paths, made
+   * only when there is a candidate and kept in memory. If git cannot answer, nothing is deleted this run
+   * (fail safe).
+   */
+  private async withoutSkipWorktree(candidates: readonly string[], gitAdapter: SimpleGitAdapter): Promise<string[]> {
+    if (candidates.length === 0) return [];
+    const skipWorktree = await gitAdapter.getSkipWorktreePaths();
+    if (skipWorktree === undefined) {
+      console.error(
+        '[ctxo] Could not tell which paths git marks skip-worktree (sparse checkout): no stale index entry was removed',
+      );
+      return [];
+    }
+    return candidates.filter((path) => !skipWorktree.has(path));
   }
 
   /**

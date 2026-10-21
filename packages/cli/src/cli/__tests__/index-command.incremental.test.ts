@@ -512,6 +512,99 @@ describe('IndexCommand incremental runs', () => {
     });
   });
 
+  // In a sparse checkout git still tracks the files outside the cone, but they are absent from the working
+  // tree on purpose. Their committed index entries are data that other machines rely on, so nothing may
+  // delete one just because its source is not on disk.
+  describe('a path that git marks skip-worktree is never removed from the index', () => {
+    async function indexThenGoSparse(): Promise<void> {
+      project.write('src/off-cone.ts', 'export const offCone = 1;\n');
+      project.write('src/gone.ts', 'export const gone = 1;\n');
+      project.commit('feat: files for the sparse checkout');
+      await new IndexCommand(project.dir).run();
+      expect(hasIndexEntry(project.dir, 'src/off-cone.ts')).toBe(true);
+      expect(hasIndexEntry(project.dir, 'src/gone.ts')).toBe(true);
+      // The checkout turns sparse: git still tracks the file, but it is no longer in the working tree.
+      project.git('update-index', '--skip-worktree', 'src/off-cone.ts');
+      rmSync(join(project.dir, 'src', 'off-cone.ts'));
+      // A file that is really deleted, for contrast.
+      rmSync(join(project.dir, 'src', 'gone.ts'));
+    }
+
+    const FAIL_SAFE_WARNING =
+      '[ctxo] Could not tell which paths git marks skip-worktree (sparse checkout): no stale index entry was removed';
+
+    it('a full run keeps the JSON of the skip-worktree path and still prunes the deleted file', async () => {
+      await indexThenGoSparse();
+      const skipWorktree = vi.spyOn(SimpleGitAdapter.prototype, 'getSkipWorktreePaths'); // calls through
+
+      await new IndexCommand(project.dir).run();
+
+      expect(hasIndexEntry(project.dir, 'src/off-cone.ts')).toBe(true);
+      expect(hasIndexEntry(project.dir, 'src/gone.ts')).toBe(false);
+      expect(skipWorktree).toHaveBeenCalledTimes(1); // one git call, kept in memory
+      expect(logLines(errorSpy).some((line) => line.startsWith('[ctxo] Pruned 1 stale index entry'))).toBe(true);
+    });
+
+    it('a full run prunes nothing when git cannot tell which paths are skip-worktree', async () => {
+      await indexThenGoSparse();
+      vi.spyOn(SimpleGitAdapter.prototype, 'getSkipWorktreePaths').mockResolvedValue(undefined);
+      errorSpy.mockClear();
+
+      await new IndexCommand(project.dir).run();
+
+      expect(hasIndexEntry(project.dir, 'src/off-cone.ts')).toBe(true);
+      expect(hasIndexEntry(project.dir, 'src/gone.ts')).toBe(true); // fail safe: not even the deleted one
+      expect(logLines(errorSpy)).toContain(FAIL_SAFE_WARNING);
+      expect(logLines(errorSpy).some((line) => line.includes('Pruned'))).toBe(false);
+    });
+
+    it('a full run does not ask git while nothing looks stale', async () => {
+      await new IndexCommand(project.dir).run();
+      const skipWorktree = vi.spyOn(SimpleGitAdapter.prototype, 'getSkipWorktreePaths');
+
+      await new IndexCommand(project.dir).run();
+
+      expect(skipWorktree).not.toHaveBeenCalled();
+    });
+
+    it('--files keeps the JSON of a skip-worktree path that is absent and drops the one that is deleted', async () => {
+      await indexThenGoSparse();
+
+      await new IndexCommand(project.dir).run({ files: ['src/off-cone.ts', 'src/gone.ts'] });
+
+      expect(hasIndexEntry(project.dir, 'src/off-cone.ts')).toBe(true);
+      expect(hasIndexEntry(project.dir, 'src/gone.ts')).toBe(false);
+    });
+
+    it('--files removes nothing when git cannot tell which paths are skip-worktree', async () => {
+      await indexThenGoSparse();
+      vi.spyOn(SimpleGitAdapter.prototype, 'getSkipWorktreePaths').mockResolvedValue(undefined);
+      errorSpy.mockClear();
+
+      await new IndexCommand(project.dir).run({ files: ['src/off-cone.ts', 'src/gone.ts'] });
+
+      expect(hasIndexEntry(project.dir, 'src/off-cone.ts')).toBe(true);
+      expect(hasIndexEntry(project.dir, 'src/gone.ts')).toBe(true);
+      expect(logLines(errorSpy)).toContain(FAIL_SAFE_WARNING);
+    });
+
+    it('--commit HEAD keeps the JSON of a skip-worktree path that the commit changed', async () => {
+      project.write('src/off-cone.ts', 'export const offCone = 1;\n');
+      project.commit('feat: add the file');
+      await new IndexCommand(project.dir).run();
+      // A commit that reaches the repository without the file being in this working tree (a cherry-pick,
+      // say) lists it as modified while it is absent.
+      project.append('src/off-cone.ts', '// edited elsewhere');
+      project.commit('feat: edit the file');
+      project.git('update-index', '--skip-worktree', 'src/off-cone.ts');
+      rmSync(join(project.dir, 'src', 'off-cone.ts'));
+
+      await new IndexCommand(project.dir).run({ commit: 'HEAD' });
+
+      expect(hasIndexEntry(project.dir, 'src/off-cone.ts')).toBe(true);
+    });
+  });
+
   // The co-change matrix is committed and shared, so it must not depend on which language plugins the
   // machine that wrote it had loaded: every file the committed index knows, and that still exists and is
   // not excluded, takes part, whether this run could index it or not. Communities, SQLite and the

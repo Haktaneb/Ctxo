@@ -73,6 +73,21 @@ function parseNameStatus(tokens: readonly string[]): FileChange[] {
   return changes;
 }
 
+/**
+ * Parses `git ls-files -t -z`: records of `<tag> <path>`, where the tag is H for an ordinary tracked file
+ * and S for a skip-worktree one (others mark unmerged, removed, modified or untracked paths). Returns the
+ * paths tagged S.
+ */
+function parseSkipWorktree(raw: string): Set<string> {
+  const paths = new Set<string>();
+  for (const record of raw.split(NUL)) {
+    if (record.length > 2 && record.charAt(0) === 'S' && record.charAt(1) === ' ') {
+      paths.add(toForwardSlashes(record.slice(2)));
+    }
+  }
+  return paths;
+}
+
 /** Parses `git log` output produced with CHANGE_LOG_FORMAT, `--name-status` and `-z`. */
 function parseChangeLog(raw: string): CommitChangeSet[] {
   const commits: CommitChangeSet[] = [];
@@ -199,6 +214,16 @@ export class SimpleGitAdapter implements IGitPort {
       return { head, headCommittedAt, commits: parseChangeLog(await this.git.raw(args)) };
     } catch (err) {
       log.error(`Failed to read change log: ${(err as Error).message}`);
+      return undefined;
+    }
+  }
+
+  async getSkipWorktreePaths(): Promise<ReadonlySet<string> | undefined> {
+    try {
+      // One listing of the index with status tags; -z keeps unusual names verbatim.
+      return parseSkipWorktree(await this.git.raw([...STABLE_OUTPUT_CONFIG, 'ls-files', '-t', '-z']));
+    } catch (err) {
+      log.error(`Failed to list skip-worktree paths: ${(err as Error).message}`);
       return undefined;
     }
   }

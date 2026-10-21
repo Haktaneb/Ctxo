@@ -27,4 +27,11 @@ export interface IGitPort {
    * fails.
    */
   getCommitFileChanges?(rev: string): Promise<FileChange[] | undefined>;
+  /**
+   * Tracked paths that git marks skip-worktree (a sparse checkout, or
+   * `git update-index --skip-worktree`): git still tracks them, but they are
+   * deliberately absent from the working tree. Repo-relative, forward slashes.
+   * Returns undefined when git fails, so a caller can fail safe.
+   */
+  getSkipWorktreePaths?(): Promise<ReadonlySet<string> | undefined>;
 }
