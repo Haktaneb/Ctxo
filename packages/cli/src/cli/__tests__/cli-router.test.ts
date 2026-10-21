@@ -360,3 +360,120 @@ describe('cli-router index --files, --file and --commit', () => {
     expect(help).toMatch(/--commit <rev>[^\n]*commit just made[^\n]*HEAD/);
   });
 });
+
+describe('cli-router subcommand --help and -h', () => {
+  // Every command class is replaced before routing: a subcommand that ignores --help must never run for real
+  // (a real `init` or `index` here would write hooks and files into the repository running the tests).
+  const SUBCOMMANDS = [
+    'index', 'sync', 'status', 'verify-index', 'init', 'watch', 'stats', 'doctor', 'visualize',
+    'version', 'install', 'update', 'blast-radius', 'gate', 'gate-hook',
+  ];
+
+  let constructed: string[];
+  let errorSpy: MockInstance<typeof console.error>;
+  let exitSpy: MockInstance<typeof process.exit>;
+  let previousExitCode: typeof process.exitCode;
+
+  beforeEach(async () => {
+    constructed = [];
+    previousExitCode = process.exitCode;
+    // Keyed by class name; every one of them is replaced.
+    const modules: Record<string, Record<string, unknown>> = {
+      IndexCommand: await import('../index-command.js'),
+      SyncCommand: await import('../sync-command.js'),
+      StatusCommand: await import('../status-command.js'),
+      VerifyCommand: await import('../verify-command.js'),
+      InitCommand: await import('../init-command.js'),
+      WatchCommand: await import('../watch-command.js'),
+      StatsCommand: await import('../stats-command.js'),
+      DoctorCommand: await import('../doctor-command.js'),
+      VisualizeCommand: await import('../visualize-command.js'),
+      VersionCommand: await import('../version-command.js'),
+      InstallCommand: await import('../install-command.js'),
+      UpdateCommand: await import('../update-command.js'),
+      BlastRadiusCommand: await import('../blast-radius-command.js'),
+      GateHookCommand: await import('../gate-hook-command.js'),
+      GateCommand: await import('../gate-command.js'),
+    };
+    for (const [name, mod] of Object.entries(modules)) {
+      vi.spyOn(mod, name as never).mockImplementation(
+        function (this: unknown) {
+          constructed.push(name);
+          const noop = async () => {};
+          return { run: noop, preview: noop };
+        } as never,
+      );
+    }
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    process.exitCode = previousExitCode;
+  });
+
+  function printed(): string {
+    return errorSpy.mock.calls.map((args) => String(args[0])).join('\n');
+  }
+
+  it.each(['--help', '-h'])('ctxo index %s prints the help and does not index', async (flag) => {
+    await new CliRouter(process.cwd()).route(['index', flag]);
+
+    expect(constructed).toEqual([]);
+    expect(printed()).toMatch(/--max-history N[^\n]*intent depth only/);
+    expect(printed()).toContain('--cochange-commits <n|all>');
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(previousExitCode);
+  });
+
+  it.each(['--help', '-h'])('ctxo init %s prints the help and does not run init', async (flag) => {
+    await new CliRouter(process.cwd()).route(['init', flag]);
+
+    expect(constructed).toEqual([]);
+    expect(printed()).toContain('ctxo init');
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(previousExitCode);
+  });
+
+  it.each(SUBCOMMANDS)('ctxo %s --help prints the help, runs nothing and exits 0', async (command) => {
+    await new CliRouter(process.cwd()).route([command, '--help']);
+
+    expect(constructed).toEqual([]);
+    expect(printed()).toContain('Usage:');
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(previousExitCode);
+  });
+
+  it.each(SUBCOMMANDS)('ctxo %s -h prints the help, runs nothing and exits 0', async (command) => {
+    await new CliRouter(process.cwd()).route([command, '-h']);
+
+    expect(constructed).toEqual([]);
+    expect(printed()).toContain('Usage:');
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it('prints the help when --help follows other flags, and does not parse them', async () => {
+    // --max-history 0 is invalid, but help wins: no error, no exit
+    await new CliRouter(process.cwd()).route(['index', '--max-history', '0', '--help']);
+
+    expect(constructed).toEqual([]);
+    expect(printed()).toContain('Usage:');
+    expect(printed()).not.toContain('requires a positive integer');
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it('ctxo blast-radius --help does not treat the flag as a symbol id', async () => {
+    await new CliRouter(process.cwd()).route(['blast-radius', '--help']);
+
+    expect(constructed).toEqual([]);
+    expect(printed()).not.toContain('usage: ctxo blast-radius <symbolId>');
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it('keeps running the subcommand when no help flag is given', async () => {
+    await new CliRouter(process.cwd()).route(['sync']);
+
+    expect(constructed).toEqual(['SyncCommand']);
+  });
+});

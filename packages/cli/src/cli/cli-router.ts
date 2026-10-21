@@ -71,6 +71,14 @@ export class CliRouter {
   async route(args: string[]): Promise<void> {
     const command = args[0];
 
+    // --help and -h win over everything else on the line, before any flag is parsed or any command is built:
+    // `ctxo index --help` must print the help and never start an index run, and `ctxo init --help` never an init.
+    // There is one help text for the whole CLI (each command has its own lines in it).
+    if (!command || args.some((arg) => arg === '--help' || arg === '-h')) {
+      this.printHelp();
+      return;
+    }
+
     if (command === '--version' || command === '-v' || command === '-V') {
       const verbose = args.includes('--verbose');
       const json = args.includes('--json');
@@ -85,11 +93,6 @@ export class CliRouter {
         verbose: !json && !short,
         json,
       });
-      return;
-    }
-
-    if (!command || command === '--help' || command === '-h') {
-      this.printHelp();
       return;
     }
 
@@ -356,6 +359,8 @@ Usage:
   ctxo                      Start MCP server (stdio transport)
   ctxo index                Build full codebase index (--max-history N controls intent depth only, default 20)
   ctxo index --skip-community    Skip Louvain community detection for faster indexing
+  ctxo index --skip-history      Skip git history (no intent or anti-patterns; co-changes.json is not refreshed)
+  ctxo index --check             Fail if the index is stale; writes nothing and records no snapshot
   ctxo index --cochange-commits <n|all>   Co-change window in commits (default 2000, or "all")
   ctxo index --cochange-since <duration>  Co-change window by age from HEAD (30d, 2w, 12m, 1y)
   ctxo index --files <path...>   Re-index only these files (repo-relative); the rest of the index is kept
@@ -365,12 +370,13 @@ Usage:
   ctxo watch                Start file watcher for incremental re-indexing
   ctxo verify-index         CI gate: fail if index is stale
   ctxo status               Show index manifest
-  ctxo init                 Interactive setup (tools, rules, hooks)
+  ctxo init                 Interactive setup (tools, rules, hooks); the post-commit hook runs ctxo index --commit HEAD
   ctxo init --rules         Regenerate AI tool rules only
   ctxo init --tools a,b -y  Non-interactive (claude-code,cursor,...)
   ctxo init --dry-run       Preview what would be created
   ctxo stats                Show usage statistics (--json, --days N, --clear)
   ctxo doctor               Health check all subsystems (--json, --quiet)
+  ctxo doctor --fix         Apply fixes in dependency order, such as upgrading the post-commit hook (--dry-run, --yes)
   ctxo visualize            Generate interactive dependency graph HTML
   ctxo visualize --max-nodes N   Limit to top N symbols by PageRank
   ctxo visualize --output PATH   Write HTML to custom path
@@ -393,7 +399,7 @@ Usage:
   ctxo --version --verbose       Print core + plugins + runtime
   ctxo --version --json          Machine-readable version payload
   ctxo version                   Subcommand — verbose by default
-  ctxo --help               Show this help message
+  ctxo --help               Show this help message (also ctxo <command> --help; nothing is run)
 `.trim());
   }
 }
