@@ -1,0 +1,63 @@
+import { describe, it, expect } from 'vitest';
+import {
+  canonicalFromParts,
+  canonicalSqlName,
+  DEFAULT_SQL_SCHEMA,
+  foldAsciiLower,
+  SQL_DIALECT,
+} from '../names.js';
+
+describe('canonicalSqlName', () => {
+  it('canonicalizes bracketed, bare and quoted names', () => {
+    expect(canonicalSqlName('[dbo].[Loan Items]')).toBe('dbo.loan items');
+    expect(canonicalSqlName('Loans')).toBe('dbo.loans');
+    expect(canonicalSqlName('"Sales"."Orders"')).toBe('sales.orders');
+  });
+
+  it('skips 3- and 4-part names, temp tables, table variables and system schemas', () => {
+    expect(canonicalSqlName('OtherDb.dbo.Loans')).toBeUndefined();
+    expect(canonicalSqlName('srv.db.dbo.Loans')).toBeUndefined();
+    expect(canonicalSqlName('#tmp')).toBeUndefined();
+    expect(canonicalSqlName('##g')).toBeUndefined();
+    expect(canonicalSqlName('@t')).toBeUndefined();
+    expect(canonicalSqlName('sys.tables')).toBeUndefined();
+    expect(canonicalSqlName('INFORMATION_SCHEMA.COLUMNS')).toBeUndefined();
+  });
+
+  it('folds ASCII A-Z only and keeps every other character', () => {
+    expect(canonicalSqlName('[dbo].[Ödünç Kaydı]')).toBe('dbo.Ödünç kaydı');
+    expect(canonicalSqlName('KİTAP')).toBe('dbo.kİtap');
+    expect(canonicalSqlName('ÜYE')).toBe('dbo.Üye');
+  });
+
+  it('returns undefined for text that is not a plain multipart name', () => {
+    expect(canonicalSqlName('')).toBeUndefined();
+    expect(canonicalSqlName('a.')).toBeUndefined();
+    expect(canonicalSqlName('.a')).toBeUndefined();
+    expect(canonicalSqlName('a..b')).toBeUndefined();
+    expect(canonicalSqlName('a b')).toBeUndefined();
+    expect(canonicalSqlName("'a'")).toBeUndefined();
+  });
+});
+
+describe('canonicalFromParts', () => {
+  it('applies the dbo default and skips empty parts', () => {
+    expect(canonicalFromParts(['Loans'])).toBe('dbo.loans');
+    expect(canonicalFromParts(['Lib', 'Loans'])).toBe('lib.loans');
+    expect(canonicalFromParts([])).toBeUndefined();
+    expect(canonicalFromParts(['a', ''])).toBeUndefined();
+    expect(canonicalFromParts(['a', 'b', 'c'])).toBeUndefined();
+  });
+
+  it('skips a part containing "::" so it cannot collide with the symbol ID form', () => {
+    expect(canonicalFromParts(['a::b'])).toBeUndefined();
+    expect(canonicalFromParts(['x::y', 'Loans'])).toBeUndefined();
+    expect(canonicalFromParts(['dbo', 'a::table'])).toBeUndefined();
+  });
+
+  it('exposes the dialect and default schema constants', () => {
+    expect(SQL_DIALECT).toBe('tsql');
+    expect(DEFAULT_SQL_SCHEMA).toBe('dbo');
+    expect(foldAsciiLower('ABC xyz Ü İ')).toBe('abc xyz Ü İ');
+  });
+});
