@@ -113,7 +113,8 @@ describe('buildContextsView', () => {
     expect(undamped.candidates).toHaveLength(1);
     expect(undamped.candidates[0]!.files).toEqual([...BILLING, DB, ...SHIPPING]);
     expect(undamped.candidates[0]!.fileCount).toBe(11);
-    expect(undamped.candidates[0]!.label).toBe('src');
+    // Common directory `src` is the root of every node, so the first member (no PageRank) names it.
+    expect(undamped.candidates[0]!.label).toBe('src/billing');
   });
 
   it('configured hubs lose every edge and are reported without a candidate', () => {
@@ -197,6 +198,43 @@ describe('buildContextsView', () => {
       input(indices, { settings, filePageRank: new Map([['lib/x.ts', 0.9], ['src/y.ts', 0.1]]) }),
     );
     expect(labelOf(xRanksHigher, 'lib/x.ts')).toBe('lib');
+  });
+
+  it('labels fall back to the top-PageRank member\'s directory when the common directory is the root of every node', () => {
+    const billing = 'src/App/Billing/x.ts';
+    const shipping = 'src/App/Shipping/y.ts';
+    const loansA = 'src/App/Loans/a.ts';
+    const loansB = 'src/App/Loans/b.ts';
+    const view = buildContextsView(
+      input(
+        [
+          plain(billing, [[fnOf(billing), fnOf(shipping), 'calls']]),
+          plain(shipping),
+          plain(loansA, [[fnOf(loansA), fnOf(loansB), 'calls']]),
+          plain(loansB),
+        ],
+        {
+          settings: withSettings({ minCandidateFiles: 2 }),
+          filePageRank: new Map([[billing, 0.9], [shipping, 0.1], [loansA, 0.5], [loansB, 0.4]]),
+        },
+      ),
+    );
+
+    expect(view.candidates.map((candidate) => [candidate.label, candidate.files])).toEqual([
+      ['src/App/Billing', [billing, shipping]],
+      ['src/App/Loans', [loansA, loansB]],
+    ]);
+  });
+
+  it('a view whose nodes share no directory keeps the repo-root rule', () => {
+    const view = buildContextsView(
+      input([plain('a.ts', [[fnOf('a.ts'), fnOf('b.ts'), 'calls']]), plain('b.ts'), ...clique(['src/x/p.ts', 'src/x/q.ts'])], {
+        settings: withSettings({ minCandidateFiles: 2 }),
+      }),
+    );
+
+    expect(byLabel(view.candidates, '.').files).toEqual(['a.ts', 'b.ts']);
+    expect(byLabel(view.candidates, 'src/x').files).toEqual(['src/x/p.ts', 'src/x/q.ts']);
   });
 
   it('labels treat backslashes as directory separators', () => {

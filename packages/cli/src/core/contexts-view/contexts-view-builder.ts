@@ -122,12 +122,9 @@ function directorySegments(file: string): string[] {
   return parts;
 }
 
-/**
- * The longest common directory of the members or, when that is the repo root, the directory of the member
- * with the highest file-level PageRank (ties: first member). The repo root is `.`. Separators are written
- * as `/`; the segments keep their spelling (spaces, non-ASCII, case).
- */
-function labelOf(files: readonly string[], pageRank: ReadonlyMap<string, number>): string {
+/** The longest common directory segments of the given files; empty when they share none. */
+function commonDirectory(files: readonly string[]): string[] {
+  if (files.length === 0) return [];
   let common = directorySegments(files[0]!);
   for (const file of files.slice(1)) {
     const segments = directorySegments(file);
@@ -135,7 +132,21 @@ function labelOf(files: readonly string[], pageRank: ReadonlyMap<string, number>
     while (length < common.length && length < segments.length && common[length] === segments[length]) length++;
     common = common.slice(0, length);
   }
-  if (common.length === 0) {
+  return common;
+}
+
+/**
+ * The longest common directory of the members or, when that is the repo root or the common root of all
+ * nodes, the directory of the member with the highest file-level PageRank (ties: first member). The repo
+ * root is `.`. Separators are written as `/`; the segments keep their spelling (spaces, non-ASCII, case).
+ */
+function labelOf(
+  files: readonly string[],
+  pageRank: ReadonlyMap<string, number>,
+  nodeRoot: readonly string[],
+): string {
+  let common = commonDirectory(files);
+  if (common.length === 0 || (common.length === nodeRoot.length && common.every((s, i) => s === nodeRoot[i]))) {
     let top = files[0]!;
     for (const file of files) {
       if ((pageRank.get(file) ?? 0) > (pageRank.get(top) ?? 0)) top = file;
@@ -217,8 +228,9 @@ export function buildContextsView(input: ContextsViewInput): ContextsView {
   }
 
   // IDs and labels: size desc, then label, then first member; IDs start at 1.
+  const nodeRoot = commonDirectory(graph.files);
   const ordered = folded.groups
-    .map((files) => ({ files, label: labelOf(files, input.filePageRank) }))
+    .map((files) => ({ files, label: labelOf(files, input.filePageRank, nodeRoot) }))
     .sort(
       (x, y) =>
         y.files.length - x.files.length || compareCodepoint(x.label, y.label) || compareCodepoint(x.files[0]!, y.files[0]!),
