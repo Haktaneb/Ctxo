@@ -988,7 +988,7 @@ export class IndexCommand {
    * run (discovery order) and an incremental run (directory order of the committed JSON, new files
    * appended) would otherwise feed them differently, and could write different snapshots for one HEAD.
    *
-   * Full index run (`base` undefined): returns the indices of this run as they are. A full run indexes
+   * Full index run (`base` undefined): returns the indices of this run, sorted by file. A full run indexes
    * every file it discovers, so they are the whole project. The committed JSON of a file this machine
    * cannot index (no plugin loaded here) stays in the index, because a full run prunes only entries that
    * went stale, but it is not part of these local graph products.

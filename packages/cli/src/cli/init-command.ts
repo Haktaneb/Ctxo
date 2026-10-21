@@ -359,7 +359,7 @@ export class InitCommand {
       results.push(
         hooks.installed
           ? `${pc.green('\u2713')} ${pc.bold('post-commit, post-merge')}  ${pc.dim('hooks installed')}`
-          : `${pc.yellow('!')} ${pc.bold('post-commit, post-merge')}  ${pc.dim('skipped \u2014 shared hooks directory (see warning above)')}`,
+          : `${pc.yellow('!')} ${pc.bold('post-commit, post-merge')}  ${pc.dim('skipped - shared hooks directory (see warning above)')}`,
       );
     }
 

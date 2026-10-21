@@ -20,7 +20,7 @@ export interface DriftStabilitySummary {
 export interface DriftDetectionResult {
   readonly events: DriftEventWithStability[];
   readonly confidence: 'high' | 'medium' | 'low';
-  /** Snapshots in the history that was passed in (a file count, kept for compatibility). */
+  /** The number of history entries passed in (kept for compatibility; confidence is built on `distinctCommits`). */
   readonly snapshotsAvailable: number;
   /** Commits other than the current one that the history covers; `confidence` is built on this. */
   readonly distinctCommits: number;

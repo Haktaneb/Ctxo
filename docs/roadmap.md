@@ -24,7 +24,7 @@ Items on deck for v0.7.x / v0.8. No strict ordering — picked by impact + readi
 
 ### Platform & transport
 
-- **`CTXO_HTTP_PORT` shadows CLI commands** - pre-existing. With `CTXO_HTTP_PORT` set, `packages/cli/src/index.ts` takes the HTTP server path before the CLI router, so `ctxo <command>` (including `ctxo <command> --help`) starts the server instead of printing help or running. Found while fixing `--help` for #157; route CLI arguments to the router first when a subcommand is given.
+- **`CTXO_HTTP_PORT` shadows CLI commands** - _fixed (see [CHANGELOG](../CHANGELOG.md))_. `CTXO_HTTP_PORT` used to take the HTTP server path before the CLI router, so with the variable exported `ctxo <command>` (including `ctxo <command> --help` and the post-commit hook's `ctxo index --commit HEAD`, which made `git commit` hang) started a server. The variable now counts only when `ctxo` runs without arguments; with arguments the CLI router runs. `--http [--port <n>]` still selects HTTP mode.
 
 - **Streamable HTTP transport** — for remote/cloud MCP usage. Today Ctxo is stdio-only. Needed for hosted scenarios and non-local clients.
 

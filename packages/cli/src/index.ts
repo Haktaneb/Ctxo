@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { startHttpTransport } from './adapters/transport/http-server-transport.js';
+import { resolveHttpPort } from './cli/http-port.js';
 import { z } from 'zod';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -72,8 +73,8 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
 
   // HTTP mode — check before CLI routing since --http is a server flag, not a CLI command
-  const httpPortStr = process.env.CTXO_HTTP_PORT
-    || (args.includes('--http') ? (args[args.indexOf('--port') + 1] || '3001') : null);
+  // CTXO_HTTP_PORT only counts when there are no CLI arguments (see resolveHttpPort).
+  const httpPortStr = resolveHttpPort(args, process.env);
 
   if (!httpPortStr && args.length > 0) {
     // CLI mode

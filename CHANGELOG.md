@@ -117,6 +117,10 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo with five packages. Per-packag
   `ctxo doctor --fix` deleted them. `ctxo status` and language detection read the same names (#157).
 - Drift events, boundary violations and god nodes are sorted by code point, not by the machine's
   locale, so `communities.json` and the artifacts next to it are the same on every machine (#157).
+- With `CTXO_HTTP_PORT` exported, `ctxo <command>` started the HTTP server instead of running, so
+  the post-commit hook (`ctxo index --commit HEAD`) never returned and `git commit` hung. The
+  variable now applies only when `ctxo` runs without arguments; `ctxo --http` without `--port`
+  now listens on its default port 3001 instead of failing on an invalid port (#157).
 
 ## [0.8.0-alpha.0] - 2026-04-13
 

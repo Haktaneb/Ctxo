@@ -15,6 +15,7 @@ vi.mock('@clack/prompts', () => ({
   spinner: vi.fn(() => ({ start: vi.fn(), stop: vi.fn() })),
 }));
 
+import * as clack from '@clack/prompts';
 import { InitCommand } from '../init-command.js';
 import { isolateGitEnv, type IsolatedGitEnv } from './git-test-env.js';
 
@@ -46,5 +47,24 @@ describe('InitCommand - declined git hooks advice', () => {
     expect(output).toContain('ctxo init');
     expect(output).not.toMatch(/add `ctxo index --check` to CI/);
     expect(existsSync(join(dir, '.git', 'hooks', 'post-commit'))).toBe(false);
+  });
+});
+
+describe('InitCommand - hooks skipped for a shared hooks directory', () => {
+  it('says so in the summary box with a plain hyphen, not an em dash', async () => {
+    const shared = mkdtempSync(join(tmpdir(), 'ctxo-init-shared-hooks-'));
+    try {
+      gitEnv.setGlobalHooksPath(shared);
+      // The one confirm of this flow (install hooks?) is answered yes.
+      vi.mocked(clack.confirm).mockResolvedValueOnce(true);
+
+      await new InitCommand(dir).run({ noInstall: true });
+
+      const output = errorSpy.mock.calls.map((call) => String(call[0])).join('\n');
+      expect(output).toContain('skipped - shared hooks directory (see warning above)');
+      expect(output).not.toContain(`skipped ${String.fromCharCode(0x2014)} shared hooks directory`);
+    } finally {
+      rmSync(shared, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
   });
 });
