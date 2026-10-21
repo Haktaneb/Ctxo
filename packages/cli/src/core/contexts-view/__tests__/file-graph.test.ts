@@ -314,3 +314,23 @@ describe('applyHubDamping', () => {
     ]);
   });
 });
+
+describe('buildFileGraph data edges', () => {
+  it('a file that only reads a table gains no edgeCounts entry and no dependent for that table file', () => {
+    const indices: FileIndex[] = [
+      fileIndex('app.ts', ['run'], [['app.ts::run::function', 'dbo.t::table', 'reads']]),
+      {
+        file: 'db/t.sql',
+        lastModified: 1,
+        symbols: [sym('db/t.sql', 'dbo.t', 'table')],
+        edges: [],
+        intent: [],
+        antiPatterns: [],
+      },
+    ];
+    const graph = buildFileGraph({ indices, isNode: all, weights: WEIGHTS });
+    expect(graph.edgeCounts).toEqual([]);
+    expect(graph.dependents.get('db/t.sql')).toBe(0);
+    expect(graph.pairs).toEqual([]);
+  });
+});

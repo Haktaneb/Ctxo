@@ -195,4 +195,56 @@ describe('SymbolGraph', () => {
       expect(g2.getReverseEdges('y/Bar.java::Bar::class').length).toBe(0);
     });
   });
+
+  describe('data references', () => {
+    it('a 2-part table reference resolves to a view of that name', () => {
+      const graph = new SymbolGraph();
+      graph.addNode(makeNode('src/a.ts::run::function'));
+      graph.addNode(makeNode('db/v.sql::dbo.loans::view'));
+      graph.addEdge(makeEdge('src/a.ts::run::function', 'dbo.loans::table', 'reads'));
+      expect(graph.getForwardEdges('src/a.ts::run::function')[0]!.to).toBe('db/v.sql::dbo.loans::view');
+    });
+
+    it('a data reference defined in several files resolves to the first file in sorted path order whatever the insertion order', () => {
+      const graph = new SymbolGraph();
+      graph.addNode(makeNode('src/a.ts::run::function'));
+      graph.addNode(makeNode('db/b.sql::dbo.loans::table'));
+      graph.addNode(makeNode('db/a.sql::dbo.loans::table'));
+      graph.addEdge(makeEdge('src/a.ts::run::function', 'dbo.loans::table', 'reads'));
+      expect(graph.getForwardEdges('src/a.ts::run::function')[0]!.to).toBe('db/a.sql::dbo.loans::table');
+    });
+
+    it('a procedure reference defined in two files resolves to the first file', () => {
+      const graph = new SymbolGraph();
+      graph.addNode(makeNode('src/a.ts::run::function'));
+      graph.addNode(makeNode('db/z.sql::dbo.sp::procedure'));
+      graph.addNode(makeNode('db/m.sql::dbo.sp::procedure'));
+      graph.addEdge(makeEdge('src/a.ts::run::function', 'dbo.sp::procedure', 'executes'));
+      expect(graph.getForwardEdges('src/a.ts::run::function')[0]!.to).toBe('db/m.sql::dbo.sp::procedure');
+    });
+
+    it('an undefined data reference stays unresolved', () => {
+      const graph = new SymbolGraph();
+      graph.addNode(makeNode('src/a.ts::run::function'));
+      graph.addEdge(makeEdge('src/a.ts::run::function', 'dbo.audit::table', 'writes'));
+      expect(graph.getForwardEdges('src/a.ts::run::function')[0]!.to).toBe('dbo.audit::table');
+    });
+
+    it('getNode resolves a 2-part data reference', () => {
+      const graph = new SymbolGraph();
+      graph.addNode(makeNode('db/b.sql::dbo.loans::table'));
+      graph.addNode(makeNode('db/a.sql::dbo.loans::view'));
+      expect(graph.getNode('dbo.loans::table')?.symbolId).toBe('db/a.sql::dbo.loans::view');
+      expect(graph.hasNode('dbo.loans::table')).toBe(true);
+    });
+
+    it('an ambiguous class name reference stays unresolved as before', () => {
+      const graph = new SymbolGraph();
+      graph.addNode(makeNode('src/a.ts::run::function'));
+      graph.addNode(makeNode('src/x/Bar.java::Bar::class'));
+      graph.addNode(makeNode('src/y/Bar.java::Bar::class'));
+      graph.addEdge(makeEdge('src/a.ts::run::function', 'Bar::class', 'uses'));
+      expect(graph.getForwardEdges('src/a.ts::run::function')[0]!.to).toBe('Bar::class');
+    });
+  });
 });

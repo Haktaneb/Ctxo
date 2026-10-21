@@ -1,5 +1,5 @@
 import type { SymbolGraph } from '../graph/symbol-graph.js';
-import type { CoChangeEntry } from '../types.js';
+import { EDGE_KINDS, type CoChangeEntry, type EdgeKind } from '../types.js';
 
 export type ImpactConfidence = 'confirmed' | 'likely' | 'potential';
 
@@ -22,8 +22,17 @@ export interface BlastRadiusResult {
   readonly overallRiskScore: number;
 }
 
-const CONFIRMED_KINDS = new Set(['calls', 'extends', 'implements']);
-const LIKELY_KINDS = new Set(['uses']);
+/** Confidence of a dependent by edge kind. The data edges are exact references, so they are confirmed. */
+export const EDGE_KIND_CONFIDENCE: Readonly<Record<EdgeKind, ImpactConfidence>> = {
+  calls: 'confirmed',
+  extends: 'confirmed',
+  implements: 'confirmed',
+  reads: 'confirmed',
+  writes: 'confirmed',
+  executes: 'confirmed',
+  uses: 'likely',
+  imports: 'potential',
+};
 
 const CONFIDENCE_RANK: Record<ImpactConfidence, number> = {
   confirmed: 2,
@@ -32,9 +41,7 @@ const CONFIDENCE_RANK: Record<ImpactConfidence, number> = {
 };
 
 function edgeKindToConfidence(kind: string): ImpactConfidence {
-  if (CONFIRMED_KINDS.has(kind)) return 'confirmed';
-  if (LIKELY_KINDS.has(kind)) return 'likely';
-  return 'potential';
+  return (EDGE_KINDS as readonly string[]).includes(kind) ? EDGE_KIND_CONFIDENCE[kind as EdgeKind] : 'potential';
 }
 
 export class BlastRadiusCalculator {

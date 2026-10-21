@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { SymbolGraph } from '../../graph/symbol-graph.js';
-import { BlastRadiusCalculator } from '../blast-radius-calculator.js';
+import { BlastRadiusCalculator, EDGE_KIND_CONFIDENCE } from '../blast-radius-calculator.js';
+import { EDGE_KINDS } from '../../types.js';
 import type { CoChangeEntry, SymbolNode } from '../../types.js';
 
 function makeNode(id: string): SymbolNode {
@@ -401,5 +402,22 @@ describe('BlastRadiusCalculator', () => {
     expect(result.likelyCount).toBe(1);
     expect(result.confirmedCount).toBe(0);
     expect(result.potentialCount).toBe(0);
+  });
+
+  it('reads, writes and executes dependents are confirmed', () => {
+    const graph = new SymbolGraph();
+    for (const id of ['db/t.sql::dbo.t::table', 'src/r.ts::r::function', 'src/w.ts::w::function', 'src/e.ts::e::function']) {
+      graph.addNode(makeNode(id));
+    }
+    graph.addEdge({ from: 'src/r.ts::r::function', to: 'db/t.sql::dbo.t::table', kind: 'reads' });
+    graph.addEdge({ from: 'src/w.ts::w::function', to: 'db/t.sql::dbo.t::table', kind: 'writes' });
+    graph.addEdge({ from: 'src/e.ts::e::function', to: 'db/t.sql::dbo.t::table', kind: 'executes' });
+    const result = calc.calculate(graph, 'db/t.sql::dbo.t::table');
+    expect(result.confirmedCount).toBe(3);
+    expect(result.impactedSymbols.every((e) => e.confidence === 'confirmed')).toBe(true);
+  });
+
+  it('every edge kind has a confidence', () => {
+    expect(Object.keys(EDGE_KIND_CONFIDENCE).sort()).toEqual([...EDGE_KINDS].sort());
   });
 });

@@ -1,5 +1,6 @@
 import { compareCodepoint } from '../compare-codepoint.js';
 import { makeGlobMatcher, type ResolvedContextsViewConfig } from '../config/load-config.js';
+import { DATA_EDGE_KINDS } from '../data-coupling/data-kinds.js';
 import { SymbolGraph } from '../graph/symbol-graph.js';
 import type { CoChangeEntry, EdgeKind, FileIndex } from '../types.js';
 
@@ -109,6 +110,8 @@ export function buildFileGraph(input: FileGraphInput): FileGraph {
   const directed = new Map<string, FileEdgeCount>();
   const dependentSets = new Map<string, Set<string>>();
   for (const edge of graph.allEdges()) {
+    // Data coupling is reported separately; data edges add no file edge count or dependent.
+    if (DATA_EDGE_KINDS.has(edge.kind)) continue;
     if (!symbolIds.has(edge.to)) continue;
     const from = fileOf(edge.from);
     const to = fileOf(edge.to);

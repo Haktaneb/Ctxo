@@ -40,6 +40,8 @@ export interface DeadCodeResult {
 // Patterns for files to exclude from dead code analysis
 const TEST_PATTERNS = [/__tests__/, /\.test\.ts$/, /\.spec\.ts$/, /\btests\//, /\bfixtures?\//];
 const CONFIG_PATTERNS = [/\.(config|rc)\.(ts|js|json)$/, /tsconfig/, /eslint/, /\.d\.ts$/];
+// SQL objects are reached by data edges and by runtime, never reported as dead
+const SQL_PATTERN = /\.sql$/i;
 
 // Framework lifecycle symbols — should never be flagged as dead
 const FRAMEWORK_PATTERNS = [
@@ -73,12 +75,12 @@ export class DeadCodeDetector {
     const allNodes = graph.allNodes();
 
     // Filter candidates — exclude tests/config by default
-    const candidates = options.includeTests
-      ? allNodes
-      : allNodes.filter((n) => {
-          const file = n.symbolId.split('::')[0] ?? '';
-          return !this.matchesAny(file, TEST_PATTERNS) && !this.matchesAny(file, CONFIG_PATTERNS);
-        });
+    const candidates = allNodes.filter((n) => {
+      const file = n.symbolId.split('::')[0] ?? '';
+      if (SQL_PATTERN.test(file)) return false;
+      if (options.includeTests) return true;
+      return !this.matchesAny(file, TEST_PATTERNS) && !this.matchesAny(file, CONFIG_PATTERNS);
+    });
 
     if (candidates.length === 0) {
       return { totalSymbols: 0, reachableSymbols: 0, deadSymbols: [], unusedExports: [], deadFiles: [], scaffolding: this.detectScaffolding(options.sourceContents), deadCodePercentage: 0 };

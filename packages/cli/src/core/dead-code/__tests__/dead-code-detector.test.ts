@@ -339,4 +339,13 @@ describe('DeadCodeDetector', () => {
 
     expect(result.scaffolding).toEqual([]);
   });
+
+  it('symbols of .sql files are never reported as dead and are not counted', () => {
+    const graph = new SymbolGraph();
+    graph.addNode(makeNode('db/t.sql::dbo.t::table'));
+    graph.addNode(makeNode('db/p.SQL::dbo.p::procedure'));
+    const result = detector.detect(graph);
+    expect(result.deadSymbols.map((d) => d.symbolId)).toEqual([]);
+    expect(result.totalSymbols).toBe(0);
+  });
 });

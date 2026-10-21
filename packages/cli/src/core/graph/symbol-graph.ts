@@ -1,3 +1,6 @@
+import { DATA_RESOURCE_KINDS } from '@ctxo/plugin-api';
+import { compareCodepoint } from '../compare-codepoint.js';
+import { isDataResourceKind } from '../data-coupling/data-kinds.js';
 import type { SymbolNode, GraphEdge } from '../types.js';
 
 export class SymbolGraph {
@@ -69,6 +72,8 @@ export class SymbolGraph {
     // Final fallback: name-reference targets (e.g. Java "Bar::class" or
     // "pkg.Bar::helper::method") carry name+kind but not the file path. Resolve
     // by name+kind ONLY when unambiguous (exactly one node matches).
+    const dataMatch = this.resolveDataReference(segs);
+    if (dataMatch) return dataMatch.symbolId;
     const nameKind = this.extractNameKind(segs);
     if (nameKind) {
       const candidates = this.nodesByNameAndKind.get(nameKind);
@@ -94,6 +99,8 @@ export class SymbolGraph {
     }
 
     // Final fallback: name-reference targets — resolve by name+kind only when unambiguous.
+    const dataMatch = this.resolveDataReference(segs);
+    if (dataMatch) return dataMatch;
     const nameKind = this.extractNameKind(segs);
     if (nameKind) {
       const candidates = this.nodesByNameAndKind.get(nameKind);
@@ -101,6 +108,27 @@ export class SymbolGraph {
     }
 
     return undefined;
+  }
+
+  /**
+   * Resolves a 2-part data reference (`dbo.loans::table`). A table or view reference is kind-agnostic
+   * across data resource kinds, a procedure reference matches procedures only. Several definitions
+   * resolve to the codepoint-smallest symbolId, which is the first file in sorted path order.
+   */
+  private resolveDataReference(segs: string[]): SymbolNode | undefined {
+    if (segs.length !== 2) return undefined;
+    const [name, kind] = segs as [string, string];
+    let kinds: readonly string[];
+    if (isDataResourceKind(kind)) kinds = DATA_RESOURCE_KINDS;
+    else if (kind === 'procedure') kinds = ['procedure'];
+    else return undefined;
+    let best: SymbolNode | undefined;
+    for (const k of kinds) {
+      for (const node of this.nodesByNameAndKind.get(`${name}::${k}`) ?? []) {
+        if (!best || compareCodepoint(node.symbolId, best.symbolId) < 0) best = node;
+      }
+    }
+    return best;
   }
 
   /**
