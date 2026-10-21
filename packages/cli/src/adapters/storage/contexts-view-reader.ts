@@ -17,6 +17,18 @@ const UNTIL_REWRITTEN = 'the contexts view is ignored until ctxo index rewrites 
 const UNTIL_RETRY = 'the contexts view is ignored for now and the next call tries again';
 
 /**
+ * Freezes the view and everything in it. It is shared by all callers, so an in-place edit (a sort, say)
+ * would silently change what every other caller sees; frozen, the first attempt throws instead.
+ */
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value)) deepFreeze(child);
+  }
+  return value;
+}
+
+/**
  * Reads `<ctxoRoot>/index/contexts-view.json`, validates it with `ContextsViewSchema` and caches the result
  * until the file's mtime or size changes. It never throws; `undefined` means there is no usable view.
  *
@@ -52,7 +64,9 @@ export class ContextsViewReader implements IContextsViewPort {
 
     // The stat is taken before the read, so a file replaced in between is cached under the older key and
     // the next call reads again.
-    const version = `${stats.mtimeMs}:${stats.size}`;
+    // The inode joins mtime and size because atomicWrite renames in a fresh file, so a same-size rewrite in
+    // one mtime tick still changes the key.
+    const version = `${stats.mtimeMs}:${stats.size}:${stats.ino}`;
     if (this.cached?.version === version) return this.cached.view;
     return this.load(version);
   }
@@ -92,7 +106,7 @@ export class ContextsViewReader implements IContextsViewPort {
       );
       return undefined;
     }
-    return parsed.data;
+    return deepFreeze(parsed.data);
   }
 
   private warnOnce(key: string, problem: string, consequence: string): void {

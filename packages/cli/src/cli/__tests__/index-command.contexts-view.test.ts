@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } fr
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { IndexCommand } from '../index-command.js';
+import { ContextsViewReader } from '../../adapters/storage/contexts-view-reader.js';
 import type { ContextsView } from '../../core/contexts-view/contexts-view-builder.js';
 import { isolateGitEnv, type IsolatedGitEnv } from './git-test-env.js';
 import { cleanupTempProjects, createProject, type TempProject } from './helpers/temp-project.js';
@@ -111,6 +112,35 @@ describe('IndexCommand contexts view', () => {
     await new IndexCommand(project.dir).run();
 
     expect(mentioned(readView(project.dir), 'src/billing/c.ts')).toBe(false);
+  });
+
+  it("an incremental run does not make a deleted file's committed JSON a node", async () => {
+    await new IndexCommand(project.dir).run();
+    expect(mentioned(readView(project.dir), 'src/billing/c.ts')).toBe(true);
+
+    // The incremental run merges the committed JSON of c.ts, which it neither re-indexes nor prunes.
+    rmSync(join(project.dir, 'src', 'billing', 'c.ts'));
+    await new IndexCommand(project.dir).run({ files: ['src/billing/a.ts'] });
+
+    expect(mentioned(readView(project.dir), 'src/billing/c.ts')).toBe(false);
+  });
+
+  it('logs "Contexts view skipped" and still finishes when the view cannot be written', async () => {
+    mkdirSync(viewPath(project.dir), { recursive: true });
+
+    await expect(new IndexCommand(project.dir).run()).resolves.toBeUndefined();
+
+    const lines = errorSpy.mock.calls.map((args) => args.join(' '));
+    expect(lines).toContainEqual(expect.stringMatching(/^\[ctxo\] Contexts view skipped: /));
+  });
+
+  it('the view a real index run writes passes the schema', async () => {
+    await new IndexCommand(project.dir).run();
+
+    const read = new ContextsViewReader(join(project.dir, '.ctxo')).readContextsView();
+
+    expect(read).toEqual(readView(project.dir));
+    expect(read?.candidates).toHaveLength(1);
   });
 
   it('an incremental --files run writes the same view as a full run', async () => {

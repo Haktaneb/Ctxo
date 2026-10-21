@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ContextsViewReader } from '../contexts-view-reader.js';
@@ -95,6 +95,45 @@ it('returns undefined and warns once for an invalid or conflict-marked file, the
   setMtime(viewPath, 1_700_000_200);
   expect(reader.readContextsView()).toEqual(view);
   expect(warn).toHaveBeenCalledTimes(2);
+});
+
+it('hands out a deeply frozen view, so an in-place edit throws instead of corrupting the cache', () => {
+  const reader = new ContextsViewReader(ctxoRoot);
+  writeFileSync(viewPath, JSON.stringify(sampleView(), null, 2), 'utf-8');
+
+  const view = reader.readContextsView()!;
+
+  expect(Object.isFrozen(view)).toBe(true);
+  expect(Object.isFrozen(view.candidates[0]!.files)).toBe(true);
+  expect(() => (view.candidates[0]!.files as string[]).sort()).toThrow(TypeError);
+  expect(() => (view.settings.weights as { dependency: number }).dependency = 9).toThrow(TypeError);
+});
+
+it('picks up a rewrite whose size changed while the mtime stayed equal', () => {
+  const reader = new ContextsViewReader(ctxoRoot);
+  const view = sampleView();
+  writeFileSync(viewPath, JSON.stringify(view, null, 2), 'utf-8');
+  setMtime(viewPath, 1_700_000_000);
+  expect(reader.readContextsView()?.commitSha).toBe('abc1234');
+
+  writeFileSync(viewPath, JSON.stringify({ ...view, commitSha: 'abc1234def5678' }, null, 2), 'utf-8');
+  setMtime(viewPath, 1_700_000_000);
+  expect(reader.readContextsView()?.commitSha).toBe('abc1234def5678');
+});
+
+it('picks up a same-size rewrite in the same mtime tick when the file was replaced by a rename', () => {
+  const reader = new ContextsViewReader(ctxoRoot);
+  const view = sampleView();
+  writeFileSync(viewPath, JSON.stringify(view, null, 2), 'utf-8');
+  setMtime(viewPath, 1_700_000_000);
+  expect(reader.readContextsView()?.commitSha).toBe('abc1234');
+
+  // What atomicWrite does: a fresh file renamed over the old one.
+  const tmpPath = `${viewPath}.tmp`;
+  writeFileSync(tmpPath, JSON.stringify({ ...view, commitSha: 'xyz9876' }, null, 2), 'utf-8');
+  setMtime(tmpPath, 1_700_000_000);
+  renameSync(tmpPath, viewPath);
+  expect(reader.readContextsView()?.commitSha).toBe('xyz9876');
 });
 
 it('picks up a rewritten file by its mtime', () => {

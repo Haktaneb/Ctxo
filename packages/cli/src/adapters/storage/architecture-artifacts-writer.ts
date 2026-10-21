@@ -71,7 +71,7 @@ export class ArchitectureArtifactsWriter {
     return true;
   }
 
-  readDriftEvents():DriftEventsArtifact | undefined {
+  readDriftEvents(): DriftEventsArtifact | undefined {
     const path = join(this.indexDir, DRIFT_FILE_NAME);
     if (!existsSync(path)) return undefined;
     try {
