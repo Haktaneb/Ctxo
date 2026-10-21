@@ -27,10 +27,11 @@ Two calls do the heavy lifting:
 
 - `getCommitHistory(filePath, maxCount)` uses `git log --follow` to track a
   file across renames.
-- `getBatchHistory(maxCount)` a single `git log --name-only` pass that
-  builds a `file -> commits` map for the whole repo. This is what `ctxo
-  index` uses so indexing stays under the 500 ms target even on large
-  repos.
+- `getChangeLog(maxCommits)` a single `git log --name-status -M` pass over
+  the non-merge commits reachable from HEAD. This is what `ctxo index` uses
+  to build the `file -> commits` map for the whole repo, so indexing stays
+  under the 500 ms target even on large repos. Renames are followed: a
+  file keeps the history it had under its old names.
 
 If git is not available, the adapter logs and returns empty arrays. No
 crash, no blocking.

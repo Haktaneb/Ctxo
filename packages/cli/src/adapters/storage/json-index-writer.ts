@@ -1,5 +1,6 @@
-import { mkdirSync, unlinkSync, existsSync } from 'node:fs';
+import { mkdirSync, unlinkSync, existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import type { FileIndex, CoChangeMatrix } from '../../core/types.js';
 import { atomicWrite } from './atomic-write.js';
 
@@ -23,10 +24,32 @@ export class JsonIndexWriter {
     this.atomicWrite(targetPath, json);
   }
 
-  writeCoChanges(matrix: CoChangeMatrix): void {
+  /**
+   * Writes `co-changes.json`. Returns false and leaves the file untouched when it already holds the
+   * same `window` and `entries`: `timestamp` is metadata, so a run that found nothing new does not
+   * show up as a change in git. Returns true when the file was (re)written.
+   */
+  writeCoChanges(matrix: CoChangeMatrix): boolean {
     mkdirSync(this.indexDir, { recursive: true });
     const targetPath = join(this.indexDir, 'co-changes.json');
+    if (this.holdsSameCoChanges(targetPath, matrix)) return false;
+
     this.atomicWrite(targetPath, JSON.stringify(matrix, null, 2));
+    return true;
+  }
+
+  /** True when the file at `targetPath` parses and has the same `window` and `entries` as `matrix`. */
+  private holdsSameCoChanges(targetPath: string, matrix: CoChangeMatrix): boolean {
+    if (!existsSync(targetPath)) return false;
+    try {
+      const existing: unknown = JSON.parse(readFileSync(targetPath, 'utf-8'));
+      if (existing === null || typeof existing !== 'object') return false;
+      const { window, entries } = existing as Partial<CoChangeMatrix>;
+      return isDeepStrictEqual(window, matrix.window) && isDeepStrictEqual(entries, matrix.entries);
+    } catch {
+      // Unreadable or not JSON: treat it as different, so the write below replaces it.
+      return false;
+    }
   }
 
   private atomicWrite(targetPath: string, content: string): void {

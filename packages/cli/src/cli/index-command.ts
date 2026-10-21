@@ -11,7 +11,10 @@ import {
   indexIgnorePatterns,
   indexIgnoreProjectPatterns,
   makeGlobMatcher,
+  resolveCoChangeConfig,
+  type ResolvedCoChangeConfig,
 } from '../core/config/load-config.js';
+import type { CtxoConfig } from '../core/config/config-schema.js';
 import {
   detectLanguages,
   decideNeededLanguages,
@@ -29,7 +32,10 @@ import { ArchitectureArtifactsWriter } from '../adapters/storage/architecture-ar
 import { CommunitySnapshotWriter } from '../adapters/storage/community-snapshot-writer.js';
 import { SimpleGitAdapter } from '../adapters/git/simple-git-adapter.js';
 import { RevertDetector } from '../core/why-context/revert-detector.js';
-import { aggregateCoChanges } from '../core/co-change/co-change-analyzer.js';
+import { buildCoChangeMatrix } from '../core/co-change/co-change-analyzer.js';
+import { parseCoChangeSince, selectWindow, sinceCutoff } from '../core/co-change/co-change-window.js';
+import { canonicalizeChangeLog, type CanonicalCommit } from '../core/history/change-log.js';
+import { buildIntentHistory } from '../core/history/intent-history.js';
 import { CommunityDetector } from '../core/overlay/community-detector.js';
 import { DriftDetector } from '../core/overlay/drift-detector.js';
 import { BoundaryViolationDetector } from '../core/overlay/boundary-violation-detector.js';
@@ -86,6 +92,8 @@ export class IndexCommand {
   }
 
   private loadIgnoreConfig(): {
+    /** The whole loaded config, so the run reads `.ctxo/config.yaml` (and warns about it) once. */
+    config: CtxoConfig;
     ignoreFile: (p: string) => boolean;
     ignoreProject: (p: string) => boolean;
     ignoreProjectPatterns: string[];
@@ -100,6 +108,7 @@ export class IndexCommand {
       console.error(`[ctxo] index.ignoreProjects: ${projectPatterns.length} pattern(s) active`);
     }
     return {
+      config,
       ignoreFile: makeGlobMatcher(filePatterns),
       ignoreProject: makeGlobMatcher(projectPatterns),
       ignoreProjectPatterns: projectPatterns,
@@ -112,7 +121,12 @@ export class IndexCommand {
     skipSideEffects?: boolean;
     skipHistory?: boolean;
     skipCommunity?: boolean;
+    /** Commits of history kept per file in `intent[]`. Does not affect the co-change window. */
     maxHistory?: number;
+    /** Co-change window in commits (`--cochange-commits`); overrides `cochange.maxCommits`. */
+    cochangeCommits?: number | 'all';
+    /** Co-change window by age, counted back from HEAD (`--cochange-since`); overrides `cochange.since`. */
+    cochangeSince?: string;
     installMissing?: boolean;
   } = {}): Promise<void> {
     if (options.check) {
@@ -251,29 +265,52 @@ export class IndexCommand {
     // Clean up pre-loaded sources
     tsMorphLike?.clearProjectSources();
 
-    // Phase 2: Batch git history (single git call for all files)
+    // The merged index (committed JSON plus the files indexed now) is read at most once per run:
+    // the co-change phase and community detection both need it.
+    let mergedIndices: FileIndex[] | undefined;
+    const mergedIndex = (): FileIndex[] => (mergedIndices ??= this.buildGraphInputIndices(pendingIndices));
+
+    // Phases 2 and 2b: one git pass (the change log) feeds both the per-file intent[] and the
+    // co-change matrix of the whole repository. The co-change window comes from `cochange.*` in
+    // config.yaml and `--cochange-*`; `--max-history` only sets how much history each file keeps.
     if (!options.skipHistory && pendingIndices.length > 0) {
+      const coChange = resolveCoChangeConfig(ignore.config, {
+        maxCommits: options.cochangeCommits,
+        since: options.cochangeSince,
+      });
       const maxHistory = options.maxHistory ?? 20;
-      const batchHistory = await gitAdapter.getBatchHistory?.(maxHistory) ?? new Map<string, import('../core/types.js').CommitRecord[]>();
+      const changeLog = await gitAdapter.getChangeLog(changeLogSize(coChange.maxCommits, maxHistory));
 
-      for (const { relativePath, fileIndex } of pendingIndices) {
-        const commits = batchHistory.get(relativePath) ?? [];
-        fileIndex.intent = commits.map((c) => ({
-          hash: c.hash,
-          message: c.message,
-          date: c.date,
-          kind: 'commit' as const,
-        }));
-        fileIndex.antiPatterns = revertDetector.detect(commits);
+      if (changeLog === undefined) {
+        // git failed, is missing, or the repository has no commit yet. intent[] stays empty, as it
+        // did when the old batch read failed, and co-changes.json is left alone: a failing git call
+        // must never replace a good matrix with an empty one.
+        console.error('[ctxo] Git history unavailable: intent[] left empty and co-changes.json not updated');
+      } else {
+        // Renames are resolved once; intent[] and the co-change matrix share the result.
+        const commits = canonicalizeChangeLog(changeLog.commits);
+
+        // Phase 2: intent[] and antiPatterns of the files indexed in this run
+        const history = buildIntentHistory(commits, maxHistory);
+        for (const { relativePath, fileIndex } of pendingIndices) {
+          const fileCommits = history.get(relativePath) ?? [];
+          fileIndex.intent = fileCommits.map((c) => ({
+            hash: c.hash,
+            message: c.message,
+            date: c.date,
+            kind: 'commit' as const,
+          }));
+          fileIndex.antiPatterns = revertDetector.detect(fileCommits);
+        }
+
+        // Phase 2b: the co-change matrix of every indexed file, whichever files this run re-indexes.
+        // A file that was deleted since it was indexed has no source left and drops out here, even
+        // though its JSON stays in the index until something removes it.
+        const indexedFiles = mergedIndex()
+          .map((idx) => idx.file)
+          .filter((file) => existsSync(join(this.projectRoot, file)));
+        this.writeCoChangeMatrix(writer, commits, changeLog.head, changeLog.headCommittedAt, coChange, indexedFiles);
       }
-    }
-
-    // Phase 2b: Aggregate co-change data from git history
-    if (!options.skipHistory && pendingIndices.length > 0) {
-      const fileIndices = pendingIndices.map(e => e.fileIndex);
-      const coChangeMatrix = aggregateCoChanges(fileIndices);
-      writer.writeCoChanges(coChangeMatrix);
-      console.error(`[ctxo] Co-change analysis: ${coChangeMatrix.entries.length} file pairs detected`);
     }
 
     // Phase 2c: Community detection + snapshot
@@ -294,7 +331,7 @@ export class IndexCommand {
       }
     } else if (pendingIndices.length > 0) {
       try {
-        const graphIndices = this.buildGraphInputIndices(pendingIndices);
+        const graphIndices = mergedIndex();
         communitySnapshot = this.buildCommunitySnapshot(
           graphIndices,
           {
@@ -634,9 +671,89 @@ export class IndexCommand {
   }
 
   /**
-   * Produce the FileIndex list used as input to community detection.
+   * Phase 2b. Builds the co-change matrix from the commits of the change log and writes
+   * `co-changes.json`.
    *
-   * Full index run: returns pendingIndices as-is — they already cover every file.
+   * `commits` is the whole canonical log, newest first. The window is cut from it with the same
+   * `coChange` object that is recorded in the matrix, so the stored window always equals the applied
+   * one. The cutoff for `since` is counted back from HEAD's committer date, never from the clock.
+   */
+  private writeCoChangeMatrix(
+    writer: JsonIndexWriter,
+    commits: readonly CanonicalCommit[],
+    head: string,
+    headCommittedAt: number,
+    coChange: ResolvedCoChangeConfig,
+    indexedFiles: readonly string[],
+  ): void {
+    const since = coChange.since !== undefined ? parseCoChangeSince(coChange.since) : undefined;
+    const cutoff = since !== undefined ? sinceCutoff(headCommittedAt, since) : undefined;
+    const windowed = selectWindow(commits, coChange.maxCommits, cutoff);
+
+    const matrix = buildCoChangeMatrix(windowed, {
+      isIncluded: this.coChangeFileFilter(indexedFiles, coChange),
+      maxCommits: coChange.maxCommits,
+      since: coChange.since,
+      head,
+      maxFilesPerCommit: coChange.maxFilesPerCommit,
+      minShared: coChange.minShared,
+      timestamp: Math.floor(Date.now() / 1000),
+    });
+    writer.writeCoChanges(matrix);
+
+    if (matrix.window) {
+      console.error(
+        `[ctxo] Co-change: ${matrix.entries.length} pairs from ${matrix.window.commitsUsed} commits ` +
+          `(${matrix.window.massSkipped} mass commits skipped, window ${describeCoChangeWindow(coChange, matrix.window.commitsScanned)})`,
+      );
+    }
+  }
+
+  /**
+   * The files that take part in the co-change matrix: the indexed files and the tracked files that
+   * match `cochange.include` (files no language plugin indexes, such as SQL scripts), minus the files
+   * that match `cochange.exclude`. Exclusion wins, so it can also remove a file that `include` added.
+   */
+  private coChangeFileFilter(
+    indexedFiles: readonly string[],
+    coChange: ResolvedCoChangeConfig,
+  ): (path: string) => boolean {
+    const files = new Set<string>(indexedFiles);
+
+    if (coChange.include.length > 0) {
+      const matchesInclude = makeGlobMatcher([...coChange.include]);
+      for (const tracked of this.listTrackedFiles()) {
+        // A tracked file that is gone from the working tree has no source left, like a deleted index entry.
+        if (matchesInclude(tracked) && existsSync(join(this.projectRoot, tracked))) files.add(tracked);
+      }
+    }
+
+    const isExcluded = makeGlobMatcher([...coChange.exclude]);
+    return (path) => files.has(path) && !isExcluded(path);
+  }
+
+  /** Every file git tracks, repo-relative with forward slashes. `-z` keeps unusual names verbatim. */
+  private listTrackedFiles(): string[] {
+    try {
+      const output = execFileSync('git', ['ls-files', '-z'], {
+        cwd: this.projectRoot,
+        encoding: 'utf-8',
+        maxBuffer: 64 * 1024 * 1024,
+      });
+      return output.split('\0').filter((path) => path.length > 0);
+    } catch {
+      console.error('[ctxo] git ls-files failed: cochange.include matched no files');
+      return [];
+    }
+  }
+
+  /**
+   * Produce the FileIndex list used as input to community detection and the co-change phase.
+   *
+   * Always the committed JSON index with the indices of this run spliced in: a fresh index replaces
+   * the committed entry of the same file. A full run therefore also carries the committed entries of
+   * files it did not re-index, for example files since deleted (callers that need existing files
+   * check the working tree) or files whose language plugin is not installed on this machine.
    * Incremental `--file` run: pendingIndices holds only the just-updated file(s). We load the
    * rest of the committed JSON index from disk and splice in the fresh in-memory indices so
    * Louvain sees the COMPLETE project graph. Without this, Louvain would run on a 1-file
@@ -770,6 +887,22 @@ export class IndexCommand {
       );
     }
   }
+}
+
+/**
+ * How many commits to read from git. The co-change window needs `windowCommits` of them; `intent[]`
+ * needs enough to find `maxHistory` commits for every file, which the old batch read approximated as
+ * `maxHistory * 50`. The larger of the two serves both, and an unbounded window reads everything.
+ */
+function changeLogSize(windowCommits: number | 'all', maxHistory: number): number | 'all' {
+  return windowCommits === 'all' ? 'all' : Math.max(windowCommits, maxHistory * 50);
+}
+
+/** The configured window in words, for the log line: "last 2000 commits within 12m of HEAD, 87 scanned". */
+function describeCoChangeWindow(coChange: ResolvedCoChangeConfig, commitsScanned: number): string {
+  const size = coChange.maxCommits === 'all' ? 'all commits' : `last ${coChange.maxCommits} commits`;
+  const age = coChange.since !== undefined ? ` within ${coChange.since} of HEAD` : '';
+  return `${size}${age}, ${commitsScanned} scanned`;
 }
 
 function pickEdgeQuality(tiers: {

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import { CliRouter } from '../cli-router.js';
 
 describe('CliRouter', () => {
@@ -144,5 +144,116 @@ describe('cli-router update command', () => {
       force: true,
     });
     spy.mockRestore();
+  });
+});
+
+describe('cli-router index co-change flags', () => {
+  let indexRuns: Array<Record<string, unknown>>;
+  let indexConstructed: number;
+  let errorSpy: MockInstance<typeof console.error>;
+  let exitSpy: MockInstance<typeof process.exit>;
+
+  beforeEach(async () => {
+    indexRuns = [];
+    indexConstructed = 0;
+    // Replace IndexCommand first: if a flag slips through validation, nothing may index the real repo.
+    // Must be constructible (see the update test above), hence a function expression.
+    const original = await import('../index-command.js');
+    vi.spyOn(original, 'IndexCommand' as any).mockImplementation(
+      function (this: unknown) {
+        indexConstructed += 1;
+        return {
+          run: async (options: Record<string, unknown>) => { indexRuns.push(options); },
+        };
+      } as any,
+    );
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  async function route(...args: string[]): Promise<void> {
+    await new CliRouter(process.cwd()).route(['index', ...args]);
+  }
+
+  it('passes --cochange-commits and --cochange-since to IndexCommand.run', async () => {
+    await route('--cochange-commits', '500', '--cochange-since', '12m');
+
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(indexRuns).toHaveLength(1);
+    expect(indexRuns[0]).toMatchObject({ cochangeCommits: 500, cochangeSince: '12m' });
+  });
+
+  it('accepts all as the value of --cochange-commits', async () => {
+    await route('--cochange-commits', 'all');
+
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(indexRuns[0]).toMatchObject({ cochangeCommits: 'all' });
+  });
+
+  it.each(['30d', '2w', '12m', '1y', '0d'])('accepts %s as the value of --cochange-since', async (since) => {
+    await route('--cochange-since', since);
+
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(indexRuns[0]).toMatchObject({ cochangeSince: since });
+  });
+
+  it('leaves both co-change options unset when the flags are absent', async () => {
+    await route('--max-history', '5');
+
+    expect(indexRuns).toHaveLength(1);
+    expect(indexRuns[0]!['cochangeCommits']).toBeUndefined();
+    expect(indexRuns[0]!['cochangeSince']).toBeUndefined();
+    expect(indexRuns[0]).toMatchObject({ maxHistory: 5 });
+  });
+
+  it('exits with error for --cochange-commits without a value', async () => {
+    await route('--cochange-commits');
+
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('--cochange-commits requires a positive integer or "all"'));
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(indexConstructed).toBe(0);
+  });
+
+  it.each(['abc', '0', '-5', '1.5', '2e3', '0x10', 'ALL', '', '--skip-history'])(
+    'exits with error for --cochange-commits %j',
+    async (value) => {
+      await route('--cochange-commits', value);
+
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('--cochange-commits requires a positive integer or "all"'));
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(indexConstructed).toBe(0);
+    },
+  );
+
+  it('exits with error for --cochange-since without a value', async () => {
+    await route('--cochange-since');
+
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('--cochange-since requires a duration'));
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(indexConstructed).toBe(0);
+  });
+
+  it.each(['abc', '12', '5x', '1.5m', '-3d', '30D', 'm', '', '--skip-history'])(
+    'exits with error for --cochange-since %j',
+    async (value) => {
+      await route('--cochange-since', value);
+
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('--cochange-since requires a duration such as 30d, 2w, 12m or 1y'));
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(indexConstructed).toBe(0);
+    },
+  );
+
+  it('documents both flags and says --max-history controls intent depth only', async () => {
+    await new CliRouter(process.cwd()).route(['--help']);
+
+    const help = errorSpy.mock.calls.map((args) => String(args[0])).join('\n');
+    expect(help).toMatch(/--max-history N[^\n]*intent depth only/);
+    expect(help).toContain('--cochange-commits <n|all>');
+    expect(help).toContain('--cochange-since <duration>');
   });
 });

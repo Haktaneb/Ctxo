@@ -15,6 +15,14 @@ import { UpdateCommand } from './update-command.js';
 import { BlastRadiusCommand } from './blast-radius-command.js';
 import { GateHookCommand } from './gate-hook-command.js';
 import { GateCommand } from './gate-command.js';
+import { parseCoChangeSince } from '../core/co-change/co-change-window.js';
+
+/** `value` as a positive integer, or undefined when it is anything else (no sign, decimals, exponent or unit). */
+function parsePositiveInteger(value: string | undefined): number | undefined {
+  if (value === undefined || !/^\d+$/.test(value)) return undefined;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 1 ? parsed : undefined;
+}
 
 export function getVersion(): string {
   let dir = import.meta.dirname;
@@ -105,12 +113,31 @@ export class CliRouter {
           process.exit(1);
           return;
         }
+        // The co-change window flags are checked here because the config resolver skips an invalid
+        // override silently, which would run a different window from the one the user asked for.
+        const cochangeCommitsIdx = args.indexOf('--cochange-commits');
+        const cochangeCommitsRaw = cochangeCommitsIdx !== -1 ? args[cochangeCommitsIdx + 1] : undefined;
+        const cochangeCommitsArg = cochangeCommitsRaw === 'all' ? 'all' : parsePositiveInteger(cochangeCommitsRaw);
+        if (cochangeCommitsIdx !== -1 && cochangeCommitsArg === undefined) {
+          console.error('[ctxo] --cochange-commits requires a positive integer or "all"');
+          process.exit(1);
+          return;
+        }
+        const cochangeSinceIdx = args.indexOf('--cochange-since');
+        const cochangeSinceArg = cochangeSinceIdx !== -1 ? args[cochangeSinceIdx + 1] : undefined;
+        if (cochangeSinceIdx !== -1 && (cochangeSinceArg === undefined || parseCoChangeSince(cochangeSinceArg) === undefined)) {
+          console.error('[ctxo] --cochange-since requires a duration such as 30d, 2w, 12m or 1y');
+          process.exit(1);
+          return;
+        }
         await new IndexCommand(this.projectRoot).run({
           file: fileArg,
           check: checkArg,
           skipHistory,
           skipCommunity,
           maxHistory: maxHistoryArg,
+          cochangeCommits: cochangeCommitsArg,
+          cochangeSince: cochangeSinceArg,
           installMissing,
         });
         break;
@@ -296,8 +323,10 @@ ctxo v${v} — MCP server for dependency-aware codebase context
 
 Usage:
   ctxo                      Start MCP server (stdio transport)
-  ctxo index                Build full codebase index (--max-history N, default 20)
+  ctxo index                Build full codebase index (--max-history N controls intent depth only, default 20)
   ctxo index --skip-community    Skip Louvain community detection for faster indexing
+  ctxo index --cochange-commits <n|all>   Co-change window in commits (default 2000, or "all")
+  ctxo index --cochange-since <duration>  Co-change window by age from HEAD (30d, 2w, 12m, 1y)
   ctxo sync                 Rebuild SQLite cache from committed JSON index
   ctxo watch                Start file watcher for incremental re-indexing
   ctxo verify-index         CI gate: fail if index is stale
