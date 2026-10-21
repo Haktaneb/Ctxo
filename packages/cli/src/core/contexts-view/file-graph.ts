@@ -63,7 +63,8 @@ function orderedPair(x: string, y: string): [string, string] {
 /**
  * Builds the undirected file graph: distinct symbol edges between node files, weighted by kind and
  * log-scaled against the strongest pair, blended with the co-change frequency. Deterministic: the
- * same indices in any order give a deep-equal result.
+ * same indices in any order give a deep-equal result. Rounding order: `weight` is computed from the
+ * unrounded dependency and rounded once to 6 decimals; `dependency` is rounded to 6 decimals.
  */
 export function buildFileGraph(input: FileGraphInput): FileGraph {
   const sorted = [...input.indices].sort((x, y) => compareCodepoint(x.file, y.file));
@@ -84,9 +85,12 @@ export function buildFileGraph(input: FileGraphInput): FileGraph {
   for (const entries of input.coChangeMap?.values() ?? []) {
     for (const entry of entries) {
       if (entry.file1 === entry.file2) continue;
-      if (!input.isNode(entry.file1) || !input.isNode(entry.file2)) continue;
-      nodes.add(entry.file1);
-      nodes.add(entry.file2);
+      // A co-change file accepted by isNode is a node even when all its partners are rejected.
+      const ok1 = input.isNode(entry.file1);
+      const ok2 = input.isNode(entry.file2);
+      if (ok1) nodes.add(entry.file1);
+      if (ok2) nodes.add(entry.file2);
+      if (!ok1 || !ok2) continue;
       const [a, b] = orderedPair(entry.file1, entry.file2);
       const key = pairKey(a, b);
       const known = coEntries.get(key);
@@ -158,7 +162,8 @@ export interface HubDecision {
 /**
  * Finds hub files: `hubs.paths` matches (damping 0), and with `hubs.auto` the files in the top
  * `topPercent` by dependents (every tie included, at least `minDependents`) and god-node files.
- * Damping is `1 / log2(2 + dependents)` rounded to 3 decimals. Sorted by file.
+ * `damping` is `1 / log2(2 + dependents)` rounded to 3 decimals, a display value only:
+ * `applyHubDamping` recomputes the exact factor. Sorted by file.
  */
 export function detectHubs(
   graph: FileGraph,
@@ -192,9 +197,15 @@ export function detectHubs(
   return decisions;
 }
 
-/** Multiplies each pair's weight by the damping of every hub endpoint; zero weights are dropped. */
+/**
+ * Multiplies each pair's weight by the exact factor of every hub endpoint (0 for a configured hub,
+ * else `1 / log2(2 + dependents)`, not the rounded `damping`), then rounds the weight once to
+ * 6 decimals. Zero weights are dropped.
+ */
 export function applyHubDamping(pairs: readonly FilePair[], hubs: readonly HubDecision[]): FilePair[] {
-  const damping = new Map(hubs.map((hub) => [hub.file, hub.damping]));
+  const damping = new Map(
+    hubs.map((hub) => [hub.file, hub.reasons.includes('configured') ? 0 : 1 / Math.log2(2 + hub.dependents)]),
+  );
   const result: FilePair[] = [];
   for (const pair of pairs) {
     const weight = round(pair.weight * (damping.get(pair.a) ?? 1) * (damping.get(pair.b) ?? 1), 6);

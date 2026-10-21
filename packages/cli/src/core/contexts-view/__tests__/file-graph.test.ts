@@ -24,6 +24,7 @@ function fileIndex(
 }
 
 const all = () => true;
+const r6 = (value: number) => Math.round(value * 1e6) / 1e6;
 
 function co(file1: string, file2: string, frequency: number): CoChangeEntry {
   return { file1, file2, sharedCommits: 3, frequency };
@@ -90,6 +91,8 @@ describe('buildFileGraph', () => {
     expect(graph.pairs).toEqual([]);
     expect(graph.edgeCounts).toEqual([]);
     expect(graph.files).toEqual(['a.ts']);
+    expect(graph.dependents.get('a.ts')).toBe(0);
+    expect(graph.dependents.has('skip.ts')).toBe(false);
   });
 
   it('resolves a 2-part name reference through the symbol graph', () => {
@@ -151,9 +154,55 @@ describe('buildFileGraph', () => {
   });
 
   it('does not depend on input order', () => {
-    const forward = buildFileGraph({ indices: basicIndices(), isNode: all, weights: WEIGHTS });
-    const reversed = buildFileGraph({ indices: basicIndices().reverse(), isNode: all, weights: WEIGHTS });
-    expect(reversed).toEqual(forward);
+    // Edge counts depend on symbol order inside one FileIndex only through SymbolGraph's last-wins
+    // file::name map, which is stable because the index JSON keeps symbol order stable.
+    const build = (reverse: boolean) => {
+      const indices = [
+        ...basicIndices(),
+        fileIndex('n.ts', ['fn'], [['n.ts::fn::function', 'Bar::class', 'uses']]),
+        { ...fileIndex('m.ts', []), symbols: [sym('m.ts', 'Bar', 'class')] },
+      ];
+      return buildFileGraph({
+        indices: reverse ? indices.reverse() : indices,
+        isNode: all,
+        coChangeMap: new Map([['a.ts', [co('a.ts', 'e.ts', 0.8), co('c.ts', 'a.ts', 0.3)]]]),
+        weights: WEIGHTS,
+      });
+    };
+    const forward = build(false);
+    expect(forward.pairs.some((p) => p.a === 'm.ts' && p.b === 'n.ts')).toBe(true);
+    expect(build(true)).toEqual(forward);
+  });
+
+  it('drops an ambiguous 2-part target in either input order', () => {
+    const indices = [
+      fileIndex('a.ts', ['fa'], [['a.ts::fa::function', 'Bar::class', 'uses']]),
+      { ...fileIndex('b.ts', []), symbols: [sym('b.ts', 'Bar', 'class')] },
+      { ...fileIndex('c.ts', []), symbols: [sym('c.ts', 'Bar', 'class')] },
+    ];
+    for (const list of [indices, [...indices].reverse()]) {
+      const graph = buildFileGraph({ indices: list, isNode: all, weights: WEIGHTS });
+      expect(graph.pairs).toEqual([]);
+      expect(graph.edgeCounts).toEqual([]);
+    }
+  });
+
+  it('keeps a co-change file as a node when every partner is rejected by isNode', () => {
+    const graph = buildFileGraph({
+      indices: [fileIndex('a.ts', ['fa'])],
+      isNode: (f) => f !== 'skip.ts',
+      coChangeMap: new Map([['a.ts', [co('a.ts', 'skip.ts', 0.9)]]]),
+      weights: WEIGHTS,
+    });
+    expect(graph.files).toEqual(['a.ts']);
+    const only = buildFileGraph({
+      indices: [],
+      isNode: (f) => f !== 'skip.ts',
+      coChangeMap: new Map([['db/x.sql', [co('db/x.sql', 'skip.ts', 0.9)]]]),
+      weights: WEIGHTS,
+    });
+    expect(only.files).toEqual(['db/x.sql']);
+    expect(only.pairs).toEqual([]);
   });
 });
 
@@ -182,15 +231,16 @@ describe('detectHubs', () => {
   });
 
   it('includes every file tied with the top-percent cut', () => {
-    const indices: FileIndex[] = [fileIndex('t1.ts', ['t']), fileIndex('t2.ts', ['t'])];
+    const indices: FileIndex[] = [fileIndex('t1.ts', ['t']), fileIndex('t2.ts', ['t']), fileIndex('w.ts', ['w'])];
     for (let i = 0; i < 3; i++) {
       const file = `u${i}.ts`;
-      indices.push(
-        fileIndex(file, ['u'], [
-          [`${file}::u::function`, 't1.ts::t::function', 'calls'],
-          [`${file}::u::function`, 't2.ts::t::function', 'calls'],
-        ]),
-      );
+      const edges: Array<[string, string, EdgeKind]> = [
+        [`${file}::u::function`, 't1.ts::t::function', 'calls'],
+        [`${file}::u::function`, 't2.ts::t::function', 'calls'],
+      ];
+      // w.ts has 1 dependent: below the tied files (3) but at least minDependents, so only the cut excludes it.
+      if (i === 0) edges.push([`${file}::u::function`, 'w.ts::w::function', 'calls']);
+      indices.push(fileIndex(file, ['u'], edges));
     }
     const graph = buildFileGraph({ indices, isNode: all, weights: WEIGHTS });
     const hubs = detectHubs(graph, {
@@ -198,6 +248,16 @@ describe('detectHubs', () => {
       godNodeFiles: new Set(),
     });
     expect(hubs.map((h) => h.file)).toEqual(['t1.ts', 't2.ts']);
+  });
+
+  it('a configured hub that also qualifies automatically keeps both reasons and damping 0', () => {
+    const hubs = detectHubs(fanInGraph(12), {
+      hubs: { ...AUTO_HUBS, paths: ['src/shared/**'] },
+      godNodeFiles: new Set(),
+    });
+    expect(hubs).toEqual([
+      { file: 'src/shared/db.ts', reasons: ['configured', 'fan-in'], dependents: 12, damping: 0 },
+    ]);
   });
 
   it('with auto false keeps only hubs.paths matches with damping 0', () => {
@@ -211,6 +271,15 @@ describe('detectHubs', () => {
 });
 
 describe('applyHubDamping', () => {
+  it('uses the exact factor 1 / log2(2 + dependents), not the rounded display damping', () => {
+    const hub = detectHubs(fanInGraph(12), { hubs: AUTO_HUBS, godNodeFiles: new Set() })[0]!;
+    const result = applyHubDamping([{ a: 'a.ts', b: 'h.ts', dependency: 1, coChange: 0, weight: 1 }], [
+      { ...hub, file: 'h.ts' },
+    ]);
+    expect(result[0]!.weight).toBe(Math.round((1 / Math.log2(14)) * 1e6) / 1e6);
+    expect(result[0]!.weight).toBe(0.26265);
+  });
+
   it('multiplies edges touching a hub by its damping, once per hub endpoint, and drops configured-hub edges', () => {
     const pairs: FilePair[] = [
       { a: 'a.ts', b: 'h1.ts', dependency: 1, coChange: 0, weight: 1 },
@@ -224,9 +293,9 @@ describe('applyHubDamping', () => {
       { file: 'zero.ts', reasons: ['configured'], dependents: 0, damping: 0 },
     ]);
     expect(result.map((p) => [p.a, p.b, p.weight])).toEqual([
-      ['a.ts', 'h1.ts', 0.5],
+      ['a.ts', 'h1.ts', r6(1 / Math.log2(12))],
       ['a.ts', 'b.ts', 0.5],
-      ['h1.ts', 'h2.ts', 0.2],
+      ['h1.ts', 'h2.ts', r6(1 / Math.log2(12) / Math.log2(12))],
     ]);
   });
 });
