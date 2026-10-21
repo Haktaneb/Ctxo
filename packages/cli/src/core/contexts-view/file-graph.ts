@@ -63,14 +63,18 @@ function orderedPair(x: string, y: string): [string, string] {
 /**
  * Builds the undirected file graph: distinct symbol edges between node files, weighted by kind and
  * log-scaled against the strongest pair, blended with the co-change frequency. Deterministic: the
- * same indices in any order give a deep-equal result. Rounding order: `weight` is computed from the
- * unrounded dependency and rounded once to 6 decimals; `dependency` is rounded to 6 decimals.
+ * same indices in any order, with symbols in any order inside each file, give a deep-equal result.
+ * Rounding order: `weight` is computed from the unrounded dependency and rounded once to 6 decimals;
+ * `dependency` is rounded to 6 decimals.
  */
 export function buildFileGraph(input: FileGraphInput): FileGraph {
   const sorted = [...input.indices].sort((x, y) => compareCodepoint(x.file, y.file));
   const graph = new SymbolGraph();
   for (const index of sorted) {
-    for (const symbol of index.symbols) graph.addNode(symbol);
+    // SymbolGraph resolves a wrong-kind target through a last-wins file::name map, so the order symbols
+    // are added in decides where such an edge lands. Adding them sorted by id makes that order fixed.
+    const symbols = [...index.symbols].sort((x, y) => compareCodepoint(x.symbolId, y.symbolId));
+    for (const symbol of symbols) graph.addNode(symbol);
   }
   for (const index of sorted) {
     for (const edge of index.edges) graph.addEdge(edge);

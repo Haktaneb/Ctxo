@@ -127,6 +127,31 @@ describe('buildContextsView', () => {
     expect(view.coverage).toEqual({ files: 11, covered: 10, ratio: 0.909 });
   });
 
+  it('a hub goes to the candidate of its strongest neighbour inside a candidate, past stronger unclustered ones', () => {
+    // u.ts calls all three hub functions (the hub's strongest edge) but has no other edge, so it ends up
+    // unclustered; a/x.ts calls one hub function and sits in candidate 1.
+    const hubFunctions = ['h1', 'h2', 'h3'].map((name) => sym('h.ts', name));
+    const view = buildContextsView(
+      input(
+        [
+          fileIndex('h.ts', hubFunctions),
+          plain(
+            'u.ts',
+            hubFunctions.map((target): Edge => [fnOf('u.ts'), target.symbolId, 'calls']),
+          ),
+          ...clique(['a/x.ts', 'a/y.ts', 'a/z.ts'], { 'a/x.ts': [[fnOf('a/x.ts'), 'h.ts::h1::function', 'calls']] }),
+        ],
+        { godNodeFiles: new Set(['h.ts']) },
+      ),
+    );
+
+    expect(view.unclustered).toEqual({ count: 1, files: ['u.ts'] });
+    expect(view.candidates.map((candidate) => [candidate.id, candidate.files])).toEqual([
+      [1, ['a/x.ts', 'a/y.ts', 'a/z.ts']],
+    ]);
+    expect(view.hubs).toEqual([{ file: 'h.ts', reasons: ['god-node'], dependents: 2, damping: 0.5, candidate: 1 }]);
+  });
+
   it('ids are sequential by size desc, then label, and fingerprints hash the sorted members', () => {
     const view = buildContextsView(
       input([
@@ -172,6 +197,22 @@ describe('buildContextsView', () => {
       input(indices, { settings, filePageRank: new Map([['lib/x.ts', 0.9], ['src/y.ts', 0.1]]) }),
     );
     expect(labelOf(xRanksHigher, 'lib/x.ts')).toBe('lib');
+  });
+
+  it('labels treat backslashes as directory separators', () => {
+    const view = buildContextsView(
+      input(
+        [
+          plain('src\\billing\\a.ts', [[fnOf('src\\billing\\a.ts'), fnOf('src\\billing\\b.ts'), 'calls']]),
+          plain('src\\billing\\b.ts'),
+        ],
+        { settings: withSettings({ minCandidateFiles: 2 }) },
+      ),
+    );
+
+    expect(view.candidates.map((candidate) => [candidate.label, candidate.files])).toEqual([
+      ['src/billing', ['src\\billing\\a.ts', 'src\\billing\\b.ts']],
+    ]);
   });
 
   it('cohesion is internal weight over internal plus boundary weight', () => {
@@ -315,6 +356,35 @@ describe('buildContextsView', () => {
     expect(forward.collisions.map((collision) => collision.name)).toEqual(['invoice']);
     expect(forward.candidates[0]!.topTerms.length).toBeGreaterThan(0);
     expect(JSON.stringify(reversed)).toBe(JSON.stringify(forward));
+
+    // Regression: b/x.ts declares Foo as a type and as a variable, and the Foo::class edge resolves by
+    // file::name. Symbol order inside a file must not decide which Foo it lands on.
+    const fooIndices = () => [
+      ...clique(['a/x.ts', 'a/y.ts', 'a/z.ts'], {
+        'a/x.ts': [
+          [fnOf('a/x.ts'), 'b/x.ts::Foo::type', 'uses'],
+          [fnOf('a/x.ts'), 'b/x.ts::Foo::class', 'uses'],
+        ],
+      }),
+      ...clique(['b/x.ts', 'b/y.ts', 'b/z.ts']).map((index) =>
+        index.file === 'b/x.ts'
+          ? { ...index, symbols: [...index.symbols, sym('b/x.ts', 'Foo', 'type'), sym('b/x.ts', 'Foo', 'variable')] }
+          : index,
+      ),
+    ];
+    const fooForward = buildContextsView(input(fooIndices()));
+    const fooReversed = buildContextsView(
+      input(
+        fooIndices()
+          .reverse()
+          .map((index) => ({ ...index, symbols: [...index.symbols].reverse(), edges: [...index.edges].reverse() })),
+      ),
+    );
+
+    expect(byLabel(fooForward.candidates, 'a').crossEdges).toEqual([
+      { candidate: byLabel(fooForward.candidates, 'b').id, total: 2, byKind: { uses: 2 } },
+    ]);
+    expect(JSON.stringify(fooReversed)).toBe(JSON.stringify(fooForward));
   });
 
   it('an index without edges puts every node in unclustered', () => {

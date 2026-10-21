@@ -79,6 +79,23 @@ describe('foldSmallGroups', () => {
     expect(result.unclustered).toEqual(['w.ts']);
   });
 
+  it('foldSmallGroups folds the smallest small group first', () => {
+    // q (1 file) goes before {p1, p2} and joins it (0.5 against 0.4), which leaves nothing small. Taking
+    // {p1, p2} first would send it to A (0.9), and q would then follow it into A.
+    const result = foldSmallGroups(
+      [FIVE, ['p1.ts', 'p2.ts'], ['q.ts']],
+      lookup([
+        ['p1.ts', 'g1/a.ts', 0.9],
+        ['p2.ts', 'q.ts', 0.5],
+        ['q.ts', 'g1/b.ts', 0.4],
+      ]),
+      3,
+    );
+
+    expect(result.groups).toEqual([FIVE, ['p1.ts', 'p2.ts', 'q.ts']]);
+    expect(result.unclustered).toEqual([]);
+  });
+
   it('foldSmallGroups sends isolated small groups to unclustered', () => {
     const result = foldSmallGroups(
       [FIVE, ['q.ts', 'p.ts'], ['o.ts']],

@@ -154,16 +154,30 @@ describe('buildFileGraph', () => {
   });
 
   it('does not depend on input order', () => {
-    // Edge counts depend on symbol order inside one FileIndex only through SymbolGraph's last-wins
-    // file::name map, which is stable because the index JSON keeps symbol order stable.
+    // SymbolGraph resolves a wrong-kind target through a last-wins file::name map, so the symbol order
+    // inside one FileIndex would decide which `Foo` the `Foo::class` edge lands on. buildFileGraph adds
+    // each file's symbols sorted by id, so q.ts's two `Foo` symbols resolve the same way in any order.
     const build = (reverse: boolean) => {
       const indices = [
         ...basicIndices(),
         fileIndex('n.ts', ['fn'], [['n.ts::fn::function', 'Bar::class', 'uses']]),
         { ...fileIndex('m.ts', []), symbols: [sym('m.ts', 'Bar', 'class')] },
+        fileIndex(
+          'p.ts',
+          ['fp'],
+          [
+            ['p.ts::fp::function', 'q.ts::Foo::type', 'uses'],
+            ['p.ts::fp::function', 'q.ts::Foo::class', 'uses'],
+          ],
+        ),
+        { ...fileIndex('q.ts', []), symbols: [sym('q.ts', 'Foo', 'type'), sym('q.ts', 'Foo', 'variable')] },
       ];
       return buildFileGraph({
-        indices: reverse ? indices.reverse() : indices,
+        indices: reverse
+          ? indices
+              .reverse()
+              .map((index) => ({ ...index, symbols: [...index.symbols].reverse(), edges: [...index.edges].reverse() }))
+          : indices,
         isNode: all,
         coChangeMap: new Map([['a.ts', [co('a.ts', 'e.ts', 0.8), co('c.ts', 'a.ts', 0.3)]]]),
         weights: WEIGHTS,
@@ -171,6 +185,7 @@ describe('buildFileGraph', () => {
     };
     const forward = build(false);
     expect(forward.pairs.some((p) => p.a === 'm.ts' && p.b === 'n.ts')).toBe(true);
+    expect(forward.edgeCounts).toContainEqual({ from: 'p.ts', to: 'q.ts', kind: 'uses', count: 2 });
     expect(build(true)).toEqual(forward);
   });
 

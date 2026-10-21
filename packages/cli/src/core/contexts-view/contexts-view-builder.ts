@@ -124,8 +124,8 @@ function directorySegments(file: string): string[] {
 
 /**
  * The longest common directory of the members or, when that is the repo root, the directory of the member
- * with the highest file-level PageRank (ties: first member). The repo root is `.`. The spelling is the
- * first member's (or the top member's), never normalised.
+ * with the highest file-level PageRank (ties: first member). The repo root is `.`. Separators are written
+ * as `/`; the segments keep their spelling (spaces, non-ASCII, case).
  */
 function labelOf(files: readonly string[], pageRank: ReadonlyMap<string, number>): string {
   let common = directorySegments(files[0]!);
@@ -135,17 +135,14 @@ function labelOf(files: readonly string[], pageRank: ReadonlyMap<string, number>
     while (length < common.length && length < segments.length && common[length] === segments[length]) length++;
     common = common.slice(0, length);
   }
-  let source = files[0]!;
-  let segments = common;
-  if (segments.length === 0) {
+  if (common.length === 0) {
+    let top = files[0]!;
     for (const file of files) {
-      if ((pageRank.get(file) ?? 0) > (pageRank.get(source) ?? 0)) source = file;
+      if ((pageRank.get(file) ?? 0) > (pageRank.get(top) ?? 0)) top = file;
     }
-    segments = directorySegments(source);
+    common = directorySegments(top);
   }
-  if (segments.length === 0) return '.';
-  const length = segments.reduce((sum, segment) => sum + segment.length, 0) + segments.length - 1;
-  return source.slice(0, length);
+  return common.length === 0 ? '.' : common.join('/');
 }
 
 function fingerprintOf(files: readonly string[]): string {
