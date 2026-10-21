@@ -213,10 +213,11 @@ function registerTools(
   server.registerTool(
     'get_architectural_overlay',
     {
-      description: 'Get the project architecture map. mode "both" (default) returns the regex layer map (Domain, Infrastructure, Adapter, Test, Composition, Configuration) plus data-driven Louvain communities; "regex" or "communities" returns one of them. mode "contexts" returns candidate bounded contexts computed by `ctxo index`: file-level clusters of dependencies and co-change with hub files damped, each with a suggested label, cohesion, top terms, cross-candidate edges and co-change pairs, plus type names whose shapes differ between candidates. Use this when onboarding to a new codebase, validating layer boundaries, or preparing a context map. For symbol-level analysis, use get_logic_slice or get_blast_radius.',
+      description: 'Get the project architecture map. mode "both" (default) returns the regex layer map (Domain, Infrastructure, Adapter, Test, Composition, Configuration) plus data-driven Louvain communities; "regex" or "communities" returns one of them. mode "contexts" returns candidate bounded contexts computed by `ctxo index`: file-level clusters of dependencies and co-change with hub files damped, each with a suggested label, cohesion, top terms, cross-candidate edges and co-change pairs, plus type names whose shapes differ between candidates. Use this when onboarding to a new codebase, validating layer boundaries, or preparing a context map. For symbol-level analysis, use get_logic_slice or get_blast_radius. mode "contexts" returns a summary of all candidates; pass candidate: <id> for one candidate in full.',
       inputSchema: {
         layer: z.string().optional().describe('Filter by specific layer name'),
         mode: z.enum(OVERLAY_MODES).optional().describe('View to return: "both" (default) layers plus communities, "regex" layer map, "communities" Louvain clusters, "contexts" candidate contexts (file level)'),
+        candidate: z.number().int().positive().optional().describe('With mode "contexts": the id of one candidate to return in full (files, terms, cross edges, co-change pairs, its hubs and collisions); omit for the summary of all candidates'),
       },
       annotations: toolAnnotations,
     },
@@ -264,7 +265,7 @@ function registerTools(
         query: z.string().min(1).describe('Search query (matches symbol names)'),
         tokenBudget: z.number().optional().default(4000).describe('Max tokens for results (default 4000)'),
         strategy: z.enum(['combined', 'dependency', 'importance']).optional().default('combined').describe('Ranking strategy'),
-        searchMode: z.enum(['fts', 'legacy']).optional().default('fts').describe('"fts" (default): BM25 ranking with camelCase splitting, trigram fallback and typo correction; "legacy": substring matching'),
+        searchMode: z.enum(['fts', 'legacy']).optional().default('fts').describe('"fts" (default): BM25 ranking with camelCase splitting, trigram fallback and typo correction; "legacy": substring matching; strategy "importance" always uses legacy matching'),
       },
       annotations: toolAnnotations,
     },

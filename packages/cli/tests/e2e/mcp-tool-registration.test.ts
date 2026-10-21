@@ -103,7 +103,7 @@ describe('MCP tool registration vs handler schemas', () => {
     }
   });
 
-  it('overlay mode includes contexts, ranked context has searchMode and no fuzzy, search_symbols has mode', () => {
+  it('overlay mode includes contexts and takes candidate, ranked context has searchMode and no fuzzy, search_symbols has mode', () => {
     const byName = new Map(tools.map((t) => [t.name, t.inputSchema]));
     expect(sorted(byName.get('get_architectural_overlay')?.properties?.['mode']?.enum)).toEqual([
       'both',
@@ -111,6 +111,7 @@ describe('MCP tool registration vs handler schemas', () => {
       'contexts',
       'regex',
     ]);
+    expect(byName.get('get_architectural_overlay')?.properties?.['candidate']).toBeDefined();
     const ranked = byName.get('get_ranked_context')?.properties ?? {};
     expect(ranked['searchMode']).toBeDefined();
     expect(ranked['fuzzy']).toBeUndefined();

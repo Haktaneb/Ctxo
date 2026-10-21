@@ -17,6 +17,7 @@ export const OVERLAY_MODES = ['regex', 'communities', 'both', 'contexts'] as con
 export const InputSchema = z.object({
   layer: z.string().optional(),
   mode: z.enum(OVERLAY_MODES).optional(),
+  candidate: z.number().int().positive().optional(),
 });
 
 export interface CommunityOverlayCluster {
@@ -85,38 +86,116 @@ export function buildCommunityOverlay(
   };
 }
 
+/** Hubs and collisions listed in the summary (R24); the totals say how many there are. */
 const HUB_COLLISION_LIMIT = 50;
+/** Top terms per candidate in the summary. */
+const SUMMARY_TERM_LIMIT = 5;
+/** Files of the candidate, occurrences per collision and members per occurrence in the detail. */
+const DETAIL_LIST_LIMIT = 15;
+
+const NO_VIEW_HINT = 'No contexts view available. Run ctxo index to generate one.';
+const SUMMARY_HINT = 'Pass candidate: <id> for one candidate in full; run ctxo contexts --json for the whole view.';
+
+/** Masks candidate labels, after seeding the masker in sorted order so the `[masked-cluster-N]` numbering is stable. */
+function labelMaskerFor(view: ContextsView, labelMasker: ClusterLabelMasker | undefined): (label: string) => string {
+  const masker = labelMasker?.isEnabled() ? labelMasker : undefined;
+  if (!masker) return (label) => label;
+  for (const label of [...new Set(view.candidates.map((c) => c.label))].sort(compareCodepoint)) masker.mask(label);
+  return (label) => masker.mask(label);
+}
+
+/** Every candidate in brief, plus the capped hubs and collisions: small enough to list the whole view. */
+function contextsSummary(view: ContextsView, maskLabel: (label: string) => string): Record<string, unknown> {
+  return {
+    commitSha: view.commitSha,
+    coverage: view.coverage,
+    candidates: view.candidates.map((candidate) => ({
+      id: candidate.id,
+      label: maskLabel(candidate.label),
+      fingerprint: candidate.fingerprint,
+      fileCount: candidate.fileCount,
+      cohesion: candidate.cohesion,
+      topTerms: candidate.topTerms.slice(0, SUMMARY_TERM_LIMIT),
+    })),
+    hubs: view.hubs.slice(0, HUB_COLLISION_LIMIT).map((hub) => ({
+      file: hub.file,
+      reasons: hub.reasons,
+      ...(hub.candidate !== undefined ? { candidate: hub.candidate } : {}),
+    })),
+    hubsTotal: view.hubs.length,
+    collisions: view.collisions.slice(0, HUB_COLLISION_LIMIT).map((collision) => ({
+      name: collision.name,
+      minJaccard: collision.minJaccard,
+      candidates: [...new Set(collision.occurrences.map((occurrence) => occurrence.candidate))].sort((a, b) => a - b),
+      occurrenceCount: collision.occurrences.length,
+    })),
+    collisionsTotal: view.collisions.length,
+    unclustered: { count: view.unclustered.count },
+    hint: SUMMARY_HINT,
+  };
+}
 
 /**
- * Builds the `mode: "contexts"` body from the (read-only, shared) view. Every array is copied: the view
- * must never be sorted or spliced in place. Labels are masked after seeding the masker in sorted order,
- * so the `[masked-cluster-N]` numbering is stable across calls.
+ * One candidate in full (files capped), the hubs assigned to it and the collisions it takes part in. A
+ * collision lists at most `DETAIL_LIST_LIMIT` occurrences: all of this candidate's that fit, then the first
+ * of the others, kept in view order.
+ */
+function contextsDetail(
+  view: ContextsView,
+  id: number,
+  maskLabel: (label: string) => string,
+): Record<string, unknown> {
+  const candidate = view.candidates.find((c) => c.id === id);
+  if (!candidate) {
+    return { found: false, hint: `No candidate ${id} in the contexts view. Call without candidate for the list.` };
+  }
+  return {
+    commitSha: view.commitSha,
+    candidate: {
+      ...candidate,
+      label: maskLabel(candidate.label),
+      files: candidate.files.slice(0, DETAIL_LIST_LIMIT),
+    },
+    hubs: view.hubs
+      .filter((hub) => hub.candidate === id)
+      .map((hub) => ({ file: hub.file, reasons: hub.reasons, dependents: hub.dependents, damping: hub.damping })),
+    collisions: view.collisions
+      .filter((collision) => collision.occurrences.some((occurrence) => occurrence.candidate === id))
+      .map((collision) => {
+        const own = collision.occurrences.filter((occurrence) => occurrence.candidate === id);
+        const others = collision.occurrences.filter((occurrence) => occurrence.candidate !== id);
+        const kept = new Set([...own, ...others].slice(0, DETAIL_LIST_LIMIT));
+        return {
+          name: collision.name,
+          minJaccard: collision.minJaccard,
+          occurrences: collision.occurrences
+            .filter((occurrence) => kept.has(occurrence))
+            .map((occurrence) => ({
+              ...occurrence,
+              members: occurrence.members.slice(0, DETAIL_LIST_LIMIT),
+              memberCount: occurrence.members.length,
+            })),
+          occurrenceCount: collision.occurrences.length,
+        };
+      }),
+  };
+}
+
+/**
+ * Builds the `mode: "contexts"` body from the (read-only, shared, deep-frozen) view: the summary of every
+ * candidate, or with `candidate` that one candidate in full. Only copies are built (`map`, `slice`, spread):
+ * the view must never be sorted or spliced in place. The full view stays in the artifact and in
+ * `ctxo contexts --json`; `settings` is left out here.
  */
 export function buildContextsOverlay(
   view: ContextsView | undefined,
-  options: { memberPreviewLimit?: number; labelMasker?: ClusterLabelMasker } = {},
+  options: { candidate?: number; labelMasker?: ClusterLabelMasker } = {},
 ): Record<string, unknown> {
-  if (!view) return { hint: 'No contexts view available. Run ctxo index to generate one.' };
-  const previewLimit = options.memberPreviewLimit ?? 15;
-  const masker = options.labelMasker?.isEnabled() ? options.labelMasker : undefined;
-  if (masker) {
-    for (const label of [...new Set(view.candidates.map((c) => c.label))].sort(compareCodepoint)) masker.mask(label);
-  }
-  const maskLabel = (label: string) => (masker ? masker.mask(label) : label);
-
-  return {
-    ...view,
-    candidates: view.candidates.map((candidate) => ({
-      ...candidate,
-      label: maskLabel(candidate.label),
-      files: candidate.files.slice(0, previewLimit),
-    })),
-    unclustered: { ...view.unclustered, files: view.unclustered.files.slice(0, previewLimit) },
-    hubs: view.hubs.slice(0, HUB_COLLISION_LIMIT),
-    hubsTotal: view.hubs.length,
-    collisions: view.collisions.slice(0, HUB_COLLISION_LIMIT),
-    collisionsTotal: view.collisions.length,
-  };
+  if (!view) return { found: false, hint: NO_VIEW_HINT };
+  const maskLabel = labelMaskerFor(view, options.labelMasker);
+  return options.candidate === undefined
+    ? contextsSummary(view, maskLabel)
+    : contextsDetail(view, options.candidate, maskLabel);
 }
 
 export function handleGetArchitecturalOverlay(
@@ -165,7 +244,10 @@ export function handleGetArchitecturalOverlay(
       }
 
       if (mode === 'contexts') {
-        const body = buildContextsOverlay(contextsView?.readContextsView(), { labelMasker: clusterLabelMasker });
+        const body = buildContextsOverlay(contextsView?.readContextsView(), {
+          candidate: parsed.data.candidate,
+          labelMasker: clusterLabelMasker,
+        });
         const payload = masking.mask(JSON.stringify(wrapResponse(body, extras)));
         return { content: buildContent(payload) };
       }
