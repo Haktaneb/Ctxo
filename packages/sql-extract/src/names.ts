@@ -12,13 +12,14 @@ export function foldAsciiLower(text: string): string {
 
 /**
  * Canonical `schema.name` from already-unquoted name parts. One part gets the `dbo` schema,
- * two parts are `schema.name`. Three or more parts, empty parts, parts containing `::`, temp
- * tables, table variables and the sys and information_schema schemas give undefined.
+ * two parts are `schema.name`. Three or more parts, empty parts, parts containing `::` or `.`
+ * (a delimited `[a.b]` would otherwise read as more parts), temp tables, table variables and
+ * the sys and information_schema schemas give undefined.
  */
 export function canonicalFromParts(parts: readonly string[]): string | undefined {
   if (parts.length < 1 || parts.length > 2) return undefined;
   for (const part of parts) {
-    if (part.length === 0 || part.includes('::')) return undefined;
+    if (part.length === 0 || part.includes('::') || part.includes('.')) return undefined;
   }
   const name = parts[parts.length - 1]!;
   if (name.startsWith('#') || name.startsWith('@')) return undefined;

@@ -41,7 +41,22 @@ describe('@ctxo/sql-extract package', () => {
   });
 
   it('pins the exact set of public runtime exports', () => {
-    // The types are erased at runtime. Task 8 adds the two public functions and updates this list.
-    expect(Object.keys(entry).sort()).toEqual([]);
+    // Types are erased at runtime, so this is the whole runtime surface of the package.
+    expect(Object.keys(entry).sort()).toEqual([
+      'DEFAULT_SQL_SCHEMA',
+      'SQL_DIALECT',
+      'extractSqlAccesses',
+      'extractSqlDefinitions',
+    ]);
+    expect(typeof entry.extractSqlAccesses).toBe('function');
+    expect(typeof entry.extractSqlDefinitions).toBe('function');
+  });
+
+  it('re-exports only from the package entry', () => {
+    const re = /\bexport\s+(?:type\s+)?(?:\*|\{[^}]*\})\s*from\b/;
+    for (const file of sourceFiles(join(pkgRoot, 'src'))) {
+      if (file.endsWith(join('src', 'index.ts'))) continue;
+      expect(re.test(readFileSync(file, 'utf8')), `${file} re-exports`).toBe(false);
+    }
   });
 });

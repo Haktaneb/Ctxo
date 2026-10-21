@@ -55,9 +55,28 @@ describe('canonicalFromParts', () => {
     expect(canonicalFromParts(['dbo', 'a::table'])).toBeUndefined();
   });
 
+  it('skips a part that still contains "." after delimiter removal, so it cannot read as more parts', () => {
+    expect(canonicalFromParts(['a.b'])).toBeUndefined();
+    expect(canonicalFromParts(['dbo', 'a.b'])).toBeUndefined();
+    expect(canonicalFromParts(['Lending.Desk', 'Loans'])).toBeUndefined();
+    expect(canonicalSqlName('[dbo].[a.b]')).toBeUndefined();
+    expect(canonicalSqlName('[Loans.Archive]')).toBeUndefined();
+    expect(canonicalSqlName('"dbo"."Loans.Archive"')).toBeUndefined();
+    expect(canonicalSqlName('[dbo].[Loans]')).toBe('dbo.loans');
+  });
+
   it('exposes the dialect and default schema constants', () => {
     expect(SQL_DIALECT).toBe('tsql');
     expect(DEFAULT_SQL_SCHEMA).toBe('dbo');
     expect(foldAsciiLower('ABC xyz Ü İ')).toBe('abc xyz Ü İ');
+  });
+});
+
+describe('foldAsciiLower', () => {
+  it('keeps dotless ı and sharp ß, which locale or Unicode folding would change', () => {
+    expect(foldAsciiLower('ı')).toBe('ı');
+    expect(foldAsciiLower('ß')).toBe('ß');
+    expect(foldAsciiLower('KİTAP ıI ßS')).toBe('kİtap ıi ßs');
+    expect(canonicalSqlName('[Üye].[Ödünç Kaydı]')).toBe('Üye.Ödünç kaydı');
   });
 });

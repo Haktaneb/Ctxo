@@ -1,0 +1,5 @@
+{
+  "description": "A Dapper list parameter after IN without parentheses reads like IN (@ids).",
+  "mode": "statement",
+  "accesses": { "reads": ["dbo.loans"], "writes": [], "executes": [] }
+}
