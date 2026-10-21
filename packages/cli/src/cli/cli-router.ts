@@ -363,7 +363,7 @@ ctxo v${v} — MCP server for dependency-aware codebase context
 Usage:
   ctxo                      Start MCP server (stdio transport)
   ctxo index                Build full codebase index (--max-history N controls intent depth only, default 20)
-  ctxo index --skip-community    Skip Louvain community detection for faster indexing
+  ctxo index --skip-community    Skip community detection and the contexts view for faster indexing
   ctxo index --skip-history      Skip git history (no intent or anti-patterns; co-changes.json is not refreshed)
   ctxo index --check             Fail if the index is stale; writes nothing and records no snapshot
   ctxo index --cochange-commits <n|all>   Co-change window in commits (default 2000, or "all")

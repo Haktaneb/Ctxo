@@ -135,14 +135,14 @@ Unknown fields at the root are ignored for forward compatibility. Unknown fields
 - Patterns are matched against **repo-relative, forward-slash paths**. Backslashes are normalised before matching.
 - `index.ignore` runs per file, after the git-tracked file list is produced.
 - `index.ignoreProjects` runs against workspace roots during discovery. A matched workspace is never visited, and its plugin dependencies are never imported.
-- Each pattern is matched on its own and a path matches when any pattern does. Do not use `!` negation in `index.tests`, `contextsView.exclude` or `contextsView.hubs.paths`: a negated pattern matches every other path, and `ctxo doctor` does not warn about it yet.
+- Each pattern is matched on its own and a path matches when any pattern does. Do not use `!` negation in any of these lists (`index.ignore`, `index.ignoreProjects`, `index.tests`, `contextsView.exclude`, `contextsView.hubs.paths`): a negated pattern matches every other path, and `ctxo doctor` does not warn about it yet.
 
 ```yaml
 index:
   ignore:
     - "**/*.generated.ts"      # extension match anywhere
     - "packages/**/dist/**"    # nested directories
-    - "!packages/core/dist/**" # negation also supported
+    - "packages/*/generated/**" # any package
 ```
 
 ## Defaults
