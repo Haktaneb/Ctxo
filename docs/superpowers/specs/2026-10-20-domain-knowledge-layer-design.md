@@ -137,7 +137,7 @@ Order: 0, 1A, 1B, 1C, 2A, 2B, 3, 4. Dependencies: 1A needs 0 (co-change); 1B add
 ```sh
 # ctxo-start v2
 # Incremental re-index of the files changed by this commit (one run per commit)
-if command -v ctxo >/dev/null 2>&1; then
+if [ -d .ctxo ] && command -v ctxo >/dev/null 2>&1; then
   ctxo index --commit HEAD >/dev/null 2>&1 || true
 fi
 # ctxo-end

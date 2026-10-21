@@ -16,11 +16,14 @@ vi.mock('@clack/prompts', () => ({
 }));
 
 import { InitCommand } from '../init-command.js';
+import { isolateGitEnv, type IsolatedGitEnv } from './git-test-env.js';
 
 let dir: string;
+let gitEnv: IsolatedGitEnv;
 let errorSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
+  gitEnv = isolateGitEnv();
   dir = mkdtempSync(join(tmpdir(), 'ctxo-init-declined-'));
   execFileSync('git', ['init', '-q'], { cwd: dir });
   errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -29,6 +32,7 @@ beforeEach(() => {
 afterEach(() => {
   errorSpy.mockRestore();
   rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  gitEnv.restore();
 });
 
 describe('InitCommand - declined git hooks advice', () => {

@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { DoctorReport } from '../../core/diagnostics/types.js';
 import { applyFixes, formatFixReport } from '../doctor-fix.js';
+import { isolateGitEnv, type IsolatedGitEnv } from './git-test-env.js';
 
 function report(overrides: Partial<DoctorReport['checks'][number]>[]): DoctorReport {
   const checks = overrides.map((o, i) => ({
@@ -25,28 +26,21 @@ function report(overrides: Partial<DoctorReport['checks'][number]>[]): DoctorRep
 describe('applyFixes', () => {
   let tmp: string;
   let savedCI: string | undefined;
-  const savedGitEnv = new Map<string, string | undefined>();
+  let gitEnv: IsolatedGitEnv;
 
   beforeEach(() => {
     tmp = mkdtempSync(join(tmpdir(), 'ctxo-fix-'));
     savedCI = process.env['CI'];
     delete process.env['CI'];
-    // A hook-driven test run exports GIT_DIR; the hook tests below must resolve against their own temp repo.
-    for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_PREFIX']) {
-      savedGitEnv.set(key, process.env[key]);
-      delete process.env[key];
-    }
+    // The hook tests below must resolve against their own temp repo: no inherited GIT_DIR, no global or system git config.
+    gitEnv = isolateGitEnv();
   });
 
   afterEach(() => {
     rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     if (savedCI === undefined) delete process.env['CI'];
     else process.env['CI'] = savedCI;
-    for (const [key, value] of savedGitEnv) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-    savedGitEnv.clear();
+    gitEnv.restore();
   });
 
   it('returns empty attempts on a clean report', async () => {
@@ -127,6 +121,32 @@ describe('applyFixes', () => {
       expect(content).not.toContain('ctxo index --file');
       expect(content).toContain('echo "mine"');
       expect(content).toContain('echo "tail"');
+    });
+
+    it('doctor --fix refuses a core.hooksPath from the global git config: skipped, nothing written', async () => {
+      const hookFile = seedV1Hook();
+      const before = readFileSync(hookFile, 'utf-8');
+      const shared = mkdtempSync(join(tmpdir(), 'ctxo-fix-shared-hooks-'));
+      gitEnv.setGlobalHooksPath(shared);
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      try {
+        const r = await applyFixes(
+          report([{ id: 'git_hooks', status: 'warn' }]),
+          { projectRoot: tmp, ctxoRoot: join(tmp, '.ctxo'), yes: true },
+        );
+
+        const hooksAttempt = r.attempts.find((a) => a.name === 'Git hooks');
+        expect(hooksAttempt?.status).toBe('skipped');
+        expect(hooksAttempt?.error).toMatch(/shared/i);
+        expect(r.halted).toBe(false);
+        expect(readdirSync(shared)).toEqual([]);
+        expect(readFileSync(hookFile, 'utf-8')).toBe(before);
+        expect(errorSpy.mock.calls.map((call) => String(call[0])).join('\n')).toMatch(/shared by every repo/);
+      } finally {
+        errorSpy.mockRestore();
+        rmSync(shared, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      }
     });
 
     it('doctor --fix --dry-run leaves the hook untouched', async () => {

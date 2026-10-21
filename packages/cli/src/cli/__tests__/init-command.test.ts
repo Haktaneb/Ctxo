@@ -1,32 +1,24 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, statSync, chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { delimiter, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { InitCommand } from '../init-command.js';
+import { isolateGitEnv, type IsolatedGitEnv } from './git-test-env.js';
 
 const tempDirs: string[] = [];
+let gitEnv: IsolatedGitEnv;
 
-// A git hook run by the owner's tooling exports GIT_DIR and friends. If this suite inherited them,
-// `git rev-parse --git-path hooks` would point at the live hooks instead of the temp repo.
-const SCRUBBED_GIT_ENV = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_PREFIX'] as const;
-const savedGitEnv = new Map<string, string | undefined>();
-
+// Hook tests resolve `git rev-parse --git-path hooks` in temp repos; they must never see the
+// owner's GIT_DIR or global/system git config (see git-test-env.ts).
 beforeEach(() => {
-  for (const key of SCRUBBED_GIT_ENV) {
-    savedGitEnv.set(key, process.env[key]);
-    delete process.env[key];
-  }
+  gitEnv = isolateGitEnv();
 });
 
 afterEach(() => {
   for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   tempDirs.length = 0;
-  for (const [key, value] of savedGitEnv) {
-    if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
-  }
-  savedGitEnv.clear();
+  gitEnv.restore();
 });
 
 /** A real, empty git repository in the OS temp dir. Hook tests never touch any other repository. */
@@ -49,18 +41,28 @@ const V1_POST_COMMIT_BLOCK = [
   '# ctxo-end',
 ].join('\n');
 
-/** Spec 6.3, verbatim. */
+/** Spec 6.3, verbatim: guarded on a `.ctxo` directory so a shared hooks dir stays harmless in other repos. */
 const V2_POST_COMMIT_BLOCK = [
   '# ctxo-start v2',
   '# Incremental re-index of the files changed by this commit (one run per commit)',
-  'if command -v ctxo >/dev/null 2>&1; then',
+  'if [ -d .ctxo ] && command -v ctxo >/dev/null 2>&1; then',
   '  ctxo index --commit HEAD >/dev/null 2>&1 || true',
   'fi',
   '# ctxo-end',
 ].join('\n');
 
-/** The post-merge block, which this task keeps as it was. */
+/** The post-merge block: unversioned marker, same `.ctxo` guard. */
 const POST_MERGE_BLOCK = [
+  '# ctxo-start',
+  '# Rebuild SQLite cache after merge (index updated via git pull)',
+  'if [ -d .ctxo ] && command -v ctxo >/dev/null 2>&1; then',
+  '  ctxo sync 2>/dev/null || true',
+  'fi',
+  '# ctxo-end',
+].join('\n');
+
+/** The post-merge block as earlier builds wrote it (no `.ctxo` guard). */
+const UNGUARDED_POST_MERGE_BLOCK = [
   '# ctxo-start',
   '# Rebuild SQLite cache after merge (index updated via git pull)',
   'if command -v ctxo >/dev/null 2>&1; then',
@@ -165,8 +167,8 @@ describe('InitCommand — hook installation', () => {
     expect(readFileSync(hookPath(dir), 'utf-8')).toContain(V2_POST_COMMIT_BLOCK);
   });
 
-  it('installHooks keeps hook files executable', () => {
-    if (process.platform === 'win32') return; // POSIX mode bits do not exist on Windows
+  // POSIX mode bits do not exist on Windows.
+  it.skipIf(process.platform === 'win32')('installHooks keeps hook files executable', () => {
     const dir = makeTempProject();
     new InitCommand(dir).installHooks();
 
@@ -174,25 +176,143 @@ describe('InitCommand — hook installation', () => {
     expect(statSync(hookPath(dir, 'post-merge')).mode & 0o111).not.toBe(0);
   });
 
-  it('the installed post-commit hook runs ctxo index --commit HEAD once for a multi-file commit', () => {
+  it.skipIf(process.platform === 'win32')('installHooks makes a current but non-executable hook executable', () => {
     const dir = makeTempProject();
+    new InitCommand(dir).installHooks();
+    chmodSync(hookPath(dir), 0o644);
+    chmodSync(hookPath(dir, 'post-merge'), 0o644);
+    const before = readFileSync(hookPath(dir), 'utf-8');
+
+    new InitCommand(dir).installHooks();
+
+    expect(readFileSync(hookPath(dir), 'utf-8')).toBe(before);
+    expect(statSync(hookPath(dir)).mode & 0o111).not.toBe(0);
+    expect(statSync(hookPath(dir, 'post-merge')).mode & 0o111).not.toBe(0);
+  });
+
+  /**
+   * Runs `git commit` in `dir` with a stand-in `ctxo` first on PATH. The hook resolves it through
+   * `command -v ctxo`; the stand-in appends its arguments to the returned log file.
+   */
+  function makeCommitter(dir: string): { commit(files: string[]): void; calls(): string[] } {
     const binDir = mkdtempSync(join(tmpdir(), 'ctxo-fake-bin-'));
     tempDirs.push(binDir);
     const logFile = join(binDir, 'ctxo.log');
-    // A stand-in `ctxo` that records its arguments; the hook resolves it through `command -v ctxo`.
     writeFileSync(join(binDir, 'ctxo'), '#!/bin/sh\necho "$@" >> "$CTXO_LOG"\n', { mode: 0o755 });
+    const env = { ...process.env, CTXO_LOG: logFile, PATH: `${binDir}${delimiter}${process.env['PATH'] ?? ''}` };
+    return {
+      commit(files: string[]): void {
+        for (const name of files) writeFileSync(join(dir, name), name, 'utf-8');
+        execFileSync('git', ['add', '-A'], { cwd: dir, env });
+        execFileSync(
+          'git',
+          ['-c', 'commit.gpgsign=false', '-c', 'user.name=Test', '-c', 'user.email=test@test.com', 'commit', '-q', '-m', files.join(' ')],
+          { cwd: dir, env },
+        );
+      },
+      calls(): string[] {
+        return existsSync(logFile) ? readFileSync(logFile, 'utf-8').trim().split('\n') : [];
+      },
+    };
+  }
+
+  it('the installed post-commit hook runs ctxo index --commit HEAD once for a multi-file commit', () => {
+    const dir = makeTempProject();
+    mkdirSync(join(dir, '.ctxo'));
+    const committer = makeCommitter(dir);
     new InitCommand(dir).installHooks();
 
-    for (const name of ['a.txt', 'b.txt', 'c.txt']) writeFileSync(join(dir, name), name, 'utf-8');
-    const env = { ...process.env, CTXO_LOG: logFile, PATH: `${binDir}${delimiter}${process.env['PATH'] ?? ''}` };
-    execFileSync('git', ['add', '-A'], { cwd: dir, env });
-    execFileSync(
-      'git',
-      ['-c', 'commit.gpgsign=false', '-c', 'user.name=Test', '-c', 'user.email=test@test.com', 'commit', '-q', '-m', 'three files'],
-      { cwd: dir, env },
-    );
+    committer.commit(['a.txt', 'b.txt', 'c.txt']);
 
-    expect(readFileSync(logFile, 'utf-8').trim().split('\n')).toEqual(['index --commit HEAD']);
+    expect(committer.calls()).toEqual(['index --commit HEAD']);
+  });
+
+  it('the installed post-commit hook does not call ctxo without a .ctxo directory, and calls it once with one', () => {
+    const dir = makeTempProject();
+    const committer = makeCommitter(dir);
+    new InitCommand(dir).installHooks();
+
+    committer.commit(['a.txt', 'b.txt']);
+    expect(committer.calls()).toEqual([]);
+
+    mkdirSync(join(dir, '.ctxo'));
+    committer.commit(['c.txt', 'd.txt']);
+    expect(committer.calls()).toEqual(['index --commit HEAD']);
+  });
+
+  it('installHooks upgrades an unguarded post-merge block to the .ctxo-guarded one', () => {
+    const dir = makeTempProject();
+    const before = '#!/bin/sh\necho "merge start"\n\n';
+    const after = '\necho "merge end"\n';
+    writeFileSync(hookPath(dir, 'post-merge'), before + UNGUARDED_POST_MERGE_BLOCK + after, 'utf-8');
+
+    new InitCommand(dir).installHooks();
+
+    expect(readFileSync(hookPath(dir, 'post-merge'), 'utf-8')).toBe(before + POST_MERGE_BLOCK + after);
+  });
+
+  it('installHooks replaces every ctxo block, leaving one block and every user line', () => {
+    const dir = makeTempProject();
+    const content = [
+      '#!/bin/sh',
+      'echo "first user line"',
+      V1_POST_COMMIT_BLOCK,
+      'echo "between the blocks"',
+      V1_POST_COMMIT_BLOCK,
+      'echo "last user line"',
+      '',
+    ].join('\n');
+    writeFileSync(hookPath(dir), content, 'utf-8');
+
+    new InitCommand(dir).installHooks();
+
+    const result = readFileSync(hookPath(dir), 'utf-8');
+    expect(result.match(/# ctxo-start/g) ?? []).toHaveLength(1);
+    expect(result.match(/# ctxo-end/g) ?? []).toHaveLength(1);
+    expect(result.match(/ctxo index --commit HEAD/g) ?? []).toHaveLength(1);
+    expect(result).not.toContain('ctxo index --file');
+    for (const line of ['echo "first user line"', 'echo "between the blocks"', 'echo "last user line"']) {
+      expect(result).toContain(line);
+    }
+    // File order is kept: the surviving block sits where the first block stood.
+    expect(result.indexOf('first user line')).toBeLessThan(result.indexOf('# ctxo-start v2'));
+    expect(result.indexOf('# ctxo-start v2')).toBeLessThan(result.indexOf('between the blocks'));
+    expect(result.indexOf('between the blocks')).toBeLessThan(result.indexOf('last user line'));
+  });
+
+  it('installHooks ignores look-alike marker lines (ctxo-end-of-my-section, ctxo-startup)', () => {
+    const dir = makeTempProject();
+    // `# ctxo-end-of-my-section` is not an end marker, so this start marker is dangling.
+    const original = [
+      '#!/bin/sh',
+      '# ctxo-start',
+      'echo "inside the dangling section"',
+      '# ctxo-end-of-my-section',
+      '# ctxo-startup notes',
+      'echo "tail"',
+      '',
+    ].join('\n');
+    writeFileSync(hookPath(dir), original, 'utf-8');
+
+    new InitCommand(dir).installHooks();
+    const once = readFileSync(hookPath(dir), 'utf-8');
+    new InitCommand(dir).installHooks();
+
+    expect(once.startsWith(original)).toBe(true);
+    expect(once).toContain(V2_POST_COMMIT_BLOCK);
+    expect(readFileSync(hookPath(dir), 'utf-8')).toBe(once);
+  });
+
+  it('installHooks matches marker lines with trailing blanks and CRLF line endings', () => {
+    const dir = makeTempProject();
+    const before = '#!/bin/sh\r\necho "before"\r\n';
+    const after = '\r\necho "after"\r\n';
+    const crlfV1 = V1_POST_COMMIT_BLOCK.replace('# ctxo-start', '# ctxo-start  ').replace(/\n/g, '\r\n');
+    writeFileSync(hookPath(dir), before + crlfV1 + after, 'utf-8');
+
+    new InitCommand(dir).installHooks();
+
+    expect(readFileSync(hookPath(dir), 'utf-8')).toBe(before + V2_POST_COMMIT_BLOCK + after);
   });
 
   it('installHooks leaves an up-to-date post-merge block byte for byte as it was', () => {
@@ -262,6 +382,110 @@ describe('InitCommand — hook installation', () => {
     const content = readFileSync(join(dir, '.git', 'hooks', 'post-commit'), 'utf-8');
     expect(content).toContain('# ctxo-start');
     expect(content).toContain('# ctxo-end');
+  });
+});
+
+describe('InitCommand - shared hooks directory (global or system core.hooksPath)', () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    errorSpy.mockRestore();
+  });
+
+  function stderr(): string {
+    return errorSpy.mock.calls.map((call) => String(call[0])).join('\n');
+  }
+
+  function makeSharedHooksDir(): string {
+    const shared = mkdtempSync(join(tmpdir(), 'ctxo-shared-hooks-'));
+    tempDirs.push(shared);
+    return shared;
+  }
+
+  it('installHooks does not write into a core.hooksPath from the global git config, and warns', () => {
+    const dir = makeTempProject();
+    const shared = makeSharedHooksDir();
+    gitEnv.setGlobalHooksPath(shared);
+
+    const result = new InitCommand(dir).installHooks();
+
+    expect(result.installed).toBe(false);
+    expect(readdirSync(shared)).toEqual([]);
+    expect(existsSync(hookPath(dir))).toBe(false);
+    const warning = stderr();
+    expect(warning).toMatch(/shared by every repo/);
+    expect(warning).toContain(shared.replace(/\\/g, '/'));
+    expect(warning).toContain('by hand');
+    expect(warning).toContain(V2_POST_COMMIT_BLOCK);
+    expect(warning).toContain(POST_MERGE_BLOCK);
+  });
+
+  it('installHooks does not write into a core.hooksPath from the system git config either', () => {
+    const dir = makeTempProject();
+    const shared = makeSharedHooksDir();
+    gitEnv.setSystemHooksPath(shared);
+
+    const result = new InitCommand(dir).installHooks();
+
+    expect(result.installed).toBe(false);
+    expect(readdirSync(shared)).toEqual([]);
+    expect(stderr()).toMatch(/shared by every repo/);
+  });
+
+  it('installHooks still honours a repo-local core.hooksPath that overrides a global one', () => {
+    const dir = makeTempProject();
+    gitEnv.setGlobalHooksPath(makeSharedHooksDir());
+    execFileSync('git', ['config', '--local', 'core.hooksPath', '.githooks'], { cwd: dir });
+
+    const result = new InitCommand(dir).installHooks();
+
+    expect(result.installed).toBe(true);
+    expect(readFileSync(join(dir, '.githooks', 'post-commit'), 'utf-8')).toContain(V2_POST_COMMIT_BLOCK);
+    expect(stderr()).not.toMatch(/shared by every repo/);
+  });
+
+  it('non-interactive init continues past a shared hooks directory: scaffolding done, no hooks, no failure exit', async () => {
+    const dir = makeTempProject();
+    const shared = makeSharedHooksDir();
+    gitEnv.setGlobalHooksPath(shared);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => { throw new Error('exit'); });
+
+    try {
+      await new InitCommand(dir).run({ yes: true, noInstall: true });
+    } finally {
+      exitSpy.mockRestore();
+    }
+
+    expect(existsSync(join(dir, '.ctxo', 'index'))).toBe(true);
+    expect(readdirSync(shared)).toEqual([]);
+    expect(stderr()).toMatch(/shared by every repo/);
+    expect(stderr()).not.toContain('Git hooks installed');
+  });
+
+  it('--dry-run says the hooks would be skipped for a shared hooks directory', async () => {
+    const dir = makeTempProject();
+    const shared = makeSharedHooksDir();
+    gitEnv.setGlobalHooksPath(shared);
+
+    await new InitCommand(dir).run({ tools: ['windsurf'], dryRun: true });
+
+    expect(stderr()).toContain(shared.replace(/\\/g, '/'));
+    expect(stderr()).toMatch(/skipped/i);
+    expect(readdirSync(shared)).toEqual([]);
+  });
+
+  it('--dry-run keeps a space before (git hook) when the hooks path is long', async () => {
+    const dir = makeTempProject();
+    execFileSync('git', ['config', 'core.hooksPath', '.githooks-with-a-rather-long-directory-name'], { cwd: dir });
+
+    await new InitCommand(dir).run({ tools: ['windsurf'], dryRun: true });
+
+    expect(stderr()).toContain('.githooks-with-a-rather-long-directory-name/post-commit (git hook)');
+    expect(stderr()).toContain('.githooks-with-a-rather-long-directory-name/post-merge (git hook)');
   });
 });
 
@@ -365,6 +589,3 @@ describe('InitCommand — cursor: skills + rules, no guard', () => {
     expect(existsSync(join(dir, '.claude', 'settings.json'))).toBe(false);
   });
 });
-
-// Import vi for mocking
-import { vi } from 'vitest';

@@ -1,5 +1,4 @@
-import { isAbsolute, join, relative, resolve } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { isAbsolute, join, relative } from 'node:path';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { PLATFORMS, detectPlatforms, installRules, ensureGitignore, ensureConfig, getMcpConfigTargets, ensureMcpConfig, installSkills, ensureClaudeHook } from './ai-rules.js';
@@ -10,6 +9,16 @@ import {
   type KnownLanguage,
 } from '../core/detection/detect-languages.js';
 import { InstallCommand } from './install-command.js';
+import {
+  POST_COMMIT_CONTENT,
+  POST_MERGE_CONTENT,
+  resolveHooksDir,
+  sharedHooksScope,
+  sharedHooksWarning,
+  upsertCtxoBlock,
+  forwardSlashes,
+  type SharedHooksScope,
+} from './git-hooks.js';
 
 const requireCjs = createRequire(import.meta.url);
 
@@ -31,96 +40,16 @@ function resolveInstalledPlugins(needed: readonly KnownLanguage[]): {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Git hook content                                                   */
-/* ------------------------------------------------------------------ */
-
-const CTXO_START = '# ctxo-start';
-const CTXO_END = '# ctxo-end';
-
-/**
- * Version of the post-commit block this build writes. The marker line carries it (`# ctxo-start v2`)
- * so a newer build can tell an outdated block from a current one and replace it in place.
- * Blocks written before versioning have a bare `# ctxo-start` and count as version 1.
- */
-export const POST_COMMIT_HOOK_VERSION = 2;
-
-// Blocks are joined with an explicit '\n' so a CRLF checkout of this file can never leak CRs into a hook.
-const POST_COMMIT_CONTENT = [
-  `${CTXO_START} v${POST_COMMIT_HOOK_VERSION}`,
-  '# Incremental re-index of the files changed by this commit (one run per commit)',
-  'if command -v ctxo >/dev/null 2>&1; then',
-  '  ctxo index --commit HEAD >/dev/null 2>&1 || true',
-  'fi',
-  CTXO_END,
-].join('\n');
-
-const POST_MERGE_CONTENT = [
-  CTXO_START,
-  '# Rebuild SQLite cache after merge (index updated via git pull)',
-  'if command -v ctxo >/dev/null 2>&1; then',
-  '  ctxo sync 2>/dev/null || true',
-  'fi',
-  CTXO_END,
-].join('\n');
-
-/**
- * A complete ctxo block: a `# ctxo-start` line through the next `# ctxo-end` line (the end line's
- * newline is not part of the match). The body may not contain another `# ctxo-start` line, so a
- * dangling start marker without an end can never swallow the user lines up to a later, complete block.
- */
-const CTXO_BLOCK_PATTERN = new RegExp(
-  `^${CTXO_START}[^\\r\\n]*\\r?\\n(?:(?!^${CTXO_START})[\\s\\S])*?^${CTXO_END}[^\\r\\n]*`,
-  'm',
-);
-
-const CTXO_BLOCK_VERSION_PATTERN = new RegExp(`^${CTXO_START}(?:[ \\t]+v(\\d+))?`);
-
-interface CtxoBlockSpan {
-  readonly start: number;
-  readonly end: number;
-  readonly text: string;
-}
-
-function findCtxoBlock(content: string): CtxoBlockSpan | undefined {
-  const match = CTXO_BLOCK_PATTERN.exec(content);
-  if (!match) return undefined;
-  return { start: match.index, end: match.index + match[0].length, text: match[0] };
-}
-
-/**
- * Version of the first complete ctxo block in a hook file: 1 for an unversioned block, N for
- * `# ctxo-start vN`, or `undefined` when the file holds no complete block.
- */
-export function readCtxoBlockVersion(hookContent: string): number | undefined {
-  const block = findCtxoBlock(hookContent);
-  if (!block) return undefined;
-  const versionMatch = CTXO_BLOCK_VERSION_PATTERN.exec(block.text);
-  return versionMatch?.[1] ? Number(versionMatch[1]) : 1;
-}
-
-/**
- * The directory git runs hooks from: `git rev-parse --git-path hooks`, so `core.hooksPath` and
- * linked worktrees resolve the way git itself resolves them. Git may answer relative to its cwd,
- * which is the project root, so a relative answer is resolved against it. Falls back to
- * `<projectRoot>/.git/hooks` whenever git cannot answer.
- */
-export function resolveHooksDir(projectRoot: string): string {
-  const fallback = join(projectRoot, '.git', 'hooks');
-  try {
-    const answer = execFileSync('git', ['rev-parse', '--git-path', 'hooks'], {
-      cwd: projectRoot,
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    return answer ? resolve(projectRoot, answer) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-/* ------------------------------------------------------------------ */
 /*  Options                                                            */
 /* ------------------------------------------------------------------ */
+
+/** Outcome of `InitCommand.installHooks`. Not installing into a shared hooks directory is a normal outcome, not an error. */
+export interface HooksInstallResult {
+  readonly installed: boolean;
+  readonly hooksDir: string;
+  /** Set when `core.hooksPath` comes from the global or system git config, so ctxo left it alone. */
+  readonly sharedScope?: SharedHooksScope;
+}
 
 export interface InitOptions {
   tools?: string[];
@@ -214,11 +143,24 @@ export class InitCommand {
     this.projectRoot = projectRoot;
   }
 
-  installHooks(): void {
+  /**
+   * Installs (or upgrades in place) the post-commit and post-merge blocks in the hooks directory
+   * git uses. A `core.hooksPath` from the global or system git config points at a directory shared
+   * by every repository on the machine: nothing is written there, a warning with the blocks to add
+   * by hand goes to stderr, and the result says so. A local `core.hooksPath` is honoured.
+   */
+  installHooks(): HooksInstallResult {
     const hooksDir = resolveHooksDir(this.projectRoot);
+    const sharedScope = sharedHooksScope(this.projectRoot);
+    if (sharedScope) {
+      console.error(sharedHooksWarning(hooksDir, sharedScope));
+      return { installed: false, hooksDir, sharedScope };
+    }
+
     mkdirSync(hooksDir, { recursive: true });
     this.installHook(hooksDir, 'post-commit', POST_COMMIT_CONTENT);
     this.installHook(hooksDir, 'post-merge', POST_MERGE_CONTENT);
+    return { installed: true, hooksDir };
   }
 
   async run(options: InitOptions = {}): Promise<void> {
@@ -413,8 +355,12 @@ export class InitCommand {
     }
 
     if (installGitHooks) {
-      this.installHooks();
-      results.push(`${pc.green('\u2713')} ${pc.bold('post-commit, post-merge')}  ${pc.dim('hooks installed')}`);
+      const hooks = this.installHooks();
+      results.push(
+        hooks.installed
+          ? `${pc.green('\u2713')} ${pc.bold('post-commit, post-merge')}  ${pc.dim('hooks installed')}`
+          : `${pc.yellow('!')} ${pc.bold('post-commit, post-merge')}  ${pc.dim('skipped \u2014 shared hooks directory (see warning above)')}`,
+      );
     }
 
     if (installGuard) {
@@ -503,8 +449,7 @@ export class InitCommand {
     }
 
     if (!options.rulesOnly) {
-      this.installHooks();
-      console.error('[ctxo] \u2713 Git hooks installed');
+      if (this.installHooks().installed) console.error('[ctxo] \u2713 Git hooks installed');
     }
 
     if (!options.rulesOnly && toolIds.includes('claude-code')) {
@@ -554,8 +499,10 @@ export class InitCommand {
 
     if (!options.rulesOnly) {
       const hooksDir = this.displayHooksDir();
-      console.error(`  ${`${hooksDir}/post-commit`.padEnd(26)}(git hook)`);
-      console.error(`  ${`${hooksDir}/post-merge`.padEnd(26)}(git hook)`);
+      const note = sharedHooksScope(this.projectRoot) ? ' - skipped: shared hooks directory' : '';
+      // padEnd(25) plus one space: a path of 25+ characters still gets a separator.
+      console.error(`  ${`${hooksDir}/post-commit`.padEnd(25)} (git hook)${note}`);
+      console.error(`  ${`${hooksDir}/post-merge`.padEnd(25)} (git hook)${note}`);
     }
 
     if (!options.rulesOnly && toolIds.includes('claude-code')) {
@@ -585,8 +532,8 @@ export class InitCommand {
   /** The hooks directory for human output: project-relative when it sits inside the project, absolute otherwise. */
   private displayHooksDir(): string {
     const hooksDir = resolveHooksDir(this.projectRoot);
-    const rel = relative(this.projectRoot, hooksDir).replace(/\\/g, '/');
-    return rel === '' || rel.startsWith('..') || isAbsolute(rel) ? hooksDir.replace(/\\/g, '/') : rel;
+    const rel = forwardSlashes(relative(this.projectRoot, hooksDir));
+    return rel === '' || rel.startsWith('..') || isAbsolute(rel) ? forwardSlashes(hooksDir) : rel;
   }
 
   private installHook(hooksDir: string, hookName: string, hookContent: string): void {
@@ -594,22 +541,20 @@ export class InitCommand {
 
     const hookExists = existsSync(hookPath);
     const existing = hookExists ? readFileSync(hookPath, 'utf-8') : '#!/bin/sh\n';
+    const updated = upsertCtxoBlock(existing, hookContent);
 
-    // An existing ctxo block (unversioned v1 included) is replaced where it stands, so the lines
-    // before and after it survive byte for byte. Without one, the block is appended.
-    const block = findCtxoBlock(existing);
-    let updated: string;
-    if (block) {
-      updated = existing.slice(0, block.start) + hookContent + existing.slice(block.end);
-    } else {
-      updated = existing.endsWith('\n')
-        ? existing + '\n' + hookContent + '\n'
-        : existing + '\n\n' + hookContent + '\n';
+    if (!hookExists || updated !== existing) {
+      writeFileSync(hookPath, updated, 'utf-8');
+      chmodSync(hookPath, 0o755);
+      return;
     }
 
-    if (hookExists && updated === existing) return;
-
-    writeFileSync(hookPath, updated, 'utf-8');
-    chmodSync(hookPath, 0o755);
+    // Content is already current. A hook that lost its exec bit (copied, restored from a backup)
+    // would silently stop firing, so restore it; failing init over a file we cannot chmod would not help.
+    try {
+      chmodSync(hookPath, 0o755);
+    } catch {
+      // best effort
+    }
   }
 }

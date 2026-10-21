@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { GitHooksCheck } from '../checks/git-check.js';
 import { InitCommand } from '../../../cli/init-command.js';
+import { isolateGitEnv, type IsolatedGitEnv } from '../../../cli/__tests__/git-test-env.js';
 import type { CheckContext } from '../../../core/diagnostics/types.js';
 
 const V1_BLOCK = [
@@ -21,26 +22,21 @@ const V1_BLOCK = [
 const V2_BLOCK = [
   '# ctxo-start v2',
   '# Incremental re-index of the files changed by this commit (one run per commit)',
-  'if command -v ctxo >/dev/null 2>&1; then',
+  'if [ -d .ctxo ] && command -v ctxo >/dev/null 2>&1; then',
   '  ctxo index --commit HEAD >/dev/null 2>&1 || true',
   'fi',
   '# ctxo-end',
 ].join('\n');
 
-const SCRUBBED_GIT_ENV = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_PREFIX'] as const;
-
 describe('GitHooksCheck', () => {
   const check = new GitHooksCheck();
-  const savedGitEnv = new Map<string, string | undefined>();
+  let gitEnv: IsolatedGitEnv;
   let tempDir: string;
   let ctx: CheckContext;
 
   beforeEach(() => {
-    // A hook-driven test run exports GIT_DIR; every test here must resolve against its own temp repo.
-    for (const key of SCRUBBED_GIT_ENV) {
-      savedGitEnv.set(key, process.env[key]);
-      delete process.env[key];
-    }
+    // Resolve against this test's own repo only: no inherited GIT_DIR, no global or system git config.
+    gitEnv = isolateGitEnv();
     tempDir = mkdtempSync(join(tmpdir(), 'ctxo-hooks-check-'));
     execFileSync('git', ['init', '-q'], { cwd: tempDir });
     ctx = { projectRoot: tempDir, ctxoRoot: join(tempDir, '.ctxo') };
@@ -48,11 +44,7 @@ describe('GitHooksCheck', () => {
 
   afterEach(() => {
     rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-    for (const [key, value] of savedGitEnv) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-    savedGitEnv.clear();
+    gitEnv.restore();
   });
 
   function writePostCommit(content: string): void {
@@ -126,6 +118,64 @@ describe('GitHooksCheck', () => {
     mkdirSync(join(tempDir, '.githooks'));
     writeFileSync(join(tempDir, '.githooks', 'post-commit'), `#!/bin/sh\n\n${V2_BLOCK}\n`, 'utf-8');
     expect((await check.run(ctx)).status).toBe('pass');
+  });
+
+  it('warns when the post-commit hook holds more than one ctxo block', async () => {
+    writePostCommit(`#!/bin/sh\n${V2_BLOCK}\necho "between"\n${V2_BLOCK}\n`);
+    const result = await check.run(ctx);
+    expect(result.status).toBe('warn');
+    expect(result.message).toMatch(/2 ctxo/);
+    expect(result.fix).toContain('ctxo doctor --fix');
+  });
+
+  it('does not take look-alike marker lines for a block', async () => {
+    writePostCommit(`#!/bin/sh\n# ctxo-start v2\nctxo index --commit HEAD\n# ctxo-end-of-my-section\n`);
+    const result = await check.run(ctx);
+    expect(result.status).toBe('warn');
+    expect(result.message).toMatch(/no ctxo post-commit hook/i);
+  });
+
+  describe('shared hooks directory (global or system core.hooksPath)', () => {
+    let shared: string;
+
+    beforeEach(() => {
+      shared = mkdtempSync(join(tmpdir(), 'ctxo-hooks-check-shared-'));
+      gitEnv.setGlobalHooksPath(shared);
+    });
+
+    afterEach(() => {
+      rmSync(shared, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    });
+
+    it('warns with a message that explains the shared directory instead of plain "missing"', async () => {
+      const result = await check.run(ctx);
+      expect(result.status).toBe('warn');
+      expect(result.message).toMatch(/shared/i);
+      expect(result.message).toContain(shared.replace(/\\/g, '/'));
+      expect(result.message).not.toMatch(/^No ctxo post-commit hook/);
+      expect(result.fix).toMatch(/by hand/i);
+      expect(readdirSync(shared)).toEqual([]);
+    });
+
+    it('still warns on an outdated block in the shared directory', async () => {
+      writeFileSync(join(shared, 'post-commit'), `#!/bin/sh\n\n${V1_BLOCK}\n`, 'utf-8');
+      const result = await check.run(ctx);
+      expect(result.status).toBe('warn');
+      expect(result.message).toMatch(/shared/i);
+      expect(result.message).toMatch(/v1/);
+    });
+
+    it('passes once the current block was added by hand', async () => {
+      writeFileSync(join(shared, 'post-commit'), `#!/bin/sh\n\n${V2_BLOCK}\n`, 'utf-8');
+      expect((await check.run(ctx)).status).toBe('pass');
+    });
+
+    it('lets a repo-local core.hooksPath override the shared one', async () => {
+      execFileSync('git', ['config', '--local', 'core.hooksPath', '.githooks'], { cwd: tempDir });
+      const result = await check.run(ctx);
+      expect(result.status).toBe('warn');
+      expect(result.message).not.toMatch(/shared/i);
+    });
   });
 
   it('does not fail the doctor run outside a git repository', async () => {
