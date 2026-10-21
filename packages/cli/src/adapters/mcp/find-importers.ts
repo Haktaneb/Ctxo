@@ -5,10 +5,11 @@ import type { StalenessCheck } from './get-logic-slice.js';
 import { getGraphAndFiles } from './get-logic-slice.js';
 import { wrapResponse } from '../../core/response-envelope.js';
 import { filterByIntent } from '../../core/intent-filter.js';
+import { EdgeKindSchema, type EdgeKind } from '../../core/types.js';
 
 export const InputSchema = z.object({
   symbolId: z.string().min(1),
-  edgeKinds: z.array(z.enum(['imports', 'calls', 'extends', 'implements', 'uses'])).optional(),
+  edgeKinds: z.array(EdgeKindSchema).optional(),
   transitive: z.boolean().optional().default(false),
   maxDepth: z.number().int().min(1).max(10).optional().default(5),
   intent: z.string().optional().describe('Filter results by intent keywords (e.g., "test", "adapter", "core")'),
@@ -55,7 +56,7 @@ export function handleFindImporters(
         const reverseEdges = graph.getReverseEdges(symbolId);
         const seen = new Map<string, typeof importers[0]>();
         for (const edge of reverseEdges) {
-          if (edgeKinds && !edgeKinds.includes(edge.kind as 'imports' | 'calls' | 'extends' | 'implements' | 'uses')) continue;
+          if (edgeKinds && !edgeKinds.includes(edge.kind as EdgeKind)) continue;
           const node = graph.getNode(edge.from);
           if (node) {
             const existing = seen.get(node.symbolId);
@@ -89,7 +90,7 @@ export function handleFindImporters(
 
           const reverseEdges = graph.getReverseEdges(current.id);
           for (const edge of reverseEdges) {
-            if (edgeKinds && !edgeKinds.includes(edge.kind as 'imports' | 'calls' | 'extends' | 'implements' | 'uses')) continue;
+            if (edgeKinds && !edgeKinds.includes(edge.kind as EdgeKind)) continue;
             if (visited.has(edge.from)) continue;
             visited.add(edge.from);
 

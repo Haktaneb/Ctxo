@@ -89,6 +89,18 @@ describe('ContextAssembler — assembleForTask', () => {
     expect(result!.totalTokens).toBeLessThanOrEqual(100);
   });
 
+  it('synthesizes an orphan table id with kind table, not variable', () => {
+    const graph = buildTestGraph();
+    // The edge source has no symbols[] entry: the assembler builds a node from the id alone.
+    graph.addEdge({ from: 'db/loans.sql::dbo.loans::table', to: 'src/a.ts::A::function', kind: 'uses' });
+    const result = assembler.assembleForTask(graph, 'src/a.ts::A::function', 'refactor', buildTestIndices());
+
+    expect(result).toBeDefined();
+    const entry = result!.context.find((c) => c.symbolId === 'db/loans.sql::dbo.loans::table');
+    expect(entry).toBeDefined();
+    expect(entry!.kind).toBe('table');
+  });
+
   it('returns undefined for non-existent symbol', () => {
     const graph = buildTestGraph();
     const result = assembler.assembleForTask(graph, 'src/missing.ts::X::function', 'understand', []);

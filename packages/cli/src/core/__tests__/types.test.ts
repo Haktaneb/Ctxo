@@ -56,7 +56,7 @@ function buildFileIndex(overrides: Record<string, unknown> = {}) {
 // ── SymbolKindSchema ────────────────────────────────────────────
 
 describe('SymbolKindSchema', () => {
-  it.each(['function', 'class', 'interface', 'method', 'variable', 'type'])(
+  it.each([...PLUGIN_SYMBOL_KINDS])(
     'parses valid kind "%s"',
     (kind) => {
       const result = SymbolKindSchema.safeParse(kind);
@@ -568,5 +568,41 @@ describe('plugin-api kind lists', () => {
       const target = kind === 'executes' ? 'dbo.usp_closeloan::procedure' : 'dbo.loans::table';
       expect(GraphEdgeSchema.safeParse({ from: 'src/a.cs::A.M::method', to: target, kind }).success).toBe(true);
     }
+  });
+});
+
+describe('annotation and fact schemas', () => {
+  it('SymbolNodeSchema keeps annotations', () => {
+    const input = buildSymbolNode({
+      annotations: [
+        { name: 'Route', args: ['loans'], named: { Name: 'list' } },
+        { name: 'Obsolete' },
+      ],
+    });
+    const result = SymbolNodeSchema.safeParse(input);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data).toEqual(input);
+  });
+
+  it('SymbolNodeSchema rejects an annotation without a name or with a non-string arg', () => {
+    expect(SymbolNodeSchema.safeParse(buildSymbolNode({ annotations: [{ args: ['x'] }] })).success).toBe(false);
+    expect(SymbolNodeSchema.safeParse(buildSymbolNode({ annotations: [{ name: '' }] })).success).toBe(false);
+    expect(SymbolNodeSchema.safeParse(buildSymbolNode({ annotations: [{ name: 'A', args: [1] }] })).success).toBe(false);
+  });
+
+  it('FileIndexSchema keeps facts and rejects an unknown fact kind', () => {
+    const fact = {
+      kind: 'endpoint',
+      symbolId: 'src/foo.ts::myFn::function',
+      line: 3,
+      text: 'GET /loans',
+      detail: { verb: 'GET' },
+    };
+    const kept = FileIndexSchema.safeParse(buildFileIndex({ facts: [fact] }));
+    expect(kept.success).toBe(true);
+    if (kept.success) expect(kept.data.facts).toEqual([fact]);
+
+    const rejected = FileIndexSchema.safeParse(buildFileIndex({ facts: [{ ...fact, kind: 'mystery' }] }));
+    expect(rejected.success).toBe(false);
   });
 });

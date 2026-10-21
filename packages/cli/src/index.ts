@@ -7,6 +7,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createLogger } from './core/logger.js';
+import { SymbolKindSchema, EdgeKindSchema } from './core/types.js';
 import { SqliteStorageAdapter } from './adapters/storage/sqlite-storage-adapter.js';
 import { CoChangeReader } from './adapters/storage/co-change-reader.js';
 import { MaskingPipeline, type MaskingPatternConfig } from './core/masking/masking-pipeline.js';
@@ -280,7 +281,7 @@ function registerTools(
       description: 'Search symbols by exact name or regex pattern across the codebase index. Use this when you know (part of) the symbol name and need to find its ID for use with other tools. For semantic/relevance-based search, use get_ranked_context instead.',
       inputSchema: {
         pattern: z.string().min(1).describe('Search pattern (substring or regex)'),
-        kind: z.enum(['function', 'class', 'interface', 'method', 'variable', 'type']).optional().describe('Filter by symbol kind'),
+        kind: SymbolKindSchema.optional().describe('Filter by symbol kind (table, view and procedure come from SQL plugins)'),
         filePattern: z.string().optional().describe('Filter by file path substring'),
         limit: z.number().int().min(1).max(100).optional().default(25).describe('Max results (default 25)'),
         mode: z.enum(['regex', 'fts']).optional().default('regex').describe('"regex" (default): case-insensitive regex or substring match on names; "fts": BM25 relevance search'),
@@ -313,7 +314,7 @@ function registerTools(
       description: 'Find all symbols that import or depend on a given symbol (reverse dependency / "who uses this?"). Use this to check if a symbol is safe to modify or delete. Supports transitive traversal for deep impact chains. Use `intent` to filter by keyword (e.g., "test", "core"). For forward dependencies (what this symbol uses), use get_logic_slice. For aggregated impact with risk scores, use get_blast_radius.',
       inputSchema: {
         symbolId: z.string().min(1).describe('The symbol ID (format: file::name::kind)'),
-        edgeKinds: z.array(z.enum(['imports', 'calls', 'extends', 'implements', 'uses'])).optional().describe('Filter by edge kinds'),
+        edgeKinds: z.array(EdgeKindSchema).optional().describe('Filter by edge kinds (reads, writes and executes are data access)'),
         transitive: z.boolean().optional().default(false).describe('Follow transitive reverse edges (default false)'),
         maxDepth: z.number().int().min(1).max(10).optional().default(5).describe('Max BFS depth for transitive mode (default 5)'),
         intent: z.string().optional().describe('Filter importers by intent keywords (e.g., "test", "core", "adapter")'),
@@ -346,7 +347,7 @@ function registerTools(
       description: 'Rank symbols by structural importance using PageRank centrality on the dependency graph. Use this to identify the most critical symbols in the codebase — high-PageRank symbols are heavily depended upon and risky to change. For finding unused/unimportant code, use find_dead_code instead.',
       inputSchema: {
         limit: z.number().int().min(1).max(200).optional().default(25).describe('Max results (default 25)'),
-        kind: z.enum(['function', 'class', 'interface', 'method', 'variable', 'type']).optional().describe('Filter by symbol kind'),
+        kind: SymbolKindSchema.optional().describe('Filter by symbol kind (table, view and procedure come from SQL plugins)'),
         filePattern: z.string().optional().describe('Filter by file path substring'),
         damping: z.number().min(0).max(1).optional().default(0.85).describe('PageRank damping factor (default 0.85)'),
       },

@@ -1,5 +1,5 @@
 import type { SymbolGraph } from '../graph/symbol-graph.js';
-import type { SymbolNode, SymbolKind, FileIndex, CoChangeEntry } from '../types.js';
+import { SYMBOL_KINDS, type SymbolNode, type SymbolKind, type FileIndex, type CoChangeEntry } from '../types.js';
 import { LogicSliceQuery } from '../logic-slice/logic-slice-query.js';
 import { BlastRadiusCalculator, type ImpactConfidence } from '../blast-radius/blast-radius-calculator.js';
 import { type TaskType, type ScoringWeights, getWeightsForTask } from './task-context-strategy.js';
@@ -280,9 +280,7 @@ interface Signals {
   hasAntiPattern: boolean;
 }
 
-const VALID_SYMBOL_KINDS = new Set<SymbolKind>([
-  'function', 'class', 'interface', 'method', 'variable', 'type',
-]);
+const VALID_SYMBOL_KINDS: ReadonlySet<string> = new Set<string>(SYMBOL_KINDS);
 
 /**
  * Build a minimal SymbolNode from a symbolId string. Used when a blast-radius
@@ -295,6 +293,6 @@ function synthesizeNodeFromId(symbolId: string): SymbolNode | undefined {
   if (parts.length !== 3) return undefined;
   const [file, name, kindRaw] = parts;
   if (!file || !name || !kindRaw) return undefined;
-  const kind = VALID_SYMBOL_KINDS.has(kindRaw as SymbolKind) ? (kindRaw as SymbolKind) : 'variable';
+  const kind = VALID_SYMBOL_KINDS.has(kindRaw) ? (kindRaw as SymbolKind) : 'variable';
   return { symbolId, name, kind, startLine: 0, endLine: 0 };
 }

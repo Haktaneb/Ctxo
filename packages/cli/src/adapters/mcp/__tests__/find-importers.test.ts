@@ -87,6 +87,43 @@ describe('FindImportersHandler', () => {
     expect(payload.importers[1].depth).toBe(2);
   });
 
+  it('find_importers accepts edgeKinds reads and writes', () => {
+    storage.bulkWrite([
+      {
+        file: 'db/loans.sql',
+        lastModified: 1,
+        symbols: [{ symbolId: 'db/loans.sql::dbo.loans::table', name: 'dbo.loans', kind: 'table', startLine: 1, endLine: 9 }],
+        edges: [],
+        intent: [],
+        antiPatterns: [],
+      },
+      {
+        file: 'src/reader.ts',
+        lastModified: 1,
+        symbols: [{ symbolId: 'src/reader.ts::Reader::class', name: 'Reader', kind: 'class', startLine: 1, endLine: 9 }],
+        edges: [{ from: 'src/reader.ts::Reader::class', to: 'db/loans.sql::dbo.loans::table', kind: 'reads' }],
+        intent: [],
+        antiPatterns: [],
+      },
+      {
+        file: 'src/writer.ts',
+        lastModified: 1,
+        symbols: [{ symbolId: 'src/writer.ts::Writer::class', name: 'Writer', kind: 'class', startLine: 1, endLine: 9 }],
+        edges: [{ from: 'src/writer.ts::Writer::class', to: 'db/loans.sql::dbo.loans::table', kind: 'writes' }],
+        intent: [],
+        antiPatterns: [],
+      },
+    ]);
+    const handler = handleFindImporters(storage, new MaskingPipeline(), undefined, tempDir);
+
+    const reads = JSON.parse(handler({ symbolId: 'db/loans.sql::dbo.loans::table', edgeKinds: ['reads'] }).content[0]!.text);
+    expect(reads.error).toBeUndefined();
+    expect(reads.importers.map((i: { symbolId: string }) => i.symbolId)).toEqual(['src/reader.ts::Reader::class']);
+
+    const writes = JSON.parse(handler({ symbolId: 'db/loans.sql::dbo.loans::table', edgeKinds: ['writes'] }).content[0]!.text);
+    expect(writes.importers.map((i: { symbolId: string }) => i.symbolId)).toEqual(['src/writer.ts::Writer::class']);
+  });
+
   it('filters by edgeKinds', () => {
     // D has importers: B (via calls). Filter to imports only → empty
     const handler = handleFindImporters(storage, new MaskingPipeline(), undefined, tempDir);

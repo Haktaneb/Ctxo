@@ -10,7 +10,11 @@ export interface ILanguageAdapter {
   /** Extract symbol nodes from a single source file. */
   extractSymbols(filePath: string, source: string): Promise<SymbolNode[]>;
 
-  /** Extract graph edges (imports/calls/extends/implements/uses) from a file. */
+  /**
+   * Extract graph edges from a file. Each edge kind is one of `EDGE_KINDS`:
+   * the code kinds (imports, calls, extends, implements, uses) and the data
+   * kinds (reads, writes, executes).
+   */
   extractEdges(filePath: string, source: string): Promise<GraphEdge[]>;
 
   /** Compute per-symbol cyclomatic complexity for a file. */
