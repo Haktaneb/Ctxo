@@ -1,0 +1,49 @@
+import { join } from 'node:path';
+import { ContextsViewReader } from '../adapters/storage/contexts-view-reader.js';
+
+export interface ContextsOptions {
+  json?: boolean;
+}
+
+const NO_VIEW_HINT = 'No contexts view. Run ctxo index (without --skip-community).';
+
+export class ContextsCommand {
+  private readonly ctxoRoot: string;
+
+  constructor(projectRoot: string) {
+    this.ctxoRoot = join(projectRoot, '.ctxo');
+  }
+
+  run(options: ContextsOptions): void {
+    const view = new ContextsViewReader(this.ctxoRoot).readContextsView();
+
+    if (options.json) {
+      process.stdout.write(
+        view
+          ? JSON.stringify(view, null, 2) + '\n'
+          : JSON.stringify({ found: false, hint: NO_VIEW_HINT }) + '\n',
+      );
+      return;
+    }
+
+    if (!view) {
+      console.error(NO_VIEW_HINT);
+      return;
+    }
+
+    const { coverage, candidates, hubs, unclustered, collisions } = view;
+    const pct = Math.round(coverage.ratio * 100);
+    const lines = [
+      `[ctxo] Contexts view at ${view.commitSha}: ${candidates.length} candidates cover ${coverage.covered}/${coverage.files} files (${pct}%), ${hubs.length} hubs, ${unclustered.count} unclustered, ${collisions.length} collisions`,
+    ];
+    for (const c of candidates) {
+      const terms = c.topTerms.slice(0, 3).map((t) => t.term).join(', ');
+      lines.push(`#${c.id}  ${c.fileCount} files  cohesion ${c.cohesion}  ${c.label}  terms: ${terms}`);
+    }
+    for (const h of hubs) {
+      const target = h.candidate === undefined ? 'unassigned' : `#${h.candidate}`;
+      lines.push(`hub ${h.file} (${h.reasons.join(', ')}, ${h.dependents} dependents) -> ${target}`);
+    }
+    console.error(lines.join('\n'));
+  }
+}

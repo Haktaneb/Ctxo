@@ -13,6 +13,7 @@ import { VersionCommand } from './version-command.js';
 import { InstallCommand } from './install-command.js';
 import { UpdateCommand } from './update-command.js';
 import { BlastRadiusCommand } from './blast-radius-command.js';
+import { ContextsCommand } from './contexts-command.js';
 import { GateHookCommand } from './gate-hook-command.js';
 import { GateCommand } from './gate-command.js';
 import { parseCoChangeSince } from '../core/co-change/co-change-window.js';
@@ -328,6 +329,10 @@ export class CliRouter {
         break;
       }
 
+      case 'contexts':
+        new ContextsCommand(this.projectRoot).run({ json: args.includes('--json') });
+        break;
+
       case 'visualize': {
         const outputIdx = args.indexOf('--output');
         const outputArg = outputIdx !== -1 ? args[outputIdx + 1] : undefined;
@@ -393,6 +398,8 @@ Usage:
   ctxo update --pm <pm>    Override package manager (npm|pnpm|yarn|bun)
   ctxo update --force      Bypass CI lockfile guard
   ctxo blast-radius <symbolId>   Blast radius for one symbol (--json for machine output)
+  ctxo contexts             Candidate contexts from dependency and co-change clusters (table)
+  ctxo contexts --json      Same, full contexts-view.json to stdout
   ctxo gate --preview            Preview which symbols the safe-edit guard would block
   ctxo gate --preview --json     Same, machine-readable output
   ctxo --version                 Print core version
