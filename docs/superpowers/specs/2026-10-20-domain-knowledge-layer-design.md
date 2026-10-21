@@ -113,7 +113,7 @@ Order: 0, 1A, 1B, 1C, 2A, 2B, 3, 4. Dependencies: 1A needs 0 (co-change); 1B add
 - **Window (K5):** the last `maxCommits` non-merge commits from HEAD (default 2000), optionally narrowed by `since` (a duration such as `12m`, anchored to HEAD's committer date, never the wall clock), or `maxCommits: all`. Both limits apply when both are set. The window is independent of `--max-history`, which keeps controlling `intent[]` only.
 - **Processing (newest first, same rules as the oracle):**
   - Maintain a canonical rename map: a path renamed later maps to its newest name.
-  - Keep only paths that are currently indexed files (any language plugin), plus tracked files matching `cochange.include` (default empty; for example `**/*.sql` before lang-sql exists, or cards later). Deleted files drop out.
+  - Keep only paths that are currently indexed files (any language plugin), plus tracked files matching `cochange.include` (default empty; for example `**/*.sql` before lang-sql exists, or cards later), minus files matching `cochange.exclude`. `exclude` is applied last, so it also vetoes files that `include` added. Deleted files drop out. On a full run the indexed set is the files the run discovered plus the surviving committed entries, so the committed matrix does not depend on which language plugins are installed on the machine.
   - A commit with no remaining file is ignored. A commit whose remaining file count exceeds `maxFilesPerCommit` (default 30) is skipped and counted as `massSkipped`; the threshold counts files after filtering. The others count as `commitsUsed`.
   - Count commits per file and shared commits per file pair.
 - **Entries:** keep the existing `CoChangeEntry` schema and thresholds (`sharedCommits >= minShared` (default 2), `frequency = shared / min(countA, countB) >= 0.1`). Sort by frequency desc, shared desc, then `file1`, `file2`.
@@ -143,15 +143,17 @@ fi
 # ctxo-end
 ```
 
-- `installHook` replaces an existing block between `# ctxo-start` and `# ctxo-end` (old unversioned blocks included) and resolves the hooks directory with `git rev-parse --git-path hooks`. `ctxo init` and `ctxo doctor --fix` both upgrade it. A new doctor check `git_hooks` reports a missing or outdated block (this also revives the dead `git_hooks` fix mapping).
+- `installHook` replaces the first complete block between `# ctxo-start` and `# ctxo-end` (old unversioned blocks included, the user's lines around it kept) and removes every further complete ctxo block, so duplicates collapse into one. It resolves the hooks directory with `git rev-parse --git-path hooks`. `ctxo init` and `ctxo doctor --fix` both upgrade it. A new doctor check `git_hooks` reports a missing, outdated or duplicated block (this also revives the dead `git_hooks` fix mapping).
+- Shared hooks directories are refused (owner decision K23). When `git config --show-scope --get core.hooksPath` reports the `global` or `system` scope, the directory is shared by every repository on the machine: `ctxo init` and `ctxo doctor --fix` write nothing there, print the two blocks to add by hand and the `git config --local core.hooksPath <dir>` alternative, and carry on (the `doctor --fix` attempt is reported as skipped, not failed). A local `core.hooksPath` is honoured. The `[ -d .ctxo ]` guard in both blocks keeps a hand-added block harmless in repositories that do not use ctxo. `--show-scope` needs git 2.26 or newer; on an older git the directory is treated as not shared. A current block added by hand to a shared directory makes `git_hooks` pass.
+- A full run uses only the files it discovers (communities, SQLite and the artifacts come from them) and prunes the index entries of deleted or newly ignored sources, never those of skip-worktree paths (sparse checkout); if that query fails, nothing is pruned. Incremental runs use the merged index.
 
 ### 6.4 Snapshots and confidence
 
 - When the current `communities.json` has the same `commitSha` as the new snapshot, overwrite the current file without archiving. History therefore holds at most one snapshot per commit (`nocommit` handling unchanged).
 - `listHistory` de-duplicates existing histories by `commitSha` (keeps the newest per SHA), so old repos get correct numbers without a migration.
 - Drift compares against the newest history entry whose `commitSha` differs from the current one.
-- Drift and boundary results keep `snapshotsAvailable` (file count, for compatibility) and add `distinctCommits`. Confidence uses distinct commits with the existing thresholds: fewer than 3 low, 3 to 6 medium, 7 or more high. Boundary confidence needs at least 2 distinct commits.
-- Fix the `--check` claims in `docs/features/architectural-intelligence.md` and the detector hints.
+- Drift and boundary results keep `snapshotsAvailable` (the number of history entries passed in, for compatibility) and add `distinctCommits`. Confidence uses distinct commits with the existing thresholds: fewer than 3 low, 3 to 6 medium, 7 or more high. Boundary confidence needs at least 2 distinct commits.
+- `ctxo index --check` writes nothing and records no snapshot. The docs, the detector hints and the declined-hooks advice in `ctxo init` say so, and point to the post-commit hook or `ctxo index` after commits instead.
 
 ### 6.5 Blast radius and the gate use co-change
 

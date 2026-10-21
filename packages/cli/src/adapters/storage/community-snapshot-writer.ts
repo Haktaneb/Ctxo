@@ -59,18 +59,20 @@ export class CommunitySnapshotWriter {
     mkdirSync(this.historyDir, { recursive: true });
 
     // Archive the previous current snapshot (if any) into history BEFORE
-    // overwriting. This keeps history as "snapshots older than current" —
-    // drift and boundary-violation detectors compare current vs history[0]
-    // and must not see current in both positions.
+    // overwriting. This keeps history as "snapshots older than current".
+    // Drift and boundary-violation detectors compare current against the
+    // newest history entry from a different commit (history[0] on a clean
+    // history) and must not see current in both positions.
     //
     // Two cases are not archived:
     // - commitSha 'nocommit' (git unavailable at write time). Such snapshots
     //   have no stable anchor for drift comparison and would pollute history
     //   with indistinguishable entries.
     // - the same commit as the new snapshot. History is a chain of commits,
-    //   not of runs: the post-commit hook runs `ctxo index --file` once per
-    //   changed file and `ctxo watch` re-snapshots after every burst of edits,
-    //   all at the same HEAD. The new snapshot simply replaces current, so a
+    //   not of runs: the v1 post-commit hook ran `ctxo index --file` once per
+    //   changed file (the v2 hook runs `ctxo index --commit HEAD` once) and
+    //   `ctxo watch` re-snapshots after every burst of edits, all at the same
+    //   HEAD. The new snapshot simply replaces current, so a
     //   commit enters history once, when the next commit supersedes it.
     const currentPath = join(this.indexDir, CURRENT_FILE_NAME);
     if (existsSync(currentPath)) {
