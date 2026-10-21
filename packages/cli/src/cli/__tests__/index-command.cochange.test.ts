@@ -261,6 +261,61 @@ describe('IndexCommand co-change', () => {
     expect(readFileSync(file).equals(before)).toBe(false);
   });
 
+  it.each([
+    ['--max-history 1 leaves the default window of 2000 commits', { maxHistory: 1 }, 2000],
+    ['--max-history 100 asks for 100 * 50 commits, more than the default window', { maxHistory: 100 }, 5000],
+    ['--cochange-commits all reads the whole history', { cochangeCommits: 'all' as const }, 'all'],
+  ])('reads the change log with the right fetch size: %s', async (_label, options, expected) => {
+    commitGreetAndTypes(project, 1);
+    // No stub: the spy calls through, so the run still gets its real change log.
+    const getChangeLog = vi.spyOn(SimpleGitAdapter.prototype, 'getChangeLog');
+
+    await new IndexCommand(project.dir).run(options);
+
+    expect(getChangeLog).toHaveBeenCalledTimes(1);
+    expect(getChangeLog).toHaveBeenCalledWith(expected);
+    expect(readCoChanges(project.dir).window).toMatchObject({ commitsScanned: 2 });
+  });
+
+  it('an unexpected failure while reading history does not stop the run or touch co-changes.json', async () => {
+    commitGreetAndTypes(project, 2);
+    await new IndexCommand(project.dir).run();
+    const before = readFileSync(coChangesFile(project.dir));
+    rmSync(join(project.dir, '.ctxo', 'index', 'communities.json'));
+
+    // The source changes on disk, so Phase 3 has something new to write.
+    appendFileSync(join(project.dir, 'src', 'utils.ts'), 'export function shout(text: string): string { return text; }\n');
+    vi.spyOn(SimpleGitAdapter.prototype, 'getChangeLog').mockRejectedValue(new Error('boom'));
+    await expect(new IndexCommand(project.dir).run()).resolves.toBeUndefined();
+
+    expect(readFileSync(coChangesFile(project.dir)).equals(before)).toBe(true);
+    const lines = errorSpy.mock.calls.map((args) => args.join(' '));
+    expect(lines).toContain('[ctxo] History and co-change skipped: boom');
+    // The run went on: the new symbol is indexed (Phase 3) and the snapshot is rewritten (Phase 2c).
+    expect(readFileIndex(project.dir, 'src/utils.ts').symbols.map((symbol) => symbol.name)).toContain('shout');
+    expect(existsSync(join(project.dir, '.ctxo', 'index', 'communities.json'))).toBe(true);
+  });
+
+  it('a git ls-files failure leaves co-changes.json untouched instead of dropping the cochange.include files', async () => {
+    for (let n = 1; n <= 3; n++) {
+      project.commitTogether(`feat: change ${n}`, ['src/greet.ts', 'src/types.ts', 'docs/notes.md']);
+    }
+    writeConfig(project.dir, 'cochange:\n  include:\n    - "docs/**"\n');
+    await new IndexCommand(project.dir).run();
+    const before = readFileSync(coChangesFile(project.dir));
+    expect(mentions(readCoChanges(project.dir), 'docs/notes.md')).toBe(true);
+
+    // A broken index makes `git ls-files` fail, while `git log` still works. An explicit file list
+    // keeps file discovery from needing `git ls-files`.
+    writeFileSync(join(project.dir, '.git', 'index'), 'not an index', 'utf-8');
+    errorSpy.mockClear();
+    await expect(new IndexCommand(project.dir).run({ file: 'src/types.ts' })).resolves.toBeUndefined();
+
+    expect(readFileSync(coChangesFile(project.dir)).equals(before)).toBe(true);
+    const lines = errorSpy.mock.calls.map((args) => args.join(' '));
+    expect(lines).toContainEqual(expect.stringMatching(/^\[ctxo\] git ls-files failed: .*co-changes\.json not updated$/));
+  });
+
   it('a repository without any commit indexes without writing co-changes.json', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ctxo-cochange-nohead-'));
     tempDirs.push(dir);
