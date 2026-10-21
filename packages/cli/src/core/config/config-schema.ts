@@ -88,6 +88,17 @@ export const CoChangeConfigSchema = z
   })
   .strict();
 
+export const CommunitiesConfigSchema = z
+  .object({
+    /** Louvain resolution: higher gives more, smaller communities. Default: 1.0. */
+    resolution: z.number().positive().optional(),
+    /** Minimum number of communities a symbol must bridge to count as a god node. Default: 3. */
+    godNodeMinBridged: z.number().int().min(1).optional(),
+    /** Maximum number of god nodes reported. Default: 25. */
+    godNodeMaxResults: z.number().int().min(0).optional(),
+  })
+  .strict();
+
 export const CtxoConfigSchema = z
   .object({
     version: z.union([z.string(), z.number()]).optional(),
@@ -97,6 +108,7 @@ export const CtxoConfigSchema = z
     watch: WatchConfigSchema.optional(),
     gate: GateConfigSchema.optional(),
     cochange: CoChangeConfigSchema.optional(),
+    communities: CommunitiesConfigSchema.optional(),
   })
   .passthrough();
 
@@ -106,7 +118,8 @@ export type MaskingConfig = z.infer<typeof MaskingConfigSchema>;
 export type WatchConfig = z.infer<typeof WatchConfigSchema>;
 export type GateConfig = z.infer<typeof GateConfigSchema>;
 export type CoChangeConfig = z.infer<typeof CoChangeConfigSchema>;
-export type CtxoConfig = z.infer<typeof CtxoConfigSchema>;
+export type CommunitiesConfig = z.infer<typeof CommunitiesConfigSchema>;
+export type CtxoConfig =z.infer<typeof CtxoConfigSchema>;
 
 export const DEFAULT_WATCH_SNAPSHOT_MIN_FILE_CHANGES = 5;
 export const DEFAULT_COCHANGE_MAX_COMMITS = 2000;

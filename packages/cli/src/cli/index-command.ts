@@ -9,6 +9,7 @@ import { loadPlugins } from './plugin-loader.js';
 import { InstallCommand } from './install-command.js';
 import { changeLogSize, writeCoChangeMatrix } from './index-cochange.js';
 import {
+  communityDetectorOptions,
   loadConfig,
   indexIgnorePatterns,
   indexIgnoreProjectPatterns,
@@ -35,7 +36,7 @@ import { SimpleGitAdapter } from '../adapters/git/simple-git-adapter.js';
 import { RevertDetector } from '../core/why-context/revert-detector.js';
 import { canonicalizeChangeLog } from '../core/history/change-log.js';
 import { buildIntentHistory } from '../core/history/intent-history.js';
-import { CommunityDetector } from '../core/overlay/community-detector.js';
+import { CommunityDetector, type CommunityDetectorOptions } from '../core/overlay/community-detector.js';
 import { DriftDetector } from '../core/overlay/drift-detector.js';
 import { BoundaryViolationDetector } from '../core/overlay/boundary-violation-detector.js';
 import { SymbolGraph } from '../core/graph/symbol-graph.js';
@@ -479,6 +480,7 @@ export class IndexCommand {
             tsCount: graphIndices.filter((idx) => /\.(ts|tsx|js|jsx)$/.test(idx.file)).length,
           },
           gitAdapter,
+          communityDetectorOptions(ignore.config),
         );
         const scope = incremental ? ' (incremental, full-graph recompute)' : '';
         console.error(
@@ -1031,6 +1033,7 @@ export class IndexCommand {
     indices: readonly FileIndex[],
     tiers: { csharpTier: string; goTier: string; javaTier: string; tsCount: number },
     gitAdapter: SimpleGitAdapter,
+    detectorOptions: CommunityDetectorOptions,
   ): Promise<CommunitySnapshot> {
     const graph = new SymbolGraph();
     for (const fileIndex of indices) {
@@ -1044,7 +1047,7 @@ export class IndexCommand {
     const pagerankMap = new Map<string, number>();
     for (const entry of pagerank.rankings) pagerankMap.set(entry.symbolId, entry.score);
 
-    const detector = new CommunityDetector();
+    const detector = new CommunityDetector(detectorOptions);
     const edgeQuality = pickEdgeQuality(tiers);
     const detectResult = detector.detect(graph, pagerankMap, edgeQuality);
 

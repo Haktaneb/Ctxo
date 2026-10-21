@@ -11,8 +11,8 @@ import { SimpleGitAdapter } from '../adapters/git/simple-git-adapter.js';
 import { RevertDetector } from '../core/why-context/revert-detector.js';
 import { SymbolGraph } from '../core/graph/symbol-graph.js';
 import { PageRankCalculator } from '../core/importance/pagerank-calculator.js';
-import { CommunityDetector } from '../core/overlay/community-detector.js';
-import { loadConfig, watchSnapshotMinFileChanges } from '../core/config/load-config.js';
+import { CommunityDetector, type CommunityDetectorOptions } from '../core/overlay/community-detector.js';
+import { communityDetectorOptions, loadConfig, watchSnapshotMinFileChanges } from '../core/config/load-config.js';
 import type { FileIndex, CommitIntent, AntiPattern, CommunitySnapshot } from '../core/types.js';
 import type { IIncrementalReindex, IncrementalReindexCapable } from '@ctxo/plugin-api';
 
@@ -75,7 +75,9 @@ export class WatchCommand {
     // monorepos (full PageRank + Louvain recompute). Only recompute once at
     // least `snapshotMinFileChanges` distinct files have been re-indexed
     // since the last snapshot, so rapid-fire saves don't stall the editor.
-    const snapshotThreshold = watchSnapshotMinFileChanges(loadConfig(this.ctxoRoot).config);
+    const watchConfig = loadConfig(this.ctxoRoot).config;
+    const snapshotThreshold = watchSnapshotMinFileChanges(watchConfig);
+    const detectorOptions = communityDetectorOptions(watchConfig);
     const pathsChangedSinceSnapshot = new Set<string>();
 
     const reindexFile = async (filePath: string) => {
@@ -172,7 +174,7 @@ export class WatchCommand {
         const changedCount = pathsChangedSinceSnapshot.size;
         pathsChangedSinceSnapshot.clear();
         try {
-          const snapshot = buildWatchCommunitySnapshot(storage);
+          const snapshot = buildWatchCommunitySnapshot(storage, detectorOptions);
           if (snapshot) {
             storage.writeCommunities(snapshot);
             console.error(
@@ -240,7 +242,10 @@ export class WatchCommand {
 
 }
 
-function buildWatchCommunitySnapshot(storage: SqliteStorageAdapter): CommunitySnapshot | undefined {
+export function buildWatchCommunitySnapshot(
+  storage: SqliteStorageAdapter,
+  detectorOptions: CommunityDetectorOptions,
+): CommunitySnapshot | undefined {
   const symbols = storage.getAllSymbols();
   if (symbols.length === 0) return undefined;
   const edges = storage.getAllEdges();
@@ -253,7 +258,7 @@ function buildWatchCommunitySnapshot(storage: SqliteStorageAdapter): CommunitySn
   const pagerankMap = new Map<string, number>();
   for (const entry of pagerank.rankings) pagerankMap.set(entry.symbolId, entry.score);
 
-  const detector = new CommunityDetector();
+  const detector = new CommunityDetector(detectorOptions);
   const detectResult = detector.detect(graph, pagerankMap, 'full');
 
   return {

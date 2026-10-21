@@ -4,6 +4,7 @@ import { parse as parseYaml } from 'yaml';
 import picomatch from 'picomatch';
 import { parseCoChangeSince } from '../co-change/co-change-window.js';
 import { createLogger } from '../logger.js';
+import type { CommunityDetectorOptions } from '../overlay/community-detector.js';
 import {
   CtxoConfigSchema,
   DEFAULT_COCHANGE_MAX_COMMITS,
@@ -105,6 +106,26 @@ export function indexIgnoreProjectPatterns(config: CtxoConfig): string[] {
 
 export function indexTestPatterns(config: CtxoConfig): string[] {
   return (config.index?.tests ?? []).filter(isValidGlob);
+}
+
+/**
+ * The `communities` section as detector options. Only usable values are passed on, so the detector
+ * keeps its own defaults (1.0, 3, 25) for anything absent or invalid.
+ */
+export function communityDetectorOptions(config: CtxoConfig): CommunityDetectorOptions {
+  const section = config.communities;
+  const resolution = section?.resolution;
+  const minBridged = section?.godNodeMinBridged;
+  const maxResults = section?.godNodeMaxResults;
+  return {
+    ...(typeof resolution === 'number' && Number.isFinite(resolution) && resolution > 0 ? { resolution } : {}),
+    ...(typeof minBridged === 'number' && Number.isInteger(minBridged) && minBridged >= 1
+      ? { godNodeMinBridged: minBridged }
+      : {}),
+    ...(typeof maxResults === 'number' && Number.isInteger(maxResults) && maxResults >= 0
+      ? { godNodeMaxResults: maxResults }
+      : {}),
+  };
 }
 
 export function maskingClusterLabelPatterns(config: CtxoConfig): string[] {

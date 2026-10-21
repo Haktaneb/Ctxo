@@ -1,6 +1,11 @@
-import { describe, it, expect } from 'vitest';
-import { relative } from 'node:path';
-import { WatchCommand } from '../watch-command.js';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { relative, join } from 'node:path';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { SqliteStorageAdapter } from '../../adapters/storage/sqlite-storage-adapter.js';
+import * as detectorModule from '../../core/overlay/community-detector.js';
+import type { FileIndex } from '../../core/types.js';
+import { WatchCommand, buildWatchCommunitySnapshot } from '../watch-command.js';
 
 describe('WatchCommand', () => {
   it('computes relative paths correctly with path.relative', () => {
@@ -54,5 +59,46 @@ describe('WatchCommand', () => {
     expect(ignoredPatterns).toContain('**/node_modules/**');
     expect(ignoredPatterns).toContain('**/.ctxo/**');
     expect(ignoredPatterns).toContain('**/.git/**');
+  });
+});
+
+describe('buildWatchCommunitySnapshot', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('the watch snapshot uses the given options', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ctxo-watch-snap-'));
+    const storage = new SqliteStorageAdapter(dir);
+    try {
+      await storage.initEmpty();
+      const a = 'src/a.ts::a::function';
+      const b = 'src/b.ts::b::function';
+      const file = (name: string, id: string, edges: FileIndex['edges']): FileIndex => ({
+        file: name,
+        lastModified: 1,
+        symbols: [{ symbolId: id, name: id.split('::')[1]!, kind: 'function', startLine: 1, endLine: 2 }],
+        edges,
+        intent: [],
+        antiPatterns: [],
+      });
+      storage.writeSymbolFile(file('src/a.ts', a, [{ from: a, to: b, kind: 'calls' }]));
+      storage.writeSymbolFile(file('src/b.ts', b, []));
+
+      const Real = detectorModule.CommunityDetector;
+      const calls: unknown[] = [];
+      vi.spyOn(detectorModule, 'CommunityDetector').mockImplementation(function (this: unknown, options?: unknown) {
+        calls.push(options);
+        return new Real(options as never);
+      } as never);
+
+      const snapshot = buildWatchCommunitySnapshot(storage, { resolution: 0.5 });
+
+      expect(snapshot).toBeDefined();
+      expect(calls).toEqual([{ resolution: 0.5 }]);
+    } finally {
+      storage.close();
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
   });
 });

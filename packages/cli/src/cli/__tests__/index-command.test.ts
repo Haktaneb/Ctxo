@@ -1,10 +1,12 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync, cpSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { IndexCommand } from '../index-command.js';
+import * as detectorModule from '../../core/overlay/community-detector.js';
+import { isolateGitEnv, type IsolatedGitEnv } from './git-test-env.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURES_DIR = join(__dirname, 'fixtures', 'sample-project');
@@ -25,12 +27,16 @@ function setupTempProject(): string {
 
 describe('IndexCommand', () => {
   let tempDir: string;
+  let gitEnv: IsolatedGitEnv;
 
   beforeEach(() => {
+    gitEnv = isolateGitEnv();
     tempDir = setupTempProject();
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
+    gitEnv.restore();
     // Windows holds simple-git / sqlite handles briefly after test body returns;
     // cleanup is best-effort to avoid false-positive test failures.
     try {
@@ -38,6 +44,25 @@ describe('IndexCommand', () => {
     } catch {
       /* best effort */
     }
+  });
+
+  it('ctxo index builds communities with the configured options', async () => {
+    mkdirSync(join(tempDir, '.ctxo'), { recursive: true });
+    writeFileSync(
+      join(tempDir, '.ctxo', 'config.yaml'),
+      'communities:\n  resolution: 0.5\n  godNodeMaxResults: 1\n',
+    );
+    const Real = detectorModule.CommunityDetector;
+    const calls: unknown[] = [];
+    vi.spyOn(detectorModule, 'CommunityDetector').mockImplementation(function (this: unknown, options?: unknown) {
+      calls.push(options);
+      return new Real(options as never);
+    } as never);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await new IndexCommand(tempDir).run({});
+
+    expect(calls).toEqual([{ resolution: 0.5, godNodeMaxResults: 1 }]);
   });
 
   it('discovers all .ts files in project directory', async () => {
