@@ -1,4 +1,5 @@
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { PLATFORMS, detectPlatforms, installRules, ensureGitignore, ensureConfig, getMcpConfigTargets, ensureMcpConfig, installSkills, ensureClaudeHook } from './ai-rules.js';
@@ -36,25 +37,86 @@ function resolveInstalledPlugins(needed: readonly KnownLanguage[]): {
 const CTXO_START = '# ctxo-start';
 const CTXO_END = '# ctxo-end';
 
-const POST_COMMIT_CONTENT = `
-${CTXO_START}
-# Incremental re-index on commit (only changed files)
-if command -v ctxo >/dev/null 2>&1; then
-  for file in $(git diff --name-only HEAD~1 HEAD 2>/dev/null); do
-    ctxo index --file "$file" 2>/dev/null || true
-  done
-fi
-${CTXO_END}
-`.trim();
+/**
+ * Version of the post-commit block this build writes. The marker line carries it (`# ctxo-start v2`)
+ * so a newer build can tell an outdated block from a current one and replace it in place.
+ * Blocks written before versioning have a bare `# ctxo-start` and count as version 1.
+ */
+export const POST_COMMIT_HOOK_VERSION = 2;
 
-const POST_MERGE_CONTENT = `
-${CTXO_START}
-# Rebuild SQLite cache after merge (index updated via git pull)
-if command -v ctxo >/dev/null 2>&1; then
-  ctxo sync 2>/dev/null || true
-fi
-${CTXO_END}
-`.trim();
+// Blocks are joined with an explicit '\n' so a CRLF checkout of this file can never leak CRs into a hook.
+const POST_COMMIT_CONTENT = [
+  `${CTXO_START} v${POST_COMMIT_HOOK_VERSION}`,
+  '# Incremental re-index of the files changed by this commit (one run per commit)',
+  'if command -v ctxo >/dev/null 2>&1; then',
+  '  ctxo index --commit HEAD >/dev/null 2>&1 || true',
+  'fi',
+  CTXO_END,
+].join('\n');
+
+const POST_MERGE_CONTENT = [
+  CTXO_START,
+  '# Rebuild SQLite cache after merge (index updated via git pull)',
+  'if command -v ctxo >/dev/null 2>&1; then',
+  '  ctxo sync 2>/dev/null || true',
+  'fi',
+  CTXO_END,
+].join('\n');
+
+/**
+ * A complete ctxo block: a `# ctxo-start` line through the next `# ctxo-end` line (the end line's
+ * newline is not part of the match). The body may not contain another `# ctxo-start` line, so a
+ * dangling start marker without an end can never swallow the user lines up to a later, complete block.
+ */
+const CTXO_BLOCK_PATTERN = new RegExp(
+  `^${CTXO_START}[^\\r\\n]*\\r?\\n(?:(?!^${CTXO_START})[\\s\\S])*?^${CTXO_END}[^\\r\\n]*`,
+  'm',
+);
+
+const CTXO_BLOCK_VERSION_PATTERN = new RegExp(`^${CTXO_START}(?:[ \\t]+v(\\d+))?`);
+
+interface CtxoBlockSpan {
+  readonly start: number;
+  readonly end: number;
+  readonly text: string;
+}
+
+function findCtxoBlock(content: string): CtxoBlockSpan | undefined {
+  const match = CTXO_BLOCK_PATTERN.exec(content);
+  if (!match) return undefined;
+  return { start: match.index, end: match.index + match[0].length, text: match[0] };
+}
+
+/**
+ * Version of the first complete ctxo block in a hook file: 1 for an unversioned block, N for
+ * `# ctxo-start vN`, or `undefined` when the file holds no complete block.
+ */
+export function readCtxoBlockVersion(hookContent: string): number | undefined {
+  const block = findCtxoBlock(hookContent);
+  if (!block) return undefined;
+  const versionMatch = CTXO_BLOCK_VERSION_PATTERN.exec(block.text);
+  return versionMatch?.[1] ? Number(versionMatch[1]) : 1;
+}
+
+/**
+ * The directory git runs hooks from: `git rev-parse --git-path hooks`, so `core.hooksPath` and
+ * linked worktrees resolve the way git itself resolves them. Git may answer relative to its cwd,
+ * which is the project root, so a relative answer is resolved against it. Falls back to
+ * `<projectRoot>/.git/hooks` whenever git cannot answer.
+ */
+export function resolveHooksDir(projectRoot: string): string {
+  const fallback = join(projectRoot, '.git', 'hooks');
+  try {
+    const answer = execFileSync('git', ['rev-parse', '--git-path', 'hooks'], {
+      cwd: projectRoot,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return answer ? resolve(projectRoot, answer) : fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 /* ------------------------------------------------------------------ */
 /*  Options                                                            */
@@ -153,7 +215,7 @@ export class InitCommand {
   }
 
   installHooks(): void {
-    const hooksDir = join(this.projectRoot, '.git', 'hooks');
+    const hooksDir = resolveHooksDir(this.projectRoot);
     mkdirSync(hooksDir, { recursive: true });
     this.installHook(hooksDir, 'post-commit', POST_COMMIT_CONTENT);
     this.installHook(hooksDir, 'post-merge', POST_MERGE_CONTENT);
@@ -294,7 +356,7 @@ export class InitCommand {
         console.error(pc.yellow('  ⚠ Drift & boundary-violation signals depend on repeated snapshots.'));
         console.error(pc.dim('    Options without hooks:'));
         console.error(pc.dim('      • run `ctxo watch` during development'));
-        console.error(pc.dim('      • add `ctxo index --check` to CI'));
+        console.error(pc.dim('      • run `ctxo index --commit HEAD` after each commit (`ctxo index --check` only verifies staleness and records no snapshot)'));
         console.error(pc.dim('      • run `ctxo init` again to install hooks later'));
       }
       console.error('');
@@ -491,8 +553,9 @@ export class InitCommand {
     }
 
     if (!options.rulesOnly) {
-      console.error('  .git/hooks/post-commit    (git hook)');
-      console.error('  .git/hooks/post-merge     (git hook)');
+      const hooksDir = this.displayHooksDir();
+      console.error(`  ${`${hooksDir}/post-commit`.padEnd(26)}(git hook)`);
+      console.error(`  ${`${hooksDir}/post-merge`.padEnd(26)}(git hook)`);
     }
 
     if (!options.rulesOnly && toolIds.includes('claude-code')) {
@@ -519,20 +582,32 @@ export class InitCommand {
     }
   }
 
+  /** The hooks directory for human output: project-relative when it sits inside the project, absolute otherwise. */
+  private displayHooksDir(): string {
+    const hooksDir = resolveHooksDir(this.projectRoot);
+    const rel = relative(this.projectRoot, hooksDir).replace(/\\/g, '/');
+    return rel === '' || rel.startsWith('..') || isAbsolute(rel) ? hooksDir.replace(/\\/g, '/') : rel;
+  }
+
   private installHook(hooksDir: string, hookName: string, hookContent: string): void {
     const hookPath = join(hooksDir, hookName);
 
-    let existing = '';
-    if (existsSync(hookPath)) {
-      existing = readFileSync(hookPath, 'utf-8');
-      if (existing.includes(CTXO_START)) return;
+    const hookExists = existsSync(hookPath);
+    const existing = hookExists ? readFileSync(hookPath, 'utf-8') : '#!/bin/sh\n';
+
+    // An existing ctxo block (unversioned v1 included) is replaced where it stands, so the lines
+    // before and after it survive byte for byte. Without one, the block is appended.
+    const block = findCtxoBlock(existing);
+    let updated: string;
+    if (block) {
+      updated = existing.slice(0, block.start) + hookContent + existing.slice(block.end);
     } else {
-      existing = '#!/bin/sh\n';
+      updated = existing.endsWith('\n')
+        ? existing + '\n' + hookContent + '\n'
+        : existing + '\n\n' + hookContent + '\n';
     }
 
-    const updated = existing.endsWith('\n')
-      ? existing + '\n' + hookContent + '\n'
-      : existing + '\n\n' + hookContent + '\n';
+    if (hookExists && updated === existing) return;
 
     writeFileSync(hookPath, updated, 'utf-8');
     chmodSync(hookPath, 0o755);

@@ -102,6 +102,17 @@ describe('DoctorCommand', () => {
     expect(parsed.summary.pass + parsed.summary.warn + parsed.summary.fail).toBe(parsed.checks.length);
   });
 
+  it('runs the git_hooks check', async () => {
+    setupHealthyProject();
+    await seedValidDb();
+    await new DoctorCommand(tempDir).run({ json: true });
+
+    const parsed = JSON.parse(stdoutSpy.mock.calls.map(c => c[0]).join(''));
+    const hooks = parsed.checks.find((c: { name: string }) => c.name === 'git_hooks');
+    expect(hooks).toBeDefined();
+    expect(hooks.status).not.toBe('fail');
+  });
+
   it('outputs quiet format with --quiet flag', async () => {
     setupHealthyProject();
     await seedValidDb();
