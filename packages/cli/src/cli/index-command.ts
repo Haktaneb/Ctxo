@@ -176,9 +176,20 @@ export class IndexCommand {
 
     // The committed JSON index, read at most once per run, and before this run writes anything. An
     // incremental run needs it for the entries it removes, the symbol registry and the merged index; a full
-    // run for the co-change file set and for pruning the entries that went stale.
-    let committedIndices: FileIndex[] | undefined;
-    const committedIndex = (): FileIndex[] => (committedIndices ??= new JsonIndexReader(this.ctxoRoot).readAll());
+    // run for the co-change file set and for pruning the entries that went stale. Each entry keeps the path
+    // of the JSON file it came from: removing an entry deletes that file, never one named by the entry's
+    // own `file` field, which a corrupt or crafted file can point at an artifact.
+    let committed: { indices: FileIndex[]; jsonPaths: Map<string, string[]> } | undefined;
+    const readCommitted = (): { indices: FileIndex[]; jsonPaths: Map<string, string[]> } => {
+      if (committed === undefined) {
+        const entries = new JsonIndexReader(this.ctxoRoot).readEntries();
+        const jsonPaths = new Map<string, string[]>();
+        for (const { path, index } of entries) jsonPaths.set(index.file, [...(jsonPaths.get(index.file) ?? []), path]);
+        committed = { indices: entries.map((entry) => entry.index), jsonPaths };
+      }
+      return committed;
+    };
+    const committedIndex = (): FileIndex[] => readCommitted().indices;
 
     // Monorepo workspaces: the folders a full run discovers files in, and the ones index.ignoreProjects
     // leaves out. A file that the project configuration excludes from the index matches index.ignore or
@@ -360,20 +371,40 @@ export class IndexCommand {
           gitAdapter,
         );
 
-    // The global products (co-change, communities, architecture artifacts) are refreshed whenever the run
-    // changed the index, also when the last indexed file left it. A --commit run refreshes them even when it
-    // re-indexed no file: a merge commit lists none, and a commit that only touched documents still moves
-    // HEAD, which the co-change window and the snapshot record. A --files run that selected nothing has
-    // nothing to refresh.
-    const refreshGlobals =
-      pendingIndices.length > 0 || removedPaths.size > 0 || stalePaths.length > 0 || options.commit !== undefined;
+    // The committed entries that are still there once the stale ones are pruned (an incremental run prunes none).
+    const survivingEntries = new Set(committedIndex().map((idx) => idx.file)).size - new Set(stalePaths).size;
+
+    // The snapshot and the architecture artifacts are rebuilt whenever the run changed the index. A --commit
+    // run rebuilds them even when it re-indexed no file: a merge commit lists none, and a commit that only
+    // touched documents still moves HEAD, which the snapshot records. A --files run that selected nothing
+    // has nothing to rebuild. A full run that only pruned rebuilds them only when no entry survives, because
+    // then the project really is empty: with entries left, a run that discovered nothing (no language plugin
+    // loaded here, say right after a clone) would replace the committed snapshot with an empty one.
+    const refreshProducts =
+      pendingIndices.length > 0 ||
+      removedPaths.size > 0 ||
+      options.commit !== undefined ||
+      (stalePaths.length > 0 && survivingEntries === 0);
+
+    // Co-change is built from git history and the committed entries, not from what this run discovered, so
+    // it also follows a run that only pruned.
+    const refreshCoChange = refreshProducts || stalePaths.length > 0;
+
+    if (!incremental && pendingIndices.length === 0 && survivingEntries > 0) {
+      console.error(
+        registry.getSupportedExtensions().size === 0
+          ? '[ctxo] No language plugin is loaded, so no file was indexed. Run `ctxo install` (or `ctxo index --install-missing`). ' +
+              'communities.json, its history and the architecture artifacts were left as they are'
+          : '[ctxo] No source file was indexed. communities.json, its history and the architecture artifacts were left as they are',
+      );
+    }
 
     // Phases 2 and 2b: one git pass (the change log) feeds both the per-file intent[] and the
     // co-change matrix of the whole repository. The co-change window comes from `cochange.*` in
     // config.yaml and `--cochange-*`; `--max-history` only sets how much history each file keeps.
     // Non-fatal like phases 2c and 2d: an unexpected failure here must not stop the index from
     // being written, and co-changes.json is only ever replaced by a complete matrix.
-    if (!options.skipHistory && refreshGlobals) {
+    if (!options.skipHistory && refreshCoChange) {
       try {
         const coChange = resolveCoChangeConfig(ignore.config, {
           maxCommits: options.cochangeCommits,
@@ -430,13 +461,13 @@ export class IndexCommand {
     // Opt-out (--skip-community): skip entirely. Warn if a stale snapshot exists on disk.
     let communitySnapshot: CommunitySnapshot | undefined;
 
-    if (options.skipCommunity && refreshGlobals) {
+    if (options.skipCommunity && refreshProducts) {
       if (existsSync(join(this.ctxoRoot, 'index', 'communities.json'))) {
         console.error(
           `[ctxo] WARN stale communities.json present — --skip-community preserved existing snapshot. Run \`ctxo index\` (full) to refresh.`,
         );
       }
-    } else if (refreshGlobals) {
+    } else if (refreshProducts) {
       try {
         const graphIndices = graphInput();
         communitySnapshot = await this.buildCommunitySnapshot(
@@ -465,19 +496,22 @@ export class IndexCommand {
 
     // Removed and stale files leave the index before the new entries are written. On a case-insensitive file
     // system a case-only rename names one JSON file twice, so deleting afterwards would take the entry just
-    // written for the new name. A file that cannot be deleted is reported and the run goes on, since the
-    // index this run builds its products from already leaves it out.
-    const deleteEntry = (path: string): boolean => {
-      try {
-        writer.delete(path);
-        return true;
-      } catch (err) {
-        console.error(`[ctxo] Could not remove ${path} from the index: ${(err as Error).message}`);
-        return false;
+    // written for the new name. The JSON file deleted is the one the entry was read from. A file that cannot
+    // be deleted is reported and the run goes on, since the index this run builds its products from already
+    // leaves it out. Returns true only when a file was really deleted.
+    const deleteEntry = (file: string): boolean => {
+      let deleted = false;
+      for (const jsonPath of readCommitted().jsonPaths.get(file) ?? []) {
+        try {
+          if (writer.deleteEntryFile(jsonPath)) deleted = true;
+        } catch (err) {
+          console.error(`[ctxo] Could not remove ${file} from the index: ${(err as Error).message}`);
+        }
       }
+      return deleted;
     };
-    for (const path of removedPaths) deleteEntry(path);
-    const pruned = stalePaths.filter(deleteEntry).length;
+    for (const file of removedPaths) deleteEntry(file);
+    const pruned = [...new Set(stalePaths)].filter(deleteEntry).length;
     if (pruned > 0) {
       console.error(
         `[ctxo] Pruned ${pruned} stale index ${pruned === 1 ? 'entry' : 'entries'} (source file deleted, or excluded by index.ignore / index.ignoreProjects)`,
@@ -817,7 +851,8 @@ export class IndexCommand {
    *
    * The candidates are the paths asked for plus the files the commit added, modified or renamed to. Only
    * a file that a full run would index is kept: a language plugin handles it, `index.ignore` does not
-   * match it, and it lies inside a workspace that `index.ignoreProjects` leaves in. A candidate that is
+   * match it, it lies inside a workspace that `index.ignoreProjects` leaves in, and (for a path listed by
+   * name) git does not ignore it through .gitignore. A candidate that is
    * gone from the working tree is dropped from the index instead of being re-indexed, unless git tracks
    * it as skip-worktree (a sparse checkout): then it is merely not checked out and its entry stays.
    *
@@ -861,7 +896,7 @@ export class IndexCommand {
       !ignoreFile(path) &&
       workspaces.some((workspace) => isInsideDirectory(workspace, join(this.projectRoot, path)));
 
-    const changed: string[] = [];
+    let changed: string[] = [];
     const missing: string[] = [];
     let skippedListed = 0;
     for (const path of [...candidates].sort(compareCodepoint)) {
@@ -877,9 +912,23 @@ export class IndexCommand {
     // A candidate that is missing from the working tree is dropped from the index, unless git tracks it
     // as skip-worktree: then it is merely not checked out, and its entry stays.
     for (const path of await this.withoutSkipWorktree(missing, gitAdapter)) dropped.add(path);
+
+    // A full run leaves out what .gitignore covers (it lists files with --exclude-standard), so a path
+    // listed by name is left out too. The files of a commit are tracked, which git never calls ignored, so
+    // only the listed ones are asked about. If git cannot say, they are indexed as before.
+    const toCheck = changed.filter((path) => listed.has(path));
+    if (toCheck.length > 0) {
+      const ignoredByGit = await gitAdapter.getIgnoredPaths(toCheck);
+      if (ignoredByGit === undefined) {
+        console.error('[ctxo] Could not ask git which listed files .gitignore excludes: indexing them anyway');
+      } else {
+        skippedListed += changed.filter((path) => ignoredByGit.has(path)).length;
+        changed = changed.filter((path) => !ignoredByGit.has(path));
+      }
+    }
     if (skippedListed > 0) {
       console.error(
-        `[ctxo] Skipped ${skippedListed} listed file(s) that a full run would not index (no language plugin, index.ignore, or outside the workspaces)`,
+        `[ctxo] Skipped ${skippedListed} listed file(s) that a full run would not index (no language plugin, index.ignore, .gitignore, or outside the workspaces)`,
       );
     }
 
@@ -932,6 +981,11 @@ export class IndexCommand {
    * Produce the FileIndex list used as input to community detection, the architecture artifacts and the
    * SQLite cache (the co-change phase has its own file set, `coChangeFiles` in `run`).
    *
+   * The list is sorted by file name in code point order, whichever run builds it. The graph, the
+   * community detection and the PageRank that follow depend on the order they are fed in, and a full
+   * run (discovery order) and an incremental run (directory order of the committed JSON, new files
+   * appended) would otherwise feed them differently, and could write different snapshots for one HEAD.
+   *
    * Full index run (`base` undefined): returns the indices of this run as they are. A full run indexes
    * every file it discovers, so they are the whole project. The committed JSON of a file this machine
    * cannot index (no plugin loaded here) stays in the index, because a full run prunes only entries that
@@ -947,7 +1001,7 @@ export class IndexCommand {
     pendingIndices: ReadonlyArray<{ relativePath: string; fileIndex: FileIndex }>,
     base?: { committed: readonly FileIndex[]; removedPaths: ReadonlySet<string> },
   ): FileIndex[] {
-    if (base === undefined) return pendingIndices.map(({ fileIndex }) => fileIndex);
+    if (base === undefined) return sortByFile(pendingIndices.map(({ fileIndex }) => fileIndex));
 
     const { committed, removedPaths } = base;
     const pendingByPath = new Map<string, FileIndex>();
@@ -968,7 +1022,7 @@ export class IndexCommand {
     }
     // Newly indexed files (no prior committed entry) get appended.
     for (const remaining of pendingByPath.values()) merged.push(remaining);
-    return merged;
+    return sortByFile(merged);
   }
 
   private async buildCommunitySnapshot(
@@ -1087,6 +1141,11 @@ function pickEdgeQuality(tiers: {
   if (hasSyntaxOnly && hasFull) return 'mixed';
   if (hasSyntaxOnly) return 'syntax-only';
   return 'full';
+}
+
+/** The indices ordered by file name in code point order (never by locale), leaving the input alone. */
+function sortByFile(indices: readonly FileIndex[]): FileIndex[] {
+  return [...indices].sort((a, b) => compareCodepoint(a.file, b.file));
 }
 
 /**

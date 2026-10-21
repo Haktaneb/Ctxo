@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -14,6 +15,8 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { IndexCommand } from '../index-command.js';
+import * as pluginLoader from '../plugin-loader.js';
+import { compareCodepoint } from '../../core/compare-codepoint.js';
 import { SimpleGitAdapter } from '../../adapters/git/simple-git-adapter.js';
 import { JsonIndexReader } from '../../adapters/storage/json-index-reader.js';
 import { JsonIndexWriter } from '../../adapters/storage/json-index-writer.js';
@@ -646,6 +649,279 @@ describe('IndexCommand incremental runs', () => {
     });
   });
 
+  // Right after a clone, before the dependencies are installed, no language plugin loads and a full run
+  // discovers no file. It may still prune and refresh co-change, but it must not replace the snapshot and
+  // the artifacts that the committed entries still describe with empty ones.
+  describe('a full run that discovers nothing because no language plugin loads', () => {
+    const ARTIFACTS = ['communities.json', 'boundary-violations.json', 'drift-events.json'];
+    const indexFile = (file: string): string => join(project.dir, '.ctxo', 'index', file);
+
+    async function indexProjectWithHistory(): Promise<void> {
+      project.write('src/gone.ts', 'export const gone = 1;\n');
+      project.commit('feat: add gone');
+      for (let n = 1; n <= 2; n++) {
+        project.append('src/gone.ts', `// change ${n}`);
+        project.append('src/types.ts', `// change ${n}`);
+        project.commit(`feat: change ${n}`);
+      }
+      commitGreetAndTypes(project, 2);
+      await new IndexCommand(project.dir).run();
+      expect(JSON.stringify(readCoChanges(project.dir).entries)).toContain('src/gone.ts');
+    }
+
+    function committedProducts(): { artifacts: Record<string, Buffer>; history: string[] } {
+      return {
+        artifacts: Object.fromEntries(ARTIFACTS.map((file) => [file, readFileSync(indexFile(file))])),
+        history: readdirSync(indexFile('communities.history')),
+      };
+    }
+
+    function expectProductsUntouched(before: { artifacts: Record<string, Buffer>; history: string[] }): void {
+      for (const file of ARTIFACTS) expect(readFileSync(indexFile(file)).equals(before.artifacts[file]!)).toBe(true);
+      expect(readdirSync(indexFile('communities.history'))).toEqual(before.history);
+    }
+
+    function noPluginHint(spy: MockInstance<typeof console.error>): boolean {
+      return logLines(spy).some(
+        (line) => line.includes('No language plugin is loaded') && line.includes('ctxo install') && line.includes('--install-missing'),
+      );
+    }
+
+    it('prunes the stale entry and refreshes co-change, and leaves the snapshot, its history and the artifacts alone', async () => {
+      await indexProjectWithHistory();
+      const before = committedProducts();
+      rmSync(join(project.dir, 'src', 'gone.ts')); // stale: its source is gone
+      vi.spyOn(pluginLoader, 'loadPlugins').mockResolvedValue([]);
+      errorSpy.mockClear();
+
+      await new IndexCommand(project.dir).run();
+
+      expect(hasIndexEntry(project.dir, 'src/gone.ts')).toBe(false);
+      for (const file of ['src/greet.ts', 'src/types.ts', 'src/utils.ts']) {
+        expect(hasIndexEntry(project.dir, file)).toBe(true);
+      }
+      expectProductsUntouched(before);
+      // Co-change is built from git and the surviving entries, so it does not need a plugin: the deleted file
+      // is out of it and the pair of two surviving files, which nothing was discovered for, is still in.
+      const entries = readCoChanges(project.dir).entries;
+      expect(JSON.stringify(entries)).not.toContain('src/gone.ts');
+      expect(entries.some((entry) => entry.file1 === 'src/greet.ts' && entry.file2 === 'src/types.ts')).toBe(true);
+      expect(noPluginHint(errorSpy)).toBe(true);
+    });
+
+    it('with nothing to prune it changes no committed product, and says why', async () => {
+      await indexProjectWithHistory();
+      const before = committedProducts();
+      const coChanges = readFileSync(indexFile('co-changes.json'));
+      vi.spyOn(pluginLoader, 'loadPlugins').mockResolvedValue([]);
+      errorSpy.mockClear();
+
+      await new IndexCommand(project.dir).run();
+
+      expectProductsUntouched(before);
+      expect(readFileSync(indexFile('co-changes.json')).equals(coChanges)).toBe(true);
+      expect(hasIndexEntry(project.dir, 'src/gone.ts')).toBe(true);
+      expect(noPluginHint(errorSpy)).toBe(true);
+    });
+  });
+
+  // Louvain can depend on the order the graph is built in, so a full run and an incremental run at the
+  // same HEAD must feed it the same order: the files sorted by name.
+  describe('community detection is fed in a deterministic order', () => {
+    async function indexClustersThenAddA0(): Promise<void> {
+      writeTwoClusters(project);
+      project.commit('feat: two clusters with one bridge');
+      await new IndexCommand(project.dir).run();
+      // A new file that sorts before every file that is already indexed in its folder.
+      project.write('src/a/a0.ts', "import { a1 } from './a1';\n\nexport function a0(): number {\n  return a1();\n}\n");
+      project.commit('feat: add a0');
+    }
+
+    /** Records the files in the order each run hands them to community detection. */
+    function recordSnapshotInput(): () => string[] {
+      const spy = vi.spyOn(
+        IndexCommand.prototype as unknown as { buildCommunitySnapshot: (indices: readonly FileIndex[]) => Promise<unknown> },
+        'buildCommunitySnapshot',
+      );
+      return () => (spy.mock.calls.at(-1)![0] as readonly FileIndex[]).map((idx) => idx.file);
+    }
+
+    const withoutComputedAt = (snapshot: CommunitySnapshot): Omit<CommunitySnapshot, 'computedAt'> => {
+      const { computedAt: _computedAt, ...rest } = snapshot;
+      return rest;
+    };
+
+    it('an incremental run hands it the files sorted by name, a new file in its place', async () => {
+      await indexClustersThenAddA0();
+      const filesHandedOver = recordSnapshotInput();
+
+      await new IndexCommand(project.dir).run({ commit: 'HEAD' });
+
+      const files = filesHandedOver();
+      expect(files).toContain('src/a/a0.ts');
+      expect(files).toEqual([...files].sort(compareCodepoint));
+    });
+
+    it('a full run hands it the files sorted by name too', async () => {
+      await indexClustersThenAddA0();
+      const filesHandedOver = recordSnapshotInput();
+
+      await new IndexCommand(project.dir).run();
+
+      const files = filesHandedOver();
+      expect(files).toContain('src/a/a0.ts');
+      expect(files).toEqual([...files].sort(compareCodepoint));
+    });
+
+    it('a full run over a monorepo hands it the files sorted by name, whatever order the workspaces are declared in', async () => {
+      project.write(
+        'package.json',
+        JSON.stringify({
+          name: 'root',
+          workspaces: ['packages/zeta', 'packages/alpha'],
+          devDependencies: { '@ctxo/lang-typescript': 'workspace:*' },
+        }),
+      );
+      project.write('packages/zeta/package.json', JSON.stringify({ name: 'zeta' }));
+      project.write('packages/zeta/src/z.ts', 'export const z = 1;\n');
+      project.write('packages/alpha/package.json', JSON.stringify({ name: 'alpha' }));
+      project.write('packages/alpha/src/a.ts', 'export const a = 1;\n');
+      project.commit('feat: two workspaces, declared out of name order');
+      const filesHandedOver = recordSnapshotInput();
+
+      await new IndexCommand(project.dir).run();
+
+      // Files are discovered workspace by workspace, zeta first; community detection gets them by name.
+      expect(filesHandedOver()).toEqual(['packages/alpha/src/a.ts', 'packages/zeta/src/z.ts']);
+    });
+
+    it('communities.json from an incremental run equals the one from a full run at the same HEAD', async () => {
+      await indexClustersThenAddA0();
+      await new IndexCommand(project.dir).run({ commit: 'HEAD' });
+      const incremental = withoutComputedAt(readSnapshot(project.dir));
+
+      await new IndexCommand(project.dir).run();
+
+      expect(withoutComputedAt(readSnapshot(project.dir))).toEqual(incremental);
+    });
+  });
+
+  // The JSON entry of a source file x is x.json, so an entry whose "file" field says co-changes would name
+  // the co-change matrix. Pruning and removal delete the JSON file that was read, never one built from that
+  // field, and they count a deletion only when a file was really deleted.
+  describe('an index file whose file field names an artifact', () => {
+    function writeCraftedEntry(file: string): void {
+      writeFileSync(
+        join(project.dir, '.ctxo', 'index', 'crafted.json'),
+        JSON.stringify({ file, lastModified: 1, symbols: [], edges: [], intent: [], antiPatterns: [] }),
+        'utf-8',
+      );
+    }
+
+    it.each([
+      ['co-changes', 'co-changes.json', {}],
+      ['communities', 'communities.json', { skipCommunity: true }],
+    ])('does not make a full run delete %s.json, and the crafted file itself is pruned', async (name, artifact, options) => {
+      commitGreetAndTypes(project, 2);
+      await new IndexCommand(project.dir).run();
+      const artifactPath = join(project.dir, '.ctxo', 'index', artifact);
+      expect(existsSync(artifactPath)).toBe(true);
+      writeCraftedEntry(name);
+
+      await new IndexCommand(project.dir).run(options);
+
+      expect(existsSync(artifactPath)).toBe(true);
+      expect(existsSync(join(project.dir, '.ctxo', 'index', 'crafted.json'))).toBe(false);
+    });
+
+    it('does not make a full run delete a snapshot from the history', async () => {
+      commitGreetAndTypes(project, 1);
+      await new IndexCommand(project.dir).run();
+      await new IndexCommand(project.dir).run(); // the second run archives the first snapshot
+      const historyDir = join(project.dir, '.ctxo', 'index', 'communities.history');
+      const archived = readdirSync(historyDir).filter((name) => name.endsWith('.json'));
+      expect(archived.length).toBeGreaterThan(0);
+      writeCraftedEntry(`communities.history/${archived[0]!.replace(/\.json$/, '')}`);
+
+      await new IndexCommand(project.dir).run();
+
+      expect(existsSync(join(historyDir, archived[0]!))).toBe(true);
+    });
+
+    it('does not make an incremental removal delete an artifact', async () => {
+      project.write('co-changes', 'not source code\n');
+      project.commit('chore: add a file named like an artifact');
+      commitGreetAndTypes(project, 2);
+      await new IndexCommand(project.dir).run();
+      writeCraftedEntry('co-changes');
+      project.git('rm', '-q', 'co-changes');
+      project.commit('chore: remove it again');
+
+      await new IndexCommand(project.dir).run({ commit: 'HEAD' });
+
+      expect(existsSync(join(project.dir, '.ctxo', 'index', 'co-changes.json'))).toBe(true);
+    });
+
+    it('counts a prune only when a file was really deleted', async () => {
+      await new IndexCommand(project.dir).run();
+      rmSync(join(project.dir, 'src', 'utils.ts')); // stale
+      vi.spyOn(JsonIndexWriter.prototype, 'deleteEntryFile').mockReturnValue(false);
+      errorSpy.mockClear();
+
+      await new IndexCommand(project.dir).run();
+
+      expect(logLines(errorSpy).some((line) => line.includes('Pruned'))).toBe(false);
+    });
+  });
+
+  // A full run leaves out what .gitignore covers (it lists files with --exclude-standard), so a path listed
+  // by name is left out too. Tracked files are never "ignored" in git's eyes, as in the full run.
+  describe('--files and .gitignore', () => {
+    beforeEach(() => {
+      project.write('.gitignore', 'dist/\n');
+      project.write('dist/app.js', 'export const app = 1;\n');
+    });
+
+    it('skips a listed file that .gitignore covers, as a full run does', async () => {
+      await new IndexCommand(project.dir).run({ files: ['dist/app.js', 'src/types.ts'] });
+
+      expect(hasIndexEntry(project.dir, 'dist/app.js')).toBe(false);
+      expect(hasIndexEntry(project.dir, 'src/types.ts')).toBe(true);
+      expect(
+        logLines(errorSpy).some((line) => line.startsWith('[ctxo] Skipped 1 listed file(s) that a full run would not index')),
+      ).toBe(true);
+    });
+
+    it('still indexes a listed file that git tracks although .gitignore matches it', async () => {
+      project.git('add', '-f', 'dist/app.js');
+      project.commit('feat: force-add the build output');
+
+      await new IndexCommand(project.dir).run({ files: ['dist/app.js'] });
+
+      expect(hasIndexEntry(project.dir, 'dist/app.js')).toBe(true);
+    });
+
+    it('indexes the file anyway, and says so, when git cannot check', async () => {
+      vi.spyOn(SimpleGitAdapter.prototype, 'getIgnoredPaths').mockResolvedValue(undefined);
+
+      await new IndexCommand(project.dir).run({ files: ['dist/app.js'] });
+
+      expect(hasIndexEntry(project.dir, 'dist/app.js')).toBe(true);
+      expect(logLines(errorSpy)).toContain(
+        '[ctxo] Could not ask git which listed files .gitignore excludes: indexing them anyway',
+      );
+    });
+
+    it('does not ask git about the files of a commit, which are tracked', async () => {
+      const getIgnoredPaths = vi.spyOn(SimpleGitAdapter.prototype, 'getIgnoredPaths');
+      commitGreetAndTypes(project, 1);
+
+      await new IndexCommand(project.dir).run({ commit: 'HEAD' });
+
+      expect(getIgnoredPaths).not.toHaveBeenCalled();
+    });
+  });
+
   it('--files re-indexes only the files that a full run would index', async () => {
     writeConfig(project.dir, 'index:\n  ignore:\n    - "fixtures/**"\n');
     project.write('fixtures/skip.ts', 'export const skipped = 1;\n');
@@ -798,7 +1074,7 @@ describe('IndexCommand incremental runs', () => {
     await new IndexCommand(project.dir).run();
     project.git('rm', '-q', 'src/utils.ts');
     project.commit('chore: remove utils');
-    vi.spyOn(JsonIndexWriter.prototype, 'delete').mockImplementation(() => {
+    vi.spyOn(JsonIndexWriter.prototype, 'deleteEntryFile').mockImplementation(() => {
       throw new Error('EPERM: locked');
     });
 

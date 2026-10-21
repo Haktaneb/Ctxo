@@ -34,4 +34,10 @@ export interface IGitPort {
    * Returns undefined when git fails, so a caller can fail safe.
    */
   getSkipWorktreePaths?(): Promise<ReadonlySet<string> | undefined>;
+  /**
+   * Of the given repo-relative paths, those that git ignores (.gitignore, .git/info/exclude, the global
+   * excludes). A tracked file is never ignored in this sense, however a pattern matches it. Returns
+   * undefined when git fails.
+   */
+  getIgnoredPaths?(paths: readonly string[]): Promise<ReadonlySet<string> | undefined>;
 }

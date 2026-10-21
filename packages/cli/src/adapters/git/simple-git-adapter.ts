@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { simpleGit, type SimpleGit } from 'simple-git';
 import type { IGitPort } from '../../ports/i-git-port.js';
 import type {
@@ -113,8 +114,10 @@ function parseChangeLog(raw: string): CommitChangeSet[] {
 
 export class SimpleGitAdapter implements IGitPort {
   private readonly git: SimpleGit;
+  private readonly projectRoot: string;
 
   constructor(projectRoot: string) {
+    this.projectRoot = projectRoot;
     this.git = simpleGit(projectRoot);
     log.debug('Initialized with root: %s', projectRoot);
   }
@@ -226,6 +229,31 @@ export class SimpleGitAdapter implements IGitPort {
       log.error(`Failed to list skip-worktree paths: ${(err as Error).message}`);
       return undefined;
     }
+  }
+
+  async getIgnoredPaths(paths: readonly string[]): Promise<ReadonlySet<string> | undefined> {
+    if (paths.length === 0) return new Set();
+
+    // The paths go in on stdin, NUL separated, so a long list cannot overflow the command line and unusual
+    // names arrive verbatim. Exit code 0: some of them are ignored; 1: none is; anything else is a failure.
+    const result = spawnSync('git', [...STABLE_OUTPUT_CONFIG, 'check-ignore', '-z', '--stdin'], {
+      cwd: this.projectRoot,
+      input: paths.map((path) => `${path}${NUL}`).join(''),
+      encoding: 'utf-8',
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    if (result.error === undefined && result.status === 1) return new Set();
+    if (result.error !== undefined || result.status !== 0) {
+      const reason = (result.error?.message ?? result.stderr ?? '').replace(/\s+/g, ' ').trim();
+      log.error(`Failed to check ignored paths: ${reason}`);
+      return undefined;
+    }
+    return new Set(
+      result.stdout
+        .split(NUL)
+        .filter((path) => path.length > 0)
+        .map(toForwardSlashes),
+    );
   }
 
   async getCommitFileChanges(rev: string): Promise<FileChange[] | undefined> {

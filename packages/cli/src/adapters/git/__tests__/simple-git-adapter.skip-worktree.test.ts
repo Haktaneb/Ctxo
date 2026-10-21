@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -57,6 +57,8 @@ function createRepo(): TempRepo {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   for (const dir of tempDirs.splice(0)) {
     try {
       rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
@@ -121,12 +123,20 @@ describe('SimpleGitAdapter.getSkipWorktreePaths', () => {
   });
 
   it('returns undefined when git cannot list the files, so a caller can fail safe', async () => {
-    // An existing directory that is not a repository: `git ls-files` fails there.
+    // An existing directory that is not a repository: `git ls-files` fails there. The ceiling stops git
+    // from finding a repository above the temp folder, wherever that folder happens to be.
+    vi.stubEnv('GIT_CEILING_DIRECTORIES', tmpdir());
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const notARepo = mkdtempSync(join(tmpdir(), 'ctxo-not-a-repo-'));
     tempDirs.push(notARepo);
 
     const paths = await new SimpleGitAdapter(notARepo).getSkipWorktreePaths();
 
     expect(paths).toBeUndefined();
+    // The failure is reported once, and the test output stays clean.
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/^\[ctxo:git\] ERROR Failed to list skip-worktree paths: /),
+    );
   });
 });

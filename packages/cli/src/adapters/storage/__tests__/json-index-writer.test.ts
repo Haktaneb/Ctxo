@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, existsSync, readdirSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, readFileSync, existsSync, readdirSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { JsonIndexWriter } from '../json-index-writer.js';
@@ -99,6 +99,51 @@ describe('JsonIndexWriter', () => {
 
   it('does not throw when deleting non-existent file', () => {
     expect(() => writer.delete('src/nonexistent.ts')).not.toThrow();
+  });
+
+  describe('deleteEntryFile', () => {
+    it('deletes the entry file at that path and says so', () => {
+      writer.write(buildFileIndex());
+      const entryPath = join(tempDir, 'index', 'src', 'foo.ts.json');
+
+      expect(writer.deleteEntryFile(entryPath)).toBe(true);
+      expect(existsSync(entryPath)).toBe(false);
+    });
+
+    it('returns false when the file is not there, so nothing is counted as deleted', () => {
+      writer.write(buildFileIndex());
+
+      expect(writer.deleteEntryFile(join(tempDir, 'index', 'src', 'missing.ts.json'))).toBe(false);
+    });
+
+    it.each(['co-changes.json', 'communities.json', 'drift-events.json', 'boundary-violations.json'])(
+      'refuses the artifact %s that lives next to the entries',
+      (artifact) => {
+        const artifactPath = join(tempDir, 'index', artifact);
+        mkdirSync(join(tempDir, 'index'), { recursive: true });
+        writeFileSync(artifactPath, '{}', 'utf-8');
+
+        expect(() => writer.deleteEntryFile(artifactPath)).toThrow(/artifact/);
+        expect(existsSync(artifactPath)).toBe(true);
+      },
+    );
+
+    it('refuses a snapshot in communities.history', () => {
+      const snapshotPath = join(tempDir, 'index', 'communities.history', '2026-01-01T00-00-00-000Z-abc1234.json');
+      mkdirSync(join(tempDir, 'index', 'communities.history'), { recursive: true });
+      writeFileSync(snapshotPath, '{}', 'utf-8');
+
+      expect(() => writer.deleteEntryFile(snapshotPath)).toThrow(/artifact/);
+      expect(existsSync(snapshotPath)).toBe(true);
+    });
+
+    it('refuses a path outside the index folder', () => {
+      const outside = join(tempDir, 'outside.json');
+      writeFileSync(outside, '{}', 'utf-8');
+
+      expect(() => writer.deleteEntryFile(outside)).toThrow(/index folder/);
+      expect(existsSync(outside)).toBe(true);
+    });
   });
 
   it('does not leave .tmp files after write', () => {

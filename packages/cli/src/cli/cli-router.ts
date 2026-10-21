@@ -360,7 +360,7 @@ Usage:
   ctxo index --cochange-since <duration>  Co-change window by age from HEAD (30d, 2w, 12m, 1y)
   ctxo index --files <path...>   Re-index only these files (repo-relative); the rest of the index is kept
   ctxo index --file <path>       Same as --files with one path
-  ctxo index --commit <rev>      Re-index the files changed by one commit, drop the ones it deleted or renamed
+  ctxo index --commit <rev>      Re-index the files changed by the commit just made (for example HEAD), drop the ones it deleted or renamed
   ctxo sync                 Rebuild SQLite cache from committed JSON index
   ctxo watch                Start file watcher for incremental re-indexing
   ctxo verify-index         CI gate: fail if index is stale

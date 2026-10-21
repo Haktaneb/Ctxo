@@ -356,5 +356,7 @@ describe('cli-router index --files, --file and --commit', () => {
     expect(help).toContain('--files <path...>');
     expect(help).toContain('--file <path>');
     expect(help).toContain('--commit <rev>');
+    // --commit is meant for the commit that was just made, which is what the post-commit hook passes.
+    expect(help).toMatch(/--commit <rev>[^\n]*commit just made[^\n]*HEAD/);
   });
 });
