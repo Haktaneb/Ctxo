@@ -80,10 +80,12 @@ Get project architectural layer map.
 
 Parameters:
 - layer (string, optional): Filter by layer name
+- mode (enum: both|regex|communities|contexts, default both): "regex" layer map, "communities" Louvain clusters, "contexts" candidate bounded contexts (file level), "both" layers plus communities
+- candidate (number, optional): With mode "contexts", the id of one candidate to return in full
 
-Returns: Symbols grouped into Domain, Infrastructure, Adapter, Test, Composition, Configuration layers.
+Returns: Symbols grouped into Domain, Infrastructure, Adapter, Test, Composition, Configuration layers; with communities, data-driven clusters and god nodes. With mode "contexts", a summary: `commitSha`, `coverage`, `candidates` (`id`, `label`, `fingerprint`, `fileCount`, `cohesion`, top 5 `topTerms`), `hubs` (capped at 50, with `hubsTotal`), `collisions` (capped at 50, with `collisionsTotal`), `unclustered` count and a `hint`. With `candidate: <id>`, that candidate in full (files capped at 15 with `fileCount`, cross-candidate edges, co-change pairs), its hubs (50) and its collisions (10, each with only that candidate's own occurrences: `symbolId`, first 5 members, `memberCount`). An unknown id or no contexts view returns `found: false` with a hint (run `ctxo index`). `ctxo contexts --json` prints the full artifact.
 
-When to use: Onboarding to a new codebase, validating layer boundaries.
+When to use: Onboarding to a new codebase, validating layer boundaries, preparing a context map (mode "contexts").
 
 ### get_why_context
 Retrieve git commit history and anti-pattern warnings for a symbol.
@@ -144,6 +146,7 @@ Parameters:
 - query (string, required): Natural language search query
 - tokenBudget (number, default 4000): Max tokens for results
 - strategy (enum: combined|dependency|importance, default combined): Ranking strategy
+- searchMode (enum: fts|legacy, default fts): "fts" is BM25 with camelCase splitting, trigram fallback and automatic typo correction (reported in `fuzzyCorrection`); "legacy" is substring matching
 
 Returns: Symbols ranked by BM25 relevance + PageRank importance, packed within budget.
 
@@ -158,6 +161,7 @@ Parameters:
 - kind (enum: function|class|interface|method|variable|type, optional): Filter by kind
 - filePattern (string, optional): Filter by file path substring
 - limit (number 1-100, default 25): Max results
+- mode (enum: regex|fts, default regex): "regex" is a case-insensitive regex or substring match on names; "fts" is BM25 relevance search with typo correction
 
 When to use: Know (part of) the symbol name, need its ID for other tools.
 Instead of: get_ranked_context (semantic/relevance search).
@@ -251,6 +255,10 @@ Onboarding to a new codebase?
   -> get_architectural_overlay (layer map)
   -> get_symbol_importance (most critical symbols)
 
+Preparing a context map?
+  -> get_architectural_overlay(mode: "contexts") (candidate bounded contexts)
+  -> then candidate: <id> for one in full
+
 Cleaning up code?
   -> find_dead_code (unused symbols)
   -> get_change_intelligence (complexity hotspots)
@@ -274,6 +282,7 @@ All tool responses include:
 ```
 - Default truncation threshold: 8KB
 - Configurable via CTXO_RESPONSE_LIMIT environment variable
+- In `get_architectural_overlay` mode "contexts", only `candidates` is truncatable (hint: use `candidate: <id>` or `ctxo contexts --json`); `hubs` and `collisions` are capped at the source and never truncated
 
 ### Intent Filtering
 4 tools accept `intent` parameter: get_blast_radius, get_logic_slice, find_importers, find_dead_code.
@@ -333,6 +342,36 @@ cochange:
 The safe-edit gate counts confirmed + likely dependents, so co-change-upgraded dependents count and the gate may fire somewhat more often. `ctxo gate --preview` shows the effect.
 
 Design record: docs/architecture/ADR/adr-016-co-change-engine-and-snapshot-policy.md
+
+---
+
+## Contexts View (v0.12, #156)
+
+Candidate bounded contexts, computed by `ctxo index` and written to `.ctxo/index/contexts-view.json` (committed). Louvain runs on a file graph whose edges blend dependency weight (distinct symbol edges, log-normalised) and co-change frequency; hub files (fan-in or god nodes) have their edges damped by `1 / log2(2 + dependents)` and are listed separately. Groups smaller than `minCandidateFiles` fold into a neighbour; files with no edge are `unclustered`. Each candidate has a suggested label (longest common directory; PageRank fallback at the repo root), a `fingerprint`, cohesion, top terms, cross-candidate edges and co-change pairs. Collisions are type names that appear in two candidates with different member shapes (Jaccard below 0.5). No domain is named automatically.
+
+Refresh: every `ctxo index` run (full, `--files`, `--commit`, so also the post-commit hook); skipped by `--skip-community`; not refreshed by `ctxo watch`.
+
+Surfaces: `get_architectural_overlay({ mode: "contexts" })` (summary first, `candidate: <id>` for one in full) and `ctxo contexts [--json]` (table to stderr, full artifact to stdout; without a view it exits 0 with `found: false`).
+
+Config in `.ctxo/config.yaml` (all optional, defaults shown):
+
+```yaml
+communities:               # symbol-level Louvain
+  resolution: 1.0
+  godNodeMinBridged: 3
+  godNodeMaxResults: 25
+contextsView:
+  weights: { dependency: 1.0, coChange: 1.0 }
+  exclude: []              # files left out of the file graph (globs)
+  hubs: { auto: true, topPercent: 1, minDependents: 10, paths: [] }   # paths lose all their edges
+  resolution: 1.0
+  minCandidateFiles: 3
+  technicalTerms: []       # replaces the default list (Service, Repository, Controller, Handler, Manager, Dto, Impl, Async)
+index:
+  tests: []                # extra test-file globs; test files are never graph nodes
+```
+
+Design record and evidence: docs/architecture/ADR/adr-016-co-change-engine-and-snapshot-policy.md (addendum "Contexts view defaults (PR 1A)").
 
 ---
 

@@ -28,7 +28,7 @@ Language adapters ship as separate npm packages and are discovered by scanning t
 
 - get_logic_slice: Symbol + transitive dependencies (L1-L4 detail levels)
 - get_blast_radius: What breaks if a symbol changes (3-tier: confirmed/likely/potential)
-- get_architectural_overlay: Project layer map (Domain/Infrastructure/Adapter)
+- get_architectural_overlay: Project layer map (Domain/Infrastructure/Adapter), Louvain communities, and candidate bounded contexts (mode: "contexts")
 - get_why_context: Git commit intent + anti-pattern warnings (reverts, rollbacks)
 - get_change_intelligence: Complexity x churn composite score
 - find_dead_code: Unreachable symbols and files
@@ -51,6 +51,7 @@ Language adapters ship as separate npm packages and are discovered by scanning t
 - Don't know the symbol name? -> search_symbols or get_ranked_context
 - Finding unused code? -> find_dead_code
 - Safe to delete? -> find_importers
+- Preparing a context map? -> get_architectural_overlay(mode: "contexts")
 
 ## New: co-change engine, incremental indexing, one snapshot per commit (#157)
 
@@ -59,6 +60,13 @@ Language adapters ship as separate npm packages and are discovered by scanning t
 - Incremental indexing: `ctxo index --files <path...>` (alias `--file`) and `ctxo index --commit <rev>` re-index part of the index and recompute everything global from the merged index. The v2 post-commit hook runs `ctxo index --commit HEAD` once per commit, guarded by `[ -d .ctxo ]`. `ctxo init` and `ctxo doctor --fix` upgrade old hook blocks in place and refuse to write into a global or system `core.hooksPath`. New `git_hooks` doctor check.
 - One community snapshot per commit. Drift and boundary confidence count `distinctCommits` (low below 3, medium 3-6, high 7+). `ctxo index --check` records no snapshot.
 - `ctxo <command> --help` prints help and runs nothing.
+
+## New in v0.12
+
+- **Contexts view (#156)** - `ctxo index` writes `.ctxo/index/contexts-view.json`: candidate bounded contexts from file-level clustering of dependency and co-change edges, with hub files damped. Each candidate has a suggested label, cohesion, top terms, cross-candidate edges and co-change pairs; type names with different shapes in different candidates are listed as collisions. Recomputed on every index run and the post-commit hook; skipped by `--skip-community`; not refreshed by `ctxo watch`.
+- `get_architectural_overlay` `mode: "contexts"` returns a summary of all candidates (hubs and collisions capped at 50); `candidate: <id>` returns one candidate in full. `mode` (overlay), `searchMode` (get_ranked_context) and `mode` (search_symbols) are now registered, so clients can send them. The unused `fuzzy` parameter is gone (typo correction is automatic in `fts` mode).
+- `ctxo contexts [--json]` - candidates as a table (stderr) or the full artifact (stdout).
+- New config in `.ctxo/config.yaml`: `communities:` (resolution, godNodeMinBridged, godNodeMaxResults), `contextsView:` (weights, exclude, hubs, resolution, minCandidateFiles, technicalTerms) and `index.tests` (extra test globs).
 
 ## New in v0.8
 

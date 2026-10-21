@@ -82,7 +82,9 @@ Payloads under the threshold are returned verbatim with `truncated: false`. Payl
 
 Only these array fields are truncatable. Every MCP tool that produces large output writes into one of them.
 
-`impactedSymbols`, `importers`, `deadSymbols`, `unusedExports`, `results`, `rankings`, `context`, `hierarchies`, `scaffolding`, `deadFiles`, `files`
+`impactedSymbols`, `importers`, `deadSymbols`, `unusedExports`, `results`, `rankings`, `context`, `hierarchies`, `scaffolding`, `deadFiles`, `files`, `clusters`, `clustersAffected`, `candidates`
+
+`candidates` is the list in [`get_architectural_overlay`](/mcp-tools/get-architectural-overlay) `mode: "contexts"`; its truncation hint points to `candidate: <id>` and `ctxo contexts --json`. In that mode `hubs` and `collisions` are **not** truncatable: they are capped at the source (50 each in the summary, with `hubsTotal` and `collisionsTotal`), so they are always returned whole.
 
 ::: tip
 When `_meta.truncated === true`, the calling agent should either narrow its query (using `_meta.hint`) or raise `CTXO_RESPONSE_LIMIT`. Never assume the array is complete without checking the flag.

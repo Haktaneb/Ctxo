@@ -120,6 +120,7 @@ export default defineConfig({
             { text: 'ctxo visualize', link: '/cli/visualize' },
             { text: 'ctxo blast-radius', link: '/cli/blast-radius' },
             { text: 'ctxo gate', link: '/cli/gate' },
+            { text: 'ctxo contexts', link: '/cli/contexts' },
             { text: 'config.yaml reference', link: '/cli/config-yaml' },
             { text: 'Environment variables', link: '/cli/env-vars' },
           ],

@@ -61,6 +61,7 @@ ctxo visualize --no-browser         # skip auto-opening browser
 ctxo blast-radius <symbolId> --json # blast radius for one symbol, JSON to stdout
 ctxo gate --preview                 # preview which symbols the guard would block
 ctxo gate --preview --json          # same, machine-readable
+ctxo contexts [--json]              # candidate contexts: table to stderr, full contexts-view.json to stdout with --json
 
 # Environment
 DEBUG=ctxo:*                  # enable all debug output
@@ -142,6 +143,7 @@ index:
   ignoreProjects:              # globs applied to workspace roots (skip discovery)
     - "packages/experimental-*"
     - "examples/*"
+  tests: []                    # extra test-file globs (added to the shared defaults)
 cochange:                      # co-change matrix window (independent of --max-history)
   maxCommits: 2000             # last N non-merge commits from HEAD, or "all"
   # since: 12m                 # also limit by age (d, w, m, y), counted back from HEAD's committer date
@@ -149,11 +151,23 @@ cochange:                      # co-change matrix window (independent of --max-h
   minShared: 2                 # shared commits needed for a pair
   include: []                  # extra tracked, non-indexed files to analyse (globs)
   exclude: []                  # indexed files to leave out (globs); also vetoes include-added files
+communities:                   # symbol-level Louvain
+  resolution: 1.0
+  godNodeMinBridged: 3
+  godNodeMaxResults: 25
+contextsView:                  # candidate contexts (file level), see ADR-016 addendum
+  weights: { dependency: 1.0, coChange: 1.0 }
+  exclude: []                  # files left out of the file graph (globs)
+  hubs: { auto: true, topPercent: 1, minDependents: 10, paths: [] }   # paths lose all their edges
+  resolution: 1.0
+  minCandidateFiles: 3         # smaller groups fold into a neighbour
+  technicalTerms: []           # replaces the default list of dropped words
 ```
 
 * `index.ignore`: per-file picomatch globs, matched against repo-relative forward-slash paths.
 * `index.ignoreProjects`: matched against workspace paths; skipped workspaces are never enumerated and their plugin deps are never imported.
 * `cochange`: see [ADR-016](docs/architecture/ADR/adr-016-co-change-engine-and-snapshot-policy.md). One `git log` pass builds `co-changes.json` (window recorded under `window`) and every blast-radius path reads it. Overrides: `--cochange-commits`, `--cochange-since`.
+* `communities` and `contextsView`: see the ADR-016 addendum. `ctxo index` writes `.ctxo/index/contexts-view.json` (skipped by `--skip-community`, not refreshed by `ctxo watch`).
 * Invalid globs (`index.*`, `cochange.include`, `cochange.exclude`) surface as warnings via `ctxo doctor`; schema violations surface as fails. The loader falls back to defaults on any error (warn-and-continue).
 
 ### Safe-Edit Guard
@@ -222,7 +236,7 @@ Language support ships as separate plugin packages discovered at runtime by scan
 | --------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | `get_logic_slice`           | Symbol + transitive deps (L1-L4 progressive detail)                                                        |
 | `get_blast_radius`          | Impact score + affected symbols (3-tier: confirmed/likely/potential)                                       |
-| `get_architectural_overlay` | Project layer map (Domain/Infra/Adapters)                                                                  |
+| `get_architectural_overlay` | Project layer map (Domain/Infra/Adapters), communities, candidate contexts (`mode: "contexts"`, `candidate: <id>`) |
 | `get_why_context`           | Git commit intent + anti-pattern warnings                                                                  |
 | `get_change_intelligence`   | Complexity x churn composite score                                                                         |
 | `find_dead_code`            | Unreachable symbols and files                                                                              |

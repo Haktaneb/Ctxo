@@ -74,6 +74,22 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo with five packages. Per-packag
 - `distinctCommits` on `driftSignals`, `boundaryViolations` and their committed artifacts (#157).
 - `ctxo <command> --help` and `-h` print the help for every subcommand without running it (#157).
 - ADR-016: co-change engine, incremental indexing and snapshot policy.
+- **Contexts view (#156 Phase 1).** `ctxo index` writes `.ctxo/index/contexts-view.json`: candidate
+  bounded contexts from file-level Louvain over a blend of dependency and co-change edges, with hub
+  files damped. Each candidate has a suggested label, fingerprint, cohesion, top terms,
+  cross-candidate edges and co-change pairs; type names whose shapes differ between candidates are
+  listed as collisions. The view is recomputed on every index run and the post-commit hook, skipped
+  by `--skip-community`, and not refreshed by `ctxo watch`.
+- `get_architectural_overlay` gains `mode: "contexts"` (summary of every candidate, with hubs and
+  collisions capped at 50) and a `candidate: <id>` argument that returns one candidate in full.
+  `candidates` joins the truncatable fields of the response envelope.
+- `ctxo contexts` prints the candidates as a table (stderr); `ctxo contexts --json` prints the full
+  `contexts-view.json` (stdout).
+- Config: `communities:` (`resolution`, `godNodeMinBridged`, `godNodeMaxResults`), `contextsView:`
+  (`weights`, `exclude`, `hubs`, `resolution`, `minCandidateFiles`, `technicalTerms`) and
+  `index.tests` (extra test-file globs). One shared test-file classifier with default globs for
+  TypeScript, Go, C#, Java and Python now backs the contexts view.
+- ADR-016 addendum: contexts view defaults and their evidence.
 
 ### Changed
 
@@ -121,6 +137,15 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo with five packages. Per-packag
   the post-commit hook (`ctxo index --commit HEAD`) never returned and `git commit` hung. The
   variable now applies only when `ctxo` runs without arguments; `ctxo --http` without `--port`
   now listens on its default port 3001 instead of failing on an invalid port (#157).
+- `get_architectural_overlay` `mode`, `get_ranked_context` `searchMode` and `search_symbols` `mode`
+  were accepted by the handlers but missing from the registered tool schemas, so MCP clients could
+  never send them. They are registered now, and a test compares both schemas (#156).
+- God nodes with equal scores are ordered by code point, not by the machine's locale (#156).
+
+### Removed
+
+- The unused `fuzzy` parameter of `get_ranked_context`. Typo correction stays automatic in `fts`
+  mode and is reported in `fuzzyCorrection`; a client that still sends `fuzzy` gets a normal answer (#156).
 
 ## [0.8.0-alpha.0] - 2026-04-13
 

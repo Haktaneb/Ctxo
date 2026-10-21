@@ -248,6 +248,8 @@ index:
 
 ### 7.4a Experiment: change-set unit for co-change (K20)
 
+Measured in PR 1A and left out; tracked in #165.
+
 - Commits are not always the unit of a logical change. Our own flow lands one PR as many small commits (test, code, docs), so files changed in different commits of one PR never count as co-changing.
 - Add `cochange.unit: commit | merge` (default `commit`, so the oracle comparison stays like for like).
 - In `merge` mode, the default branch's first-parent history defines change sets, using git only (no hosting API):
