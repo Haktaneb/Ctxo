@@ -10,6 +10,9 @@ export const EDGE_KIND_WEIGHTS: Readonly<Record<EdgeKind, number>> = {
   implements: 1,
   uses: 1,
   imports: 0.5,
+  reads: 0,
+  writes: 0,
+  executes: 0,
 };
 
 export interface FileEdgeCount {

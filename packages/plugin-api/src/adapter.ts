@@ -1,3 +1,4 @@
+import type { CodeFact } from './facts.js';
 import type { SymbolNode, GraphEdge, ComplexityMetrics, SymbolKind } from './types.js';
 
 /**
@@ -14,6 +15,13 @@ export interface ILanguageAdapter {
 
   /** Compute per-symbol cyclomatic complexity for a file. */
   extractComplexity(filePath: string, source: string): Promise<ComplexityMetrics[]>;
+
+  /**
+   * Extract code facts from a file (protocol v2). Called only when facts are
+   * requested (`PluginCapabilities.facts`). See `CodeFact` for the line and
+   * text rules.
+   */
+  extractFacts?(filePath: string, source: string): Promise<CodeFact[]>;
 
   /**
    * True if this adapter should handle the given file path. Implementations

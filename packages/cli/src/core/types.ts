@@ -1,28 +1,16 @@
 import { z } from 'zod';
+import { SYMBOL_KINDS, EDGE_KINDS } from '@ctxo/plugin-api';
 
 // ── Symbol Kinds ────────────────────────────────────────────────
 
-export const SYMBOL_KINDS = [
-  'function',
-  'class',
-  'interface',
-  'method',
-  'variable',
-  'type',
-] as const;
+export { SYMBOL_KINDS };
 
 export const SymbolKindSchema = z.enum(SYMBOL_KINDS);
 export type SymbolKind = z.infer<typeof SymbolKindSchema>;
 
 // ── Edge Kinds ──────────────────────────────────────────────────
 
-export const EDGE_KINDS = [
-  'imports',
-  'calls',
-  'extends',
-  'implements',
-  'uses',
-] as const;
+export { EDGE_KINDS };
 
 export const EdgeKindSchema = z.enum(EDGE_KINDS);
 export type EdgeKind = z.infer<typeof EdgeKindSchema>;

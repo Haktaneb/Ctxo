@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { SYMBOL_KINDS as PLUGIN_SYMBOL_KINDS, EDGE_KINDS as PLUGIN_EDGE_KINDS } from '@ctxo/plugin-api';
 import {
   SymbolKindSchema,
   SymbolNodeSchema,
@@ -541,6 +542,31 @@ describe('CoChangeMatrixSchema', () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect('generatedBy' in result.data).toBe(false);
+    }
+  });
+});
+
+describe('plugin-api kind lists', () => {
+  it('core kind schemas use the plugin-api lists', () => {
+    expect([...SymbolKindSchema.options]).toEqual([...PLUGIN_SYMBOL_KINDS]);
+    expect([...EdgeKindSchema.options]).toEqual([...PLUGIN_EDGE_KINDS]);
+  });
+
+  it('SymbolIdSchema accepts table, view and procedure ids', () => {
+    expect(SymbolIdSchema.safeParse('db/loans.sql::dbo.loans::table').success).toBe(true);
+    expect(SymbolIdSchema.safeParse('db/loans.sql::dbo.v_loans::view').success).toBe(true);
+    expect(SymbolIdSchema.safeParse('db/loans.sql::dbo.usp_closeloan::procedure').success).toBe(true);
+  });
+
+  it('EdgeTargetSchema accepts 2-part data references', () => {
+    expect(EdgeTargetSchema.safeParse('dbo.loans::table').success).toBe(true);
+    expect(EdgeTargetSchema.safeParse('dbo.usp_closeloan::procedure').success).toBe(true);
+  });
+
+  it('GraphEdgeSchema accepts reads, writes and executes', () => {
+    for (const kind of ['reads', 'writes', 'executes']) {
+      const target = kind === 'executes' ? 'dbo.usp_closeloan::procedure' : 'dbo.loans::table';
+      expect(GraphEdgeSchema.safeParse({ from: 'src/a.cs::A.M::method', to: target, kind }).success).toBe(true);
     }
   });
 });
