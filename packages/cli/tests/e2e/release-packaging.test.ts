@@ -50,7 +50,7 @@ describe('Release Packaging', () => {
     expect(files.some((f: string) => f === 'package.json')).toBe(true);
   });
 
-  it('tarball size is reasonable (< 1450KB)', { timeout: 30_000 }, () => {
+  it('tarball size is reasonable (< 1600KB)', { timeout: 30_000 }, () => {
     const output = execSync('npm pack --dry-run --json', { cwd: ROOT, encoding: 'utf-8' });
 
     const info = JSON.parse(output);
@@ -65,7 +65,8 @@ describe('Release Packaging', () => {
     // rest of PR 0 (one snapshot per commit, co-change in every blast-radius caller, hook v2 with
     // its shared-directory guard, `--help` for every subcommand, docs shipped in the tarball) to
     // 1450KB (measured 1420.70KB).
-    expect(sizeKB).toBeLessThan(1450);
+    // PR 1A contexts view (file graph, clustering, overlay, CLI) → 1600KB (measured 1564.51KB).
+    expect(sizeKB).toBeLessThan(1600);
     expect(sizeKB).toBeGreaterThan(1); // Sanity: not empty (dist/ may not exist in CI pre-build)
   });
 });
