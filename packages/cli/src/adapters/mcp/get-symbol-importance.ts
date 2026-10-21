@@ -6,7 +6,7 @@ import type { StalenessCheck } from './get-logic-slice.js';
 import { getGraphAndFiles } from './get-logic-slice.js';
 import { wrapResponse } from '../../core/response-envelope.js';
 
-const InputSchema = z.object({
+export const InputSchema = z.object({
   limit: z.number().int().min(1).max(200).optional().default(25),
   kind: z.enum(['function', 'class', 'interface', 'method', 'variable', 'type']).optional(),
   filePattern: z.string().optional(),

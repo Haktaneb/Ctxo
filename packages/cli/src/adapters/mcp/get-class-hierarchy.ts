@@ -6,7 +6,7 @@ import { getGraphAndFiles } from './get-logic-slice.js';
 import type { SymbolGraph } from '../../core/graph/symbol-graph.js';
 import { wrapResponse } from '../../core/response-envelope.js';
 
-const InputSchema = z.object({
+export const InputSchema = z.object({
   symbolId: z.string().min(1).optional(),
   direction: z.enum(['ancestors', 'descendants', 'both']).optional().default('both'),
 });

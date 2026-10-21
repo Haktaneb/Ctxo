@@ -6,7 +6,7 @@ import { getGraphAndFiles } from './get-logic-slice.js';
 import { wrapResponse } from '../../core/response-envelope.js';
 import { filterByIntent } from '../../core/intent-filter.js';
 
-const InputSchema = z.object({
+export const InputSchema = z.object({
   symbolId: z.string().min(1),
   edgeKinds: z.array(z.enum(['imports', 'calls', 'extends', 'implements', 'uses'])).optional(),
   transitive: z.boolean().optional().default(false),

@@ -47,7 +47,7 @@ function computeClusterBreakdown(
   return { byCluster, crossClusterCount, multiClusterHint };
 }
 
-const InputSchema = z.object({
+export const InputSchema = z.object({
   symbolId: z.string().min(1),
   confidence: z.enum(['confirmed', 'likely', 'potential']).optional(),
   intent: z.string().optional().describe('Filter results by intent keywords (e.g., "test", "adapter", "security")'),

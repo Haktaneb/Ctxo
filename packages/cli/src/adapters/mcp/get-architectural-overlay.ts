@@ -3,15 +3,18 @@ import type { IGitPort } from '../../ports/i-git-port.js';
 import type { IStoragePort } from '../../ports/i-storage-port.js';
 import type { IMaskingPort } from '../../ports/i-masking-port.js';
 import { ArchitecturalOverlay } from '../../core/overlay/architectural-overlay.js';
+import { compareCodepoint } from '../../core/compare-codepoint.js';
 import { wrapResponse } from '../../core/response-envelope.js';
 import { buildSnapshotStaleness } from '../../core/overlay/snapshot-staleness.js';
 import type { ClusterLabelMasker } from '../../core/overlay/cluster-label-masker.js';
 import type { CommunitySnapshot, GodNode } from '../../core/types.js';
+import type { ContextsView } from '../../core/contexts-view/contexts-view-builder.js';
+import type { IContextsViewPort } from '../../ports/i-contexts-view-port.js';
 import type { StalenessCheck } from './get-logic-slice.js';
 
-const OVERLAY_MODES = ['regex', 'communities', 'both'] as const;
+export const OVERLAY_MODES = ['regex', 'communities', 'both', 'contexts'] as const;
 
-const InputSchema = z.object({
+export const InputSchema = z.object({
   layer: z.string().optional(),
   mode: z.enum(OVERLAY_MODES).optional(),
 });
@@ -82,12 +85,47 @@ export function buildCommunityOverlay(
   };
 }
 
+const HUB_COLLISION_LIMIT = 50;
+
+/**
+ * Builds the `mode: "contexts"` body from the (read-only, shared) view. Every array is copied: the view
+ * must never be sorted or spliced in place. Labels are masked after seeding the masker in sorted order,
+ * so the `[masked-cluster-N]` numbering is stable across calls.
+ */
+export function buildContextsOverlay(
+  view: ContextsView | undefined,
+  options: { memberPreviewLimit?: number; labelMasker?: ClusterLabelMasker } = {},
+): Record<string, unknown> {
+  if (!view) return { hint: 'No contexts view available. Run ctxo index to generate one.' };
+  const previewLimit = options.memberPreviewLimit ?? 15;
+  const masker = options.labelMasker?.isEnabled() ? options.labelMasker : undefined;
+  if (masker) {
+    for (const label of [...new Set(view.candidates.map((c) => c.label))].sort(compareCodepoint)) masker.mask(label);
+  }
+  const maskLabel = (label: string) => (masker ? masker.mask(label) : label);
+
+  return {
+    ...view,
+    candidates: view.candidates.map((candidate) => ({
+      ...candidate,
+      label: maskLabel(candidate.label),
+      files: candidate.files.slice(0, previewLimit),
+    })),
+    unclustered: { ...view.unclustered, files: view.unclustered.files.slice(0, previewLimit) },
+    hubs: view.hubs.slice(0, HUB_COLLISION_LIMIT),
+    hubsTotal: view.hubs.length,
+    collisions: view.collisions.slice(0, HUB_COLLISION_LIMIT),
+    collisionsTotal: view.collisions.length,
+  };
+}
+
 export function handleGetArchitecturalOverlay(
   storage: IStoragePort,
   masking: IMaskingPort,
   staleness?: StalenessCheck,
   git?: IGitPort,
   clusterLabelMasker?: ClusterLabelMasker,
+  contextsView?: IContextsViewPort,
 ) {
   const overlay = new ArchitecturalOverlay();
 
@@ -123,6 +161,12 @@ export function handleGetArchitecturalOverlay(
         const payload = masking.mask(
           JSON.stringify(wrapResponse({ layer: parsed.data.layer, files: filtered ?? [] }, extras)),
         );
+        return { content: buildContent(payload) };
+      }
+
+      if (mode === 'contexts') {
+        const body = buildContextsOverlay(contextsView?.readContextsView(), { labelMasker: clusterLabelMasker });
+        const payload = masking.mask(JSON.stringify(wrapResponse(body, extras)));
         return { content: buildContent(payload) };
       }
 

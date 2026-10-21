@@ -9,7 +9,7 @@ import { DetailLevelSchema } from '../../core/types.js';
 import { wrapResponse } from '../../core/response-envelope.js';
 import { filterByIntent } from '../../core/intent-filter.js';
 
-const InputSchema = z.object({
+export const InputSchema = z.object({
   symbolId: z.string().min(1).optional(),
   symbolIds: z.array(z.string().min(1)).optional(),
   level: DetailLevelSchema.optional().default(3),

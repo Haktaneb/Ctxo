@@ -7,7 +7,7 @@ import { wrapResponse } from '../../core/response-envelope.js';
 import { SearchEngine } from '../../core/search/search-engine.js';
 import type { ISearchPort } from '../../ports/i-search-port.js';
 
-const InputSchema = z.object({
+export const InputSchema = z.object({
   pattern: z.string().min(1),
   kind: z.enum(['function', 'class', 'interface', 'method', 'variable', 'type']).optional(),
   filePattern: z.string().optional(),

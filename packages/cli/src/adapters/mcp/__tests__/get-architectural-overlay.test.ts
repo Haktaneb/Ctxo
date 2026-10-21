@@ -6,6 +6,10 @@ import { SqliteStorageAdapter } from '../../storage/sqlite-storage-adapter.js';
 import { MaskingPipeline } from '../../../core/masking/masking-pipeline.js';
 import { handleGetArchitecturalOverlay, buildCommunityOverlay } from '../get-architectural-overlay.js';
 import type { CommunitySnapshot, FileIndex } from '../../../core/types.js';
+import { ClusterLabelMasker } from '../../../core/overlay/cluster-label-masker.js';
+import { resolveContextsViewConfig } from '../../../core/config/load-config.js';
+import type { ContextCandidate, ContextsView } from '../../../core/contexts-view/contexts-view-builder.js';
+import type { IContextsViewPort } from '../../../ports/i-contexts-view-port.js';
 
 function buildSnapshot(): CommunitySnapshot {
   return {
@@ -217,5 +221,131 @@ describe('GetArchitecturalOverlayHandler', () => {
     expect(labels.some((l) => /^\[masked-cluster-\d+\]$/.test(l))).toBe(true);
     expect(labels).toContain('src/core');
     expect(labels).not.toContain('internal-vault');
+  });
+});
+
+describe('GetArchitecturalOverlayHandler mode contexts', () => {
+  let tempDir: string;
+  let storage: SqliteStorageAdapter;
+
+  beforeEach(async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'ctxo-overlay-ctx-'));
+    storage = new SqliteStorageAdapter(tempDir);
+    await storage.initEmpty();
+    storage.bulkWrite(buildHexagonalIndices());
+  });
+
+  afterEach(() => {
+    delete process.env['CTXO_RESPONSE_LIMIT'];
+    storage.close();
+    rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+
+  function candidate(id: number, label: string, fileCount: number): ContextCandidate {
+    const files = Array.from({ length: fileCount }, (_, i) => `src/c${id}/file-${String(i).padStart(3, '0')}.ts`);
+    return {
+      id,
+      label,
+      fingerprint: `fp-${id}`,
+      fileCount,
+      files,
+      cohesion: 0.5,
+      topTerms: [],
+      crossEdges: [],
+      coChangePairs: [],
+    };
+  }
+
+  function buildView(candidates: ContextCandidate[]): ContextsView {
+    return {
+      version: 1,
+      commitSha: 'abc1234',
+      settings: resolveContextsViewConfig({} as never),
+      coverage: { files: 100, covered: 90, ratio: 0.9 },
+      candidates,
+      hubs: [],
+      unclustered: { count: 20, files: Array.from({ length: 20 }, (_, i) => `src/u/f-${i}.ts`) },
+      collisions: [],
+    };
+  }
+
+  function port(view: ContextsView | undefined): IContextsViewPort {
+    return { readContextsView: () => view };
+  }
+
+  it('mode contexts returns candidates at the top level with files capped at 15 and fileCount kept', async () => {
+    const view = buildView([candidate(0, 'orders', 20)]);
+    const handler = handleGetArchitecturalOverlay(storage, new MaskingPipeline(), undefined, undefined, undefined, port(view));
+    const payload = JSON.parse((await handler({ mode: 'contexts' })).content[0]!.text);
+
+    expect(payload.layers).toBeUndefined();
+    expect(payload.candidates).toHaveLength(1);
+    expect(payload.candidates[0].files).toHaveLength(15);
+    expect(payload.candidates[0].fileCount).toBe(20);
+    expect(payload.unclustered.files).toHaveLength(15);
+    expect(payload.unclustered.count).toBe(20);
+    expect(view.candidates[0]!.files).toHaveLength(20);
+  });
+
+  it('mode contexts without a view returns the run ctxo index hint', async () => {
+    const handler = handleGetArchitecturalOverlay(storage, new MaskingPipeline(), undefined, undefined, undefined, port(undefined));
+    const payload = JSON.parse((await handler({ mode: 'contexts' })).content[0]!.text);
+
+    expect(payload.hint).toBe('No contexts view available. Run ctxo index to generate one.');
+    expect(payload.candidates).toBeUndefined();
+  });
+
+  it('mode contexts caps hubs and collisions at 50 with totals', async () => {
+    const hubs = Array.from({ length: 60 }, (_, i) => ({ file: `src/h${i}.ts`, reasons: ['path'], dependents: 3, damping: 0.5 }));
+    const view = { ...buildView([candidate(0, 'orders', 3)]), hubs } as unknown as ContextsView;
+    const handler = handleGetArchitecturalOverlay(storage, new MaskingPipeline(), undefined, undefined, undefined, port(view));
+    const payload = JSON.parse((await handler({ mode: 'contexts' })).content[0]!.text);
+
+    expect(payload.hubs).toHaveLength(50);
+    expect(payload.hubsTotal).toBe(60);
+    expect(payload.collisions).toHaveLength(0);
+    expect(payload.collisionsTotal).toBe(0);
+    expect(view.hubs).toHaveLength(60);
+  });
+
+  it('mode contexts truncates candidates through the envelope', async () => {
+    process.env['CTXO_RESPONSE_LIMIT'] = '2048';
+    const view = buildView(Array.from({ length: 40 }, (_, i) => candidate(i, `context-${i}`, 15)));
+    const handler = handleGetArchitecturalOverlay(storage, new MaskingPipeline(), undefined, undefined, undefined, port(view));
+    const payload = JSON.parse((await handler({ mode: 'contexts' })).content[0]!.text);
+
+    expect(payload._meta.truncated).toBe(true);
+    expect(payload._meta.hint).toContain('ctxo contexts --json');
+    expect(payload.candidates.length).toBeLessThan(40);
+  });
+
+  it('mode contexts masks candidate labels that match masking.clusterLabels', async () => {
+    const view = buildView([candidate(0, 'src/payment-core', 3), candidate(1, 'orders', 3)]);
+    const masker = new ClusterLabelMasker(['src/payment*']);
+    const handler = handleGetArchitecturalOverlay(storage, new MaskingPipeline(), undefined, undefined, masker, port(view));
+    const payload = JSON.parse((await handler({ mode: 'contexts' })).content[0]!.text);
+
+    const labels = payload.candidates.map((c: { label: string }) => c.label) as string[];
+    expect(labels).toContain('[masked-cluster-1]');
+    expect(labels).toContain('orders');
+    expect(labels).not.toContain('src/payment-core');
+  });
+
+  it('mode both is unchanged and carries no candidates', async () => {
+    const view = buildView([candidate(0, 'orders', 3)]);
+    const handler = handleGetArchitecturalOverlay(storage, new MaskingPipeline(), undefined, undefined, undefined, port(view));
+    const payload = JSON.parse((await handler({ mode: 'both' })).content[0]!.text);
+
+    expect(payload.layers).toBeDefined();
+    expect(payload.candidates).toBeUndefined();
+  });
+
+  it('layer keeps precedence over mode contexts', async () => {
+    const view = buildView([candidate(0, 'orders', 3)]);
+    const handler = handleGetArchitecturalOverlay(storage, new MaskingPipeline(), undefined, undefined, undefined, port(view));
+    const payload = JSON.parse((await handler({ mode: 'contexts', layer: 'Domain' })).content[0]!.text);
+
+    expect(payload.layer).toBe('Domain');
+    expect(payload.candidates).toBeUndefined();
   });
 });

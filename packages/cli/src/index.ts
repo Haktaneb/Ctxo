@@ -15,7 +15,8 @@ import { handleGetWhyContext } from './adapters/mcp/get-why-context.js';
 import { handleGetChangeIntelligence } from './adapters/mcp/get-change-intelligence.js';
 import { SimpleGitAdapter } from './adapters/git/simple-git-adapter.js';
 import { handleGetBlastRadius } from './adapters/mcp/get-blast-radius.js';
-import { handleGetArchitecturalOverlay } from './adapters/mcp/get-architectural-overlay.js';
+import { handleGetArchitecturalOverlay, OVERLAY_MODES } from './adapters/mcp/get-architectural-overlay.js';
+import { ContextsViewReader } from './adapters/storage/contexts-view-reader.js';
 import { handleFindDeadCode } from './adapters/mcp/get-dead-code.js';
 import { handleGetContextForTask } from './adapters/mcp/get-context-for-task.js';
 import { handleGetRankedContext } from './adapters/mcp/get-ranked-context.js';
@@ -207,14 +208,15 @@ function registerTools(
     (args) => blastRadiusHandler(args),
   );
 
-  const overlayHandler = withRecording('get_architectural_overlay', handleGetArchitecturalOverlay(storage, masking, staleness, git, clusterLabelMasker), recorder);
+  const overlayHandler = withRecording('get_architectural_overlay', handleGetArchitecturalOverlay(storage, masking, staleness, git, clusterLabelMasker, new ContextsViewReader(ctxoRoot)), recorder);
 
   server.registerTool(
     'get_architectural_overlay',
     {
-      description: 'Get the project architectural layer map — identifies which symbols belong to Domain, Infrastructure, and Adapter layers. Use this when onboarding to a new codebase or validating that a change respects layer boundaries. For symbol-level analysis, use get_logic_slice or get_blast_radius.',
+      description: 'Get the project architecture map. mode "both" (default) returns the regex layer map (Domain, Infrastructure, Adapter, Test, Composition, Configuration) plus data-driven Louvain communities; "regex" or "communities" returns one of them. mode "contexts" returns candidate bounded contexts computed by `ctxo index`: file-level clusters of dependencies and co-change with hub files damped, each with a suggested label, cohesion, top terms, cross-candidate edges and co-change pairs, plus type names whose shapes differ between candidates. Use this when onboarding to a new codebase, validating layer boundaries, or preparing a context map. For symbol-level analysis, use get_logic_slice or get_blast_radius.',
       inputSchema: {
         layer: z.string().optional().describe('Filter by specific layer name'),
+        mode: z.enum(OVERLAY_MODES).optional().describe('View to return: "both" (default) layers plus communities, "regex" layer map, "communities" Louvain clusters, "contexts" candidate contexts (file level)'),
       },
       annotations: toolAnnotations,
     },
@@ -262,6 +264,7 @@ function registerTools(
         query: z.string().min(1).describe('Search query (matches symbol names)'),
         tokenBudget: z.number().optional().default(4000).describe('Max tokens for results (default 4000)'),
         strategy: z.enum(['combined', 'dependency', 'importance']).optional().default('combined').describe('Ranking strategy'),
+        searchMode: z.enum(['fts', 'legacy']).optional().default('fts').describe('"fts" (default): BM25 ranking with camelCase splitting, trigram fallback and typo correction; "legacy": substring matching'),
       },
       annotations: toolAnnotations,
     },
@@ -279,6 +282,7 @@ function registerTools(
         kind: z.enum(['function', 'class', 'interface', 'method', 'variable', 'type']).optional().describe('Filter by symbol kind'),
         filePattern: z.string().optional().describe('Filter by file path substring'),
         limit: z.number().int().min(1).max(100).optional().default(25).describe('Max results (default 25)'),
+        mode: z.enum(['regex', 'fts']).optional().default('regex').describe('"regex" (default): case-insensitive regex or substring match on names; "fts": BM25 relevance search'),
       },
       annotations: toolAnnotations,
     },
