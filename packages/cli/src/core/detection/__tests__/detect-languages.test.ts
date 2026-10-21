@@ -98,6 +98,18 @@ describe('detectLanguages', () => {
     expect(result.unknownExtensions['.md']).toBe(1);
   });
 
+  it('counts files whose names have non-ASCII characters by their real extension', () => {
+    // Without -z, git quotes such a name ("src/\305\237ube.ts") and the extension reads as `.ts"`.
+    execFileSync('git', ['config', 'core.quotePath', 'true'], { cwd: tempDir });
+    touch(tempDir, 'src/şube kaydı.ts', '');
+    touch(tempDir, 'src/plain.ts', '');
+    commitAll(tempDir);
+    const result = detectLanguages(tempDir);
+    expect(result.byExtension.typescript).toBe(2);
+    expect(result.unknownExtensions).toEqual({});
+    expect(result.totalFiles).toBe(2);
+  });
+
   it('merges .ts and .tsx into a single typescript count', () => {
     touch(tempDir, 'a.ts', '');
     touch(tempDir, 'b.tsx', '');

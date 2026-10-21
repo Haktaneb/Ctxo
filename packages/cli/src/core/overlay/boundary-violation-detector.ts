@@ -1,3 +1,4 @@
+import { compareCodepoint } from '../compare-codepoint.js';
 import type { SymbolGraph } from '../graph/symbol-graph.js';
 import type {
   BoundaryViolation,
@@ -78,8 +79,8 @@ export class BoundaryViolationDetector {
 
     violations.sort((a, b) => {
       if (a.severity !== b.severity) return a.severity === 'high' ? -1 : 1;
-      const cmp = a.from.symbolId.localeCompare(b.from.symbolId);
-      return cmp !== 0 ? cmp : a.to.symbolId.localeCompare(b.to.symbolId);
+      const cmp = compareCodepoint(a.from.symbolId, b.from.symbolId);
+      return cmp !== 0 ? cmp : compareCodepoint(a.to.symbolId, b.to.symbolId);
     });
 
     return {

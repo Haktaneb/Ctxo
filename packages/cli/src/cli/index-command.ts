@@ -677,15 +677,16 @@ export class IndexCommand {
 
   private discoverFilesIn(root: string, ignoreFile: (p: string) => boolean = () => false): string[] {
     try {
-      const output = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], {
+      // -z: NUL-separated, unquoted names. Without it git prints a non-ASCII path in quotes with octal
+      // escapes ("src/\305\237ube.ts") under the default core.quotePath, and the extension check drops it.
+      const output = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
         cwd: root,
         encoding: 'utf-8',
         maxBuffer: 10 * 1024 * 1024,
       });
 
       return output
-        .split('\n')
-        .map((line) => line.trim())
+        .split('\0')
         .filter((line) => line.length > 0)
         .filter((line) => this.isSupportedExtension(line))
         .map((line) => join(root, line))

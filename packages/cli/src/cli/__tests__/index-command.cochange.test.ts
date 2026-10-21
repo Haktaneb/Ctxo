@@ -18,6 +18,7 @@ import { execFileSync } from 'node:child_process';
 import { IndexCommand } from '../index-command.js';
 import { SimpleGitAdapter } from '../../adapters/git/simple-git-adapter.js';
 import { CoChangeMatrixSchema, type CoChangeMatrix, type FileIndex } from '../../core/types.js';
+import { isolateGitEnv, type IsolatedGitEnv } from './git-test-env.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURES_DIR = join(__dirname, 'fixtures', 'sample-project');
@@ -125,14 +126,19 @@ function writeConfig(dir: string, yaml: string): void {
 describe('IndexCommand co-change', () => {
   let project: TempProject;
   let errorSpy: MockInstance<typeof console.error>;
+  let gitEnv: IsolatedGitEnv;
 
   beforeEach(() => {
+    // The temp repos commit and index with the machine's git: no inherited GIT_DIR, no global or
+    // system git config.
+    gitEnv = isolateGitEnv();
     project = createProject();
     errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    gitEnv.restore();
     for (const dir of tempDirs.splice(0)) {
       try {
         rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

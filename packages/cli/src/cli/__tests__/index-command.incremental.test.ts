@@ -17,6 +17,7 @@ import { execFileSync } from 'node:child_process';
 import { IndexCommand } from '../index-command.js';
 import * as pluginLoader from '../plugin-loader.js';
 import { compareCodepoint } from '../../core/compare-codepoint.js';
+import { OrphanedFilesCheck } from '../../adapters/diagnostics/checks/index-check.js';
 import { SimpleGitAdapter } from '../../adapters/git/simple-git-adapter.js';
 import { JsonIndexReader } from '../../adapters/storage/json-index-reader.js';
 import { JsonIndexWriter } from '../../adapters/storage/json-index-writer.js';
@@ -28,6 +29,7 @@ import type {
   DriftEventsArtifact,
   FileIndex,
 } from '../../core/types.js';
+import { isolateGitEnv, type IsolatedGitEnv } from './git-test-env.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURES_DIR = join(__dirname, 'fixtures', 'sample-project');
@@ -197,6 +199,12 @@ function readSnapshot(dir: string): CommunitySnapshot {
   return JSON.parse(readFileSync(join(dir, '.ctxo', 'index', 'communities.json'), 'utf-8')) as CommunitySnapshot;
 }
 
+/** A snapshot without the one field that differs between two runs at the same HEAD. */
+const withoutComputedAt = (snapshot: CommunitySnapshot): Omit<CommunitySnapshot, 'computedAt'> => {
+  const { computedAt: _computedAt, ...rest } = snapshot;
+  return rest;
+};
+
 function readViolations(dir: string): BoundaryViolationsArtifact {
   return JSON.parse(
     readFileSync(join(dir, '.ctxo', 'index', 'boundary-violations.json'), 'utf-8'),
@@ -280,14 +288,19 @@ const SPELLINGS: Array<[string, Selector]> = [
 describe('IndexCommand incremental runs', () => {
   let project: TempProject;
   let errorSpy: MockInstance<typeof console.error>;
+  let gitEnv: IsolatedGitEnv;
 
   beforeEach(() => {
+    // The temp repos commit and index with the machine's git: no inherited GIT_DIR, no global or
+    // system git config (a global core.quotePath=false would also hide the non-ASCII path bugs).
+    gitEnv = isolateGitEnv();
     project = createProject();
     errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    gitEnv.restore();
     for (const dir of tempDirs.splice(0)) {
       try {
         rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
@@ -751,11 +764,6 @@ describe('IndexCommand incremental runs', () => {
       return () => (spy.mock.calls.at(-1)![0] as readonly FileIndex[]).map((idx) => idx.file);
     }
 
-    const withoutComputedAt = (snapshot: CommunitySnapshot): Omit<CommunitySnapshot, 'computedAt'> => {
-      const { computedAt: _computedAt, ...rest } = snapshot;
-      return rest;
-    };
-
     it('an incremental run hands it the files sorted by name, a new file in its place', async () => {
       await indexClustersThenAddA0();
       const filesHandedOver = recordSnapshotInput();
@@ -808,6 +816,60 @@ describe('IndexCommand incremental runs', () => {
       await new IndexCommand(project.dir).run();
 
       expect(withoutComputedAt(readSnapshot(project.dir))).toEqual(incremental);
+    });
+  });
+
+  // `git ls-files` prints a path with non-ASCII characters in quotes and octal escapes unless it is run
+  // with -z. Full runs and the doctor must read the same names the incremental runs (which use -z) do.
+  describe('a tracked file with a non-ASCII name', () => {
+    const NON_ASCII = 'src/şube kaydı.ts';
+
+    function commitNonAsciiFile(): void {
+      project.write(
+        NON_ASCII,
+        "import { greet } from './greet';\n\nexport function subeKaydi(): string {\n  return greet('sube');\n}\n",
+      );
+      project.commit('feat: add a file with a non-ASCII name');
+    }
+
+    it('a full run indexes it into the JSON index and into SQLite', async () => {
+      commitNonAsciiFile();
+
+      await new IndexCommand(project.dir).run();
+
+      expect(hasIndexEntry(project.dir, NON_ASCII)).toBe(true);
+      expect(symbolNames(project.dir, NON_ASCII)).toEqual(['subeKaydi']);
+      const cache = await readSqliteContents(project.dir);
+      expect(cache.files).toContain(NON_ASCII);
+      expect(cache.symbolIds).toContain(`${NON_ASCII}::subeKaydi::function`);
+      expect(cache.files).toEqual(readJsonContents(project.dir).files);
+    });
+
+    it('communities.json from an incremental run equals the one from a full run at the same HEAD', async () => {
+      await new IndexCommand(project.dir).run();
+      commitNonAsciiFile();
+      await new IndexCommand(project.dir).run({ commit: 'HEAD' });
+      const incremental = withoutComputedAt(readSnapshot(project.dir));
+      expect(JSON.stringify(incremental.communities)).toContain(NON_ASCII);
+
+      await new IndexCommand(project.dir).run();
+
+      expect(withoutComputedAt(readSnapshot(project.dir))).toEqual(incremental);
+      expect(hasIndexEntry(project.dir, NON_ASCII)).toBe(true);
+    });
+
+    it('doctor does not report the entry of an incremental run as an orphan', async () => {
+      commitNonAsciiFile();
+      await new IndexCommand(project.dir).run({ commit: 'HEAD' });
+      expect(hasIndexEntry(project.dir, NON_ASCII)).toBe(true);
+
+      const result = await new OrphanedFilesCheck().run({
+        projectRoot: project.dir,
+        ctxoRoot: join(project.dir, '.ctxo'),
+      });
+
+      // "none" (not "none (git ls-files unavailable)"): git answered, and no entry is an orphan.
+      expect(result).toMatchObject({ status: 'pass', message: 'none' });
     });
   });
 

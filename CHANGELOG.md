@@ -112,6 +112,11 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo with five packages. Per-packag
 - A dependent inside the target's own file no longer picks up an unrelated co-change entry when
   tiering blast radius (#157).
 - Docs, hints and the declined-hooks advice claimed `ctxo index --check` builds snapshot history (#157).
+- A full `ctxo index` dropped source files with non-ASCII names (git prints them quoted), so a
+  full run and a `--commit` run disagreed, `ctxo doctor` listed their entries as orphans and
+  `ctxo doctor --fix` deleted them. `ctxo status` and language detection read the same names (#157).
+- Drift events, boundary violations and god nodes are sorted by code point, not by the machine's
+  locale, so `communities.json` and the artifacts next to it are the same on every machine (#157).
 
 ## [0.8.0-alpha.0] - 2026-04-13
 

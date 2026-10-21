@@ -278,10 +278,12 @@ function listGitFiles(projectRoot: string): Set<string> {
   try {
     const out = execFileSync(
       'git',
-      ['ls-files', '--cached', '--others', '--exclude-standard'],
+      // -z: NUL-separated, unquoted names. Quoted ones would never match an index entry, and the
+      // prune would delete the entries of every file with a non-ASCII name.
+      ['ls-files', '-z', '--cached', '--others', '--exclude-standard'],
       { cwd: projectRoot, encoding: 'utf-8', maxBuffer: 64 * 1024 * 1024 },
     );
-    return new Set(out.split('\n').filter(Boolean));
+    return new Set(out.split('\0').filter(Boolean));
   } catch {
     return new Set();
   }

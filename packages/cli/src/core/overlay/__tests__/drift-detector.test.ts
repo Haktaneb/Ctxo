@@ -122,6 +122,33 @@ describe('DriftDetector', () => {
     ]);
   });
 
+  it('sorts drift events by code point, never by locale', () => {
+    // Same shape as the test above. "Index" and "ideal" differ only in case: a code point sort puts
+    // the upper-case I first, a locale-aware sort ("ideal" before "index") puts it last.
+    const detector = new DriftDetector({ jaccardThreshold: 0.5 });
+    const prev = snapshot([
+      entry('src/ideal.ts::y::function', 0, 'alpha'),
+      entry('src/Index.ts::x::function', 0, 'alpha'),
+      entry('k1.ts::K1::function', 1, 'beta'),
+      entry('k2.ts::K2::function', 1, 'beta'),
+      entry('k3.ts::K3::function', 1, 'beta'),
+      entry('k4.ts::K4::function', 1, 'beta'),
+    ]);
+    const current = snapshot([
+      entry('src/ideal.ts::y::function', 1, 'beta'),
+      entry('src/Index.ts::x::function', 1, 'beta'),
+      entry('k1.ts::K1::function', 1, 'beta'),
+      entry('k2.ts::K2::function', 1, 'beta'),
+      entry('k3.ts::K3::function', 1, 'beta'),
+      entry('k4.ts::K4::function', 1, 'beta'),
+    ]);
+    const result = detector.detect(current, [prev]);
+    expect(result.events.map((e) => e.symbolId)).toEqual([
+      'src/Index.ts::x::function',
+      'src/ideal.ts::y::function',
+    ]);
+  });
+
   it('flags confidence as medium with 3-6 snapshots', () => {
     const history = Array.from({ length: 3 }, () => snapshot([entry('a.ts::A::function', 0, 'core')]));
     const current = snapshot([entry('a.ts::A::function', 0, 'core')]);

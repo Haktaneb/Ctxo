@@ -1,3 +1,4 @@
+import { compareCodepoint } from '../compare-codepoint.js';
 import type { CommunityEntry, CommunitySnapshot, DriftEvent } from '../types.js';
 import { distinctCommitCount, priorCommitSnapshots } from './snapshot-history.js';
 
@@ -148,7 +149,7 @@ export class DriftDetector {
     const events = (this.suppressTransient
       ? rawEvents.filter((e) => e.stability !== 'transient')
       : rawEvents
-    ).sort((a, b) => a.symbolId.localeCompare(b.symbolId));
+    ).sort((a, b) => compareCodepoint(a.symbolId, b.symbolId));
 
     return {
       events,

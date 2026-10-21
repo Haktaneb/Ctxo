@@ -180,6 +180,34 @@ describe('BoundaryViolationDetector', () => {
     expect(fromIds).toEqual([...fromIds].sort());
   });
 
+  it('sorts violations by code point, never by locale', () => {
+    // "Index" and "ideal" differ only in case: a code point sort puts the upper-case I first, a
+    // locale-aware sort ("ideal" before "index") puts it last. Same tie-break on the target side.
+    const graph = new SymbolGraph();
+    const ids = [
+      'src/ideal.ts::y::function',
+      'src/Index.ts::x::function',
+      'src/Zeta.ts::t::function',
+      'src/zeta.ts::t::function',
+    ];
+    for (const id of ids) graph.addNode(makeNode(id));
+    graph.addEdge({ from: 'src/ideal.ts::y::function', to: 'src/Zeta.ts::t::function', kind: 'calls' });
+    graph.addEdge({ from: 'src/Index.ts::x::function', to: 'src/Zeta.ts::t::function', kind: 'calls' });
+    graph.addEdge({ from: 'src/Index.ts::x::function', to: 'src/zeta.ts::t::function', kind: 'calls' });
+    const current = snapshot([
+      entry('src/ideal.ts::y::function', 0, 'A'),
+      entry('src/Index.ts::x::function', 0, 'A'),
+      entry('src/Zeta.ts::t::function', 1, 'B'),
+      entry('src/zeta.ts::t::function', 1, 'B'),
+    ]);
+    const result = detector.detect(graph, current, []);
+    expect(result.violations.map((v) => [v.from.symbolId, v.to.symbolId])).toEqual([
+      ['src/Index.ts::x::function', 'src/Zeta.ts::t::function'],
+      ['src/Index.ts::x::function', 'src/zeta.ts::t::function'],
+      ['src/ideal.ts::y::function', 'src/Zeta.ts::t::function'],
+    ]);
+  });
+
   it('scales confidence with snapshot depth', () => {
     const graph = new SymbolGraph();
     graph.addNode(makeNode('a.ts::A::function'));
