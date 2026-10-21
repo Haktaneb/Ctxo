@@ -135,25 +135,36 @@ function commonDirectory(files: readonly string[]): string[] {
   return common;
 }
 
-/**
- * The longest common directory of the members or, when that is the repo root or the common root of all
- * nodes, the directory of the member with the highest file-level PageRank (ties: first member). The repo
- * root is `.`. Separators are written as `/`; the segments keep their spelling (spaces, non-ASCII, case).
- */
-function labelOf(
-  files: readonly string[],
-  pageRank: ReadonlyMap<string, number>,
-  nodeRoot: readonly string[],
-): string {
-  let common = commonDirectory(files);
-  if (common.length === 0 || (common.length === nodeRoot.length && common.every((s, i) => s === nodeRoot[i]))) {
-    let top = files[0]!;
-    for (const file of files) {
-      if ((pageRank.get(file) ?? 0) > (pageRank.get(top) ?? 0)) top = file;
-    }
-    common = directorySegments(top);
+/** Directory segments joined with `/`, the repo root as `.`. The segments keep their spelling (spaces, non-ASCII, case). */
+function directoryLabel(segments: readonly string[]): string {
+  return segments.length === 0 ? '.' : segments.join('/');
+}
+
+/** The directory of the member with the highest file-level PageRank (ties: first member). */
+function topMemberDirectory(files: readonly string[], pageRank: ReadonlyMap<string, number>): string {
+  let top = files[0]!;
+  for (const file of files) {
+    if ((pageRank.get(file) ?? 0) > (pageRank.get(top) ?? 0)) top = file;
   }
-  return common.length === 0 ? '.' : common.join('/');
+  return directoryLabel(directorySegments(top));
+}
+
+/**
+ * The labels of the groups (K34): the longest common directory of the members or, when that is the repo
+ * root, the directory of the top-PageRank member. Then every label that two or more groups share is
+ * replaced, for each of them, by the directory of its own top-PageRank member. One pass: labels may still
+ * repeat. Independent of the group order.
+ */
+function labelsOf(groups: readonly (readonly string[])[], pageRank: ReadonlyMap<string, number>): string[] {
+  const base = groups.map((files) => {
+    const common = commonDirectory(files);
+    return common.length > 0 ? directoryLabel(common) : topMemberDirectory(files, pageRank);
+  });
+  const uses = new Map<string, number>();
+  for (const label of base) uses.set(label, (uses.get(label) ?? 0) + 1);
+  return base.map((label, index) =>
+    (uses.get(label) ?? 0) > 1 ? topMemberDirectory(groups[index]!, pageRank) : label,
+  );
 }
 
 function fingerprintOf(files: readonly string[]): string {
@@ -227,10 +238,10 @@ export function buildContextsView(input: ContextsViewInput): ContextsView {
     }
   }
 
-  // IDs and labels: size desc, then label, then first member; IDs start at 1.
-  const nodeRoot = commonDirectory(graph.files);
+  // Labels first, then IDs: size desc, then final label, then first member; IDs start at 1.
+  const labels = labelsOf(folded.groups, input.filePageRank);
   const ordered = folded.groups
-    .map((files) => ({ files, label: labelOf(files, input.filePageRank, nodeRoot) }))
+    .map((files, index) => ({ files, label: labels[index]! }))
     .sort(
       (x, y) =>
         y.files.length - x.files.length || compareCodepoint(x.label, y.label) || compareCodepoint(x.files[0]!, y.files[0]!),

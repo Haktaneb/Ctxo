@@ -113,8 +113,8 @@ describe('buildContextsView', () => {
     expect(undamped.candidates).toHaveLength(1);
     expect(undamped.candidates[0]!.files).toEqual([...BILLING, DB, ...SHIPPING]);
     expect(undamped.candidates[0]!.fileCount).toBe(11);
-    // Common directory `src` is the root of every node, so the first member (no PageRank) names it.
-    expect(undamped.candidates[0]!.label).toBe('src/billing');
+    // The longest common directory, and no other candidate shares it.
+    expect(undamped.candidates[0]!.label).toBe('src');
   });
 
   it('configured hubs lose every edge and are reported without a candidate', () => {
@@ -200,41 +200,98 @@ describe('buildContextsView', () => {
     expect(labelOf(xRanksHigher, 'lib/x.ts')).toBe('lib');
   });
 
-  it('labels fall back to the top-PageRank member\'s directory when the common directory is the root of every node', () => {
-    const billing = 'src/App/Billing/x.ts';
-    const shipping = 'src/App/Shipping/y.ts';
-    const loansA = 'src/App/Loans/a.ts';
-    const loansB = 'src/App/Loans/b.ts';
-    const view = buildContextsView(
-      input(
-        [
-          plain(billing, [[fnOf(billing), fnOf(shipping), 'calls']]),
-          plain(shipping),
-          plain(loansA, [[fnOf(loansA), fnOf(loansB), 'calls']]),
-          plain(loansB),
-        ],
-        {
-          settings: withSettings({ minCandidateFiles: 2 }),
-          filePageRank: new Map([[billing, 0.9], [shipping, 0.1], [loansA, 0.5], [loansB, 0.4]]),
-        },
-      ),
-    );
+  describe('duplicate labels (K34)', () => {
+    const PAIRS = withSettings({ minCandidateFiles: 2 });
+    const BILLING_APP = ['src/App/Billing/Invoice.ts', 'src/App/Common/Money.ts'];
+    const SHIPPING_APP = ['src/App/Common/Address.ts', 'src/App/Shipping/Parcel.ts'];
+    const LIB = ['lib/p.ts', 'lib/q.ts'];
+    const APP_RANK: Array<[string, number]> = [
+      ['src/App/Billing/Invoice.ts', 0.9],
+      ['src/App/Common/Money.ts', 0.1],
+      ['src/App/Common/Address.ts', 0.2],
+      ['src/App/Shipping/Parcel.ts', 0.8],
+    ];
 
-    expect(view.candidates.map((candidate) => [candidate.label, candidate.files])).toEqual([
-      ['src/App/Billing', [billing, shipping]],
-      ['src/App/Loans', [loansA, loansB]],
-    ]);
-  });
+    /** Each list becomes one candidate: its files call each other and nothing else. */
+    function pairs(...groups: string[][]): FileIndex[] {
+      return groups.flatMap((files) => clique(files));
+    }
 
-  it('a view whose nodes share no directory keeps the repo-root rule', () => {
-    const view = buildContextsView(
-      input([plain('a.ts', [[fnOf('a.ts'), fnOf('b.ts'), 'calls']]), plain('b.ts'), ...clique(['src/x/p.ts', 'src/x/q.ts'])], {
-        settings: withSettings({ minCandidateFiles: 2 }),
-      }),
-    );
+    it('candidates whose common directory is the same get the directory of their own top-PageRank member', () => {
+      const view = buildContextsView(
+        input(pairs(BILLING_APP, SHIPPING_APP, LIB), { settings: PAIRS, filePageRank: new Map(APP_RANK) }),
+      );
 
-    expect(byLabel(view.candidates, '.').files).toEqual(['a.ts', 'b.ts']);
-    expect(byLabel(view.candidates, 'src/x').files).toEqual(['src/x/p.ts', 'src/x/q.ts']);
+      // Both src/App candidates share the common directory src/App; lib is unique and keeps it.
+      expect(view.candidates.map((candidate) => [candidate.id, candidate.label, candidate.files])).toEqual([
+        [1, 'lib', LIB],
+        [2, 'src/App/Billing', BILLING_APP],
+        [3, 'src/App/Shipping', SHIPPING_APP],
+      ]);
+    });
+
+    it('a unique label is kept even when its top-PageRank member sits deeper', () => {
+      const loans = ['src/App/Loans/Loan.ts', 'src/App/Loans/Rules/Limit.ts'];
+      const view = buildContextsView(
+        input(pairs(loans), { settings: PAIRS, filePageRank: new Map([['src/App/Loans/Rules/Limit.ts', 0.9]]) }),
+      );
+
+      expect(view.candidates.map((candidate) => candidate.label)).toEqual(['src/App/Loans']);
+    });
+
+    it('ids follow the refined labels: size desc, then final label, then first member', () => {
+      // By first member alpha would come first; by refined label (src/App/Beta < src/App/Zeta) beta does.
+      const alpha = ['src/App/Alpha/a.ts', 'src/App/Zeta/z.ts'];
+      const beta = ['src/App/Beta/y.ts', 'src/App/Common/b.ts'];
+      const view = buildContextsView(
+        input(pairs(alpha, beta, LIB), {
+          settings: PAIRS,
+          filePageRank: new Map([['src/App/Zeta/z.ts', 0.9], ['src/App/Beta/y.ts', 0.9]]),
+        }),
+      );
+
+      expect(view.candidates.map((candidate) => [candidate.id, candidate.label, candidate.files])).toEqual([
+        [1, 'lib', LIB],
+        [2, 'src/App/Beta', beta],
+        [3, 'src/App/Zeta', alpha],
+      ]);
+    });
+
+    it('the repo-root rule: the top-PageRank member\'s directory, else "."; labels may still repeat', () => {
+      const mixed = ['a.ts', 'lib/x.ts'];
+      const rootOnly = ['b.ts', 'c.ts'];
+      const rootTop = ['d.ts', 'src/e.ts'];
+      const view = buildContextsView(
+        input(pairs(mixed, rootOnly, rootTop), {
+          settings: PAIRS,
+          filePageRank: new Map([['lib/x.ts', 0.9], ['a.ts', 0.1], ['d.ts', 0.9], ['src/e.ts', 0.1]]),
+        }),
+      );
+
+      // rootOnly and rootTop both start as "." and their top members sit at the root too, so both stay ".".
+      expect(view.candidates.map((candidate) => [candidate.id, candidate.label, candidate.files])).toEqual([
+        [1, '.', rootOnly],
+        [2, '.', rootTop],
+        [3, 'lib', mixed],
+      ]);
+    });
+
+    it('the same input in reversed order gives the same labels and ids', () => {
+      const forward = buildContextsView(
+        input(pairs(BILLING_APP, SHIPPING_APP, LIB), { settings: PAIRS, filePageRank: new Map(APP_RANK) }),
+      );
+      const reversed = buildContextsView(
+        input(
+          pairs(BILLING_APP, SHIPPING_APP, LIB)
+            .reverse()
+            .map((index) => ({ ...index, symbols: [...index.symbols].reverse(), edges: [...index.edges].reverse() })),
+          { settings: PAIRS, filePageRank: new Map([...APP_RANK].reverse()) },
+        ),
+      );
+
+      expect(forward.candidates.map((candidate) => candidate.label)).toEqual(['lib', 'src/App/Billing', 'src/App/Shipping']);
+      expect(JSON.stringify(reversed)).toBe(JSON.stringify(forward));
+    });
   });
 
   it('labels treat backslashes as directory separators', () => {
