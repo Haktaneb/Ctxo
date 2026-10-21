@@ -88,4 +88,21 @@ describe('GateCommand --preview with co-change', () => {
 
     expect(printed.symbols.some((s) => s.symbolId === 'src/a.ts::A::function')).toBe(true);
   });
+
+  it('ignores an invalid co-changes.json as a whole: nothing is upgraded from the part that looks usable', () => {
+    const warn = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // The a.ts/d.ts entry alone would make D likely and A fire; the second entry breaks the schema.
+    const invalid = JSON.stringify({
+      version: 1, timestamp: 1,
+      entries: [
+        { file1: 'src/a.ts', file2: 'src/d.ts', sharedCommits: 4, frequency: 0.8 },
+        { file1: 'src/a.ts', file2: 'src/x.ts', sharedCommits: 2, frequency: 1.5 },
+      ],
+    });
+    const printed = preview(withCoChanges(fixture(BORDERLINE), invalid));
+
+    expect(printed.symbols.some((s) => s.symbolId === 'src/a.ts::A::function')).toBe(false);
+    expect(printed.wouldFireCount).toBe(0);
+    expect(warn).toHaveBeenCalled(); // the broken file is reported, not silently skipped
+  });
 });

@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { loadGraph } from './graph-loader.js';
 import { BlastRadiusCalculator } from '../core/blast-radius/blast-radius-calculator.js';
-import { findCoChangedFiles } from '../core/blast-radius/co-changed-files.js';
+import { findCoChangedFilesForBlastRadius } from '../core/blast-radius/co-changed-files.js';
 import { CoChangeReader } from '../adapters/storage/co-change-reader.js';
 
 export interface BlastRadiusOptions {
@@ -25,10 +25,7 @@ export class BlastRadiusCommand {
     const coChangeMap = new CoChangeReader(this.ctxoRoot).readCoChangeMap();
     const result = new BlastRadiusCalculator().calculate(graph, options.symbolId, coChangeMap);
 
-    const rootFile = options.symbolId.split('::')[0]!;
-    const impactedFiles = new Set(result.impactedSymbols.map((s) => s.symbolId.split('::')[0]!));
-    impactedFiles.add(rootFile);
-    const coChangedFiles = coChangeMap ? findCoChangedFiles(coChangeMap, rootFile, impactedFiles) : [];
+    const coChangedFiles = findCoChangedFilesForBlastRadius(coChangeMap, options.symbolId, result.impactedSymbols);
 
     const payload = {
       found: true,

@@ -240,7 +240,7 @@ function registerTools(
   server.registerTool(
     'get_context_for_task',
     {
-      description: 'Get task-optimized context for a symbol based on what you are about to do. Specify taskType: "fix" (bug investigation — includes history + anti-patterns), "extend" (add feature — includes deps + blast radius), "refactor" (restructure — includes importers + complexity), or "understand" (learn — includes full slice + architecture). This is the BEST starting point when you know both the symbol and your intent.',
+      description: 'Get task-optimized context for a symbol based on what you are about to do. Specify taskType: "fix" (bug investigation — includes history + anti-patterns), "extend" (add feature — includes deps + blast radius), "refactor" (restructure — includes importers + complexity), or "understand" (learn — includes full slice + architecture). Context entries that depend on the symbol (its blast radius) carry an optional `confidence` tier: confirmed, likely or potential, where co-change history can raise potential to likely. This is the BEST starting point when you know both the symbol and your intent.',
       inputSchema: {
         symbolId: z.string().min(1).describe('The symbol ID (format: file::name::kind)'),
         taskType: z.enum(['fix', 'extend', 'refactor', 'understand']).describe('Task type determines which context is most relevant'),

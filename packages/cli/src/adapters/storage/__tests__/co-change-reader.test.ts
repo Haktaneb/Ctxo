@@ -1,11 +1,50 @@
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CoChangeReader } from '../co-change-reader.js';
 import type { CoChangeEntry, CoChangeMatrix } from '../../../core/types.js';
 
+/**
+ * Faults for the reader's file system calls on co-changes.json, for what a real file system cannot do on
+ * demand: a stat error that is not "missing", and reads that fail for a moment and then work. Everything
+ * else passes straight through to the real `node:fs`. `matrixReads` counts the reads of the matrix.
+ */
+const faults = vi.hoisted(() => ({
+  statError: undefined as Error | undefined,
+  failingReads: 0,
+  matrixReads: 0,
+}));
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  const isMatrix = (path: unknown) => String(path).endsWith('co-changes.json');
+  return {
+    ...actual,
+    statSync: ((path: unknown, ...rest: unknown[]) => {
+      if (faults.statError && isMatrix(path)) throw faults.statError;
+      return (actual.statSync as (...args: unknown[]) => unknown)(path, ...rest);
+    }) as typeof actual.statSync,
+    readFileSync: ((path: unknown, ...rest: unknown[]) => {
+      if (isMatrix(path)) {
+        faults.matrixReads++;
+        if (faults.failingReads > 0) {
+          faults.failingReads--;
+          throw Object.assign(new Error('EIO: i/o error, read'), { code: 'EIO' });
+        }
+      }
+      return (actual.readFileSync as (...args: unknown[]) => unknown)(path, ...rest);
+    }) as typeof actual.readFileSync,
+  };
+});
+
 const roots: string[] = [];
+
+beforeEach(() => {
+  faults.statError = undefined;
+  faults.failingReads = 0;
+  faults.matrixReads = 0;
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -90,6 +129,7 @@ it('CoChangeReader keeps serving the parsed map while mtime and size are unchang
   writeMatrixFile(root, matrix([entry('src/a.ts', 'src/b.ts', 0.7, 4)]), 1);
   expect(reader.readCoChangeMap()).toBe(first);
   expect(first?.get('src/a.ts')?.[0]?.frequency).toBe(0.8);
+  expect(faults.matrixReads).toBe(1);
 });
 
 it('CoChangeReader forgets the cached map when the file is deleted', () => {
@@ -132,6 +172,8 @@ it('CoChangeReader warns once per invalid file version and says nothing about a 
   expect(warn).toHaveBeenCalledTimes(1);
   expect(String(warn.mock.calls[0]?.[0])).toContain('co-changes.json');
   expect(String(warn.mock.calls[0]?.[0])).toContain('is not valid JSON');
+  // Unusable content is a fact about that version of the file, so it is read once, not on every call.
+  expect(faults.matrixReads).toBe(1);
 
   // A new version of the file that is invalid again is news, so it warns again.
   writeMatrixFile(root, { version: 2, timestamp: 1, entries: [] }, 2);
@@ -139,6 +181,7 @@ it('CoChangeReader warns once per invalid file version and says nothing about a 
   expect(reader.readCoChangeMap()).toBeUndefined();
   expect(warn).toHaveBeenCalledTimes(2);
   expect(String(warn.mock.calls[1]?.[0])).toContain('is not a valid co-change matrix (version:');
+  expect(faults.matrixReads).toBe(2);
 });
 
 it('CoChangeReader returns undefined and warns when the file cannot be read', () => {
@@ -152,6 +195,84 @@ it('CoChangeReader returns undefined and warns when the file cannot be read', ()
   expect(reader.readCoChangeMap()).toBeUndefined();
   expect(warn).toHaveBeenCalledTimes(1);
   expect(String(warn.mock.calls[0]?.[0])).toContain('cannot be read');
+  // A failed read is not an answer about the content: every call tries again.
+  expect(faults.matrixReads).toBe(2);
+});
+
+it('CoChangeReader does not cache a failed read: the next call reads again and the warning is not repeated', () => {
+  const warn = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const root = tempRoot();
+  writeMatrixFile(root, matrix([entry('src/a.ts', 'src/b.ts', 0.8, 4)]), 1);
+  const reader = new CoChangeReader(root);
+
+  // The next two reads fail with an I/O error although the file itself is fine and unchanged.
+  faults.failingReads = 2;
+  expect(reader.readCoChangeMap()).toBeUndefined();
+  expect(reader.readCoChangeMap()).toBeUndefined();
+  expect(faults.matrixReads).toBe(2);
+  expect(warn).toHaveBeenCalledTimes(1);
+  expect(String(warn.mock.calls[0]?.[0])).toContain('EIO');
+
+  // A newer version of the file that cannot be read either is a different problem: reported again.
+  writeMatrixFile(root, matrix([entry('src/a.ts', 'src/b.ts', 0.8, 4), entry('src/a.ts', 'src/c.ts', 0.6, 3)]), 2);
+  faults.failingReads = 1;
+  expect(reader.readCoChangeMap()).toBeUndefined();
+  expect(warn).toHaveBeenCalledTimes(2);
+
+  // Then the read works: the data is served, and cached from here on.
+  expect(reader.readCoChangeMap()?.get('src/a.ts')).toHaveLength(2);
+  expect(reader.readCoChangeMap()?.get('src/a.ts')).toHaveLength(2);
+  expect(faults.matrixReads).toBe(4);
+  expect(warn).toHaveBeenCalledTimes(2);
+});
+
+it('CoChangeReader is silent only for a missing file: any other stat error warns once, is never cached, and is retried', () => {
+  const warn = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const root = tempRoot();
+  writeMatrixFile(root, matrix([entry('src/a.ts', 'src/b.ts', 0.8, 4)]), 1);
+  const reader = new CoChangeReader(root);
+  expect(reader.readCoChangeMap()?.size).toBe(2);
+
+  // The file is there, but it cannot be inspected right now.
+  faults.statError = Object.assign(new Error('EACCES: permission denied, stat'), { code: 'EACCES' });
+  expect(reader.readCoChangeMap()).toBeUndefined(); // not the map cached before: it may be out of date
+  expect(reader.readCoChangeMap()).toBeUndefined();
+  expect(warn).toHaveBeenCalledTimes(1);
+  expect(String(warn.mock.calls[0]?.[0])).toContain('EACCES');
+
+  // Once the error is gone the next call works again (the file was not seen meanwhile, so it is read again)
+  // and the earlier warning is not repeated.
+  const eacces = faults.statError;
+  faults.statError = undefined;
+  expect(reader.readCoChangeMap()?.size).toBe(2);
+  expect(faults.matrixReads).toBe(2);
+  expect(warn).toHaveBeenCalledTimes(1);
+
+  // The same problem coming back after a healthy period is a new episode and is reported again.
+  faults.statError = eacces;
+  expect(reader.readCoChangeMap()).toBeUndefined();
+  expect(warn).toHaveBeenCalledTimes(2);
+
+  // ENOENT is the one error that means "no file": silent.
+  faults.statError = Object.assign(new Error('ENOENT: no such file or directory, stat'), { code: 'ENOENT' });
+  expect(reader.readCoChangeMap()).toBeUndefined();
+  expect(warn).toHaveBeenCalledTimes(2);
+});
+
+it('CoChangeReader freezes the lists and entries it hands out, so the shared map cannot be edited in place', () => {
+  const root = tempRoot();
+  writeMatrixFile(root, matrix([entry('src/a.ts', 'src/b.ts', 0.3, 2), entry('src/a.ts', 'src/c.ts', 0.9, 5)]), 1);
+  const map = new CoChangeReader(root).readCoChangeMap()!;
+
+  for (const list of map.values()) {
+    expect(Object.isFrozen(list)).toBe(true);
+    for (const item of list) expect(Object.isFrozen(item)).toBe(true);
+  }
+  const list = map.get('src/a.ts')!;
+  expect(() => list.sort((x, y) => y.frequency - x.frequency)).toThrow(TypeError);
+  expect(() => list.push(entry('src/a.ts', 'src/d.ts', 0.5, 2))).toThrow(TypeError);
+  expect(() => { (list[0] as { frequency: number }).frequency = 0.1; }).toThrow(TypeError);
+  expect(list.map((e) => e.file2)).toEqual(['src/b.ts', 'src/c.ts']);
 });
 
 it.each<[string, unknown]>([

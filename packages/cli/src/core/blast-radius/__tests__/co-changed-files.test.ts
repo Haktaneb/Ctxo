@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { findCoChangedFiles } from '../co-changed-files.js';
+import { findCoChangedFiles, findCoChangedFilesForBlastRadius } from '../co-changed-files.js';
 import { loadCoChangeMap } from '../../co-change/co-change-analyzer.js';
 import type { CoChangeEntry } from '../../types.js';
 
@@ -92,4 +92,43 @@ it('findCoChangedFiles leaves its inputs as they were', () => {
   // A cached map is shared between callers: sorting its lists in place would throw on these frozen ones.
   expect(findCoChangedFiles(map, 'src/a.ts', impacted).map((f) => f.file)).toEqual(['src/c.ts', 'src/b.ts']);
   expect(entries.map((e) => e.file2)).toEqual(['src/b.ts', 'src/c.ts']);
+});
+
+it('findCoChangedFilesForBlastRadius leaves out the root file and the file of every impacted symbol, in any tier', () => {
+  const map = mapOf([
+    entry('src/a.ts', 'src/b.ts', 0.9, 9), // b.ts holds a confirmed dependent
+    entry('src/a.ts', 'src/c.ts', 0.8, 8), // c.ts a likely one
+    entry('src/a.ts', 'src/d.ts', 0.7, 7), // d.ts a potential one
+    entry('src/a.ts', 'src/e.ts', 0.6, 6), // nothing in e.ts depends on the root
+  ]);
+  const impacted = [
+    { symbolId: 'src/b.ts::B::function' },
+    { symbolId: 'src/b.ts::B2::function' }, // a second symbol in a file that is already counted
+    { symbolId: 'src/c.ts::C::class' },
+    { symbolId: 'src/d.ts::D.run::method' },
+  ];
+
+  expect(findCoChangedFilesForBlastRadius(map, 'src/a.ts::A::function', impacted)).toEqual([
+    { file: 'src/e.ts', frequency: 0.6, sharedCommits: 6 },
+  ]);
+});
+
+it('findCoChangedFilesForBlastRadius takes the root file from the symbol id and ignores dependents inside that file', () => {
+  const map = mapOf([entry('src/a.ts', 'src/e.ts', 0.6, 6)]);
+
+  expect(
+    findCoChangedFilesForBlastRadius(map, 'src/a.ts::A::function', [{ symbolId: 'src/a.ts::Helper::function' }]),
+  ).toEqual([{ file: 'src/e.ts', frequency: 0.6, sharedCommits: 6 }]);
+  // The same entry seen from the other file: e.ts is the root now, and a.ts the co-changing file.
+  expect(findCoChangedFilesForBlastRadius(map, 'src/e.ts::E::function', [])).toEqual([
+    { file: 'src/a.ts', frequency: 0.6, sharedCommits: 6 },
+  ]);
+});
+
+it('findCoChangedFilesForBlastRadius returns nothing without a matrix or without partners', () => {
+  const impacted = [{ symbolId: 'src/b.ts::B::function' }];
+
+  expect(findCoChangedFilesForBlastRadius(undefined, 'src/a.ts::A::function', impacted)).toEqual([]);
+  expect(findCoChangedFilesForBlastRadius(new Map(), 'src/a.ts::A::function', impacted)).toEqual([]);
+  expect(findCoChangedFilesForBlastRadius(mapOf([entry('src/x.ts', 'src/y.ts', 0.9, 9)]), 'src/a.ts::A::function', [])).toEqual([]);
 });

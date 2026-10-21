@@ -149,6 +149,26 @@ describe('handleGetPrImpact', () => {
     expect(file.coChangedWith).toContain('src/b.ts');
   });
 
+  it('lists coChangedWith strongest first from the real reader, whose lists are frozen', async () => {
+    new JsonIndexWriter(tempDir).writeCoChanges({
+      version: 1,
+      timestamp: 1000,
+      entries: [
+        { file1: 'src/a.ts', file2: 'src/b.ts', sharedCommits: 2, frequency: 0.3 },
+        { file1: 'src/a.ts', file2: 'src/c.ts', sharedCommits: 6, frequency: 0.9 },
+      ],
+    });
+    const git = createMockGit(['src/a.ts']);
+    const handler = handleGetPrImpact(storage, git, new MaskingPipeline(), undefined, tempDir, undefined, new CoChangeReader(tempDir));
+    const result = await handler({ since: 'HEAD~1' });
+    const payload = JSON.parse(result.content[0]!.text);
+
+    // Sorting the list in place would throw on the frozen list and turn this into an error payload.
+    expect(payload.error).toBeUndefined();
+    const file = payload.files.find((f: { file: string }) => f.file === 'src/a.ts');
+    expect(file.coChangedWith).toEqual(['src/c.ts', 'src/b.ts']);
+  });
+
   it('reads co-change through the injected port, not from co-changes.json itself', async () => {
     // The file on disk pairs a.ts with b.ts; the port says a.ts goes with c.ts.
     const port: ICoChangePort = {

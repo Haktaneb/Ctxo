@@ -55,3 +55,32 @@ function compareStrongestFirst(a: CoChangedFile, b: CoChangedFile): number {
     compareCodepoint(a.file, b.file)
   );
 }
+
+/**
+ * `findCoChangedFiles` for the root symbol of a blast radius: the one place that says which files already
+ * have a graph path to the root. They are the root's own file and the file of every symbol in
+ * `impactedSymbols`, whatever its confidence tier.
+ *
+ * Pass the whole, unfiltered list of impacted symbols. A `confidence` or `intent` filter decides which
+ * symbols a caller shows; it does not change that their files have a path to the root, and a file must
+ * never turn up as "co-changed without a graph path" because a filter hid its dependent.
+ *
+ * Returns an empty list without a matrix (`undefined`), so a caller needs no check of its own.
+ */
+export function findCoChangedFilesForBlastRadius(
+  coChangeMap: ReadonlyMap<string, readonly CoChangeEntry[]> | undefined,
+  rootSymbolId: string,
+  impactedSymbols: Iterable<{ readonly symbolId: string }>,
+): CoChangedFile[] {
+  if (!coChangeMap) return [];
+
+  const rootFile = fileOf(rootSymbolId);
+  const impactedFiles = new Set<string>([rootFile]);
+  for (const { symbolId } of impactedSymbols) impactedFiles.add(fileOf(symbolId));
+  return findCoChangedFiles(coChangeMap, rootFile, impactedFiles);
+}
+
+/** The file part of a symbol id (`<file>::<name>::<kind>`). */
+function fileOf(symbolId: string): string {
+  return symbolId.split('::')[0]!;
+}
