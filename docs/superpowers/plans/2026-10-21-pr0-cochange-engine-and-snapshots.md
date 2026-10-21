@@ -18,7 +18,7 @@
 - Work in a git worktree branched from `master` HEAD (created with superpowers:using-git-worktrees). Never touch the staged release files on the main checkout: `.changeset/config.json`, `.changeset/minor-all-packages-2026-10-20.md` and the `packages/lang-*/package.json` peer-range edits.
 - Hexagonal rules: `core/` never imports from `adapters/` or `ports/`; `ports/` never imports from `adapters/`; no barrel exports; every adapter implements a port.
 - No `console.log` (eslint bans it). CLI human output goes to `console.error`, JSON to `process.stdout.write`, library logs through `createLogger('ctxo:<ns>')`. Adapters warn and continue.
-- Tests are co-located in `__tests__/` next to the source; vitest; git-based tests create temp repos with `mkdtempSync(join(tmpdir(), 'ctxo-...'))` and commit with `-c commit.gpgsign=false -c user.name=Test -c user.email=test@test.com`.
+- Tests are co-located in `__tests__/` next to the source; vitest; git-based tests create temp repos with `mkdtempSync(join(tmpdir(), 'ctxo-...'))`, and every git operation that creates commits there (commit, merge, rebase, cherry-pick, amend, revert, tag) passes `-c commit.gpgsign=false -c user.name=Test -c user.email=test@test.com`, plus `-c tag.gpgsign=false` for tags.
 - Determinism:
   - Sort with codepoint comparison (`a < b ? -1 : a > b ? 1 : 0`), never `localeCompare`.
   - Analysis results never depend on the wall clock; the co-change window is anchored to HEAD's committer date.
@@ -26,7 +26,7 @@
 - Co-change defaults (spec 6.2, 6.6, K5): `maxCommits: 2000` (or `'all'`), optional `since` (`<n>d|w|m|y`, anchored to HEAD's committer date), `maxFilesPerCommit: 30` (counted after filtering), `minShared: 2`, `include: []`, `exclude: []`, `MIN_FREQUENCY = 0.1`, `frequency = round(shared / min(countA, countB), 3)`.
 - Confidence thresholds (spec 6.4): fewer than 3 distinct commits low, 3 to 6 medium, 7 or more high; boundary confidence needs at least 2 distinct commits.
 - Blast-radius co-change rule (spec 6.5): a `potential` dependent becomes `likely` when its file co-changes with the root symbol's file at `frequency > 0.5`. `coChangedFiles`: top 10 files with `frequency >= 0.5` and no graph path; informational only.
-- Before editing an existing symbol, call `get_blast_radius` and `get_why_context` on it (project rule in CLAUDE.md; the safe-edit guard enforces high-impact ones).
+- Before editing an existing symbol, call `get_blast_radius` and `get_why_context` on it (project rule in CLAUDE.md; the safe-edit guard enforces high-impact ones). The session's ctxo MCP server indexes the main checkout (older code), so `found: false` from either tool for a symbol added on this branch is expected: call the tools as the project rule asks, then proceed.
 - Repo text in English, no em dashes, no `Co-Authored-By` lines. No push, PR or publish without the owner's approval.
 - Privacy: nothing from the private fixture goes into the repo, tests, docs, commits or PR text; only aggregate numbers.
 
@@ -293,11 +293,14 @@
 - Modify: `packages/cli/src/core/overlay/boundary-violation-detector.ts` (lines 15-25, `confidenceFor`, `hintFor` lines 123-132)
 - Modify: `packages/cli/src/core/types.ts` (`DriftEventsArtifact`, `BoundaryViolationsArtifact`)
 - Modify: `packages/cli/src/cli/index-command.ts` (`writeArchitectureArtifacts` lines 736-753)
-- Test: `packages/cli/src/core/overlay/__tests__/drift-detector.test.ts`, `packages/cli/src/core/overlay/__tests__/boundary-violation-detector.test.ts`
+- Modify: `packages/cli/src/adapters/mcp/get-why-context.ts` (the `driftSignals` section)
+- Modify: `packages/cli/src/adapters/mcp/get-pr-impact.ts` (the `boundaryViolations` section)
+- Test: `packages/cli/src/core/overlay/__tests__/drift-detector.test.ts`, `packages/cli/src/core/overlay/__tests__/boundary-violation-detector.test.ts`, `packages/cli/src/adapters/mcp/__tests__/get-why-context.test.ts`, `packages/cli/src/adapters/mcp/__tests__/get-pr-impact.test.ts`
 
 **Interfaces:**
 - Produces:
   - `DriftDetectionResult` and `BoundaryViolationDetectionResult` gain `readonly distinctCommits: number`; both artifacts gain `distinctCommits`.
+  - `get_why_context` `driftSignals` and `get_pr_impact` `boundaryViolations` copy `distinctCommits` from the detector result, next to `snapshotsAvailable` (spec 6.4: the tools expose the count the confidence is based on).
   - A pure helper `export function distinctCommitCount(history: readonly CommunitySnapshot[], currentSha?: string): number` in a new `packages/cli/src/core/overlay/snapshot-history.ts` (counts SHAs other than `currentSha`).
   - In drift, `previous` is the newest history entry whose `commitSha` differs from `current.commitSha`.
 
@@ -308,12 +311,15 @@
     - `drift skips history entries from the current commit when choosing the previous snapshot`.
     - `boundary confidence counts distinct commits`.
     - `hints no longer mention ctxo index --check`.
-- [ ] **Step 2: Run them.** `pnpm --filter @ctxo/cli exec vitest run src/core/overlay`. Expected: the new tests FAIL.
+    - `get_why_context driftSignals carries distinctCommits` (in `get-why-context.test.ts`, next to the existing `driftSignals` test): a current snapshot `abc1234` and history of three snapshots, two for `sha1` and one for `sha2`. Expect `payload.driftSignals.distinctCommits === 2` and `payload.driftSignals.snapshotsAvailable === 3`.
+    - `get_pr_impact boundaryViolations carries distinctCommits` (in `get-pr-impact.test.ts`, next to the existing `boundaryViolations` test): the same history. Expect `payload.boundaryViolations.distinctCommits === 2` and `payload.boundaryViolations.snapshotsAvailable === 3`.
+- [ ] **Step 2: Run them.** `pnpm --filter @ctxo/cli exec vitest run src/core/overlay src/adapters/mcp/__tests__/get-why-context.test.ts src/adapters/mcp/__tests__/get-pr-impact.test.ts`. Expected: the new tests FAIL.
 - [ ] **Step 3: Implement.**
   - Confidence uses `distinctCommits` with the thresholds from Global Constraints; `snapshotsAvailable` stays.
   - New hint text, both detectors: "Install the post-commit hook (`ctxo init`) or run `ctxo index` after commits to build history; `ctxo index --check` does not record snapshots."
   - Write `distinctCommits` into both artifacts.
-- [ ] **Step 4: Run the tests.** Expected: PASS. Then `pnpm --filter @ctxo/cli test:unit`. Expected: all pass (get_why_context and get_pr_impact pass the result through unchanged).
+  - Surface it in the tools: in `get-why-context.ts` add `distinctCommits: drift.distinctCommits` to the `driftSignals` object, and in `get-pr-impact.ts` add `distinctCommits: violationResult.distinctCommits` to `boundarySection` (additive field; the other keys stay). Before editing, run `get_blast_radius` and `get_why_context` on `handleGetWhyContext` and `handleGetPrImpact`.
+- [ ] **Step 4: Run the tests.** Expected: PASS. Then `pnpm --filter @ctxo/cli test:unit`. Expected: all pass (the two tools gain only the additive `distinctCommits` field).
 - [ ] **Step 5: Commit.** `git commit -m "fix(overlay): drift and boundary confidence count distinct commits"`
 
 ---
@@ -434,9 +440,14 @@
 
   Run `node <worktree>/packages/cli/dist/index.js index`. Expected: success.
 - [ ] **Step 2:** Run the oracle in the clone with its output in the session scratchpad. Map Ctxo's file pairs to the oracle's units with a scratchpad-only script. Compare `commitsUsed` (oracle 970), `massSkipped` (oracle 3) and unit-pair shared counts. Expected: equal, or every difference explained.
-- [ ] **Step 3:** Commit a one-file change in the clone with the v2 hook installed (`ctxo init --tools claude-code -y` in the clone only). Expected:
-  - `co-changes.json` entries unchanged except for pairs that involve the new commit;
-  - one new history entry;
-  - drift/boundary `distinctCommits` matches the distinct SHAs in history.
-- [ ] **Step 4:** Time the co-change pass and `ctxo index --commit HEAD`. Expected: co-change pass at most 3 s; the commit run faster than the old per-file loop.
+- [ ] **Step 3:** Measure the dev build, never the globally installed released ctxo (it predates `--commit` and the v2 hook, so it would write the old hook and run the old code).
+  - Install the v2 hook in the clone only, with the dev build: `node <worktree>/packages/cli/dist/index.js init --tools claude-code -y`.
+  - Make a `ctxo` shim: a script named `ctxo` in a scratchpad folder (for example `<scratchpad>/ctxo-shim/ctxo`, `#!/bin/sh` followed by `exec node "<worktree>/packages/cli/dist/index.js" "$@"`, plus a `ctxo.cmd` calling the same on Windows). Put that folder in front of PATH for every command below that commits or runs the hook, and check `command -v ctxo` resolves to the shim, so the hook's `ctxo index --commit HEAD` runs the dev build.
+  - Commit a one-file change in the clone, then run by hand `node <worktree>/packages/cli/dist/index.js index --commit HEAD`.
+  - Exercise the hook itself: with the shim in front of PATH, run `.git/hooks/post-commit` (or the hooks directory `git rev-parse --git-path hooks` reports).
+  - Expected:
+    - `co-changes.json` entries unchanged except for pairs that involve the new commit;
+    - one new history entry (the manual run and the hook run for the same commit leave one entry between them);
+    - drift/boundary `distinctCommits` matches the distinct SHAs in history.
+- [ ] **Step 4:** Time the co-change pass and `node <worktree>/packages/cli/dist/index.js index --commit HEAD` (the dev build again, not the global ctxo). Expected: co-change pass at most 3 s; the commit run faster than the old per-file loop.
 - [ ] **Step 5:** Write the aggregate numbers and explanations into the PR description draft (in the scratchpad). Nothing from the fixture goes into the repo.

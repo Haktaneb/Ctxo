@@ -588,9 +588,9 @@ domain:
 
 ### 10.6 Generated loader rules
 
-`ctxo domain rules --write | --check` generates one file per context that has a card. Stale generated files are deleted. The `ctxo-domain-` prefix keeps them apart from user rules.
+`ctxo domain rules --write | --check` generates one file per context that has a card. Stale generated files are deleted. The `ctxo-context-` prefix keeps them apart from user rules, and from the `ctxo-domain-fold` skill (its Cursor copy is `.cursor/rules/ctxo-domain-fold.mdc`, which a context with the id `fold` would otherwise overwrite).
 
-`.claude/rules/ctxo-domain-lending.md`:
+`.claude/rules/ctxo-context-lending.md`:
 
 ```markdown
 ---
@@ -604,7 +604,7 @@ Before changing code under these paths, read `docs/domain/lending/domain.md` (ru
 If behaviour changes, update that card in the same PR. If it does not, add `Domain-Unchanged: lending (reason)` to a commit.
 ```
 
-`.cursor/rules/ctxo-domain-lending.mdc` has the same text with frontmatter `description`, `globs: src/Lending/**,src/Holds/**` (comma-separated string, per Cursor docs) and `alwaysApply: false`.
+`.cursor/rules/ctxo-context-lending.mdc` has the same text with frontmatter `description`, `globs: src/Lending/**,src/Holds/**` (comma-separated string, per Cursor docs) and `alwaysApply: false`.
 
 Verified behaviour: Claude Code loads a path-scoped rule when Read, Write or Edit touches a matching file (not Glob or Grep), and the built-in Explore and Plan subagents, which skip CLAUDE.md, still receive matching path-scoped rules.
 
@@ -871,7 +871,9 @@ domain:
 ### 13.3 Masking and envelope
 
 - Every new tool and field goes through the masking pipeline and the `_meta` envelope, including card text.
-- New top-level arrays are added to `TRUNCATABLE_FIELDS`.
+- Truncation keeps working on each tool's primary array, because `wrapResponse` truncates only the largest truncatable array in a payload:
+  - The primary arrays of new tools (`get_domain_context`, `get_rule`, `find_shadow_specs`, `get_context_map`) are added to `TRUNCATABLE_FIELDS`.
+  - Additive arrays on existing tools (`rulesAffected`, `cardsToUpdate`, `decisions`, `contextsTouched`, `cardsChanged`, `rulesWithoutTests`, `contextBoundaryViolations`, `dataResources`, `coChangedFiles` and the like) are capped at their source (default 50; `coChangedFiles` 10), carry a `<name>Total` count field when entries were cut, and are not added. A long additive list would otherwise take over truncation from the tool's own list. Nested per-entry lists keep their own caps (for example `sharedTables`, 15 per candidate, with `sharedTableCount`).
 - Not fixed here (filed separately if the owner agrees): the masking false positive that redacted a file path as `AWS_SECRET`.
 
 ### 13.4 Performance budgets (measured on the fixture)
