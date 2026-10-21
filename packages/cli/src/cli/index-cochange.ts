@@ -26,9 +26,10 @@ export interface WriteCoChangeMatrixOptions {
   readonly headCommittedAt: number;
   readonly coChange: ResolvedCoChangeConfig;
   /**
-   * The indexed files: those a full run indexed, or every file of the merged index after an
-   * incremental run. One that is gone from the working tree drops out: the committed index an
-   * incremental run builds on can still hold the entry of a file deleted since.
+   * The files that take part: those indexed in this run plus every file the committed index holds that
+   * the project configuration does not exclude, so the matrix does not depend on which language plugins
+   * this machine has loaded. One that is gone from the working tree drops out here: the committed index
+   * can still hold the entry of a file deleted since.
    */
   readonly indexedFiles: readonly string[];
 }

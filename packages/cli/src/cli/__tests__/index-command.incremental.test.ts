@@ -151,6 +151,24 @@ function writeTwoClusters(project: TempProject): void {
   project.write('src/b/b3.ts', cluster('b3', ['b1', 'b2']));
 }
 
+/** A tracked file that no language plugin handles, as another machine, with a plugin this one lacks, would see it. */
+const NOTE = 'docs/note.xyz';
+
+/**
+ * Writes the index entry that such a machine would have committed for `file`. The file itself must
+ * exist in the repository: this machine cannot index it, but it must not throw the entry away.
+ */
+function writePluginlessEntry(project: TempProject, file: string): void {
+  new JsonIndexWriter(join(project.dir, '.ctxo')).write({
+    file,
+    lastModified: 1_700_000_000,
+    symbols: [{ symbolId: `${file}::Note::class`, name: 'Note', kind: 'class', startLine: 0, endLine: 1 }],
+    edges: [],
+    intent: [],
+    antiPatterns: [],
+  });
+}
+
 function indexJson(dir: string, file: string): string {
   return join(dir, '.ctxo', 'index', `${file}.json`);
 }
@@ -346,10 +364,8 @@ describe('IndexCommand incremental runs', () => {
     });
   });
 
-  // A full run indexes what it discovers, and that set is the whole project. The JSON of a file that is
-  // no longer discovered stays on disk (a full run never prunes it), but it must not live on in SQLite,
-  // the snapshot, the artifacts or the co-change matrix. Only an incremental run builds on the
-  // committed index, because it re-indexes just a few files.
+  // A file that has left the project (deleted, or newly excluded by index.ignore) is gone from SQLite,
+  // the snapshot, the artifacts and the co-change matrix after a full run, and its JSON is pruned.
   const LEAVES_THE_PROJECT: Array<[string, (leaving: TempProject) => void]> = [
     ['deleted', (leaving) => rmSync(join(leaving.dir, BRIDGE))],
     [
@@ -380,8 +396,7 @@ describe('IndexCommand incremental runs', () => {
       leaveTheProject(project);
       await new IndexCommand(project.dir).run();
 
-      // Its JSON is still on disk, and it was not touched by this run.
-      expect(hasIndexEntry(project.dir, BRIDGE)).toBe(true);
+      expect(hasIndexEntry(project.dir, BRIDGE)).toBe(false); // pruned, so no later run can bring it back
       const cache = await readSqliteContents(project.dir);
       expect(cache.files).not.toContain(BRIDGE);
       expect(cache.symbolIds.some((id) => id.startsWith(`${BRIDGE}::`))).toBe(false);
@@ -390,6 +405,151 @@ describe('IndexCommand incremental runs', () => {
       expect(mentionsBridge(readCoChanges(project.dir).entries)).toBe(false);
       // What is left is the rest of the project, still complete.
       expect(cache.files).toEqual(before.files.filter((file) => file !== BRIDGE));
+    });
+  });
+
+  // A full run does not leave the index of the files that have left the project lying around, because an
+  // incremental run builds on the committed index and would bring them back. It prunes only what is
+  // surely stale: the source is gone, or index.ignore / index.ignoreProjects now excludes it. A file that
+  // exists and is not excluded stays, even when no plugin loaded here handles it.
+  describe('a full run prunes stale index entries', () => {
+    async function indexFilesThatWillLeave(): Promise<void> {
+      project.write('src/gone.ts', 'export const gone = 1;\n');
+      project.write('src/muted.ts', 'export const muted = 1;\n');
+      project.write(NOTE, 'a note that no plugin here handles\n');
+      project.commit('feat: files that will leave the index');
+      writePluginlessEntry(project, NOTE);
+      await new IndexCommand(project.dir).run();
+      for (const file of ['src/gone.ts', 'src/muted.ts', NOTE]) {
+        expect(hasIndexEntry(project.dir, file)).toBe(true);
+      }
+    }
+
+    async function makeTwoOfThemLeave(): Promise<void> {
+      rmSync(join(project.dir, 'src', 'gone.ts'));
+      writeConfig(project.dir, 'index:\n  ignore:\n    - "src/muted.ts"\n');
+      await new IndexCommand(project.dir).run();
+    }
+
+    it('deletes the JSON of a deleted file and of a newly ignored file, and keeps that of a file only its plugin is missing for', async () => {
+      await indexFilesThatWillLeave();
+      errorSpy.mockClear();
+
+      await makeTwoOfThemLeave();
+
+      expect(hasIndexEntry(project.dir, 'src/gone.ts')).toBe(false);
+      expect(hasIndexEntry(project.dir, 'src/muted.ts')).toBe(false);
+      // It exists and is not ignored; this machine just has no plugin for it.
+      expect(hasIndexEntry(project.dir, NOTE)).toBe(true);
+      expect(readFileIndex(project.dir, NOTE).symbols.map((symbol) => symbol.name)).toEqual(['Note']);
+      for (const file of ['src/greet.ts', 'src/types.ts', 'src/utils.ts']) {
+        expect(hasIndexEntry(project.dir, file)).toBe(true);
+      }
+      expect(logLines(errorSpy).some((line) => line.startsWith('[ctxo] Pruned 2 stale index entries'))).toBe(true);
+    });
+
+    it('also deletes the JSON of files in a project that index.ignoreProjects now skips', async () => {
+      project.write(
+        'package.json',
+        JSON.stringify({ name: 'root', workspaces: ['packages/*'], devDependencies: { '@ctxo/lang-typescript': 'workspace:*' } }),
+      );
+      project.write('packages/keep/package.json', JSON.stringify({ name: 'keep' }));
+      project.write('packages/keep/src/a.ts', 'export const a = 1;\n');
+      project.write('packages/experimental-foo/package.json', JSON.stringify({ name: 'experimental-foo' }));
+      project.write('packages/experimental-foo/src/b.ts', 'export const b = 2;\n');
+      project.commit('feat: workspaces');
+      await new IndexCommand(project.dir).run();
+      expect(hasIndexEntry(project.dir, 'packages/experimental-foo/src/b.ts')).toBe(true);
+
+      writeConfig(project.dir, 'index:\n  ignoreProjects:\n    - "packages/experimental-*"\n');
+      await new IndexCommand(project.dir).run();
+
+      expect(hasIndexEntry(project.dir, 'packages/experimental-foo/src/b.ts')).toBe(false);
+      expect(hasIndexEntry(project.dir, 'packages/keep/src/a.ts')).toBe(true);
+    });
+
+    it('refreshes co-change, the snapshot and SQLite when the last indexed files leave the project', async () => {
+      commitGreetAndTypes(project, 2);
+      await new IndexCommand(project.dir).run();
+      expect(readCoChanges(project.dir).entries.length).toBeGreaterThan(0);
+
+      // Nothing is discovered any more, so this run re-indexes no file; it only prunes.
+      writeConfig(project.dir, 'index:\n  ignore:\n    - "src/**"\n');
+      await new IndexCommand(project.dir).run();
+
+      for (const file of ['src/greet.ts', 'src/types.ts', 'src/utils.ts']) {
+        expect(hasIndexEntry(project.dir, file)).toBe(false);
+      }
+      expect((await readSqliteContents(project.dir)).files).toEqual([]);
+      expect(readSnapshot(project.dir).communities).toEqual([]);
+      expect(readCoChanges(project.dir).entries).toEqual([]);
+    });
+
+    it('does not prune on an incremental run', async () => {
+      await indexFilesThatWillLeave();
+      rmSync(join(project.dir, 'src', 'gone.ts'));
+
+      await new IndexCommand(project.dir).run({ files: ['src/types.ts'] });
+
+      // Only the listed file is looked at; clearing the rest of the index is the job of a full run.
+      expect(hasIndexEntry(project.dir, 'src/gone.ts')).toBe(true);
+    });
+
+    it('a later --files run does not bring the pruned files back', async () => {
+      await indexFilesThatWillLeave();
+      await makeTwoOfThemLeave();
+
+      await new IndexCommand(project.dir).run({ files: ['src/types.ts'] });
+
+      const cache = await readSqliteContents(project.dir);
+      expect(cache.files).not.toContain('src/gone.ts');
+      expect(cache.files).not.toContain('src/muted.ts');
+      const snapshot = JSON.stringify(readSnapshot(project.dir).communities);
+      expect(snapshot).not.toContain('src/gone.ts');
+      expect(snapshot).not.toContain('src/muted.ts');
+      expect(hasIndexEntry(project.dir, 'src/gone.ts')).toBe(false);
+      expect(hasIndexEntry(project.dir, 'src/muted.ts')).toBe(false);
+    });
+  });
+
+  // The co-change matrix is committed and shared, so it must not depend on which language plugins the
+  // machine that wrote it had loaded: every file the committed index knows, and that still exists and is
+  // not excluded, takes part, whether this run could index it or not. Communities, SQLite and the
+  // architecture artifacts are local graph products and hold the files this run discovered.
+  describe('co-change does not depend on the installed language plugins', () => {
+    async function indexWithHistory(): Promise<void> {
+      project.write(NOTE, 'a note that no plugin here handles\n');
+      project.commit('feat: add the note');
+      for (let n = 1; n <= 3; n++) {
+        project.append(NOTE, `change ${n}`);
+        project.append('src/types.ts', `// change ${n}`);
+        project.commit(`feat: change ${n}`);
+      }
+      writePluginlessEntry(project, NOTE);
+      await new IndexCommand(project.dir).run();
+    }
+
+    it('a file this machine cannot index still takes part in the co-change matrix of a full run', async () => {
+      await indexWithHistory();
+
+      const pair = readCoChanges(project.dir).entries.find(
+        (entry) => entry.file1 === NOTE && entry.file2 === 'src/types.ts',
+      );
+      expect(pair).toBeDefined();
+      expect(pair!.sharedCommits).toBe(3);
+      // The local graph products hold only what this run discovered.
+      expect((await readSqliteContents(project.dir)).files).not.toContain(NOTE);
+      expect(JSON.stringify(readSnapshot(project.dir).communities)).not.toContain(NOTE);
+    });
+
+    it('an incremental run writes the same matrix as the full run for the same HEAD', async () => {
+      await indexWithHistory();
+      const file = join(project.dir, '.ctxo', 'index', 'co-changes.json');
+      const full = readFileSync(file);
+
+      await new IndexCommand(project.dir).run({ files: ['src/types.ts'] });
+
+      expect(readFileSync(file).equals(full)).toBe(true);
     });
   });
 

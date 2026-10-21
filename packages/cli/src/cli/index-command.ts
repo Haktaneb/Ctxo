@@ -174,10 +174,19 @@ export class IndexCommand {
     const hasher = new ContentHasher();
     const revertDetector = new RevertDetector();
 
-    // The committed JSON index, read at most once per run, and only by an incremental run: it needs it
-    // first, for the entries it removes and for the symbol registry, and then for the merged index.
+    // The committed JSON index, read at most once per run, and before this run writes anything. An
+    // incremental run needs it for the entries it removes, the symbol registry and the merged index; a full
+    // run for the co-change file set and for pruning the entries that went stale.
     let committedIndices: FileIndex[] | undefined;
     const committedIndex = (): FileIndex[] => (committedIndices ??= new JsonIndexReader(this.ctxoRoot).readAll());
+
+    // Monorepo workspaces: the folders a full run discovers files in, and the ones index.ignoreProjects
+    // leaves out. A file that the project configuration excludes from the index matches index.ignore or
+    // lies inside one of those ignored workspaces.
+    const workspaces = this.discoverWorkspaces(ignore.ignoreProject);
+    const isIgnored = (path: string): boolean =>
+      ignore.ignoreFile(path) ||
+      workspaces.ignored.some((workspace) => isInsideDirectory(workspace, join(this.projectRoot, path)));
 
     // Discover files (an explicit selection, monorepo workspaces, or the full project)
     let files: string[];
@@ -188,7 +197,8 @@ export class IndexCommand {
         [...(options.files ?? []), ...(options.file ? [options.file] : [])],
         commitChanges,
         registry,
-        ignore,
+        ignore.ignoreFile,
+        workspaces.kept,
         new Set(committedIndex().map((idx) => idx.file)),
       );
       files = selection.changed.map((path) => join(this.projectRoot, path));
@@ -198,10 +208,9 @@ export class IndexCommand {
           (options.commit !== undefined ? ` (commit ${options.commit})` : ''),
       );
     } else {
-      // Check for monorepo workspaces — discover files across all roots
-      const workspaces = this.discoverWorkspaces(ignore.ignoreProject);
+      // Discover files across all workspace roots (the project root itself outside a monorepo)
       files = [];
-      for (const ws of workspaces) {
+      for (const ws of workspaces.kept) {
         const wsFiles = this.discoverFilesIn(ws, ignore.ignoreFile);
         files.push(...wsFiles);
       }
@@ -324,11 +333,35 @@ export class IndexCommand {
         incremental ? { committed: committedIndex(), removedPaths } : undefined,
       ));
 
+    // The files the co-change matrix is computed for. The matrix is committed and shared, so it must not
+    // depend on which language plugins this machine has loaded: it covers the files indexed in this run and
+    // every file the committed index already holds that the project configuration does not exclude (the
+    // co-change step drops the ones whose source is gone). A file that only a missing plugin keeps this
+    // machine from indexing therefore still takes part. An incremental run follows the same rule, minus the
+    // files it removes, so its matrix equals the one a full run writes for the same HEAD.
+    const coChangeFiles = (): string[] => {
+      const files = new Set(pendingIndices.map(({ fileIndex }) => fileIndex.file));
+      for (const { file } of committedIndex()) {
+        if (!removedPaths.has(file) && !isIgnored(file)) files.add(file);
+      }
+      return [...files];
+    };
+
+    // A full run also prunes the index entries that went stale: the source file is gone from the working
+    // tree, or index.ignore / index.ignoreProjects now excludes it. Left in place they would come back into
+    // the merged index of the next incremental run. An entry of a file that exists and is not excluded is
+    // never pruned, even when no plugin loaded here handles it: another machine may have indexed it.
+    const stalePaths = incremental
+      ? []
+      : this.findStaleEntries(committedIndex(), new Set(pendingIndices.map(({ fileIndex }) => fileIndex.file)), isIgnored);
+
     // The global products (co-change, communities, architecture artifacts) are refreshed whenever the run
-    // changed the index. A --commit run refreshes them even when it re-indexed no file: a merge commit
-    // lists none, and a commit that only touched documents still moves HEAD, which the co-change window
-    // and the snapshot record. A --files run that selected nothing has nothing to refresh.
-    const refreshGlobals = pendingIndices.length > 0 || removedPaths.size > 0 || options.commit !== undefined;
+    // changed the index, also when the last indexed file left it. A --commit run refreshes them even when it
+    // re-indexed no file: a merge commit lists none, and a commit that only touched documents still moves
+    // HEAD, which the co-change window and the snapshot record. A --files run that selected nothing has
+    // nothing to refresh.
+    const refreshGlobals =
+      pendingIndices.length > 0 || removedPaths.size > 0 || stalePaths.length > 0 || options.commit !== undefined;
 
     // Phases 2 and 2b: one git pass (the change log) feeds both the per-file intent[] and the
     // co-change matrix of the whole repository. The co-change window comes from `cochange.*` in
@@ -366,7 +399,7 @@ export class IndexCommand {
             fileIndex.antiPatterns = revertDetector.detect(fileCommits);
           }
 
-          // Phase 2b: the co-change matrix of every indexed file, whichever files this run re-indexes.
+          // Phase 2b: the co-change matrix of the whole repository, whichever files this run re-indexes.
           writeCoChangeMatrix({
             writer,
             projectRoot: this.projectRoot,
@@ -374,7 +407,7 @@ export class IndexCommand {
             head: changeLog.head,
             headCommittedAt: changeLog.headCommittedAt,
             coChange,
-            indexedFiles: graphInput().map((idx) => idx.file),
+            indexedFiles: coChangeFiles(),
           });
         }
       } catch (err) {
@@ -421,20 +454,29 @@ export class IndexCommand {
     }
 
     // Phase 3: Write all indices
-    // What the index holds after this run is assembled first: an incremental run reads the committed JSON
-    // as it was before this run wrote anything.
+    // What the index holds after this run is assembled first: both an incremental run and a full run read the
+    // committed JSON as it was before this run wrote anything.
     const indexed = graphInput();
 
-    // Removed files leave the index before the new entries are written. On a case-insensitive file system
-    // a case-only rename names one JSON file twice, so deleting afterwards would take the entry just
+    // Removed and stale files leave the index before the new entries are written. On a case-insensitive file
+    // system a case-only rename names one JSON file twice, so deleting afterwards would take the entry just
     // written for the new name. A file that cannot be deleted is reported and the run goes on, since the
     // index this run builds its products from already leaves it out.
-    for (const path of removedPaths) {
+    const deleteEntry = (path: string): boolean => {
       try {
         writer.delete(path);
+        return true;
       } catch (err) {
         console.error(`[ctxo] Could not remove ${path} from the index: ${(err as Error).message}`);
+        return false;
       }
+    };
+    for (const path of removedPaths) deleteEntry(path);
+    const pruned = stalePaths.filter(deleteEntry).length;
+    if (pruned > 0) {
+      console.error(
+        `[ctxo] Pruned ${pruned} stale index ${pruned === 1 ? 'entry' : 'entries'} (source file deleted, or excluded by index.ignore / index.ignoreProjects)`,
+      );
     }
     for (const { fileIndex } of pendingIndices) writer.write(fileIndex);
 
@@ -621,9 +663,15 @@ export class IndexCommand {
     }
   }
 
-  private discoverWorkspaces(ignoreProject: (p: string) => boolean = () => false): string[] {
+  /**
+   * The folders a full run discovers files in (`kept`), and the workspace folders that
+   * `index.ignoreProjects` leaves out (`ignored`). Outside a monorepo, `kept` is the project root.
+   */
+  private discoverWorkspaces(
+    ignoreProject: (p: string) => boolean = () => false,
+  ): { kept: string[]; ignored: string[] } {
     const pkgPath = join(this.projectRoot, 'package.json');
-    if (!existsSync(pkgPath)) return [this.projectRoot];
+    if (!existsSync(pkgPath)) return { kept: [this.projectRoot], ignored: [] };
 
     try {
       const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
@@ -631,7 +679,7 @@ export class IndexCommand {
         ? pkg.workspaces
         : pkg.workspaces?.packages;
 
-      if (!workspaces || workspaces.length === 0) return [this.projectRoot];
+      if (!workspaces || workspaces.length === 0) return { kept: [this.projectRoot], ignored: [] };
 
       // Resolve workspace patterns (supports simple globs like packages/*)
       const resolved: string[] = [];
@@ -655,23 +703,25 @@ export class IndexCommand {
         }
       }
 
-      if (resolved.length === 0) return [this.projectRoot];
+      if (resolved.length === 0) return { kept: [this.projectRoot], ignored: [] };
 
+      const ignored: string[] = [];
       const filtered = resolved.filter((wsAbs) => {
         const rel = relative(this.projectRoot, wsAbs).replace(/\\/g, '/');
         if (ignoreProject(rel)) {
           console.error(`[ctxo] index.ignoreProjects: skipping ${rel}`);
+          ignored.push(wsAbs);
           return false;
         }
         return true;
       });
 
-      if (filtered.length === 0) return [this.projectRoot];
+      if (filtered.length === 0) return { kept: [this.projectRoot], ignored };
 
       console.error(`[ctxo] Monorepo detected: ${filtered.length} workspace(s)`);
-      return filtered;
+      return { kept: filtered, ignored };
     } catch {
-      return [this.projectRoot];
+      return { kept: [this.projectRoot], ignored: [] };
     }
   }
 
@@ -773,7 +823,8 @@ export class IndexCommand {
     paths: readonly string[],
     commitChanges: readonly FileChange[],
     registry: LanguageAdapterRegistry,
-    ignore: { ignoreFile: (p: string) => boolean; ignoreProject: (p: string) => boolean },
+    ignoreFile: (path: string) => boolean,
+    workspaces: readonly string[],
     indexedFiles: ReadonlySet<string>,
   ): { changed: string[]; removed: string[] } {
     const candidates = new Set<string>();
@@ -798,10 +849,9 @@ export class IndexCommand {
       if (change.status === 'R' && change.oldPath !== undefined) dropped.add(change.oldPath);
     }
 
-    const workspaces = this.discoverWorkspaces(ignore.ignoreProject);
     const isIndexable = (path: string): boolean =>
       registry.getAdapter(path) !== undefined &&
-      !ignore.ignoreFile(path) &&
+      !ignoreFile(path) &&
       workspaces.some((workspace) => isInsideDirectory(workspace, join(this.projectRoot, path)));
 
     const changed: string[] = [];
@@ -830,13 +880,32 @@ export class IndexCommand {
   }
 
   /**
-   * Produce the FileIndex list used as input to community detection, the co-change phase, the
-   * architecture artifacts and the SQLite cache.
+   * The committed index entries a full run drops, as source paths. An entry is stale when its source file
+   * is gone from the working tree, or when `index.ignore` / `index.ignoreProjects` now excludes it, and
+   * this run did not just re-index it.
+   *
+   * It is never stale merely because no plugin loaded on this machine handles the file: that entry may
+   * have been committed by a machine that has the plugin, and the file is still there.
+   */
+  private findStaleEntries(
+    committed: readonly FileIndex[],
+    reindexed: ReadonlySet<string>,
+    isIgnored: (path: string) => boolean,
+  ): string[] {
+    return committed
+      .map((idx) => idx.file)
+      .filter((file) => !reindexed.has(file) && (!existsSync(join(this.projectRoot, file)) || isIgnored(file)))
+      .sort(compareCodepoint);
+  }
+
+  /**
+   * Produce the FileIndex list used as input to community detection, the architecture artifacts and the
+   * SQLite cache (the co-change phase has its own file set, `coChangeFiles` in `run`).
    *
    * Full index run (`base` undefined): returns the indices of this run as they are. A full run indexes
-   * every file it discovers, so they are the whole project. The committed JSON of a file that is no
-   * longer discovered (deleted, or newly matched by `index.ignore`) stays on disk, because a full run
-   * does not prune it, but it must not live on in SQLite, the snapshot or the artifacts.
+   * every file it discovers, so they are the whole project. The committed JSON of a file this machine
+   * cannot index (no plugin loaded here) stays in the index, because a full run prunes only entries that
+   * went stale, but it is not part of these local graph products.
    * Incremental run (`--files`, `--commit`, `base` given): pendingIndices holds only the just-updated
    * files. The committed JSON index is spliced in around them, a fresh index replacing the committed
    * entry of the same file and the entries of `base.removedPaths` left out, so Louvain sees the COMPLETE
