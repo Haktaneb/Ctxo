@@ -180,7 +180,7 @@ Files that keep changing in the same commits are coupled even when no import edg
 **How it is built.** One `git log --no-merges -M --name-status` pass over the commits reachable from HEAD, newest first. The same pass fills each file's `intent[]`, and both follow renames through one shared rename map. The window is independent of `ctxo index --max-history` (which only controls how many commits each file keeps in `intent[]`).
 
 - Only files Ctxo indexes count, plus tracked files matched by `cochange.include`. `cochange.exclude` removes files, and it also vetoes files that `include` added.
-- Merge commits are skipped. A commit that touches more than `maxFilesPerCommit` analysed files is skipped as a mass change and counted in `massSkipped`.
+- Merge commits are left out of the log. A commit that touches more than `maxFilesPerCommit` analysed files is skipped as a mass change and counted in `massSkipped`.
 - A pair becomes an entry after `minShared` shared commits and `frequency = shared / min(countA, countB) >= 0.1`.
 - The applied window is recorded in `co-changes.json` (`window`), and the file is only rewritten when its entries or window change.
 

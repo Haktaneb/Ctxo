@@ -113,8 +113,9 @@ that query fails.
 (`cochange` in [config.yaml](./config-yaml.md), `--cochange-commits`,
 `--cochange-since`). The window is independent of `--max-history`, is anchored
 to HEAD (never the wall clock), and is recorded in the file under `window`.
-Merge commits and commits that touch more than `maxFilesPerCommit` (default 30)
-analysed files are skipped. The file is rewritten only when its entries or
+Merge commits are left out of the log. Commits that touch more than
+`maxFilesPerCommit` (default 30) analysed files are skipped and counted in
+`massSkipped`. The file is rewritten only when its entries or
 window change. In a sparse checkout, files outside the cone are absent from the
 matrix. See the [`cochange` reference](/reference/config-schema#cochange).
 

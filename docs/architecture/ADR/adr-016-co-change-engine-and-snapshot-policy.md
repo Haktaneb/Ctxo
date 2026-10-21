@@ -46,9 +46,9 @@ The co-change window has its own settings (`cochange` in `.ctxo/config.yaml`, `-
 
 `commitsScanned` counts every non-merge commit of the repository, so in a monorepo a numeric `maxCommits` covers fewer relevant commits than its value suggests.
 
-### 3. Merges and mass commits are excluded and counted
+### 3. Merge commits are excluded; mass commits are skipped and counted
 
-Merge commits never list files and are skipped. A commit whose remaining file count (after filtering to indexed and included files) exceeds `maxFilesPerCommit` is skipped and counted in `massSkipped`. A commit with no remaining file is ignored.
+Merge commits never list files and are left out of the log altogether (`--no-merges`), so they appear in neither `commitsScanned` nor any other count. A commit whose remaining file count (after filtering to indexed and included files) exceeds `maxFilesPerCommit` is skipped and counted in `massSkipped`. A commit with no remaining file is ignored.
 
 ### 4. The rename map is shared with `intent[]`
 
@@ -125,7 +125,7 @@ Validated against a private production repository (826 indexed source files plus
 ### The post-commit hook (v2) and `--commit`
 
 - A commit that changed 3 source files re-indexed exactly 3 per-file entries, never the other 823. `co-changes.json` changed only in pairs that involve the commit's files: 47 of 1431 entries (3 pairs inside the commit gained one shared commit, 44 changed only their frequency), and the window moved from 976 to 977 used commits. A second and third run at the same commit left the file byte-identical.
-- One history entry per commit across six same-commit runs. `distinctCommits` went from 0 to 1 after the new commit, equal to the number of distinct SHAs in `communities.history/` other than the current commit. Before the fix, history held 2 snapshots of HEAD and the artifacts reported `snapshotsAvailable: 2`; an earlier build had once reported 163 drift events against a snapshot of the same commit.
+- One history entry per commit: the first run at the new commit archived the previous commit's snapshot as the one new entry, and six further runs at the same commit (a manual run, the hook script, three `--file` runs and one debug run) archived nothing. `distinctCommits` went from 0 to 1 after the new commit, equal to the number of distinct SHAs in `communities.history/` other than the current commit. Before the fix, history held 2 snapshots of HEAD and the artifacts reported `snapshotsAvailable: 2`; an earlier build had once reported 163 drift events against a snapshot of the same commit.
 
 ### Timings (dev build, Windows)
 
@@ -160,7 +160,7 @@ The commit run is **3.0x faster** than the per-file loop. The gain does not come
 - **`verify-index` reports files with a rename in their history as STALE** after an upgrade, until the next index, because `intent[]` now follows renames.
 - **Scope detection needs git 2.26 or newer**; older git treats the hooks directory as not shared.
 - **Single-file runs can mis-resolve some TypeScript edges.** With only the changed file loaded, an `extends` or `implements` edge to an extensionless import can resolve to `src/base::Base::class` where a full run gives `src/base.ts::Base::class`. This already affected `--file`, now also affects `--files` and `--commit`, and is tracked in the roadmap as an adapter follow-up. A periodic full `ctxo index` corrects it.
-- The CLI tarball size limit was raised to 1400 KB (measured 1351.07 KB), per the established practice of raising it with the measured size when a PR crosses it.
+- The CLI tarball size limit was raised from 1350 KB to 1450 KB on this branch (final measured size 1420.70 KB), per the established practice of raising it with the measured size when a PR crosses it. Sourcemaps keep shipping.
 
 ### Deferred
 

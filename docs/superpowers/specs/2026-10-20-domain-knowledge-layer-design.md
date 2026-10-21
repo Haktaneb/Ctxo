@@ -183,7 +183,7 @@ CLI overrides: `--cochange-commits <n|all>`, `--cochange-since <duration>`.
 - `get_blast_radius`, `ctxo blast-radius`, the gate and `gate --preview` return `likely` dependents upgraded by co-change.
 - Two runs on the same commit leave one history entry for that commit; confidence counts distinct commits.
 - Renames: a temp-repo test with `git mv` keeps co-change and `intent[]` across the rename.
-- Merge commits and commits above `maxFilesPerCommit` are excluded and counted.
+- Merge commits are excluded from the log, and commits above `maxFilesPerCommit` are skipped and counted (`massSkipped`).
 - Fixture: `commitsUsed`, `massSkipped` and file-pair co-change agree with the oracle under the same file filter (section 14).
 
 ---

@@ -1188,7 +1188,7 @@ data.entries.slice(0, 5).forEach(e => console.log('  ' + e.file1 + ' <-> ' + e.f
 * [ ] `window` records `maxCommits`, `since` (when set), `head`, `commitsScanned`, `commitsUsed`, `massSkipped`, `maxFilesPerCommit`, `minShared`
 * [ ] `ctxo index --commit HEAD` and `ctxo index --files <path>` keep every entry (the matrix equals a full run's for the same HEAD) and do not rewrite the file when nothing changed
 * [ ] `ctxo index --max-history N` does not change the matrix (the co-change window is `cochange.*` / `--cochange-commits` / `--cochange-since`)
-* [ ] Merge commits are never counted, and commits above `maxFilesPerCommit` are counted in `massSkipped`
+* [ ] Merge commits are not in the log (they are in no count), and commits above `maxFilesPerCommit` are skipped and counted in `massSkipped`
 * [ ] After a rename, the new path keeps its co-change pairs and its `intent[]` history
 
 ### 18.2 Co-Change Blast Radius Boost

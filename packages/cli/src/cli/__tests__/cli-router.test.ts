@@ -451,6 +451,7 @@ describe('cli-router subcommand --help and -h', () => {
     expect(constructed).toEqual([]);
     expect(printed()).toContain('Usage:');
     expect(exitSpy).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(previousExitCode);
   });
 
   it('prints the help when --help follows other flags, and does not parse them', async () => {

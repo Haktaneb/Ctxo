@@ -53,8 +53,9 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo with five packages. Per-packag
   own window, independent of `--max-history`. New `cochange:` config in `.ctxo/config.yaml`
   (`maxCommits` 2000 or `all`, `since`, `maxFilesPerCommit` 30, `minShared` 2, `include`, `exclude`)
   and overrides `ctxo index --cochange-commits <n|all>` and `--cochange-since <duration>`. Merge
-  commits and mass commits are skipped and counted, renames are followed, and the applied window is
-  recorded in the file under `window`. `cochange.exclude` also vetoes files added by `cochange.include`.
+  commits are excluded from the log, commits above `maxFilesPerCommit` are skipped and counted
+  (`massSkipped`), renames are followed, and the applied window is recorded in the file under
+  `window`. `cochange.exclude` also vetoes files added by `cochange.include`.
 - **Incremental indexing (#157).** `ctxo index --files <path...>` and `ctxo index --commit <rev>`
   re-index part of the index and compute co-change, communities, the snapshot, the drift and
   boundary artifacts and the SQLite cache from the merged index. `--file` stays as an alias of

@@ -65,8 +65,8 @@ Every blast-radius path uses the same matrix: the `get_blast_radius`,
 safe-edit guard hook and `ctxo gate --preview`. `ctxo index` builds it from one
 `git log` pass over a window of recent commits (default 2000, set with
 `cochange.maxCommits` or `--cochange-commits`) that is independent of
-`--max-history`. Merge commits and commits that touch more than 30 files are
-left out, and renames are followed. See the [`cochange` config](/reference/config-schema#cochange).
+`--max-history`. Merge commits are left out of the log, commits that touch more
+than 30 files are skipped and counted, and renames are followed. See the [`cochange` config](/reference/config-schema#cochange).
 
 `get_blast_radius` and `ctxo blast-radius` also return `coChangedFiles`: up to
 10 files that co-change with the target's file (frequency of at least 0.5) but

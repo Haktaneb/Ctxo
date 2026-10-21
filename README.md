@@ -108,7 +108,7 @@ ctxo index --cochange-commits 500 --cochange-since 12m   # co-change window (or 
 ctxo doctor --fix                                        # upgrades an old hook block in place
 ```
 
-Files that keep changing together show up in `get_blast_radius` as `likely` dependents and as `coChangedFiles`, even when no import connects them. `ctxo index --max-history` only controls how many commits each file keeps for `get_why_context`; the co-change window has its own settings.
+The file you forget to touch is usually the one no import points at. Files that keep changing together are coupled anyway: `get_blast_radius` promotes a dependent that co-changes with your target from `potential` to `likely`, and lists the files with no dependency path at all as `coChangedFiles`. `ctxo index --max-history` only controls how many commits each file keeps for `get_why_context`; the co-change window has its own settings.
 
 ## Supported Languages
 

@@ -247,7 +247,7 @@ pnpm --filter @ctxo/cli exec tsx src/index.ts index --cochange-commits 500 --coc
 
 * [ ] `co-changes.json` `window.maxCommits` is `50`, then `"all"`, then `500` with `since: "12m"`
 * [ ] With `all`, `window.commitsScanned` equals `git rev-list --no-merges --count HEAD`
-* [ ] `commitsUsed + massSkipped` is not larger than `commitsScanned`; merge commits are never counted
+* [ ] `commitsUsed + massSkipped` is not larger than `commitsScanned`; merge commits are not in the log, so they are in none of these counts
 * [ ] A second run with the same options and HEAD leaves `co-changes.json` byte-identical
 * [ ] Setting `cochange.maxFilesPerCommit`, `cochange.minShared`, `cochange.include` and `cochange.exclude` in `.ctxo/config.yaml` changes the matrix (and `window`) accordingly; `exclude` also removes files added by `include`
 
@@ -702,7 +702,7 @@ pnpm --filter @ctxo/cli exec tsx src/index.ts doctor; echo "Exit: $?"
 > Use a scratch clone with a repository-local hooks directory. Never run `doctor --fix` where `core.hooksPath` is shared by other repositories.
 
 ```bash
-pnpm --filter @ctxo/cli exec tsx src/index.ts doctor --json | jq '.checks[] | select(.name == "git_hooks" or .title == "Git hooks")'
+pnpm --filter @ctxo/cli exec tsx src/index.ts doctor --json | jq '.checks[] | select(.name == "git_hooks")'
 ```
 
 **Verify:**
@@ -710,7 +710,8 @@ pnpm --filter @ctxo/cli exec tsx src/index.ts doctor --json | jq '.checks[] | se
 * [ ] With the v2 block installed: `pass` ("ctxo post-commit hook v2")
 * [ ] With no ctxo block, a v1 (unversioned) block, or more than one ctxo block: `warn`, and the fix text names `ctxo doctor --fix`
 * [ ] `ctxo doctor --fix --dry-run` lists the hooks step and leaves the hook untouched; `ctxo doctor --fix --yes` upgrades it to v2 in place and the check passes
-* [ ] With a global or system `core.hooksPath`: `warn` ("Shared hooks directory ... ctxo does not write there"), and `--fix` reports the hooks step as skipped, not failed, with the hook files untouched
+* [ ] With a global or system `core.hooksPath` and no current block (missing, outdated or duplicated): `warn` ("Shared hooks directory ... ctxo does not write there"), and `--fix` reports the hooks step as skipped, not failed, with the hook files untouched
+* [ ] With a global or system `core.hooksPath` that already holds exactly one current (v2) block added by hand: `pass`
 * [ ] Outside a git repository the check passes ("Not a git repository"); `git_repo` carries the failure
 
 ***

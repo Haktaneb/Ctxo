@@ -24,6 +24,8 @@ Items on deck for v0.7.x / v0.8. No strict ordering — picked by impact + readi
 
 ### Platform & transport
 
+- **`CTXO_HTTP_PORT` shadows CLI commands** - pre-existing. With `CTXO_HTTP_PORT` set, `packages/cli/src/index.ts` takes the HTTP server path before the CLI router, so `ctxo <command>` (including `ctxo <command> --help`) starts the server instead of printing help or running. Found while fixing `--help` for #157; route CLI arguments to the router first when a subcommand is given.
+
 - **Streamable HTTP transport** — for remote/cloud MCP usage. Today Ctxo is stdio-only. Needed for hosted scenarios and non-local clients.
 
 ### Ecosystem
