@@ -11,6 +11,7 @@ import {
   LEGACY_CURSOR_FRONTMATTER,
   expectedRulesTier,
   guardAndSkillsExpected,
+  normaliseMarkdown,
   renderRulesBlock,
   scanRulesBlocks,
   textShape,
@@ -360,7 +361,10 @@ export interface SkillState {
   readonly skill: (typeof SKILLS)[number];
   /** Project-relative, forward slashes */
   readonly file: string;
-  /** `current` also covers a copy that differs only in line endings or a UTF-8 BOM. */
+  /**
+   * `current` also covers a copy that differs only in formatting: line endings, a UTF-8 BOM, trailing
+   * whitespace, blank lines or table padding (`normaliseMarkdown`).
+   */
   readonly state: 'current' | 'missing' | 'outdated';
 }
 
@@ -379,7 +383,7 @@ function skillPlan(projectRoot: string, platformId: string): SkillPlanEntry[] {
     const to = target(projectRoot, skill);
     const file = relative(projectRoot, to).split(sep).join('/');
     if (!existsSync(to)) return { skill, file, state: 'missing', bundled, to };
-    const same = textShape(readFileSync(to, 'utf-8')).text === textShape(bundled).text;
+    const same = normaliseMarkdown(readFileSync(to, 'utf-8')) === normaliseMarkdown(bundled);
     return { skill, file, state: same ? 'current' : 'outdated', bundled, to };
   });
 }
@@ -391,7 +395,7 @@ export function skillStates(projectRoot: string, platformId: string): SkillState
 
 /**
  * Copies the bundled skills into the platform's skill folder. A skill equal to the bundled one
- * (BOM and line endings ignored) is `skipped` and not rewritten; a missing one is `created`, a
+ * (formatting ignored, see `SkillState`) is `skipped` and not rewritten; a missing one is `created`, a
  * different one `updated`. `dryRun` computes the same actions and writes nothing, not even a directory.
  */
 export function installSkills(

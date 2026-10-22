@@ -9,6 +9,7 @@ import {
   compareTemplateVersions,
   expectedRulesTier,
   guardAndSkillsExpected,
+  normaliseMarkdown,
   renderRulesBlock,
   ruleBody,
   scanRulesBlocks,
@@ -48,15 +49,19 @@ const sha256 = (text: string): string => createHash('sha256').update(text, 'utf8
 
 describe('rule tiers', () => {
   it('the compact block is at most 8 lines including the heading and both markers', () => {
+    // Prettier puts a blank line after the start marker, after the heading and before the end
+    // marker, so the spec's 8-line limit counts only the non-blank lines.
     const lines = renderRulesBlock('compact').split('\n');
-    expect(lines.length).toBeLessThanOrEqual(8);
-    expect(lines[1]).toBe('## ctxo');
+    expect(lines.filter((line) => line.trim() !== '')).toHaveLength(6);
+    expect(lines.filter((line) => line.trim() !== '').length).toBeLessThanOrEqual(8);
+    expect(lines[2]).toBe('## ctxo');
   });
 
   it('the compact body is the spec draft', () => {
     expect(ruleBody({ tier: 'compact' })).toBe(
       [
         '## ctxo',
+        '',
         'This repo has a ctxo index: dependency graph, git intent, change health. For structural questions (who depends on X, what breaks if X changes, why X looks like this), use the ctxo MCP tools before grepping.',
         'A pre-edit guard blocks the first edit to a high-impact symbol until `get_blast_radius` has been called for it.',
         'Skills: `ctxo-understand` (orient at task start), `ctxo-safe-edit` (before changing a symbol), `ctxo-review-pr` (before reviewing a diff).',
@@ -65,9 +70,10 @@ describe('rule tiers', () => {
   });
 
   it('the full body differs from the legacy body in exactly the eight listed lines', () => {
+    // Compared in the normaliseMarkdown form: the full body has Prettier's blank lines and table padding.
     const full = ruleBody({ tier: 'full' });
-    const fullLines = full.split('\n');
-    const legacyLines = LEGACY_RULE_BODY.split('\n');
+    const fullLines = normaliseMarkdown(full).split('\n');
+    const legacyLines = normaliseMarkdown(LEGACY_RULE_BODY).split('\n');
     expect(fullLines).toHaveLength(legacyLines.length);
     const differing = fullLines.filter((line, i) => line !== legacyLines[i]);
     expect(differing).toEqual([
@@ -82,7 +88,16 @@ describe('rule tiers', () => {
     ]);
     expect(full).toContain(NARROWED);
     expect(full).not.toContain('ALWAYS use ctxo MCP tools before reading source files');
-    expect(fullLines[0]).toBe(legacyLines[0]);
+    expect(full.split('\n')[0]).toBe(LEGACY_RULE_BODY.split('\n')[0]);
+  });
+
+  it('normaliseMarkdown ignores line endings, a BOM, trailing whitespace, blank lines and table padding', () => {
+    const plain = '# T\nline\n| a | b |\n|---|:-:|\n| x | y |';
+    const reshaped = String.fromCharCode(0xfeff) + '\r\n\r\n# T  \r\n\r\n\r\nline\t\r\n\r\n|  a  | b |\r\n| --- | :--: |\r\n| x   | y |\r\n\r\n';
+    expect(normaliseMarkdown(plain)).toBe('# T\nline\n|a|b|\n|-|:-:|\n|x|y|');
+    expect(normaliseMarkdown(reshaped)).toBe(normaliseMarkdown(plain));
+    expect(normaliseMarkdown('  indented\nx')).not.toBe(normaliseMarkdown('indented\nx'));
+    expect(normaliseMarkdown('a b')).not.toBe(normaliseMarkdown('a  b'));
   });
 
   it('no new template text contains an em dash', () => {
@@ -105,8 +120,10 @@ describe('rule tiers', () => {
     for (const tier of ['compact', 'full'] as const) {
       const lines = renderRulesBlock(tier).split('\n');
       expect(lines[0]).toBe(`<!-- ctxo-rules-start v${RULES_TEMPLATE_VERSION} -->`);
+      expect(lines[1]).toBe('');
+      expect(lines[lines.length - 2]).toBe('');
       expect(lines[lines.length - 1]).toBe(END);
-      expect(lines.slice(1, -1).join('\n')).toBe(ruleBody({ tier }));
+      expect(lines.slice(2, -2).join('\n')).toBe(ruleBody({ tier }));
     }
   });
 });
@@ -189,6 +206,18 @@ describe('upsertRulesBlock', () => {
 
     const three = 'A\n\n' + START + '\nx\n' + END + '\nB\n' + START + '\ny\n' + END + '\n\n' + START + '\nz\n' + END;
     expect(upsertRulesBlock(three, block)).toEqual({ kind: 'replaced', content: 'A\n\n' + block + '\nB\n' });
+  });
+
+  it('upsertRulesBlock reports a block that differs only in formatting as unchanged', () => {
+    const reshaped = 'Top\n\n' + block.replace('## ctxo\n', '## ctxo   \n\n\n') + '\n';
+    expect(upsertRulesBlock(reshaped, block)).toEqual({ kind: 'unchanged', content: reshaped });
+
+    // Another marker version, an unversioned marker or a second block still gets rewritten.
+    const older = 'Top\n\n' + block.replace(`v${RULES_TEMPLATE_VERSION}`, 'v0.1') + '\n';
+    expect(upsertRulesBlock(older, block)).toEqual({ kind: 'replaced', content: 'Top\n\n' + block + '\n' });
+    const unversioned = 'Top\n\n' + block.replace(` v${RULES_TEMPLATE_VERSION}`, '') + '\n';
+    expect(upsertRulesBlock(unversioned, block).kind).toBe('replaced');
+    expect(upsertRulesBlock(reshaped + '\n' + block + '\n', block)).toEqual({ kind: 'replaced', content: 'Top\n\n' + block + '\n' });
   });
 
   it('upsertRulesBlock leaves an unterminated block alone', () => {
@@ -296,6 +325,8 @@ describe('block classification and tier policy', () => {
   it('blockTier reads the heading line', () => {
     expect(blockTier(ruleBody({ tier: 'compact' }))).toBe('compact');
     expect(blockTier(ruleBody({ tier: 'full' }))).toBe('full');
+    expect(blockTier('\n\n## ctxo  \n\nx')).toBe('compact');
+    expect(blockTier('\r\n## ctxo MCP Tool Usage (MANDATORY)\r\n')).toBe('full');
     expect(blockTier(LEGACY_RULE_BODY)).toBe('full');
     expect(blockTier('## ctxo notes\nx')).toBe('unknown');
     expect(blockTier('')).toBe('unknown');

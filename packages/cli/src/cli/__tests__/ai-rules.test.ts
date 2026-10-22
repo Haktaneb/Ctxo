@@ -334,7 +334,8 @@ describe('installRules', () => {
     expect(result.action).toBe('created');
     const content = readFileSync(join(dir, 'CLAUDE.md'), 'utf-8');
     expect(content).toBe(renderRulesBlock('compact') + '\n');
-    expect(content.trimEnd().split('\n').length).toBeLessThanOrEqual(8);
+    // Non-blank lines only: the block carries Prettier's blank lines around the markers and the heading.
+    expect(content.split('\n').filter((line) => line.trim() !== '').length).toBeLessThanOrEqual(8);
   });
 
   it('dryRun reports the action and writes nothing', () => {

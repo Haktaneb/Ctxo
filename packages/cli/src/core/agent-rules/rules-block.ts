@@ -80,41 +80,56 @@ alwaysApply: true
 
 `;
 
+/*
+ * Both bodies are written in the layout Prettier prints (a blank line after each heading, a padded
+ * table), so a repo that formats its markdown leaves them byte-for-byte alone.
+ */
+
 const COMPACT_RULE_BODY = `## ctxo
+
 This repo has a ctxo index: dependency graph, git intent, change health. For structural questions (who depends on X, what breaks if X changes, why X looks like this), use the ctxo MCP tools before grepping.
 A pre-edit guard blocks the first edit to a high-impact symbol until \`get_blast_radius\` has been called for it.
 Skills: \`ctxo-understand\` (orient at task start), \`ctxo-safe-edit\` (before changing a symbol), \`ctxo-review-pr\` (before reviewing a diff).`;
 
-/** LEGACY_RULE_BODY with eight lines reworded (narrowed first sentence, no em dashes); same heading. */
+/**
+ * LEGACY_RULE_BODY with eight lines reworded (narrowed first sentence, no em dashes) and Prettier's
+ * layout (blank lines after the headings, a padded table); same heading.
+ */
 const FULL_RULE_BODY = `## ctxo MCP Tool Usage (MANDATORY)
 
 **For structural questions (dependencies, impact, history), use ctxo tools first; reading a file to see its contents needs no index call.** The ctxo index contains dependency graphs, git intent, anti-patterns, and change health that cannot be derived from reading files alone. Skipping these tools leads to blind edits and broken dependencies.
 
 ### Before ANY Code Modification
+
 1. Call \`get_blast_radius\` for the symbol you are about to change, to see what breaks
 2. Call \`get_why_context\` for the same symbol, to check for revert history or anti-patterns
 3. Only then edit the source
 
 ### Before Starting a Task
-| Task Type | REQUIRED First Call |
-|---|---|
-| Fixing a bug | \`get_context_for_task(taskType: "fix")\` |
-| Adding/extending a feature | \`get_context_for_task(taskType: "extend")\` |
-| Refactoring | \`get_context_for_task(taskType: "refactor")\` |
-| Understanding code | \`get_context_for_task(taskType: "understand")\` |
+
+| Task Type                  | REQUIRED First Call                            |
+| -------------------------- | ---------------------------------------------- |
+| Fixing a bug               | \`get_context_for_task(taskType: "fix")\`        |
+| Adding/extending a feature | \`get_context_for_task(taskType: "extend")\`     |
+| Refactoring                | \`get_context_for_task(taskType: "refactor")\`   |
+| Understanding code         | \`get_context_for_task(taskType: "understand")\` |
 
 ### Before Reviewing a PR or Diff
+
 - Call \`get_pr_impact\`: a single call gives a full risk assessment with co-change analysis
 
 ### When Exploring or Searching Code
+
 - Use \`search_symbols\` for name/regex lookup; DO NOT grep source files for symbol discovery
 - Use \`get_ranked_context\` for natural language queries; DO NOT manually browse directories
 
 ### Orientation in Unfamiliar Areas
+
 - Call \`get_architectural_overlay\` to understand layer boundaries
 - Call \`get_symbol_importance\` to identify critical symbols
 
 ### NEVER Do These
+
 - NEVER edit a function without first calling \`get_blast_radius\` on it
 - NEVER skip \`get_why_context\`: reverted code and anti-patterns are invisible without it
 - NEVER grep source files to find symbols when \`search_symbols\` exists
@@ -125,9 +140,12 @@ export function ruleBody(options: { readonly tier: RulesTier }): string {
   return options.tier === 'compact' ? COMPACT_RULE_BODY : FULL_RULE_BODY;
 }
 
-/** The body between a versioned start marker and the end marker, joined by '\n', no trailing newline. */
+/**
+ * The body between a versioned start marker and the end marker, joined by '\n', no trailing newline.
+ * A blank line separates each marker from the body, as Prettier prints it.
+ */
 export function renderRulesBlock(tier: RulesTier): string {
-  return [`<!-- ctxo-rules-start v${RULES_TEMPLATE_VERSION} -->`, ruleBody({ tier }), END_MARKER].join('\n');
+  return [`<!-- ctxo-rules-start v${RULES_TEMPLATE_VERSION} -->`, '', ruleBody({ tier }), '', END_MARKER].join('\n');
 }
 
 /* ------------------------------------------------------------------ */
@@ -171,6 +189,31 @@ export function textShape(content: string): TextShape {
     withEol,
     restore: (normalised) => (bom ? BOM : '') + withEol(normalised),
   };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Format-insensitive comparison                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * One line in its comparison form: trailing whitespace removed, and a table row without the padding
+ * around its cells (the dashes of a separator row collapse to one). Leading whitespace is kept.
+ */
+function comparisonLine(line: string): string {
+  const trimmed = line.trimEnd();
+  if (!trimmed.trimStart().startsWith('|')) return trimmed;
+  const row = trimmed.trim().replace(/[ \t]*\|[ \t]*/g, '|');
+  return /^\|(?::?-+:?\|)+$/.test(row) ? row.replace(/-+/g, '-') : row;
+}
+
+/**
+ * The comparison form of markdown text, so what a formatter (Prettier, markdownlint --fix, an editor)
+ * changes is not an edit: no BOM, '\n' line endings, no trailing whitespace, no blank lines (every run
+ * of blank lines collapses into the line break it sits in, so leading and trailing ones go too), and
+ * table rows without cell padding. Blocks, legacy bodies and skills are all compared in this form.
+ */
+export function normaliseMarkdown(text: string): string {
+  return textShape(text).text.split('\n').map(comparisonLine).filter((line) => line !== '').join('\n');
 }
 
 /* ------------------------------------------------------------------ */
@@ -229,23 +272,43 @@ function scanNormalised(text: string): RulesScan {
   return { blocks, unterminated };
 }
 
-/** Exact occurrences of LEGACY_RULE_BODY on whole lines, outside every marked block. */
+/** LEGACY_RULE_BODY's lines in their comparison form, blank lines left out. */
+const LEGACY_LINES: readonly string[] = normaliseMarkdown(LEGACY_RULE_BODY).split('\n');
+
+/**
+ * Occurrences of LEGACY_RULE_BODY on whole lines, outside every marked block, compared line by line
+ * in the `normaliseMarkdown` form: a copy a formatter reshaped (blank lines added, a table padded,
+ * trailing spaces) is still found. A span runs from its first line to the end of its last one.
+ */
 function legacySpans(text: string, marked: readonly RulesBlockSpan[]): RulesBlockSpan[] {
-  const spans: RulesBlockSpan[] = [];
-  let from = 0;
-  for (;;) {
-    const start = text.indexOf(LEGACY_RULE_BODY, from);
-    if (start < 0) return spans;
-    const end = start + LEGACY_RULE_BODY.length;
-    const ownLines = (start === 0 || text[start - 1] === '\n') && (end === text.length || text[end] === '\n');
-    const insideMarked = marked.some((b) => start < b.end && end > b.start);
-    if (ownLines && !insideMarked) {
-      spans.push({ start, end, marked: false, body: LEGACY_RULE_BODY });
-      from = end;
-    } else {
-      from = start + 1;
-    }
+  const lines: Array<{ readonly start: number; readonly end: number; readonly key: string }> = [];
+  for (let start = 0; start <= text.length; ) {
+    const lineBreak = text.indexOf('\n', start);
+    const end = lineBreak < 0 ? text.length : lineBreak;
+    lines.push({ start, end, key: comparisonLine(text.slice(start, end)) });
+    start = end + 1;
   }
+
+  const spans: RulesBlockSpan[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const first = lines[i];
+    if (first === undefined || first.key !== LEGACY_LINES[0]) continue;
+    let matched = 1;
+    let last = first;
+    let j = i + 1;
+    for (; j < lines.length && matched < LEGACY_LINES.length; j++) {
+      const line = lines[j];
+      if (line === undefined || line.key === '') continue;
+      if (line.key !== LEGACY_LINES[matched]) break;
+      matched += 1;
+      last = line;
+    }
+    if (matched < LEGACY_LINES.length) continue;
+    if (marked.some((b) => first.start < b.end && last.end > b.start)) continue;
+    spans.push({ start: first.start, end: last.end, marked: false, body: text.slice(first.start, last.end) });
+    i = j - 1;
+  }
+  return spans;
 }
 
 /* ------------------------------------------------------------------ */
@@ -264,6 +327,8 @@ export type UpsertResult =
  * Leaves the content alone when a start marker is unterminated, or when a block comes from a newer
  * template. Every byte outside the ctxo blocks is kept, the BOM included; the new block takes the
  * dominant line ending of the text around it, so a mixed-ending file is never rewritten wholesale.
+ * A single block with the same marker version as `block` and a body that differs only in formatting
+ * (`normaliseMarkdown`) is `unchanged`, so ctxo and a formatter never rewrite each other's output.
  */
 export function upsertRulesBlock(existing: string, block: string): UpsertResult {
   const shape = textShape(existing);
@@ -285,6 +350,7 @@ export function upsertRulesBlock(existing: string, block: string): UpsertResult 
     const gap = raw.length === 0 ? '' : raw.endsWith('\n') ? eolShape.eol : eolShape.eol + eolShape.eol;
     return { kind: 'inserted', content: bom + raw + gap + eolShape.withEol(block) + eolShape.eol };
   }
+  if (later.length === 0 && sameBlock(first, block)) return { kind: 'unchanged', content: existing };
 
   const toRaw = rawOffsetMapper(raw);
   const kept: string[] = [];
@@ -306,6 +372,19 @@ export function upsertRulesBlock(existing: string, block: string): UpsertResult 
   const content = bom + prefix + eolShape.withEol(block) + suffix;
   if (content === existing) return { kind: 'unchanged', content: existing };
   return { kind: 'replaced', content };
+}
+
+/** Whether `found` is a marked block with `block`'s marker version and a body equal to its in `normaliseMarkdown` form. */
+function sameBlock(found: RulesBlockSpan, block: string): boolean {
+  const target = scanNormalised(textShape(block).text).blocks[0];
+  return (
+    target !== undefined &&
+    found.marked &&
+    target.marked &&
+    found.version !== undefined &&
+    found.version === target.version &&
+    normaliseMarkdown(found.body) === normaliseMarkdown(target.body)
+  );
 }
 
 /**
@@ -345,13 +424,22 @@ function versionParts(version: string): [number, number] {
   return [Number(major) || 0, Number(minor) || 0];
 }
 
-/** The tier a body was written in, read from its first line. */
+/**
+ * The tier a body was written in, read from its first non-blank line: a formatter may put a blank
+ * line after the start marker.
+ */
 export function blockTier(body: string): RulesTier | 'unknown' {
-  const firstLine = body.split('\n', 1)[0] ?? '';
-  if (firstLine === '## ctxo') return 'compact';
-  if (firstLine.startsWith('## ctxo MCP Tool Usage')) return 'full';
+  const heading = body.split('\n').map((line) => line.trimEnd()).find((line) => line !== '') ?? '';
+  if (heading === '## ctxo') return 'compact';
+  if (heading.startsWith('## ctxo MCP Tool Usage')) return 'full';
   return 'unknown';
 }
+
+/** Each tier's body in the `normaliseMarkdown` form. */
+const NORMALISED_BODIES: Readonly<Record<RulesTier, string>> = {
+  compact: normaliseMarkdown(COMPACT_RULE_BODY),
+  full: normaliseMarkdown(FULL_RULE_BODY),
+};
 
 export type BlockStatus =
   | { readonly state: 'current'; readonly tier: RulesTier }
@@ -359,7 +447,8 @@ export type BlockStatus =
   | { readonly state: 'newer'; readonly version: string; readonly tier: RulesTier | 'unknown' };
 
 /**
- * Outdated: no version, an older version, or the current version with an edited body.
+ * Outdated: no version, an older version, or the current version with an edited body. A body that
+ * differs from the template only in formatting (`normaliseMarkdown`) is not edited.
  * A block from a newer template is never outdated.
  */
 export function classifyRulesBlock(block: RulesBlockSpan): BlockStatus {
@@ -368,7 +457,7 @@ export function classifyRulesBlock(block: RulesBlockSpan): BlockStatus {
   const order = compareTemplateVersions(block.version, RULES_TEMPLATE_VERSION);
   if (order > 0) return { state: 'newer', version: block.version, tier };
   if (order < 0) return { state: 'outdated', reason: 'older', tier };
-  if (tier !== 'unknown' && block.body === ruleBody({ tier })) return { state: 'current', tier };
+  if (tier !== 'unknown' && normaliseMarkdown(block.body) === NORMALISED_BODIES[tier]) return { state: 'current', tier };
   return { state: 'outdated', reason: 'edited', tier };
 }
 
