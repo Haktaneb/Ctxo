@@ -32,6 +32,13 @@ describe('extractSqlAccesses in procedureName mode', () => {
     expect(extractSqlAccesses('', 'procedureName')).toEqual([]);
   });
 
+  it('an unquoted reserved word is not a procedure name, while a delimited one is', () => {
+    expect(extractSqlAccesses('SELECT', 'procedureName')).toEqual([]);
+    expect(extractSqlAccesses('dbo.Select', 'procedureName')).toEqual([]);
+    expect(extractSqlAccesses('exec.usp_CloseLoan', 'procedureName')).toEqual([]);
+    expect(extractSqlAccesses('[dbo].[Select]', 'procedureName')).toEqual([{ kind: 'executes', name: 'dbo.select' }]);
+  });
+
   it('statement is the default mode', () => {
     expect(extractSqlAccesses('dbo.usp_CloseLoan')).toEqual([]);
     expect(extractSqlAccesses('EXEC dbo.usp_CloseLoan')).toEqual(
@@ -85,42 +92,103 @@ describe('extractSqlAccesses in statement mode', () => {
     for (const sql of garbage) expect(() => extractSqlAccesses(sql), sql).not.toThrow();
   });
 
-  it('a cursor FOR UPDATE OF and trigger-style AFTER UPDATE are not DML targets', () => {
+  it('a cursor FOR UPDATE is not a DML target', () => {
+    // The label after FOR UPDATE is not a reserved word, so only the FOR rule keeps it from being a target.
+    const sql = ['DECLARE c CURSOR FOR SELECT Id FROM dbo.Loans FOR UPDATE', 'NextLoan:', 'FETCH NEXT FROM c INTO @id'].join('\n');
+    expect(byKind(extractSqlAccesses(sql))).toEqual({ reads: ['dbo.loans'], writes: [], executes: [] });
     expect(byKind(extractSqlAccesses('DECLARE c CURSOR FOR SELECT Id FROM dbo.Loans FOR UPDATE OF ClosedAt'))).toEqual({
       reads: ['dbo.loans'],
       writes: [],
       executes: [],
     });
-    expect(extractSqlAccesses('CREATE TRIGGER dbo.trg_LoanTouched ON dbo.Loans AFTER UPDATE AS SELECT 1')).toEqual([]);
+  });
+
+  it('INSERT, UPDATE and DELETE after AFTER, INSTEAD OF or FOR in a trigger header are not DML targets', () => {
+    // A real header puts a comma or a reserved word (AS, WITH, NOT) after the action, which already
+    // stops a target. These headers end in a name instead, so only the AFTER, OF and FOR rules stop a write.
+    expect(extractSqlAccesses('CREATE TRIGGER dbo.trg_LoanTouched ON dbo.Loans AFTER UPDATE LoanAudit')).toEqual([]);
+    expect(extractSqlAccesses('CREATE TRIGGER dbo.trg_LoanKept ON dbo.Loans INSTEAD OF DELETE LoanAudit')).toEqual([]);
+    expect(extractSqlAccesses('CREATE TRIGGER dbo.trg_LoanAny ON dbo.Loans FOR INSERT LoanAudit')).toEqual([]);
+    // The usual header forms.
     expect(extractSqlAccesses('CREATE TRIGGER dbo.trg_LoanTouched ON dbo.Loans AFTER INSERT, UPDATE AS SELECT 1')).toEqual([]);
     expect(extractSqlAccesses('CREATE TRIGGER dbo.trg_LoanKept ON dbo.Loans INSTEAD OF DELETE AS SELECT 1')).toEqual([]);
     expect(extractSqlAccesses('CREATE TRIGGER dbo.trg_LoanAny ON dbo.Loans FOR INSERT, UPDATE, DELETE AS SELECT 1')).toEqual([]);
   });
 
-  it('UPDATE STATISTICS, UPDATE() and ON DELETE / ON UPDATE actions are not DML targets', () => {
-    expect(extractSqlAccesses('UPDATE STATISTICS dbo.Loans')).toEqual([]);
+  it('a MERGE action after THEN is not a separate DML statement', () => {
+    // OUTPUT is not a reserved word, so only the THEN rule keeps it from being a DELETE target.
+    const sql =
+      'MERGE dbo.Holds AS t USING dbo.HoldStaging AS s ON t.Id = s.Id ' +
+      'WHEN NOT MATCHED BY SOURCE THEN DELETE OUTPUT deleted.Id INTO dbo.HoldArchive (Id);';
+    expect(byKind(extractSqlAccesses(sql))).toEqual({
+      reads: ['dbo.holdstaging'],
+      writes: ['dbo.holdarchive', 'dbo.holds'],
+      executes: [],
+    });
+  });
+
+  it('UPDATE(column) is a trigger function, not a DML statement', () => {
+    // As a statement, UPDATE( would end the open UPDATE before its FROM clause, and l would read as dbo.l.
+    const sql = 'UPDATE l SET l.Flagged = CASE WHEN UPDATE(ClosedAt) THEN 1 ELSE 0 END FROM dbo.Loans AS l';
+    expect(byKind(extractSqlAccesses(sql))).toEqual({ reads: ['dbo.loans'], writes: ['dbo.loans'], executes: [] });
     expect(extractSqlAccesses("IF UPDATE(ClosedAt) PRINT 'closed'")).toEqual([]);
+  });
+
+  it('UPDATE STATISTICS is not a DML target, while a delimited [Statistics] table is', () => {
+    expect(extractSqlAccesses('UPDATE STATISTICS dbo.Loans WITH FULLSCAN')).toEqual([]);
+    expect(byKind(extractSqlAccesses('UPDATE [Statistics] SET LoanCount = 0'))).toEqual({
+      reads: [],
+      writes: ['dbo.statistics'],
+      executes: [],
+    });
+  });
+
+  it('ON DELETE and ON UPDATE foreign key actions are not DML targets', () => {
+    // NO is not a reserved word, so without the foreign key rule ON UPDATE NO ACTION would write dbo.no.
     expect(
       extractSqlAccesses(
-        'CREATE TABLE dbo.Fines (Id INT, LoanId INT REFERENCES dbo.Loans (Id) ON DELETE CASCADE ON UPDATE NO ACTION)',
+        'CREATE TABLE dbo.Fines (Id INT, ' +
+          'LoanId INT REFERENCES dbo.Loans (Id) ON DELETE CASCADE ON UPDATE NO ACTION, ' +
+          'MemberId INT REFERENCES dbo.Members (Id) ON DELETE SET NULL ON UPDATE SET DEFAULT)',
+      ),
+    ).toEqual([]);
+    expect(
+      extractSqlAccesses(
+        'ALTER TABLE dbo.Fines ADD CONSTRAINT FK_Fines_Loans FOREIGN KEY (LoanId) REFERENCES dbo.Loans (Id) ON DELETE NO ACTION',
       ),
     ).toEqual([]);
     expect(extractSqlAccesses('GRANT INSERT, UPDATE, DELETE ON dbo.Fines TO librarian')).toEqual([]);
     expect(extractSqlAccesses('GRANT EXECUTE ON dbo.usp_CloseLoan TO librarian')).toEqual([]);
   });
 
-  it('TOP (n) and TOP n may precede the DML target', () => {
-    const sql = [
-      'DELETE TOP (10) FROM dbo.Holds WHERE ExpiresAt < @now;',
-      'UPDATE TOP (5) PERCENT dbo.Fines SET Paid = 1;',
-      'INSERT TOP (1) INTO dbo.LoanArchive (Id) SELECT Id FROM dbo.Loans;',
-      'DELETE TOP (SELECT COUNT(*) FROM dbo.Members) FROM dbo.Books;',
-    ].join('\n');
-    expect(byKind(extractSqlAccesses(sql))).toEqual({
-      reads: ['dbo.loans', 'dbo.members'],
-      writes: ['dbo.books', 'dbo.fines', 'dbo.holds', 'dbo.loanarchive'],
-      executes: [],
-    });
+  it('DML after a SET option that ends in ON is still DML', () => {
+    const cases: Array<[string, string]> = [
+      ['SET NOCOUNT ON\nUPDATE dbo.Loans SET ClosedAt = GETDATE() WHERE Id = @id', 'dbo.loans'],
+      ['SET NOCOUNT ON\nDELETE FROM dbo.Holds WHERE LoanId = @id', 'dbo.holds'],
+      ['SET XACT_ABORT ON\nDELETE dbo.Holds WHERE LoanId = @id', 'dbo.holds'],
+      ['SET NOCOUNT ON\nINSERT dbo.LoanEvents (LoanId) VALUES (@id)', 'dbo.loanevents'],
+      ['SET IDENTITY_INSERT dbo.Loans ON\nINSERT INTO dbo.Loans (Id) VALUES (1)\nSET IDENTITY_INSERT dbo.Loans OFF', 'dbo.loans'],
+      ['SET XACT_ABORT ON\nUPDATE l SET l.Flagged = 1 FROM dbo.Loans AS l', 'dbo.loans'],
+    ];
+    for (const [sql, table] of cases) expect(byKind(extractSqlAccesses(sql)).writes, sql).toEqual([table]);
+  });
+
+  it('TOP (n), TOP (n) PERCENT and TOP (expression) may precede the DML target', () => {
+    const cases: Array<[string, Record<string, string[]>]> = [
+      ['DELETE TOP (10) FROM dbo.Holds WHERE ExpiresAt < @now', { reads: [], writes: ['dbo.holds'], executes: [] }],
+      ['DELETE TOP (10) dbo.Holds WHERE ExpiresAt < @now', { reads: [], writes: ['dbo.holds'], executes: [] }],
+      ['DELETE TOP (@batch) FROM dbo.Holds', { reads: [], writes: ['dbo.holds'], executes: [] }],
+      ['UPDATE TOP (5) PERCENT dbo.Fines SET Paid = 1', { reads: [], writes: ['dbo.fines'], executes: [] }],
+      [
+        'INSERT TOP (1) INTO dbo.LoanArchive (Id) SELECT Id FROM dbo.Loans',
+        { reads: ['dbo.loans'], writes: ['dbo.loanarchive'], executes: [] },
+      ],
+      [
+        'DELETE TOP (SELECT COUNT(*) FROM dbo.Members) FROM dbo.Books',
+        { reads: ['dbo.members'], writes: ['dbo.books'], executes: [] },
+      ],
+    ];
+    for (const [sql, want] of cases) expect(byKind(extractSqlAccesses(sql)), sql).toEqual(want);
   });
 
   it('a one-part UPDATE or DELETE target that is not an alias gets the dbo schema', () => {
@@ -161,6 +229,52 @@ describe('extractSqlAccesses in statement mode', () => {
   it('a parenthesized join reads every table in it', () => {
     expect(byKind(extractSqlAccesses('SELECT * FROM (dbo.Loans l JOIN dbo.Members m ON m.Id = l.MemberId) JOIN dbo.Books b ON b.Id = l.BookId'))).toEqual({
       reads: ['dbo.books', 'dbo.loans', 'dbo.members'],
+      writes: [],
+      executes: [],
+    });
+  });
+
+  it('a nested parenthesized join after FROM reads its first table', () => {
+    const sql =
+      'SELECT l.Id FROM ((dbo.Loans l INNER JOIN dbo.Members m ON m.Id = l.MemberId) ' +
+      'INNER JOIN dbo.Books b ON b.Id = l.BookId)';
+    expect(byKind(extractSqlAccesses(sql))).toEqual({
+      reads: ['dbo.books', 'dbo.loans', 'dbo.members'],
+      writes: [],
+      executes: [],
+    });
+  });
+
+  it('an UPDATE alias defined in a nested parenthesized join is the aliased table', () => {
+    const sql =
+      'UPDATE l SET l.Flagged = 1 FROM ((dbo.Loans l JOIN dbo.Members m ON m.Id = l.MemberId) ' +
+      'JOIN dbo.Books b ON b.Id = l.BookId)';
+    expect(byKind(extractSqlAccesses(sql))).toEqual({
+      reads: ['dbo.books', 'dbo.loans', 'dbo.members'],
+      writes: ['dbo.loans'],
+      executes: [],
+    });
+    expect(byKind(extractSqlAccesses('DELETE h FROM (((dbo.Holds h JOIN dbo.Loans l ON l.Id = h.LoanId)))'))).toEqual({
+      reads: ['dbo.holds', 'dbo.loans'],
+      writes: ['dbo.holds'],
+      executes: [],
+    });
+  });
+
+  it('a doubly parenthesized join after JOIN reads every table in it', () => {
+    const sql =
+      'SELECT * FROM dbo.Loans l JOIN ((dbo.Members m JOIN dbo.Books b ON b.Id = m.FavoriteBookId)) ON m.Id = l.MemberId';
+    expect(byKind(extractSqlAccesses(sql))).toEqual({
+      reads: ['dbo.books', 'dbo.loans', 'dbo.members'],
+      writes: [],
+      executes: [],
+    });
+  });
+
+  it('a derived table inside a parenthesized join is still a derived table', () => {
+    const sql = 'UPDATE l SET Flagged = 1 FROM ((SELECT Id, MemberId FROM dbo.Loans) AS l JOIN dbo.Members m ON m.Id = l.MemberId)';
+    expect(byKind(extractSqlAccesses(sql))).toEqual({
+      reads: ['dbo.loans', 'dbo.members'],
       writes: [],
       executes: [],
     });
@@ -221,7 +335,11 @@ describe('extractSqlAccesses in statement mode', () => {
     });
   });
 
-  it('a UTF-8 byte order mark changes nothing', () => {
-    expect(extractSqlAccesses('﻿SELECT * FROM dbo.Loans')).toEqual(extractSqlAccesses('SELECT * FROM dbo.Loans'));
+  it('a leading UTF-8 byte order mark is ignored in both modes', () => {
+    expect(extractSqlAccesses('\uFEFFUPDATE dbo.Loans SET ClosedAt = GETDATE()')).toEqual([{ kind: 'writes', name: 'dbo.loans' }]);
+    // In procedureName mode the whole text must be one name, so a byte order mark read as a token would leave none.
+    expect(extractSqlAccesses('\uFEFF[dbo].[usp_CloseLoan]', 'procedureName')).toEqual([
+      { kind: 'executes', name: 'dbo.usp_closeloan' },
+    ]);
   });
 });

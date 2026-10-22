@@ -1,3 +1,3 @@
 SELECT *
-FROM [dbo].[a.b] AS x
-JOIN dbo.Loans AS l ON l.Id = x.LoanId
+FROM [dbo].[Loans.Archive] AS a
+JOIN dbo.Loans AS l ON l.Id = a.LoanId

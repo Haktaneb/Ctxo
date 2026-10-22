@@ -1,3 +1,4 @@
+import { RESERVED_WORDS, keywordOf } from './keywords.js';
 import { tokenizeSql } from './tokenizer.js';
 
 export const SQL_DIALECT = 'tsql' as const;
@@ -13,7 +14,7 @@ export function foldAsciiLower(text: string): string {
 /**
  * Canonical `schema.name` from already-unquoted name parts. One part gets the `dbo` schema,
  * two parts are `schema.name`. Three or more parts, empty parts, parts containing `::` or `.`
- * (a delimited `[a.b]` would otherwise read as more parts), temp tables, table variables and
+ * (a delimited `[Loans.Archive]` would otherwise read as more parts), temp tables, table variables and
  * the sys and information_schema schemas give undefined.
  */
 export function canonicalFromParts(parts: readonly string[]): string | undefined {
@@ -28,7 +29,10 @@ export function canonicalFromParts(parts: readonly string[]): string | undefined
   return `${foldAsciiLower(schema)}.${foldAsciiLower(name)}`;
 }
 
-/** Tokenizes a multipart name text such as `[dbo].[Loans]`, then canonicalizes it. */
+/**
+ * Tokenizes a multipart name text such as `[dbo].[Loans]`, then canonicalizes it. An unquoted
+ * reserved word is not a name part, as in a T-SQL parser: `SELECT` and `dbo.Table` give undefined.
+ */
 export function canonicalSqlName(text: string): string | undefined {
   const tokens = tokenizeSql(text);
   if (tokens.length === 0 || tokens.length % 2 === 0) return undefined;
@@ -37,6 +41,7 @@ export function canonicalSqlName(text: string): string | undefined {
     const tok = tokens[k]!;
     if (k % 2 === 0) {
       if (tok.kind !== 'word' && tok.kind !== 'quoted') return undefined;
+      if (tok.kind === 'word' && RESERVED_WORDS.has(keywordOf(tok))) return undefined;
       parts.push(tok.value);
     } else if (tok.kind !== 'punct' || tok.value !== '.') {
       return undefined;

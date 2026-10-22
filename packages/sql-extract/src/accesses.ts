@@ -5,6 +5,7 @@ import {
   RESERVED_WORDS,
   STATEMENT_START_WORDS,
   TABLE_HINTS,
+  isForeignKeyAction,
   keywordOf,
 } from './keywords.js';
 import { canonicalFromParts, canonicalSqlName, foldAsciiLower } from './names.js';
@@ -260,18 +261,20 @@ class AccessScanner {
   }
 
   /** A table source after FROM, JOIN, APPLY, USING or a FROM-list comma. */
-  private tableSource(i: number): number {
+  private tableSource(start: number): number {
+    let i = start;
+    // ( table [alias] JOIN ... ) and (( ... ) JOIN ... ): parenthesized joins, nested to any depth.
+    // A loop, not recursion, so a deep nest cannot overflow the stack.
+    while (this.isPunctAt(i, '(') && (this.isNameStart(i + 1) || this.isPunctAt(i + 1, '('))) {
+      const frame = this.openFrame(i, true);
+      frame.forwardAliases = true;
+      frame.fromActive = true;
+      i++;
+    }
     const t = this.tok(i);
     if (t === undefined) return i;
     if (isPunct(t, '(')) {
-      const frame = this.openFrame(i, true);
-      if (this.isNameStart(i + 1)) {
-        // ( table [alias] JOIN ... ): a parenthesized join
-        frame.forwardAliases = true;
-        frame.fromActive = true;
-        return this.tableSource(i + 1);
-      }
-      frame.onClose = (next) => this.alias(next, undefined); // a derived table
+      this.openFrame(i, true).onClose = (next) => this.alias(next, undefined); // a derived table
       return i + 1;
     }
     if (t.kind === 'variable') return this.alias(i + 1, undefined); // a table variable
@@ -318,7 +321,8 @@ class AccessScanner {
   }
 
   private isDml(i: number, w: string): boolean {
-    if (NOT_DML_AFTER.has(this.kw(i - 1))) return false;
+    const before = this.kw(i - 1);
+    if (NOT_DML_AFTER.has(before) || isForeignKeyAction(before, w, this.kw(i + 1))) return false;
     if (this.isPunctAt(i + 1, '(')) return false;
     return !(w === 'UPDATE' && this.kw(i + 1) === 'STATISTICS');
   }

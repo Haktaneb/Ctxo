@@ -50,8 +50,23 @@ export const TABLE_HINTS: ReadonlySet<string> = new Set([
   'INDEX', 'FORCESEEK', 'FORCESCAN',
 ]);
 
-/** INSERT, UPDATE and DELETE after these words are triggers, cursor options, FK actions or MERGE actions. */
-export const NOT_DML_AFTER: ReadonlySet<string> = new Set(['ON', 'FOR', 'AFTER', 'OF', 'THEN']);
+/**
+ * INSERT, UPDATE and DELETE after these words are trigger actions, cursor options or MERGE actions.
+ * ON is not here: it blocks only a foreign key action (see isForeignKeyAction), so the DML after
+ * `SET NOCOUNT ON` without a semicolon stays DML.
+ */
+export const NOT_DML_AFTER: ReadonlySet<string> = new Set(['FOR', 'AFTER', 'OF', 'THEN']);
+
+/** Words after `ON DELETE` or `ON UPDATE` in a foreign key action: CASCADE, NO ACTION, SET NULL, SET DEFAULT. */
+const FOREIGN_KEY_ACTION_WORDS: ReadonlySet<string> = new Set(['CASCADE', 'NO', 'SET']);
+
+/**
+ * True for `ON DELETE | UPDATE` followed by CASCADE, NO or SET, given the keywords before, at and
+ * after the word: a foreign key action, not DML.
+ */
+export function isForeignKeyAction(before: string, word: string, after: string): boolean {
+  return before === 'ON' && (word === 'DELETE' || word === 'UPDATE') && FOREIGN_KEY_ACTION_WORDS.has(after);
+}
 
 /** Column-list elements starting with these are constraints, indexes or periods, not columns. */
 export const NOT_COLUMN_WORDS: ReadonlySet<string> = new Set([

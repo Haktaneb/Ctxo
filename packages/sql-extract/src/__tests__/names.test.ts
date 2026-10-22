@@ -38,6 +38,14 @@ describe('canonicalSqlName', () => {
     expect(canonicalSqlName('a b')).toBeUndefined();
     expect(canonicalSqlName("'a'")).toBeUndefined();
   });
+
+  it('returns undefined for an unquoted reserved word in any part, while a delimited one is a name', () => {
+    expect(canonicalSqlName('SELECT')).toBeUndefined();
+    expect(canonicalSqlName('dbo.Table')).toBeUndefined();
+    expect(canonicalSqlName('exec.usp_CloseLoan')).toBeUndefined();
+    expect(canonicalSqlName('[dbo].[Table]')).toBe('dbo.table');
+    expect(canonicalSqlName('"Exec".usp_CloseLoan')).toBe('exec.usp_closeloan');
+  });
 });
 
 describe('canonicalFromParts', () => {
@@ -56,10 +64,10 @@ describe('canonicalFromParts', () => {
   });
 
   it('skips a part that still contains "." after delimiter removal, so it cannot read as more parts', () => {
-    expect(canonicalFromParts(['a.b'])).toBeUndefined();
-    expect(canonicalFromParts(['dbo', 'a.b'])).toBeUndefined();
+    expect(canonicalFromParts(['Loans.Archive'])).toBeUndefined();
+    expect(canonicalFromParts(['dbo', 'Loans.Archive'])).toBeUndefined();
     expect(canonicalFromParts(['Lending.Desk', 'Loans'])).toBeUndefined();
-    expect(canonicalSqlName('[dbo].[a.b]')).toBeUndefined();
+    expect(canonicalSqlName('[dbo].[Loans.Archive]')).toBeUndefined();
     expect(canonicalSqlName('[Loans.Archive]')).toBeUndefined();
     expect(canonicalSqlName('"dbo"."Loans.Archive"')).toBeUndefined();
     expect(canonicalSqlName('[dbo].[Loans]')).toBe('dbo.loans');

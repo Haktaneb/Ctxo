@@ -4,6 +4,7 @@ import {
   NOT_DML_AFTER,
   RESERVED_WORDS,
   STATEMENT_START_WORDS,
+  isForeignKeyAction,
   keywordOf,
 } from './keywords.js';
 import { canonicalFromParts, foldAsciiLower } from './names.js';
@@ -133,7 +134,10 @@ function alterTableAdd(
       }
     } else if (depth === 0 && t.kind === 'word') {
       const w = keywordOf(t);
-      if (ALTER_ADD_END_WORDS.has(w) && !NOT_DML_AFTER.has(keywordOf(tokens[j - 1]))) break;
+      const before = keywordOf(tokens[j - 1]);
+      if (ALTER_ADD_END_WORDS.has(w) && !NOT_DML_AFTER.has(before) && !isForeignKeyAction(before, w, keywordAt(tokens, j + 1, end))) {
+        break;
+      }
     }
     if (atElement) {
       atElement = false;
@@ -151,8 +155,10 @@ function newlines(text: string): number {
 }
 
 /**
- * Tables, views, procedures and functions a SQL file defines, in source order. A body runs to the
- * end of its batch or to the next definition at paren depth 0; accesses come from bodies only.
+ * Tables, views, procedures and functions a SQL file defines, in source order. A view, procedure
+ * or function body runs to the end of its batch or to the next view, procedure or function
+ * definition at paren depth 0 (a missing GO). CREATE TABLE and ALTER TABLE inside a body are body
+ * text: no definition, no columns. Accesses come from bodies only.
  */
 export function extractSqlDefinitions(source: string): SqlFileExtraction {
   const tokens = tokenizeSql(source);
@@ -163,6 +169,7 @@ export function extractSqlDefinitions(source: string): SqlFileExtraction {
   for (const [from, to] of batchRanges(tokens)) {
     const starts: DefinitionStart[] = [];
     let depth = 0;
+    let inBody = false; // after a view, procedure or function start, to the end of the batch
     for (let i = from; i < to; i++) {
       const t = tokens[i]!;
       if (t.kind === 'punct') {
@@ -175,10 +182,11 @@ export function extractSqlDefinitions(source: string): SqlFileExtraction {
       const w = keywordOf(t);
       if (w !== 'CREATE' && w !== 'ALTER') continue;
       const start = definitionStart(tokens, i, to);
-      if (start !== undefined) {
+      if (start !== undefined && !(inBody && start.kind === 'table')) {
         starts.push(start);
+        if (start.kind !== 'table') inBody = true;
         i = start.nameEnd - 1;
-      } else if (w === 'ALTER' && keywordAt(tokens, i + 1, to) === 'TABLE') {
+      } else if (!inBody && w === 'ALTER' && keywordAt(tokens, i + 1, to) === 'TABLE') {
         const add = alterTableAdd(tokens, i, to);
         if (add !== undefined) {
           added.set(add.table, [...(added.get(add.table) ?? []), ...add.columns]);

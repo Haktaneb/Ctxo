@@ -180,6 +180,106 @@ describe('extractSqlDefinitions', () => {
     expect(definitions[1]!.accesses).toEqual([{ kind: 'writes', name: 'dbo.holds' }]);
   });
 
+  it('a permanent CREATE TABLE inside a procedure body is body text, not a definition', () => {
+    const source = [
+      'CREATE PROCEDURE dbo.usp_Setup AS',
+      'BEGIN',
+      '  CREATE TABLE dbo.LoanStaging (Id INT);',
+      '  INSERT INTO dbo.LoanStaging SELECT Id FROM dbo.Loans;',
+      '  UPDATE dbo.Members SET Blocked = 0;',
+      'END',
+    ].join('\n');
+    const proc = only(source);
+    expect([proc.kind, proc.name]).toEqual(['procedure', 'dbo.usp_setup']);
+    expect(proc.columns).toEqual([]);
+    expect(proc.accesses).toEqual([
+      { kind: 'reads', name: 'dbo.loans' },
+      { kind: 'writes', name: 'dbo.loanstaging' },
+      { kind: 'writes', name: 'dbo.members' },
+    ]);
+    expect([proc.startLine, proc.endLine]).toEqual([0, 5]);
+    expect(proc.endOffset).toBe(source.length);
+  });
+
+  it('table DDL in a view, procedure or function body adds no definition and no columns', () => {
+    const source = [
+      'CREATE TABLE dbo.LoanBatches (Id INT NOT NULL)',
+      'GO',
+      'CREATE PROCEDURE dbo.usp_Setup AS',
+      'BEGIN',
+      '  ALTER TABLE dbo.LoanBatches ADD Note NVARCHAR(100) NULL;',
+      '  CREATE TABLE dbo.LoanBatches (Shelf INT);',
+      '  CREATE TABLE dbo.LoanStaging (Id INT, LoanId INT REFERENCES dbo.Loans (Id) ON DELETE CASCADE ON UPDATE NO ACTION,',
+      '    BatchId INT REFERENCES dbo.LoanBatches (Id) ON DELETE SET NULL);',
+      '  UPDATE dbo.Members SET Blocked = 0;',
+      'END',
+      'GO',
+      'CREATE FUNCTION dbo.fn_Batches () RETURNS INT AS BEGIN RETURN 1 END',
+      'ALTER TABLE dbo.LoanBatches ADD Clerk INT NULL',
+    ].join('\n');
+    const { definitions } = extractSqlDefinitions(source);
+    expect(definitions.map((d) => [d.kind, d.name])).toEqual([
+      ['table', 'dbo.loanbatches'],
+      ['procedure', 'dbo.usp_setup'],
+      ['function', 'dbo.fn_batches'],
+    ]);
+    expect(definitions[0]!.columns).toEqual(['id']);
+    // The foreign key actions in the body's CREATE TABLE are not writes.
+    expect(definitions[1]!.accesses).toEqual([{ kind: 'writes', name: 'dbo.members' }]);
+    expect(definitions[2]!.endLine).toBe(12);
+  });
+
+  it('a missing GO is still found after table DDL in a body', () => {
+    const source = [
+      'CREATE PROCEDURE dbo.usp_Setup AS',
+      '  CREATE TABLE dbo.LoanStaging (Id INT)',
+      '  INSERT INTO dbo.LoanStaging SELECT Id FROM dbo.Loans',
+      'CREATE VIEW dbo.StagedLoans AS SELECT Id FROM dbo.LoanStaging',
+    ].join('\n');
+    const { definitions } = extractSqlDefinitions(source);
+    expect(definitions.map((d) => [d.kind, d.name, d.endLine])).toEqual([
+      ['procedure', 'dbo.usp_setup', 2],
+      ['view', 'dbo.stagedloans', 3],
+    ]);
+  });
+
+  it('SET NOCOUNT ON or SET XACT_ABORT ON without a semicolon keeps the DML after it in a body', () => {
+    const source = [
+      'CREATE PROCEDURE dbo.usp_CloseLoan @id INT',
+      'AS',
+      'BEGIN',
+      '  SET NOCOUNT ON',
+      '  UPDATE dbo.Loans SET ClosedAt = SYSUTCDATETIME() WHERE Id = @id',
+      '  DELETE FROM dbo.Holds WHERE LoanId = @id',
+      'END',
+      'GO',
+      'CREATE PROCEDURE dbo.usp_ExpireHolds',
+      'AS',
+      'SET XACT_ABORT ON',
+      'DELETE dbo.Holds WHERE ExpiresAt < SYSUTCDATETIME()',
+    ].join('\n');
+    const [close, expire] = extractSqlDefinitions(source).definitions;
+    expect(close!.accesses).toEqual([
+      { kind: 'writes', name: 'dbo.holds' },
+      { kind: 'writes', name: 'dbo.loans' },
+    ]);
+    expect(expire!.accesses).toEqual([{ kind: 'writes', name: 'dbo.holds' }]);
+  });
+
+  it('a foreign key action in ALTER TABLE ADD does not end the element list, while other DML does', () => {
+    const source = [
+      'CREATE TABLE dbo.Books (Id INT NOT NULL)',
+      'GO',
+      'ALTER TABLE dbo.Books ADD CONSTRAINT FK_Books_Shelves FOREIGN KEY (ShelfId) REFERENCES dbo.Shelves (Id)',
+      '  ON DELETE SET NULL ON UPDATE NO ACTION, Isbn CHAR(13) NULL',
+      'GO',
+      'ALTER TABLE dbo.Books ADD Title NVARCHAR(200) NULL',
+      'SET XACT_ABORT ON',
+      "UPDATE dbo.Books SET Title = '', Shelf = 0",
+    ].join('\n');
+    expect(only(source).columns).toEqual(['id', 'isbn', 'title']);
+  });
+
   it('skips definitions whose names the Names rule skips', () => {
     const source = [
       'CREATE TABLE #Scratch (Id INT)',
