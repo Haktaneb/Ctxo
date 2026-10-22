@@ -12,8 +12,8 @@ import {
   SKILLS_TEMPLATE_VERSION,
   compareTemplateVersions,
   expectedRulesTier,
+  comparableMarkdown,
   guardAndSkillsExpected,
-  normaliseMarkdown,
   renderRulesBlock,
   scanRulesBlocks,
   skillTemplateVersion,
@@ -195,21 +195,31 @@ export interface RulesHoldOptions {
   readonly skipSkills?: boolean;
   /** A dry run: the guard and this platform's skills that the run would install count as on disk. */
   readonly planned?: { readonly guard?: boolean; readonly skills?: boolean };
+  /** `gate.enabled` as this run already read it; read from `.ctxo/config.yaml` when absent. */
+  readonly gateEnabled?: boolean;
 }
 
 /** What a held rules file waits for; see `rulesHold`. */
 export interface RulesHoldReasons {
   /** The guard is expected and not registered; `unreadable`: `.claude/settings.json` cannot be read safely. */
   readonly guard?: 'absent' | 'unreadable';
-  /** The expected skills that are not on disk. */
+  /** The expected skills that are not on disk, or not readable as a file. */
   readonly missingSkills?: readonly string[];
+  /** The expected skills on disk that differ from the bundled copy; like missing ones, they do not back the compact tier. */
+  readonly outdatedSkills?: readonly string[];
   /** The bundled skills cannot be read, so the installed ones cannot be checked; they count as not on disk. */
   readonly skillsError?: string;
 }
 
+/** Whether a skill backs the compact tier: its file is readable and current (or from a newer ctxo). */
+function skillInPlace(state: SkillState): boolean {
+  return state.state === 'current' || state.state === 'newer';
+}
+
 /**
  * Why a platform's rules block must be left unchanged, or undefined when it may be written; see
- * `rulesHold`. Throws only when the rules file itself cannot be read.
+ * `rulesHold`. A rules file that cannot be read is never held: the writer then leaves it unchanged
+ * with its `could not be read` warning, and the run goes on.
  */
 export function rulesHoldReasons(
   projectRoot: string,
@@ -217,28 +227,46 @@ export function rulesHoldReasons(
   options: RulesHoldOptions = {},
 ): RulesHoldReasons | undefined {
   if (!(SKILL_PLATFORMS as readonly string[]).includes(platformId)) return undefined;
-  if (!guardAndSkillsExpected(firstRulesBlock(projectRoot, platformId))) return undefined;
+  let first: RulesBlockSpan | undefined;
+  try {
+    first = firstRulesBlock(projectRoot, platformId);
+  } catch {
+    return undefined;
+  }
+  if (!guardAndSkillsExpected(first)) return undefined;
 
   let guard: RulesHoldReasons['guard'];
-  if (platformId === 'claude-code' && !options.noGuard && options.planned?.guard !== true && gateEnabled(projectRoot)) {
+  if (
+    platformId === 'claude-code' &&
+    !options.noGuard &&
+    options.planned?.guard !== true &&
+    (options.gateEnabled ?? gateEnabled(projectRoot))
+  ) {
     const state = readClaudeGuardState(projectRoot);
     if (state !== 'present') guard = state;
   }
   let missingSkills: string[] | undefined;
+  let outdatedSkills: string[] | undefined;
   let skillsError: string | undefined;
   if (!options.skipSkills && options.planned?.skills !== true) {
     try {
-      const missing = skillStates(projectRoot, platformId).filter((s) => s.state === 'missing').map((s) => s.skill);
+      const states = skillStates(projectRoot, platformId);
+      const missing = states.filter((s) => s.state === 'missing').map((s) => s.skill);
+      const outdated = states.filter((s) => s.state === 'outdated').map((s) => s.skill);
       if (missing.length > 0) missingSkills = missing;
+      if (outdated.length > 0) outdatedSkills = outdated;
     } catch (err) {
       skillsError = (err as Error).message;
     }
   }
 
-  if (guard === undefined && missingSkills === undefined && skillsError === undefined) return undefined;
+  if (guard === undefined && missingSkills === undefined && outdatedSkills === undefined && skillsError === undefined) {
+    return undefined;
+  }
   return {
     ...(guard !== undefined ? { guard } : {}),
     ...(missingSkills !== undefined ? { missingSkills } : {}),
+    ...(outdatedSkills !== undefined ? { outdatedSkills } : {}),
     ...(skillsError !== undefined ? { skillsError } : {}),
   };
 }
@@ -255,7 +283,8 @@ export function rulesHoldReasons(
  *    skills unless `skipSkills` (Cursor has no guard);
  * 3. what counts is still not on disk, read after the run's skills and guard steps (`planned` stands
  *    in for them in a dry run). An unreadable `.claude/settings.json` is not on disk, and neither are
- *    skills that cannot be checked.
+ *    skills that cannot be checked. A skill counts as on disk only when it is readable and current,
+ *    the same test `resolveRulesTier` applies, so a held block is never one the tier would turn full.
  *
  * A file without a ctxo block is never held. Used by init (the real run and the dry run, so also by
  * `--only rules` and `--rules`) and by `doctor --fix`.
@@ -322,20 +351,25 @@ export function gateEnabled(projectRoot: string): boolean {
 }
 
 /**
- * The rules tier for a platform from what is on disk. `planned` counts a guard or skills that the
- * caller is about to install (or would install in a dry run) as present. A rules file linked to
- * another platform's (`linkedRulesPlatforms`) gets the full tier.
+ * The rules tier for a platform from what is on disk. `planned` counts a guard or skills that a dry
+ * run would install as present. A skill counts only when its file is readable and current (or from a
+ * newer ctxo): a missing one, a path that is not a readable file and an outdated copy do not back the
+ * compact tier. A rules file linked to another platform's (`linkedRulesPlatforms`) gets the full tier.
+ * Only Claude Code can get the compact tier, so every other platform is `full` without a disk read.
+ * `known.gateEnabled` is the `gate.enabled` value this run already read (read from config when absent).
  */
 export function resolveRulesTier(
   projectRoot: string,
   platformId: string,
   planned: { readonly guard?: boolean; readonly skills?: boolean } = {},
+  known: { readonly gateEnabled?: boolean } = {},
 ): RulesTier {
+  if (platformId !== 'claude-code') return 'full';
   const guardPresent = planned.guard === true || readClaudeGuardState(projectRoot) === 'present';
-  const skillsComplete =
-    planned.skills === true || skillStates(projectRoot, 'claude-code').every((s) => s.state !== 'missing');
+  const skillsComplete = planned.skills === true || skillStates(projectRoot, 'claude-code').every(skillInPlace);
   const sharedFile = linkedRulesPlatforms(projectRoot, platformId).length > 0;
-  return expectedRulesTier(platformId, { guardPresent, skillsComplete, gateEnabled: gateEnabled(projectRoot), sharedFile });
+  const gate = known.gateEnabled ?? gateEnabled(projectRoot);
+  return expectedRulesTier(platformId, { guardPresent, skillsComplete, gateEnabled: gate, sharedFile });
 }
 
 export interface Platform {
@@ -442,63 +476,73 @@ export function installRules(
   platformId: string,
   options: { readonly tier?: RulesTier; readonly dryRun?: boolean } = {},
 ): InstallResult {
+  const { result, content } = planRules(projectRoot, platformId, { tier: options.tier });
+  if (!options.dryRun && result.action !== 'skipped' && content !== undefined) {
+    const filePath = join(projectRoot, result.file);
+    if (result.action === 'created') mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, content, 'utf-8');
+  }
+  return result;
+}
+
+/** What `installRules` does to a rules file, and the file's content afterwards. */
+export interface RulesPlan {
+  readonly result: InstallResult;
+  /** The content the file has after the write (the old content when `skipped`); absent when it is left alone with a warning. */
+  readonly content?: string;
+}
+
+/**
+ * `installRules` without the write: its result, and the content the file would have. `existing`
+ * stands in for the file's content on disk, so a dry run that has already planned a write to the same
+ * file under a linked name plans this one against what that write leaves, as a real run reads it.
+ */
+export function planRules(
+  projectRoot: string,
+  platformId: string,
+  options: { readonly tier?: RulesTier; readonly existing?: string } = {},
+): RulesPlan {
   const platform = PLATFORMS.find(p => p.id === platformId);
   if (!platform) throw new Error(`Unknown platform: ${platformId}`);
+  const file = platform.file;
 
   // A file another platform also reads gets the full tier whatever the caller asked (doctor agrees).
   const tier = linkedRulesPlatforms(projectRoot, platformId).length > 0 ? 'full' : (options.tier ?? 'full');
-  const filePath = join(projectRoot, platform.file);
+  const filePath = join(projectRoot, file);
 
-  if (!existsSync(filePath)) {
-    if (!options.dryRun) {
-      mkdirSync(dirname(filePath), { recursive: true });
-      writeFileSync(filePath, generateRules(platformId, tier), 'utf-8');
+  let existing = options.existing;
+  if (existing === undefined) {
+    if (!existsSync(filePath)) return { result: { file, action: 'created' }, content: generateRules(platformId, tier) };
+    try {
+      existing = readFileSync(filePath, 'utf-8');
+    } catch (err) {
+      return { result: { file, action: 'skipped', warning: unreadableWarning(file, err) } };
     }
-    return { file: platform.file, action: 'created' };
   }
-
-  let existing: string;
-  try {
-    existing = readFileSync(filePath, 'utf-8');
-  } catch (err) {
-    return { file: platform.file, action: 'skipped', warning: unreadableWarning(platform.file, err) };
-  }
+  const changed = (content: string): RulesPlan => ({
+    result: { file, action: content === existing ? 'skipped' : 'updated' },
+    content,
+  });
 
   if (platformId === 'cursor' && textShape(existing).text.trim() === '') {
     // An empty Cursor file gets what a created one gets: the frontmatter, then the block.
-    const content = textShape(existing).restore(generateRules(platformId, tier));
-    if (content === existing) return { file: platform.file, action: 'skipped' };
-    if (!options.dryRun) writeFileSync(filePath, content, 'utf-8');
-    return { file: platform.file, action: 'updated' };
+    return changed(textShape(existing).restore(generateRules(platformId, tier)));
   }
 
   const upsert = upsertRulesBlock(existing, renderRulesBlock(tier));
   if (upsert.kind === 'unterminated') {
-    return {
-      file: platform.file,
-      action: 'skipped',
-      warning: `${platform.file}: ctxo rules start marker has no end marker; left unchanged`,
-    };
+    return { result: { file, action: 'skipped', warning: `${file}: ctxo rules start marker has no end marker; left unchanged` } };
   }
   if (upsert.kind === 'orphan-end') {
-    return {
-      file: platform.file,
-      action: 'skipped',
-      warning: `${platform.file}: ctxo rules end marker has no start marker; left unchanged`,
-    };
+    return { result: { file, action: 'skipped', warning: `${file}: ctxo rules end marker has no start marker; left unchanged` } };
   }
   if (upsert.kind === 'newer') {
     return {
-      file: platform.file,
-      action: 'skipped',
-      warning: `${platform.file}: rules block v${upsert.version} comes from a newer ctxo; left unchanged`,
+      result: { file, action: 'skipped', warning: `${file}: rules block v${upsert.version} comes from a newer ctxo; left unchanged` },
     };
   }
 
-  const content = platformId === 'cursor' ? replaceLegacyCursorFrontmatter(upsert.content) : upsert.content;
-  if (content === existing) return { file: platform.file, action: 'skipped' };
-  if (!options.dryRun) writeFileSync(filePath, content, 'utf-8');
-  return { file: platform.file, action: 'updated' };
+  return changed(platformId === 'cursor' ? replaceLegacyCursorFrontmatter(upsert.content) : upsert.content);
 }
 
 /** The warning for a rules, skill or MCP config file ctxo could not read (a directory in its place, no permission). */
@@ -548,7 +592,7 @@ export interface SkillState {
   readonly file: string;
   /**
    * `current` also covers a copy that differs only in formatting: line endings, a UTF-8 BOM, trailing
-   * whitespace, blank lines or table padding (`normaliseMarkdown`). `newer`: the copy's
+   * whitespace, blank lines, table padding or line wrapping (`comparableMarkdown`). `newer`: the copy's
    * `<!-- ctxo-skill -->` marker is above SKILLS_TEMPLATE_VERSION (a newer ctxo wrote it); it is left
    * alone and is not outdated. A copy with no marker or an older one is `outdated`. `missing` also
    * covers a path that cannot be read as a file (such as a directory).
@@ -587,7 +631,7 @@ function skillPlan(projectRoot: string, platformId: string): SkillPlanEntry[] {
       return { skill, file, state: 'newer', bundled, to, version };
     }
     // The bundled copy carries the current marker, so a copy without one or with an older one differs.
-    const same = normaliseMarkdown(installed) === normaliseMarkdown(bundled);
+    const same = comparableMarkdown(installed) === comparableMarkdown(bundled);
     return { skill, file, state: same ? 'current' : 'outdated', bundled, to };
   });
 }
@@ -621,6 +665,28 @@ export function installSkills(
     }
     return { file, action: state === 'missing' ? 'created' : 'updated' };
   });
+}
+
+/**
+ * The warnings of one platform's `installSkills` run, split by what they leave on disk: a skill from
+ * a newer ctxo stays in place and still backs the tier (`notices`); any other warning, such as a skill
+ * path that is a directory, leaves the skill missing (`problems`). Init and `doctor --fix` read them
+ * the same way, so init plans the tier only from skills that are in place.
+ */
+export function skillInstallWarnings(
+  projectRoot: string,
+  platformId: string,
+  results: readonly InstallResult[],
+): { readonly problems: readonly string[]; readonly notices: readonly string[] } {
+  const newer = new Set(skillStates(projectRoot, platformId).filter((s) => s.state === 'newer').map((s) => s.file));
+  const problems: string[] = [];
+  const notices: string[] = [];
+  for (const result of results) {
+    if (result.warning === undefined) continue;
+    if (newer.has(result.file)) notices.push(result.warning);
+    else problems.push(result.warning);
+  }
+  return { problems, notices };
 }
 
 /* ------------------------------------------------------------------ */

@@ -12,8 +12,12 @@ import {
   ensureMcpConfig,
   installSkills,
   ensureClaudeHook,
+  gateEnabled,
+  linkedRulesPlatforms,
+  planRules,
   resolveRulesTier,
   rulesFileHoldReasons,
+  skillInstallWarnings,
   type InstallResult,
   type RulesHoldOptions,
 } from './ai-rules.js';
@@ -353,13 +357,17 @@ export class InitCommand {
       results.push(ensureIndexDir(root, write), ensureConfig(root, write), ensureGitignore(root, write));
     }
 
-    /** The platforms whose skills step ran without an error. */
+    /**
+     * The platforms whose skills step leaves every skill in place: no error, and no warning other than
+     * a skill from a newer ctxo (a skill path that is a directory stays missing, so it does not count).
+     */
     const skillsDone = new Set<string>();
     if (parts.has('skills')) {
       for (const id of toolIds) {
         try {
-          results.push(...installSkills(root, id, write));
-          skillsDone.add(id);
+          const skillResults = installSkills(root, id, write);
+          results.push(...skillResults);
+          if (skillInstallWarnings(root, id, skillResults).problems.length === 0) skillsDone.add(id);
         } catch (err) {
           // Only the warning is printed; the platform id stands in for the skill files it names.
           results.push({ file: id, action: 'skipped', warning: `skills for ${id} not installed: ${(err as Error).message}` });
@@ -375,15 +383,34 @@ export class InitCommand {
     }
 
     if (parts.has('rules')) {
-      const planned = { guard, skills: skillsDone.has('claude-code') };
+      // Read once per run, so an invalid config warns once, not once per platform.
+      const gate = gateEnabled(root);
+      // A real run reads the tier from disk after the skills and guard steps; a dry run counts what it would install.
+      const planned = dryRun ? { guard, skills: skillsDone.has('claude-code') } : {};
       const holdOptions = (platformId: string): RulesHoldOptions => ({
         ...declined,
+        gateEnabled: gate,
         ...(dryRun ? { planned: { guard, skills: skillsDone.has(platformId) } } : {}),
       });
+      /** Dry run only: the content each planned rules file would have, so a linked name is planned against it. */
+      const plannedContent = new Map<string, string>();
       for (const id of toolIds) {
         // A file linked to a held one (an AGENTS.md that is CLAUDE.md) is held too: a write would go through the link.
-        const hold = rulesFileHoldReasons(root, id, holdOptions) !== undefined;
-        results.push(...(hold ? this.heldRows(id) : [installRules(root, id, { tier: this.rulesTier(id, planned), dryRun })]));
+        if (rulesFileHoldReasons(root, id, holdOptions) !== undefined) {
+          results.push(...this.heldRows(id));
+          continue;
+        }
+        const tier = this.rulesTier(id, planned, gate);
+        if (!dryRun) {
+          results.push(installRules(root, id, { tier }));
+          continue;
+        }
+        // The real run reads a linked name after the earlier name's write landed; plan it against that content.
+        const sibling = linkedRulesPlatforms(root, id).find((other) => plannedContent.has(other));
+        const existing = sibling !== undefined ? plannedContent.get(sibling) : undefined;
+        const plan = planRules(root, id, { tier, ...(existing !== undefined ? { existing } : {}) });
+        if (plan.content !== undefined) plannedContent.set(id, plan.content);
+        results.push(plan.result);
       }
     }
 
@@ -415,9 +442,13 @@ export class InitCommand {
   }
 
   /** The platform's rules tier; `full` when it cannot be resolved (the bundled skills cannot be read). */
-  private rulesTier(platformId: string, planned: { readonly guard: boolean; readonly skills: boolean }): RulesTier {
+  private rulesTier(
+    platformId: string,
+    planned: { readonly guard?: boolean; readonly skills?: boolean },
+    gate: boolean,
+  ): RulesTier {
     try {
-      return resolveRulesTier(this.projectRoot, platformId, planned);
+      return resolveRulesTier(this.projectRoot, platformId, planned, { gateEnabled: gate });
     } catch {
       return 'full';
     }

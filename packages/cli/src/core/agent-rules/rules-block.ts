@@ -228,6 +228,17 @@ export function normaliseMarkdown(text: string): string {
   return textShape(text).text.split('\n').map(comparisonLine).filter((line) => line !== '').join('\n');
 }
 
+/**
+ * The equality form of markdown text: `normaliseMarkdown`, then every whitespace run (line breaks
+ * included) as one space, trimmed. Re-wrapped prose (Prettier's `proseWrap: always` or `never`),
+ * indentation and padding then never count as edits. Used only to test equality (block
+ * classification, the formatting-only `unchanged` upsert, the skill comparison); the tier and the
+ * legacy body are still read line by line.
+ */
+export function comparableMarkdown(text: string): string {
+  return normaliseMarkdown(text).replace(/\s+/g, ' ').trim();
+}
+
 /* ------------------------------------------------------------------ */
 /*  Scanning                                                           */
 /* ------------------------------------------------------------------ */
@@ -346,8 +357,9 @@ export type UpsertResult =
  * from a newer template (D8, D2). Every byte outside the ctxo blocks is kept, the BOM included; the new
  * block takes the dominant line ending of the text around it, so a mixed-ending file is never
  * rewritten wholesale.
- * A single block with the same marker version as `block` and a body that differs only in formatting
- * (`normaliseMarkdown`) is `unchanged`, so ctxo and a formatter never rewrite each other's output.
+ * A single block with the same marker version as `block` and a body that differs only in formatting,
+ * line wrapping included (`comparableMarkdown`), is `unchanged`, so ctxo and a formatter never rewrite
+ * each other's output.
  */
 export function upsertRulesBlock(existing: string, block: string): UpsertResult {
   const shape = textShape(existing);
@@ -394,7 +406,7 @@ export function upsertRulesBlock(existing: string, block: string): UpsertResult 
   return { kind: 'replaced', content };
 }
 
-/** Whether `found` is a marked block with `block`'s marker version and a body equal to its in `normaliseMarkdown` form. */
+/** Whether `found` is a marked block with `block`'s marker version and a body equal to its in `comparableMarkdown` form. */
 function sameBlock(found: RulesBlockSpan, block: string): boolean {
   const target = scanNormalised(textShape(block).text).blocks[0];
   return (
@@ -403,7 +415,7 @@ function sameBlock(found: RulesBlockSpan, block: string): boolean {
     target.marked &&
     found.version !== undefined &&
     found.version === target.version &&
-    normaliseMarkdown(found.body) === normaliseMarkdown(target.body)
+    comparableMarkdown(found.body) === comparableMarkdown(target.body)
   );
 }
 
@@ -462,10 +474,10 @@ export function blockTier(body: string): RulesTier | 'unknown' {
   return 'unknown';
 }
 
-/** Each tier's body in the `normaliseMarkdown` form. */
-const NORMALISED_BODIES: Readonly<Record<RulesTier, string>> = {
-  compact: normaliseMarkdown(COMPACT_RULE_BODY),
-  full: normaliseMarkdown(FULL_RULE_BODY),
+/** Each tier's body in the `comparableMarkdown` form. */
+const COMPARABLE_BODIES: Readonly<Record<RulesTier, string>> = {
+  compact: comparableMarkdown(COMPACT_RULE_BODY),
+  full: comparableMarkdown(FULL_RULE_BODY),
 };
 
 export type BlockStatus =
@@ -475,8 +487,8 @@ export type BlockStatus =
 
 /**
  * Outdated: no version, an older version, or the current version with an edited body. A body that
- * differs from the template only in formatting (`normaliseMarkdown`) is not edited.
- * A block from a newer template is never outdated.
+ * differs from the template only in formatting, line wrapping included (`comparableMarkdown`), is not
+ * edited. A block from a newer template is never outdated.
  */
 export function classifyRulesBlock(block: RulesBlockSpan): BlockStatus {
   const tier = blockTier(block.body);
@@ -484,7 +496,7 @@ export function classifyRulesBlock(block: RulesBlockSpan): BlockStatus {
   const order = compareTemplateVersions(block.version, RULES_TEMPLATE_VERSION);
   if (order > 0) return { state: 'newer', version: block.version, tier };
   if (order < 0) return { state: 'outdated', reason: 'older', tier };
-  if (tier !== 'unknown' && normaliseMarkdown(block.body) === NORMALISED_BODIES[tier]) return { state: 'current', tier };
+  if (tier !== 'unknown' && comparableMarkdown(block.body) === COMPARABLE_BODIES[tier]) return { state: 'current', tier };
   return { state: 'outdated', reason: 'edited', tier };
 }
 

@@ -5,7 +5,8 @@ import { createHash } from 'node:crypto';
 import { delimiter, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { InitCommand, type InitOptions } from '../init-command.js';
-import { PLATFORMS } from '../ai-rules.js';
+import { PLATFORMS, resolveRulesTier } from '../ai-rules.js';
+import { AiRulesCheck } from '../../adapters/diagnostics/checks/agent-setup-check.js';
 import * as gitHooks from '../git-hooks.js';
 import {
   LEGACY_CURSOR_FRONTMATTER,
@@ -815,6 +816,42 @@ describe('InitCommand - selected parts and tiered rules (#159)', () => {
 
     expect(planned).toEqual(PLATFORMS.map((platform) => platform.file));
     for (const platform of PLATFORMS) expect(existsSync(join(dir, platform.file)), platform.file).toBe(true);
+  });
+
+  it('a skill path that is a directory gives the full tier in init and in doctor', async () => {
+    const dir = makeTempProject();
+    // Something other than a readable skill sits where ctxo-safe-edit belongs.
+    mkdirSync(join(dir, '.claude', 'skills', 'ctxo-safe-edit', 'SKILL.md'), { recursive: true });
+    const only: InitOptions['only'] = ['rules', 'skills', 'guard'];
+
+    const plannedClaude = new InitCommand(dir).plan({ tools: ['claude-code'], only }).find((row) => row.file === 'CLAUDE.md');
+    await new InitCommand(dir).run({ tools: ['claude-code'], yes: true, only });
+
+    expect(stderr()).toMatch(/\.claude\/skills\/ctxo-safe-edit\/SKILL\.md: could not be read \(E\w+\); left unchanged/);
+    expect(readFileSync(join(dir, '.claude', 'settings.json'), 'utf-8')).toContain('ctxo gate-hook');
+    expect(blockTier(rulesBody(join(dir, 'CLAUDE.md')))).toBe('full');
+    expect(plannedClaude).toMatchObject({ file: 'CLAUDE.md', action: 'created' });
+    // Doctor expects the same tier, so the block raises no tier warning.
+    expect(resolveRulesTier(dir, 'claude-code')).toBe('full');
+    const doctor = await new AiRulesCheck().run({ projectRoot: dir, ctxoRoot: join(dir, '.ctxo') });
+    expect(doctor.message).not.toContain('rules tier does not match');
+    expect(doctor.message).toContain('CLAUDE.md v');
+  });
+
+  it('an invalid config.yaml warns once per init run, not once per platform', async () => {
+    const dir = makeTempProject();
+    mkdirSync(join(dir, '.ctxo'), { recursive: true });
+    writeFileSync(join(dir, '.ctxo', 'config.yaml'), 'gate:\n  enabled: maybe\n', 'utf-8');
+    writeFileSync(join(dir, 'CLAUDE.md'), PRE_TIER_CLAUDE_MD, 'utf-8');
+    const configWarnings = (): number => stderr().split('\n').filter((line) => line.startsWith('[ctxo:config] WARN')).length;
+
+    await new InitCommand(dir).run({ dryRun: true, only: ['rules'] });
+    expect(configWarnings()).toBe(1);
+
+    errorSpy.mockClear();
+    await new InitCommand(dir).run({ yes: true, only: ['rules', 'skills', 'guard'] });
+    expect(configWarnings()).toBe(1);
+    expect(blockTier(rulesBody(join(dir, 'CLAUDE.md')))).toBe('compact');
   });
 
   it('a tool named twice in --tools is applied once', async () => {

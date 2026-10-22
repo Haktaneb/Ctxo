@@ -85,8 +85,8 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo with five packages. Per-packag
   an end marker, or an end marker without a start marker leaves the file unchanged with a warning.
 - **Formatter-stable rules and skills (#159).** The blocks and the bundled skills are written in
   Prettier's layout and compared with formatting ignored (line endings, BOM, trailing whitespace,
-  blank lines, table padding), so a markdown formatter and ctxo never rewrite each other, and a
-  formatted compact block no longer reads as an opt-out.
+  blank lines, table padding, line wrapping), so a markdown formatter and ctxo never rewrite each
+  other, and a formatted compact block no longer reads as an opt-out.
 - **Versioned skills (#159).** Each bundled skill ends with `<!-- ctxo-skill v<version> -->`. A skill
   from a newer ctxo is left alone with a warning and is not reported as outdated.
 - **No silent opt-out (#159).** `ctxo init` (including `--only rules`, `--rules` and the dry run) and

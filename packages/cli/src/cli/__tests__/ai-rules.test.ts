@@ -1518,6 +1518,23 @@ describe('linked rules files', () => {
     expect(readFileSync(join(dir, 'AGENTS.md'), 'utf-8')).toBe('# Project\n\n' + renderRulesBlock('full') + '\n');
   });
 
+  it('the dry run gives a linked AGENTS.md the action the real run takes', async () => {
+    const dir = linkedProject((existing, newPath) => linkSync(existing, newPath));
+    const plan = new InitCommand(dir).plan({ tools: ['claude-code', 'antigravity'], only: ['skills', 'guard', 'rules'] });
+    const plannedAction = (file: string): string | undefined => plan.find((row) => row.file === file)?.action;
+
+    // The real run writes the shared file through CLAUDE.md, so AGENTS.md then reads as unchanged.
+    expect([plannedAction('CLAUDE.md'), plannedAction('AGENTS.md')]).toEqual(['updated', 'skipped']);
+    expect(await initRules(dir)).toEqual(['CLAUDE.md (updated)', 'AGENTS.md (unchanged)']);
+
+    // In the other order the first name written is AGENTS.md; the dry run follows that too.
+    writeFileSync(join(dir, 'CLAUDE.md'), '# Project\n', 'utf-8');
+    const reversed = new InitCommand(dir)
+      .plan({ tools: ['antigravity', 'claude-code'], only: ['rules'] })
+      .map((row) => `${row.file} ${row.action}`);
+    expect(reversed).toEqual(['AGENTS.md updated', 'CLAUDE.md skipped']);
+  });
+
   it('a linked CLAUDE.md resolves and is written in the full tier even when the guard and skills are installed', () => {
     const dir = linkedProject((existing, newPath) => linkSync(existing, newPath));
     ensureClaudeHook(dir);

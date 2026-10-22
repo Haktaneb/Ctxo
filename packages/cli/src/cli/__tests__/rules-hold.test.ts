@@ -7,7 +7,7 @@ import {
   LEGACY_RULE_BODY,
   renderRulesBlock,
 } from '../../core/agent-rules/rules-block.js';
-import { ensureClaudeHook, installSkills, rulesHold, rulesHoldReasons } from '../ai-rules.js';
+import { ensureClaudeHook, installSkills, resolveRulesTier, rulesHold, rulesHoldReasons } from '../ai-rules.js';
 
 /** Set by a test to hide the bundled skills, as in a ctxo install that lost its skills/ folder. */
 const bundle = vi.hoisted(() => ({ hidden: false, projectRoot: '' }));
@@ -92,6 +92,23 @@ describe('rulesHold', () => {
     write(root, '.ctxo/config.yaml', 'gate:\n  enabled: false\n');
     expect(rulesHoldReasons(root, 'claude-code')).toEqual({ missingSkills: ALL_SKILLS });
     expect(rulesHold(root, 'claude-code', { skipSkills: true })).toBe(false);
+  });
+
+  it('an outdated skill holds the block and gives the full tier, the same test for both', () => {
+    const root = makeProject();
+    write(root, 'CLAUDE.md', renderRulesBlock('compact') + '\n');
+    ensureClaudeHook(root);
+    installSkills(root, 'claude-code');
+    expect(resolveRulesTier(root, 'claude-code')).toBe('compact');
+
+    // An edited copy does not back the compact tier, so a write now would turn the block full.
+    write(root, '.claude/skills/ctxo-review-pr/SKILL.md', '---\nname: ctxo-review-pr\n---\n\nEdited.\n');
+    expect(resolveRulesTier(root, 'claude-code')).toBe('full');
+    expect(rulesHoldReasons(root, 'claude-code')).toEqual({ outdatedSkills: ['ctxo-review-pr'] });
+
+    installSkills(root, 'claude-code');
+    expect(rulesHold(root, 'claude-code')).toBe(false);
+    expect(resolveRulesTier(root, 'claude-code')).toBe('compact');
   });
 
   it('rulesHold counts what a dry run would install as on disk', () => {

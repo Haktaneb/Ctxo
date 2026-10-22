@@ -22,7 +22,7 @@ import {
   readRulesStates,
   resolveRulesTier,
   rulesFileHoldReasons,
-  skillStates,
+  skillInstallWarnings,
   skillsExpected,
   type RulesHoldReasons,
 } from './ai-rules.js';
@@ -300,12 +300,9 @@ async function fixSkills(projectRoot: string): Promise<void | FixSkipped | FixWa
   const warnings: string[] = [];
   for (const id of platforms) {
     try {
-      const results = installSkills(projectRoot, id);
-      const newer = new Set(skillStates(projectRoot, id).filter((s) => s.state === 'newer').map((s) => s.file));
-      for (const result of results) {
-        if (result.warning === undefined) continue;
-        (newer.has(result.file) ? warnings : errors).push(result.warning);
-      }
+      const { problems, notices } = skillInstallWarnings(projectRoot, id, installSkills(projectRoot, id));
+      errors.push(...problems);
+      warnings.push(...notices);
     } catch (err) {
       errors.push(`${id}: ${(err as Error).message}`);
     }
@@ -382,6 +379,7 @@ function holdMessage(file: string, reasons: RulesHoldReasons): string {
   if (reasons.guard === 'unreadable') why.push('.claude/settings.json is unreadable');
   if (reasons.guard === 'absent') why.push('the safe-edit guard is not registered');
   if (reasons.missingSkills) why.push(`ctxo skills are missing (${reasons.missingSkills.join(', ')})`);
+  if (reasons.outdatedSkills) why.push(`ctxo skills are outdated (${reasons.outdatedSkills.join(', ')})`);
   if (reasons.skillsError !== undefined) why.push(`the ctxo skills cannot be checked (${reasons.skillsError})`);
   return `${file} left unchanged while ${why.join(' and ')}`;
 }

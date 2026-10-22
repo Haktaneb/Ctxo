@@ -1,11 +1,16 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import prettier from 'prettier';
 import { SKILLS, installSkills, skillStates } from '../ai-rules.js';
+import { InitCommand } from '../init-command.js';
+import { AiRulesCheck, ClaudeGuardHookCheck, SkillsCheck } from '../../adapters/diagnostics/checks/agent-setup-check.js';
+import { isolateGitEnv, type IsolatedGitEnv } from './git-test-env.js';
 import {
   LEGACY_RULE_BODY,
+  RULES_TEMPLATE_VERSION,
   blockTier,
   classifyRulesBlock,
   guardAndSkillsExpected,
@@ -18,7 +23,8 @@ import {
 /*
  * Formatters such as Prettier (often run over *.md by lint-staged) must not turn the ctxo rules blocks
  * or the bundled skills into drift: the generated text is already in Prettier's layout, and the
- * comparison ignores what a formatter changes (line endings, trailing whitespace, blank lines).
+ * comparison ignores what a formatter changes (line endings, trailing whitespace, blank lines, and
+ * line wrapping under a non-default `proseWrap`).
  */
 
 const BOM = String.fromCharCode(0xfeff);
@@ -103,6 +109,64 @@ describe('formatter stability', () => {
     expect(installSkills(root, 'claude-code').map((r) => r.action)).toEqual(['skipped', 'skipped', 'skipped']);
     expect(installSkills(root, 'cursor').map((r) => r.action)).toEqual(['skipped', 'skipped', 'skipped']);
     [...claudeFiles, ...cursorFiles].forEach((file, i) => expect(readFileSync(file).equals(before[i] as Buffer)).toBe(true));
+  });
+
+  describe('re-wrapped prose', () => {
+    let gitEnv: IsolatedGitEnv | undefined;
+
+    beforeEach(() => {
+      gitEnv = isolateGitEnv();
+    });
+
+    afterEach(() => {
+      gitEnv?.restore();
+      gitEnv = undefined;
+    });
+
+    /** `ctxo init --only rules,skills,guard --tools claude-code -y`; returns its rows as `<file> (<action>)`. */
+    async function initRows(dir: string): Promise<string[]> {
+      const rows: string[] = [];
+      const spy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+        rows.push(args.map(String).join(' ').replace(/^\[ctxo\] \S+ /, ''));
+      });
+      try {
+        await new InitCommand(dir).run({ tools: ['claude-code'], yes: true, only: ['rules', 'skills', 'guard'] });
+      } finally {
+        spy.mockRestore();
+      }
+      return rows;
+    }
+
+    it.each(['always', 'never'] as const)(
+      'Prettier with proseWrap %s leaves the blocks and skills current: init reports unchanged and doctor passes',
+      async (proseWrap) => {
+        const dir = makeTempDir();
+        execFileSync('git', ['init', '-q'], { cwd: dir });
+        await initRows(dir);
+        const files = ['CLAUDE.md', ...SKILLS.map((skill) => join('.claude', 'skills', skill, 'SKILL.md'))];
+        for (const file of files) {
+          const path = join(dir, file);
+          const original = readFileSync(path, 'utf-8').replace(/\r\n/g, '\n');
+          const wrapped = prettier.format(original, { parser: 'markdown', proseWrap, printWidth: 40 });
+          if (file === 'CLAUDE.md') expect(wrapped).not.toBe(original);
+          writeFileSync(path, wrapped, 'utf-8');
+        }
+        const before = files.map((file) => readFileSync(join(dir, file)));
+
+        const rows = await initRows(dir);
+
+        expect(rows).toEqual([
+          ...SKILLS.map((skill) => `.claude/skills/${skill}/SKILL.md (unchanged)`),
+          '.claude/settings.json (unchanged)',
+          'CLAUDE.md (unchanged)',
+        ]);
+        files.forEach((file, i) => expect(readFileSync(join(dir, file)).equals(before[i] as Buffer), file).toBe(true));
+        const ctx = { projectRoot: dir, ctxoRoot: join(dir, '.ctxo') };
+        expect(await new AiRulesCheck().run(ctx)).toMatchObject({ status: 'pass', message: `CLAUDE.md v${RULES_TEMPLATE_VERSION} compact` });
+        expect(await new SkillsCheck().run(ctx)).toMatchObject({ status: 'pass' });
+        expect(await new ClaudeGuardHookCheck().run(ctx)).toMatchObject({ status: 'pass' });
+      },
+    );
   });
 
   it('a reformatted legacy body is replaced in place', () => {
