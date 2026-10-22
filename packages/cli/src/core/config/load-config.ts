@@ -203,7 +203,7 @@ export function resolveCoChangeConfig(
 
 /** The `contextsView` section with every default applied; what the file graph and clustering use. */
 export interface ResolvedContextsViewConfig {
-  readonly weights: { readonly dependency: number; readonly coChange: number };
+  readonly weights: { readonly dependency: number; readonly coChange: number; readonly data: number };
   readonly exclude: readonly string[];
   readonly hubs: {
     readonly auto: boolean;
@@ -225,7 +225,7 @@ function positiveOr(value: unknown, fallback: number): number {
 }
 
 /**
- * Resolves the `contextsView` section (defaults: weights 1 and 1, hubs auto with top 1% and at least
+ * Resolves the `contextsView` section (defaults: weights 1, 1 and data 0, hubs auto with top 1% and at least
  * 10 dependents, resolution 1, minCandidateFiles 3). Unusable values and invalid globs are skipped.
  */
 export function resolveContextsViewConfig(config: CtxoConfig): ResolvedContextsViewConfig {
@@ -236,6 +236,7 @@ export function resolveContextsViewConfig(config: CtxoConfig): ResolvedContextsV
     weights: {
       dependency: nonNegativeOr(section?.weights?.dependency, 1),
       coChange: nonNegativeOr(section?.weights?.coChange, 1),
+      data: nonNegativeOr(section?.weights?.data, 0),
     },
     exclude: (section?.exclude ?? []).filter(isValidGlob),
     hubs: {

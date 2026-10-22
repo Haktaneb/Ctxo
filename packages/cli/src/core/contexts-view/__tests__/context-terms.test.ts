@@ -11,6 +11,129 @@ function byFile(entries: Record<string, SymbolNode[]>): Map<string, readonly Sym
   return new Map(Object.entries(entries));
 }
 
+/** A lang-sql table symbol: canonical name in the ID, declared spelling as the name, columns as an annotation. */
+function table(file: string, canonical: string, declared: string, columns: string[]): SymbolNode {
+  return {
+    symbolId: `${file}::${canonical}::table`,
+    name: declared,
+    kind: 'table',
+    startLine: 1,
+    endLine: 2,
+    ...(columns.length > 0 ? { annotations: [{ name: 'columns', args: columns }] } : {}),
+  };
+}
+
+function view(file: string, canonical: string, declared: string): SymbolNode {
+  return { symbolId: `${file}::${canonical}::view`, name: declared, kind: 'view', startLine: 1, endLine: 2 };
+}
+
+describe('data resource terms', () => {
+  it('table names and columns join the top terms', () => {
+    const symbols = byFile({
+      'db/loans.sql': [table('db/loans.sql', 'dbo.loanitems', 'dbo.LoanItems', ['due_date', 'fine_amount'])],
+      'db/members.sql': [table('db/members.sql', 'dbo.member_cards', 'member_cards', [])],
+      'src/Lending/Loan.cs': [sym('src/Lending/Loan.cs', 'Lending.Loan', 'class')],
+    });
+    expect(harvestTopTerms(['db/loans.sql', 'db/members.sql', 'src/Lending/Loan.cs'], symbols, DEFAULT_TECHNICAL_TERMS)).toEqual([
+      { term: 'loan', files: 2 },
+      { term: 'amount', files: 1 },
+      { term: 'cards', files: 1 },
+      { term: 'date', files: 1 },
+      { term: 'due', files: 1 },
+      { term: 'fine', files: 1 },
+      { term: 'items', files: 1 },
+      { term: 'member', files: 1 },
+    ]);
+  });
+
+  it('a table and a class of the same name with different shapes collide', () => {
+    const symbols = byFile({
+      'src/Billing/Loans.cs': [
+        sym('src/Billing/Loans.cs', 'Billing.Loans', 'class'),
+        sym('src/Billing/Loans.cs', 'Billing.Loans.Total', 'method'),
+        sym('src/Billing/Loans.cs', 'Billing.Loans.Currency', 'variable'),
+      ],
+      'db/loans.sql': [table('db/loans.sql', 'dbo.loans', 'dbo.Loans', ['amount', 'member_id'])],
+    });
+    expect(
+      findTermCollisions([{ id: 1, files: ['src/Billing/Loans.cs'] }, { id: 2, files: ['db/loans.sql'] }], symbols),
+    ).toEqual([
+      {
+        name: 'loans',
+        minJaccard: 0,
+        occurrences: [
+          {
+            candidate: 1,
+            file: 'src/Billing/Loans.cs',
+            symbolId: 'src/Billing/Loans.cs::Billing.Loans::class',
+            members: ['Currency', 'Total'],
+          },
+          { candidate: 2, file: 'db/loans.sql', symbolId: 'db/loans.sql::dbo.loans::table', members: ['amount', 'member_id'] },
+        ],
+      },
+    ]);
+  });
+
+  it('member names compare without case and underscores', () => {
+    const cls = (members: string[]) => [
+      sym('src/Lending/LoanItems.cs', 'Lending.LoanItems', 'class'),
+      ...members.map((member) => sym('src/Lending/LoanItems.cs', `Lending.LoanItems.${member}`, 'variable')),
+    ];
+    const sources = [
+      { id: 1, files: ['src/Lending/LoanItems.cs'] },
+      { id: 2, files: ['db/loan_items.sql'] },
+    ];
+    const tableSymbols = [table('db/loan_items.sql', 'dbo.loan_items', 'loan_items', ['due_date', 'member_id'])];
+
+    // MemberId matches member_id and DueDate matches due_date: the same shape, no collision.
+    expect(
+      findTermCollisions(sources, byFile({ 'src/Lending/LoanItems.cs': cls(['DueDate', 'MemberId']), 'db/loan_items.sql': tableSymbols })),
+    ).toEqual([]);
+
+    // Two of five normalized names shared: 0.4. The key drops case and `_`; members keep their spelling.
+    const result = findTermCollisions(
+      sources,
+      byFile({
+        'src/Lending/LoanItems.cs': cls(['DueDate', 'Fee', 'MemberId']),
+        'db/loan_items.sql': [table('db/loan_items.sql', 'dbo.loan_items', 'loan_items', ['amount', 'due_date', 'fine', 'member_id'])],
+      }),
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0]!.name).toBe('loanitems');
+    expect(result[0]!.minJaccard).toBe(0.4);
+    expect(result[0]!.occurrences.map((o) => o.members)).toEqual([
+      ['DueDate', 'Fee', 'MemberId'],
+      ['amount', 'due_date', 'fine', 'member_id'],
+    ]);
+
+    // The similarity function receives the normalized names.
+    const seen: Array<readonly string[]> = [];
+    findTermCollisions(
+      sources,
+      byFile({ 'src/Lending/LoanItems.cs': cls(['MemberId']), 'db/loan_items.sql': tableSymbols }),
+      (a, b) => {
+        seen.push(a, b);
+        return 0;
+      },
+    );
+    expect(seen).toEqual([['memberid'], ['duedate', 'memberid']]);
+  });
+
+  it('views appear in top terms but not in collisions', () => {
+    const symbols = byFile({
+      'src/Billing/Loans.cs': [
+        sym('src/Billing/Loans.cs', 'Billing.Loans', 'class'),
+        sym('src/Billing/Loans.cs', 'Billing.Loans.Total', 'method'),
+      ],
+      'db/open_loans.sql': [view('db/open_loans.sql', 'dbo.loans', 'dbo.Loans')],
+    });
+    expect(harvestTopTerms(['db/open_loans.sql'], symbols, DEFAULT_TECHNICAL_TERMS)).toEqual([{ term: 'loans', files: 1 }]);
+    expect(
+      findTermCollisions([{ id: 1, files: ['src/Billing/Loans.cs'] }, { id: 2, files: ['db/open_loans.sql'] }], symbols),
+    ).toEqual([]);
+  });
+});
+
 describe('harvestTopTerms', () => {
   it('ranks type-name tokens by number of files', () => {
     const symbols = byFile({

@@ -24,7 +24,7 @@ describe('contextsView config', () => {
   it('resolveContextsViewConfig returns the spec defaults when the section is absent', () => {
     const resolved = resolveContextsViewConfig(load('version: "1.0"\n').config);
     expect(resolved).toEqual({
-      weights: { dependency: 1, coChange: 1 },
+      weights: { dependency: 1, coChange: 1, data: 0 },
       exclude: [],
       hubs: { auto: true, topPercent: 1, minDependents: 10, paths: [] },
       resolution: 1,
@@ -48,7 +48,7 @@ describe('contextsView config', () => {
     const loaded = load(
       [
         'contextsView:',
-        '  weights: { dependency: 0.5, coChange: 2 }',
+        '  weights: { dependency: 0.5, coChange: 2, data: 0.25 }',
         `  exclude: ["docs/**", "${tooLong}"]`,
         `  hubs: { auto: false, topPercent: 5, minDependents: 4, paths: ["src/shared/**", "${tooLong}"] }`,
         '  resolution: 1.5',
@@ -63,7 +63,7 @@ describe('contextsView config', () => {
       expect.stringContaining('contextsView.hubs.paths: '),
     ]);
     expect(resolveContextsViewConfig(loaded.config)).toEqual({
-      weights: { dependency: 0.5, coChange: 2 },
+      weights: { dependency: 0.5, coChange: 2, data: 0.25 },
       exclude: ['docs/**'],
       hubs: { auto: false, topPercent: 5, minDependents: 4, paths: ['src/shared/**'] },
       resolution: 1.5,
@@ -86,5 +86,26 @@ describe('contextsView config', () => {
       const loaded = load(`contextsView:\n  ${body}\n`);
       expect(loaded.errors.length, body).toBeGreaterThan(0);
     }
+  });
+
+  it('the defaults include weights.data 0', () => {
+    expect(resolveContextsViewConfig(load('version: "1.0"\n').config).weights).toEqual({
+      dependency: 1,
+      coChange: 1,
+      data: 0,
+    });
+    // Another weight set alone leaves data at its default.
+    expect(resolveContextsViewConfig(load('contextsView:\n  weights: { coChange: 0.5 }\n').config).weights).toEqual({
+      dependency: 1,
+      coChange: 0.5,
+      data: 0,
+    });
+  });
+
+  it('the schema rejects a negative data weight', () => {
+    expect(load('contextsView:\n  weights: { data: -0.5 }\n').errors.length).toBeGreaterThan(0);
+    const accepted = load('contextsView:\n  weights: { data: 0.5 }\n');
+    expect(accepted.errors).toEqual([]);
+    expect(resolveContextsViewConfig(accepted.config).weights.data).toBe(0.5);
   });
 });

@@ -1,4 +1,5 @@
 import { compareCodepoint } from '../compare-codepoint.js';
+import { isDataResourceKind } from '../data-coupling/data-kinds.js';
 import { SymbolTokenizer } from '../search/symbol-tokenizer.js';
 import type { SymbolNode } from '../types.js';
 
@@ -32,10 +33,28 @@ function isTypeSymbol(symbol: SymbolNode): boolean {
   return symbol.kind === 'class' || symbol.kind === 'interface' || symbol.kind === 'type';
 }
 
-/** C# names are namespace-qualified, so the short name is the last `.` segment. */
+/** C# names are namespace-qualified and SQL names schema-qualified, so the short name is the last `.` segment. */
 function shortName(name: string): string {
   const dot = name.lastIndexOf('.');
   return dot === -1 ? name : name.slice(dot + 1);
+}
+
+/**
+ * The comparison form of a type, table or member name in collisions: ASCII A-Z lowercased (no locale or
+ * Unicode folding, as lang-sql folds column names) and `_` removed, so `LoanItems` meets `loan_items`.
+ */
+export function normalizeTermName(name: string): string {
+  return name.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32)).replace(/_/g, '');
+}
+
+/** The `columns` annotation of a table symbol (lang-sql), sorted and unique; [] without one. */
+function columnNames(symbol: SymbolNode): string[] {
+  const columns = new Set<string>();
+  for (const annotation of symbol.annotations ?? []) {
+    if (annotation.name !== 'columns') continue;
+    for (const column of annotation.args ?? []) if (column.length > 0) columns.add(column);
+  }
+  return [...columns].sort(compareCodepoint);
 }
 
 /** Names of the symbols one level below `typeName` in the same file (`<typeName>.<member>`). */
@@ -66,9 +85,9 @@ function enumMemberNames(typeName: string, symbols: readonly SymbolNode[]): stri
 }
 
 /**
- * Top type-name terms of a candidate (spec 7.3, Designer call 8): type names and enum members tokenized
- * with SymbolTokenizer, minus stop words, technical words and tokens shorter than 2 characters or all
- * digits, ranked by number of files, ties by code point order.
+ * Top type-name terms of a candidate (spec 7.3, Designer call 8): type names, enum members, and the short
+ * names and columns of tables and views, tokenized with SymbolTokenizer, minus stop words, technical words
+ * and tokens shorter than 2 characters or all digits, ranked by number of files, ties by code point order.
  */
 export function harvestTopTerms(
   files: readonly string[],
@@ -83,6 +102,10 @@ export function harvestTopTerms(
     const symbols = symbolsByFile.get(file) ?? [];
     const names: string[] = [];
     for (const symbol of symbols) {
+      if (isDataResourceKind(symbol.kind)) {
+        names.push(shortName(symbol.name), ...columnNames(symbol));
+        continue;
+      }
       if (!isTypeSymbol(symbol)) continue;
       names.push(shortName(symbol.name));
       if (symbol.kind === 'type') names.push(...enumMemberNames(symbol.name, symbols));
@@ -116,55 +139,58 @@ function jaccard(a: readonly string[], b: readonly string[]): number {
 }
 
 /**
- * Type names (case-insensitive) that appear in two or more candidates with member sets whose Jaccard
- * similarity is below 0.5 for at least one pair of occurrences in different candidates. `similarity` is
- * Jaccard; a test can pass its own to count the comparisons.
+ * Type and table names that appear in two or more candidates with member sets whose Jaccard similarity is
+ * below 0.5 for at least one pair of occurrences in different candidates. A table's members are its
+ * columns; views take no part. Names and members compare in `normalizeTermName` form (ASCII case and `_`
+ * ignored): the collision is named by that form, and the occurrences keep the original member spellings.
+ * `similarity` is Jaccard over the normalized members; a test can pass its own to count the comparisons.
  */
 export function findTermCollisions(
   candidates: readonly TermSource[],
   symbolsByFile: ReadonlyMap<string, readonly SymbolNode[]>,
   similarity: (a: readonly string[], b: readonly string[]) => number = jaccard,
 ): TermCollision[] {
-  const byName = new Map<string, TermOccurrence[]>();
+  const byName = new Map<string, Array<{ readonly occurrence: TermOccurrence; readonly normalized: string[] }>>();
 
   for (const candidate of candidates) {
     for (const file of new Set(candidate.files)) {
       const symbols = symbolsByFile.get(file) ?? [];
       for (const symbol of symbols) {
-        if (!isTypeSymbol(symbol)) continue;
-        const key = shortName(symbol.name).toLowerCase();
-        const occurrence: TermOccurrence = {
-          candidate: candidate.id,
-          file,
-          symbolId: symbol.symbolId,
-          members: memberNames(symbol.name, symbols),
+        const isTable = symbol.kind === 'table';
+        if (!isTable && !isTypeSymbol(symbol)) continue;
+        const key = normalizeTermName(shortName(symbol.name));
+        // Arity stripping (in memberNames) applies to class members only; columns are taken as they are.
+        const members = isTable ? columnNames(symbol) : memberNames(symbol.name, symbols);
+        const entry = {
+          occurrence: { candidate: candidate.id, file, symbolId: symbol.symbolId, members },
+          normalized: members.map(normalizeTermName),
         };
         const list = byName.get(key);
-        if (list) list.push(occurrence);
-        else byName.set(key, [occurrence]);
+        if (list) list.push(entry);
+        else byName.set(key, [entry]);
       }
     }
   }
 
   const collisions: TermCollision[] = [];
-  for (const [name, occurrences] of byName) {
+  for (const [name, entries] of byName) {
     let min = Infinity;
     // Jaccard is never below 0, so once a pair reaches it no later pair can lower the minimum.
-    for (let i = 0; i < occurrences.length && min > 0; i++) {
-      for (let j = i + 1; j < occurrences.length && min > 0; j++) {
-        const a = occurrences[i]!;
-        const b = occurrences[j]!;
-        if (a.candidate === b.candidate) continue;
-        min = Math.min(min, similarity(a.members, b.members));
+    for (let i = 0; i < entries.length && min > 0; i++) {
+      for (let j = i + 1; j < entries.length && min > 0; j++) {
+        const a = entries[i]!;
+        const b = entries[j]!;
+        if (a.occurrence.candidate === b.occurrence.candidate) continue;
+        min = Math.min(min, similarity(a.normalized, b.normalized));
       }
     }
     if (min === Infinity || min >= COLLISION_JACCARD_THRESHOLD) continue;
     collisions.push({
       name,
       minJaccard: Math.round(min * 1000) / 1000,
-      occurrences: [...occurrences].sort(
-        (a, b) => a.candidate - b.candidate || compareCodepoint(a.symbolId, b.symbolId),
-      ),
+      occurrences: entries
+        .map((entry) => entry.occurrence)
+        .sort((a, b) => a.candidate - b.candidate || compareCodepoint(a.symbolId, b.symbolId)),
     });
   }
 

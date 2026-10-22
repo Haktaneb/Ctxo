@@ -1,3 +1,4 @@
+import { DATA_RESOURCE_KINDS } from '@ctxo/plugin-api';
 import { z } from 'zod';
 
 import { EdgeKindSchema } from '../types.js';
@@ -6,7 +7,8 @@ import type { ContextsView } from './contexts-view-builder.js';
 const count = z.number().int().nonnegative();
 
 const SettingsSchema = z.object({
-  weights: z.object({ dependency: z.number(), coChange: z.number() }),
+  // A PR 1A artifact has no data weight; it was 0 then.
+  weights: z.object({ dependency: z.number(), coChange: z.number(), data: z.number().default(0) }),
   exclude: z.array(z.string()),
   hubs: z.object({
     auto: z.boolean(),
@@ -17,6 +19,28 @@ const SettingsSchema = z.object({
   resolution: z.number(),
   minCandidateFiles: z.number(),
   technicalTerms: z.array(z.string()),
+});
+
+const DataAccessSchema = z.object({
+  candidate: z.number().int(),
+  modes: z.array(z.enum(['reads', 'writes'])),
+});
+
+const SharedTableSchema = z.object({
+  name: z.string(),
+  kind: z.enum(DATA_RESOURCE_KINDS).optional(),
+  external: z.boolean(),
+  accesses: z.array(DataAccessSchema),
+  owner: z.number().int().optional(),
+});
+
+const DataResourceSchema = z.object({
+  name: z.string(),
+  kind: z.enum(DATA_RESOURCE_KINDS).optional(),
+  external: z.boolean(),
+  accesses: z.array(DataAccessSchema),
+  writers: z.array(z.number().int()),
+  owner: z.number().int().optional(),
 });
 
 const CandidateSchema = z.object({
@@ -43,6 +67,8 @@ const CandidateSchema = z.object({
       sharedCommits: count,
     }),
   ),
+  // Absent in a PR 1A artifact.
+  sharedTables: z.array(SharedTableSchema).default([]),
 });
 
 const HubSchema = z.object({
@@ -76,4 +102,6 @@ export const ContextsViewSchema: z.ZodType<ContextsView> = z.object({
   hubs: z.array(HubSchema),
   unclustered: z.object({ count, files: z.array(z.string()) }),
   collisions: z.array(CollisionSchema),
+  // Absent in a PR 1A artifact.
+  dataResources: z.array(DataResourceSchema).default([]),
 });

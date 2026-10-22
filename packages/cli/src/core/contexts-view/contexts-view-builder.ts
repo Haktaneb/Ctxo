@@ -5,7 +5,15 @@ import type { ResolvedContextsViewConfig } from '../config/load-config.js';
 import type { CoChangeEntry, EdgeKind, FileIndex, SymbolNode } from '../types.js';
 import { clusterFiles, foldSmallGroups, type WeightLookup } from './candidate-groups.js';
 import { findTermCollisions, harvestTopTerms, type ContextTerm, type TermCollision } from './context-terms.js';
-import { applyHubDamping, buildFileGraph, detectHubs, type FilePair, type HubReason } from './file-graph.js';
+import { computeDataCoupling, type CandidateSharedTable, type DataResourceUsage } from './data-coupling.js';
+import {
+  applyHubDamping,
+  buildFileGraph,
+  buildIndexGraph,
+  detectHubs,
+  type FilePair,
+  type HubReason,
+} from './file-graph.js';
 
 export interface CandidateCrossEdges {
   readonly candidate: number;
@@ -31,6 +39,8 @@ export interface ContextCandidate {
   readonly topTerms: readonly ContextTerm[];
   readonly crossEdges: readonly CandidateCrossEdges[];
   readonly coChangePairs: readonly CandidateCoChangePair[];
+  /** Tables and views that this candidate and at least one other read or write, by name. */
+  readonly sharedTables: readonly CandidateSharedTable[];
 }
 
 export interface ContextHub {
@@ -50,6 +60,8 @@ export interface ContextsView {
   readonly hubs: readonly ContextHub[];
   readonly unclustered: { readonly count: number; readonly files: readonly string[] };
   readonly collisions: readonly TermCollision[];
+  /** Every table or view that a candidate file (members and assigned hubs) reads or writes, by name. */
+  readonly dataResources: readonly DataResourceUsage[];
 }
 
 export interface ContextsViewInput {
@@ -72,7 +84,11 @@ function round3(value: number): number {
 /** A fresh copy with a fixed key order, so the artifact's bytes never depend on how the caller built it. */
 function copySettings(settings: ResolvedContextsViewConfig): ResolvedContextsViewConfig {
   return {
-    weights: { dependency: settings.weights.dependency, coChange: settings.weights.coChange },
+    weights: {
+      dependency: settings.weights.dependency,
+      coChange: settings.weights.coChange,
+      data: settings.weights.data,
+    },
     exclude: [...settings.exclude],
     hubs: {
       auto: settings.hubs.auto,
@@ -200,16 +216,19 @@ function distinctCoChanges(coChangeMap: ReadonlyMap<string, readonly CoChangeEnt
  *
  * `cohesion` and the folding use the final weights without hub endpoints: hubs belong to no candidate,
  * and their edges, damped on purpose, do not count against a candidate's cohesion. `crossEdges` and
- * `coChangePairs` likewise only connect candidate members.
+ * `coChangePairs` likewise only connect candidate members. Data coupling (`sharedTables`, `dataResources`)
+ * counts members and assigned hubs for their candidate; unclustered files are left out.
  */
 export function buildContextsView(input: ContextsViewInput): ContextsView {
   const settings = copySettings(input.settings);
 
+  const indexGraph = buildIndexGraph(input.indices);
   const graph = buildFileGraph({
     indices: input.indices,
     isNode: input.isNode,
     ...(input.coChangeMap ? { coChangeMap: input.coChangeMap } : {}),
     weights: settings.weights,
+    graph: indexGraph,
   });
   const hubDecisions = detectHubs(graph, { hubs: settings.hubs, godNodeFiles: input.godNodeFiles });
   const pairs = applyHubDamping(graph.pairs, hubDecisions);
@@ -262,6 +281,11 @@ export function buildContextsView(input: ContextsViewInput): ContextsView {
       ...(candidate !== undefined ? { candidate } : {}),
     };
   });
+
+  // Data coupling: members and assigned hubs count for their candidate.
+  const fileCandidate = new Map(candidateOf);
+  for (const hub of hubs) if (hub.candidate !== undefined) fileCandidate.set(hub.file, hub.candidate);
+  const dataCoupling = computeDataCoupling({ graph: indexGraph, fileCandidate });
 
   // Cohesion: internal weight over internal plus boundary weight, hub endpoints left out.
   const internal = new Map<number, number>();
@@ -340,6 +364,7 @@ export function buildContextsView(input: ContextsViewInput): ContextsView {
       topTerms: harvestTopTerms(files, symbolsByFile, settings.technicalTerms),
       crossEdges,
       coChangePairs,
+      sharedTables: dataCoupling.sharedTables.get(id) ?? [],
     };
   });
 
@@ -362,5 +387,6 @@ export function buildContextsView(input: ContextsViewInput): ContextsView {
     hubs,
     unclustered: { count: folded.unclustered.length, files: folded.unclustered },
     collisions,
+    dataResources: dataCoupling.resources,
   };
 }

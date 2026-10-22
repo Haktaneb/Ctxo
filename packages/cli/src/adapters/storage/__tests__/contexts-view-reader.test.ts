@@ -44,6 +44,18 @@ function sampleView(): ContextsView {
         coChangePairs: [
           { file: 'src/billing/a.ts', otherFile: 'src/x.ts', otherCandidate: 2, frequency: 0.5, sharedCommits: 2 },
         ],
+        sharedTables: [
+          {
+            name: 'dbo.loans',
+            kind: 'table',
+            external: false,
+            accesses: [
+              { candidate: 1, modes: ['reads', 'writes'] },
+              { candidate: 2, modes: ['reads'] },
+            ],
+            owner: 1,
+          },
+        ],
       },
     ],
     hubs: [{ file: 'src/types.ts', reasons: ['fan-in'], dependents: 12, damping: 0.267, candidate: 1 }],
@@ -53,6 +65,20 @@ function sampleView(): ContextsView {
         name: 'Invoice',
         minJaccard: 0.5,
         occurrences: [{ candidate: 1, file: 'src/billing/a.ts', symbolId: 'src/billing/a.ts::Invoice::class', members: ['total'] }],
+      },
+    ],
+    dataResources: [
+      { name: 'dbo.audit_log', external: true, accesses: [{ candidate: 1, modes: ['writes'] }], writers: [1], owner: 1 },
+      {
+        name: 'dbo.loans',
+        kind: 'table',
+        external: false,
+        accesses: [
+          { candidate: 1, modes: ['reads', 'writes'] },
+          { candidate: 2, modes: ['reads'] },
+        ],
+        writers: [1],
+        owner: 1,
       },
     ],
   };
@@ -70,6 +96,25 @@ it('returns the view for a valid file and undefined for a missing one', () => {
   new ArchitectureArtifactsWriter(ctxoRoot).writeContextsView(view);
 
   expect(reader.readContextsView()).toEqual(view);
+});
+
+it('a contexts-view.json without sharedTables or dataResources still validates, with empty lists', () => {
+  // A PR 1A artifact: no data fields, and settings.weights without data.
+  const { dataResources: _dataResources, ...rest } = sampleView();
+  const older = {
+    ...rest,
+    settings: { ...rest.settings, weights: { dependency: 1, coChange: 1 } },
+    candidates: rest.candidates.map(({ sharedTables: _sharedTables, ...candidate }) => candidate),
+  };
+  writeFileSync(viewPath, JSON.stringify(older, null, 2), 'utf-8');
+
+  const view = new ContextsViewReader(ctxoRoot).readContextsView();
+
+  expect(view).toBeDefined();
+  expect(view!.dataResources).toEqual([]);
+  expect(view!.candidates[0]!.sharedTables).toEqual([]);
+  expect(view!.settings.weights).toEqual({ dependency: 1, coChange: 1, data: 0 });
+  expect(view!.candidates[0]!.files).toEqual(older.candidates[0]!.files);
 });
 
 it('returns undefined and warns once for an invalid or conflict-marked file, then reads the repaired file after it changes', () => {

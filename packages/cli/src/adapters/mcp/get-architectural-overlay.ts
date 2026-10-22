@@ -10,6 +10,7 @@ import type { ClusterLabelMasker } from '../../core/overlay/cluster-label-masker
 import type { CommunitySnapshot, GodNode } from '../../core/types.js';
 import type { ContextsView } from '../../core/contexts-view/contexts-view-builder.js';
 import type { TermCollision } from '../../core/contexts-view/context-terms.js';
+import type { CandidateSharedTable } from '../../core/contexts-view/data-coupling.js';
 import type { IContextsViewPort } from '../../ports/i-contexts-view-port.js';
 import type { StalenessCheck } from './get-logic-slice.js';
 
@@ -97,6 +98,10 @@ const DETAIL_FILE_LIMIT = 15;
 const DETAIL_COLLISION_LIMIT = 10;
 /** The candidate's own occurrences per collision, and members per occurrence, in the detail. */
 const DETAIL_OCCURRENCE_LIMIT = 5;
+/** Shared tables of the candidate, and the candidate's own data resources, in the detail. */
+const DETAIL_DATA_LIMIT = 15;
+/** Accesses per shared table in the detail. */
+const DETAIL_ACCESS_LIMIT = 10;
 
 const NO_VIEW_HINT = 'No contexts view available. Run ctxo index to generate one.';
 const SUMMARY_HINT = 'Pass candidate: <id> for one candidate in full; run ctxo contexts --json for the whole view.';
@@ -120,7 +125,11 @@ function collisionSummary(collision: TermCollision) {
   };
 }
 
-/** Every candidate in brief, plus the capped hubs and collisions: small enough to list the whole view. */
+/**
+ * Every candidate in brief, plus the capped hubs and collisions: small enough to list the whole view. Data
+ * coupling appears as counts only (`sharedTableCount` on a candidate with any, and the three resource
+ * totals); the lists are in the detail and in `ctxo contexts --json`.
+ */
 function contextsSummary(view: ContextsView, maskLabel: (label: string) => string): Record<string, unknown> {
   return {
     commitSha: view.commitSha,
@@ -132,6 +141,7 @@ function contextsSummary(view: ContextsView, maskLabel: (label: string) => strin
       fileCount: candidate.fileCount,
       cohesion: candidate.cohesion,
       topTerms: candidate.topTerms.slice(0, SUMMARY_TERM_LIMIT),
+      ...(candidate.sharedTables.length > 0 ? { sharedTableCount: candidate.sharedTables.length } : {}),
     })),
     hubs: view.hubs.slice(0, HUB_COLLISION_LIMIT).map((hub) => ({
       file: hub.file,
@@ -142,8 +152,43 @@ function contextsSummary(view: ContextsView, maskLabel: (label: string) => strin
     collisions: view.collisions.slice(0, HUB_COLLISION_LIMIT).map(collisionSummary),
     collisionsTotal: view.collisions.length,
     unclustered: { count: view.unclustered.count },
+    dataResourcesTotal: view.dataResources.length,
+    sharedResourcesTotal: view.dataResources.filter((resource) => resource.accesses.length >= 2).length,
+    externalResourcesTotal: view.dataResources.filter((resource) => resource.external).length,
     hint: SUMMARY_HINT,
   };
+}
+
+/**
+ * A shared table in the detail: its accesses capped at `DETAIL_ACCESS_LIMIT` by candidate id, the requesting
+ * candidate's own access always kept, with `accessCount`.
+ */
+function sharedTableDetail(table: CandidateSharedTable, id: number) {
+  const own = table.accesses.filter((access) => access.candidate === id);
+  const others = table.accesses.filter((access) => access.candidate !== id).slice(0, DETAIL_ACCESS_LIMIT - own.length);
+  return {
+    ...table,
+    accesses: [...own, ...others].sort((a, b) => a.candidate - b.candidate),
+    accessCount: table.accesses.length,
+  };
+}
+
+/** The resources the candidate reads or writes, compact: its own modes and the writer count. */
+function ownDataResources(view: ContextsView, id: number) {
+  const own: Array<Record<string, unknown>> = [];
+  for (const resource of view.dataResources) {
+    const access = resource.accesses.find((entry) => entry.candidate === id);
+    if (!access) continue;
+    own.push({
+      name: resource.name,
+      ...(resource.kind !== undefined ? { kind: resource.kind } : {}),
+      external: resource.external,
+      modes: access.modes,
+      ...(resource.owner !== undefined ? { owner: resource.owner } : {}),
+      writerCount: resource.writers.length,
+    });
+  }
+  return own;
 }
 
 /**
@@ -151,8 +196,11 @@ function contextsSummary(view: ContextsView, maskLabel: (label: string) => strin
  * collisions it takes part in (at most `DETAIL_COLLISION_LIMIT`), each list with its total. A collision carries
  * its summary fields plus this candidate's own occurrences only, at most `DETAIL_OCCURRENCE_LIMIT`, each as
  * `{ symbolId, members, memberCount }` with the first members in view order: the file is part of the symbol
- * ID, and the other candidates are named in `candidates`. No array here is truncatable, so these caps are
- * what keeps the response within the limit.
+ * ID, and the other candidates are named in `candidates`. The candidate's `sharedTables` keep the first
+ * `DETAIL_DATA_LIMIT` by name (with `sharedTableCount`), each with at most `DETAIL_ACCESS_LIMIT` accesses (with
+ * `accessCount`); `dataResources` lists the first `DETAIL_DATA_LIMIT` resources it reads or writes, by name,
+ * with `dataResourcesTotal`. No array here is truncatable, so these caps are what keeps the response within
+ * the limit.
  */
 function contextsDetail(
   view: ContextsView,
@@ -167,12 +215,15 @@ function contextsDetail(
   const collisions = view.collisions.filter((collision) =>
     collision.occurrences.some((occurrence) => occurrence.candidate === id),
   );
+  const dataResources = ownDataResources(view, id);
   return {
     commitSha: view.commitSha,
     candidate: {
       ...candidate,
       label: maskLabel(candidate.label),
       files: candidate.files.slice(0, DETAIL_FILE_LIMIT),
+      sharedTables: candidate.sharedTables.slice(0, DETAIL_DATA_LIMIT).map((table) => sharedTableDetail(table, id)),
+      sharedTableCount: candidate.sharedTables.length,
     },
     hubs: hubs
       .slice(0, HUB_COLLISION_LIMIT)
@@ -190,6 +241,8 @@ function contextsDetail(
         })),
     })),
     collisionsTotal: collisions.length,
+    dataResources: dataResources.slice(0, DETAIL_DATA_LIMIT),
+    dataResourcesTotal: dataResources.length,
     hint: DETAIL_HINT,
   };
 }
