@@ -50,7 +50,7 @@ describe('Release Packaging', () => {
     expect(files.some((f: string) => f === 'package.json')).toBe(true);
   });
 
-  it('tarball size is reasonable (< 1800KB)', { timeout: 30_000 }, () => {
+  it('tarball size is reasonable (< 2000KB)', { timeout: 30_000 }, () => {
     const output = execSync('npm pack --dry-run --json', { cwd: ROOT, encoding: 'utf-8' });
 
     const info = JSON.parse(output);
@@ -72,7 +72,9 @@ describe('Release Packaging', () => {
     // R4 attribution); its final-review fixes (one data-resource identity for the impact tools, the
     // linear R4 pass, annotations only at L4, the review carries) crossed the limit at 1711.62KB,
     // so it is 1800KB. The tarball also carries the root README.md and llms*.txt, so docs count too.
-    expect(sizeKB).toBeLessThan(1800);
+    // The owner set 2000KB ahead of the stack merge: PR 1B (1712.86KB) plus PR 2A (tiered agent
+    // rules, about 1870KB together) would cross 1800KB.
+    expect(sizeKB).toBeLessThan(2000);
     expect(sizeKB).toBeGreaterThan(1); // Sanity: not empty (dist/ may not exist in CI pre-build)
   });
 });
