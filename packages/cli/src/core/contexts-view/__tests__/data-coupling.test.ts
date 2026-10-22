@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { EdgeKind, FileIndex, SymbolKind, SymbolNode } from '../../types.js';
 import { computeDataCoupling } from '../data-coupling.js';
@@ -207,6 +207,125 @@ describe('computeDataCoupling', () => {
     ]);
   });
 
+  it('a superseded procedure copy does not make its own candidate a writer', () => {
+    const closeScript = (file: string) =>
+      sql(file, [['dbo.usp_close', 'procedure']], [['dbo.usp_close', 'dbo.loans::table', 'writes']]);
+    const result = coupling(
+      [
+        LOANS_SQL,
+        closeScript('db/migrations/V1__init.sql'),
+        // Loses resolution to V1, so no executes edge points at it.
+        closeScript('db/migrations/V7__close_fix.sql'),
+        cs('src/billing/Close.cs', [['dbo.usp_close::procedure', 'executes']]),
+      ],
+      [
+        ['src/billing/Close.cs', 0],
+        ['db/migrations/V1__init.sql', 1],
+        ['db/migrations/V7__close_fix.sql', 1],
+      ],
+    );
+
+    expect(result.resources).toEqual([
+      { name: 'dbo.loans', kind: 'table', external: false, accesses: [{ candidate: 0, modes: ['writes'] }], writers: [0], owner: 0 },
+    ]);
+  });
+
+  it('executing a procedure takes on the accesses of every copy of it', () => {
+    const result = coupling(
+      [
+        LOANS_SQL,
+        sql('db/audit.sql', [['dbo.audit', 'table']]),
+        sql('db/migrations/V1__init.sql', [['dbo.usp_close', 'procedure']], [['dbo.usp_close', 'dbo.loans::table', 'writes']]),
+        sql('db/migrations/V7__close_fix.sql', [['dbo.usp_close', 'procedure']], [
+          ['dbo.usp_close', 'dbo.loans::table', 'writes'],
+          ['dbo.usp_close', 'dbo.audit::table', 'writes'],
+          ['dbo.usp_close', 'dbo.usp_log::procedure', 'executes'],
+        ]),
+        sql('db/log.sql', [['dbo.usp_log', 'procedure']], [['dbo.usp_log', 'dbo.members::table', 'writes']]),
+        MEMBERS_SQL,
+        cs('src/billing/Close.cs', [['dbo.usp_close::procedure', 'executes']]),
+      ],
+      [
+        ['src/billing/Close.cs', 0],
+        ['db/migrations/V1__init.sql', 1],
+        ['db/migrations/V7__close_fix.sql', 1],
+        ['db/log.sql', 2],
+      ],
+    );
+
+    const writtenBy0 = { kind: 'table', external: false, accesses: [{ candidate: 0, modes: ['writes'] }], writers: [0], owner: 0 };
+    expect(result.resources).toEqual([
+      { name: 'dbo.audit', ...writtenBy0 },
+      { name: 'dbo.loans', ...writtenBy0 },
+      { name: 'dbo.members', ...writtenBy0 },
+    ]);
+  });
+
+  it('a procedure executed only from outside the view credits its own candidate', () => {
+    const result = coupling(
+      [
+        LOANS_SQL,
+        sql('db/close.sql', [['dbo.usp_close', 'procedure']], [['dbo.usp_close', 'dbo.loans::table', 'writes']]),
+        // Unclustered: no candidate, so its executes edge credits nobody.
+        cs('src/lonely/Job.cs', [['dbo.usp_close::procedure', 'executes']]),
+      ],
+      [['db/close.sql', 2]],
+    );
+
+    expect(result.resources).toEqual([
+      { name: 'dbo.loans', kind: 'table', external: false, accesses: [{ candidate: 2, modes: ['writes'] }], writers: [2], owner: 2 },
+    ]);
+  });
+
+  it('a cycle that an unexecuted procedure enters counts through that procedure', () => {
+    const result = coupling(
+      [
+        LOANS_SQL,
+        MEMBERS_SQL,
+        sql('db/a.sql', [['dbo.usp_a', 'procedure']], [
+          ['dbo.usp_a', 'dbo.usp_b::procedure', 'executes'],
+          ['dbo.usp_a', 'dbo.loans::table', 'writes'],
+        ]),
+        sql('db/b.sql', [['dbo.usp_b', 'procedure']], [
+          ['dbo.usp_b', 'dbo.usp_a::procedure', 'executes'],
+          ['dbo.usp_b', 'dbo.members::table', 'reads'],
+        ]),
+        sql('db/nightly.sql', [['dbo.usp_nightly', 'procedure']], [['dbo.usp_nightly', 'dbo.usp_a::procedure', 'executes']]),
+      ],
+      [
+        ['db/a.sql', 1],
+        ['db/b.sql', 2],
+        ['db/nightly.sql', 3],
+      ],
+    );
+
+    expect(result.resources).toEqual([
+      { name: 'dbo.loans', kind: 'table', external: false, accesses: [{ candidate: 3, modes: ['writes'] }], writers: [3], owner: 3 },
+      { name: 'dbo.members', kind: 'table', external: false, accesses: [{ candidate: 3, modes: ['reads'] }], writers: [] },
+    ]);
+  });
+
+  it('the reach step is linear in the number of procedures nobody executes', () => {
+    const count = 300;
+    const name = (i: number) => `dbo.usp_step${String(i).padStart(4, '0')}`;
+    const defs: Array<[string, SymbolKind]> = [];
+    const edges: Array<[string, string, EdgeKind]> = [];
+    for (let i = 0; i < count; i++) {
+      defs.push([name(i), 'procedure']);
+      edges.push([name(i), i + 1 < count ? `${name(i + 1)}::procedure` : 'dbo.loans::table', i + 1 < count ? 'executes' : 'writes']);
+    }
+    const graph = buildIndexGraph([LOANS_SQL, sql('db/steps.sql', defs, edges)]);
+    const forward = vi.spyOn(graph, 'getForwardEdges');
+
+    const result = computeDataCoupling({ graph, fileCandidate: new Map([['db/steps.sql', 1]]) });
+
+    // The chain head credits candidate 1, which takes on the whole chain; every other step counts through it.
+    expect(result.resources).toEqual([
+      { name: 'dbo.loans', kind: 'table', external: false, accesses: [{ candidate: 1, modes: ['writes'] }], writers: [1], owner: 1 },
+    ]);
+    expect(forward.mock.calls.length).toBeLessThanOrEqual(3 * count);
+  });
+
   it('the resource kind comes from the definition SymbolGraph resolves to', () => {
     const result = coupling(
       [
@@ -380,12 +499,27 @@ describe('computeDataCoupling', () => {
         ['dbo.members::table', 'writes'],
       ]),
       cs('src/shared/Db.cs', [['dbo.audit_log::table', 'reads']]),
+      // A copy of usp_a, and a chain nobody executes (usp_nightly -> usp_purge).
+      sql('db/migrations/V2__procs.sql', [['dbo.usp_a', 'procedure']], [['dbo.usp_a', 'dbo.members::table', 'writes']]),
+      sql(
+        'db/jobs.sql',
+        [
+          ['dbo.usp_nightly', 'procedure'],
+          ['dbo.usp_purge', 'procedure'],
+        ],
+        [
+          ['dbo.usp_nightly', 'dbo.usp_purge::procedure', 'executes'],
+          ['dbo.usp_purge', 'dbo.loans::table', 'writes'],
+        ],
+      ),
     ];
     const fileCandidate: Array<[string, number]> = [
       ['src/billing/Invoice.cs', 1],
       ['src/shipping/Parcel.cs', 2],
       ['src/shared/Db.cs', 2],
       ['db/procs.sql', 1],
+      ['db/migrations/V2__procs.sql', 1],
+      ['db/jobs.sql', 3],
     ];
 
     const forward = coupling(indices, fileCandidate);
@@ -402,7 +536,8 @@ describe('computeDataCoupling', () => {
       'dbo.members',
       'dbo.open_loans',
     ]);
-    expect([...forward.sharedTables.keys()]).toEqual([1, 2]);
+    expect([...forward.sharedTables.keys()]).toEqual([1, 2, 3]);
+    expect(forward.resources.find((resource) => resource.name === 'dbo.loans')!.writers).toEqual([2, 3]);
     expect(reversed).toEqual(forward);
     expect(JSON.stringify(reversed.resources)).toBe(JSON.stringify(forward.resources));
     expect(JSON.stringify([...reversed.sharedTables])).toBe(JSON.stringify([...forward.sharedTables]));

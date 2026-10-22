@@ -73,16 +73,98 @@ function kindOf(id: string): string {
 }
 
 /**
+ * The seeds (vertices for which `isSeed` holds) that no seed outside their own strongly connected component
+ * reaches, in the graph `successors` spans over `vertices`. Paths may run through vertices that are not
+ * seeds. `successors` must only name vertices of `vertices`.
+ *
+ * One iterative Tarjan pass, which numbers the components in reverse topological order, then one pass over
+ * the components in topological order that marks every component a seed reaches from another component.
+ * Linear in vertices plus edges; the result does not depend on the order of `vertices`.
+ */
+function unenteredSeeds(
+  vertices: readonly string[],
+  successors: (vertex: string) => readonly string[],
+  isSeed: (vertex: string) => boolean,
+): Set<string> {
+  const index = new Map<string, number>();
+  const low = new Map<string, number>();
+  const component = new Map<string, number>();
+  const members: string[][] = [];
+  const stack: string[] = [];
+  const onStack = new Set<string>();
+  let nextIndex = 0;
+
+  for (const start of vertices) {
+    if (index.has(start)) continue;
+    const frames: Array<{ vertex: string; next: readonly string[]; at: number }> = [];
+    const open = (vertex: string): void => {
+      index.set(vertex, nextIndex);
+      low.set(vertex, nextIndex);
+      nextIndex++;
+      stack.push(vertex);
+      onStack.add(vertex);
+      frames.push({ vertex, next: successors(vertex), at: 0 });
+    };
+    open(start);
+    while (frames.length > 0) {
+      const frame = frames[frames.length - 1]!;
+      if (frame.at < frame.next.length) {
+        const successor = frame.next[frame.at++]!;
+        if (!index.has(successor)) open(successor);
+        else if (onStack.has(successor)) low.set(frame.vertex, Math.min(low.get(frame.vertex)!, index.get(successor)!));
+        continue;
+      }
+      frames.pop();
+      if (low.get(frame.vertex) === index.get(frame.vertex)) {
+        const id = members.length;
+        const list: string[] = [];
+        let member: string;
+        do {
+          member = stack.pop()!;
+          onStack.delete(member);
+          component.set(member, id);
+          list.push(member);
+        } while (member !== frame.vertex);
+        members.push(list);
+      }
+      const parent = frames[frames.length - 1];
+      if (parent) low.set(parent.vertex, Math.min(low.get(parent.vertex)!, low.get(frame.vertex)!));
+    }
+  }
+
+  // An edge between two components always goes to a lower id, so the highest id comes first in
+  // topological order, and a component is final once every higher id is done.
+  const entered = members.map(() => false);
+  for (let id = members.length - 1; id >= 0; id--) {
+    if (!entered[id] && !members[id]!.some(isSeed)) continue;
+    for (const vertex of members[id]!) {
+      for (const successor of successors(vertex)) {
+        const target = component.get(successor)!;
+        if (target !== id) entered[target] = true;
+      }
+    }
+  }
+  return new Set(vertices.filter((vertex) => isSeed(vertex) && !entered[component.get(vertex)!]));
+}
+
+/**
  * Data coupling between candidates (spec 8.6): which candidate reads or writes which table or view.
  *
  * - A `reads` or `writes` edge from a symbol in a candidate file records that candidate and mode for its
  *   target, unless the symbol is a procedure: procedure bodies count through `executes` instead, so the
  *   candidate that holds a procedure script does not read and write every table its procedures touch.
- * - An `executes` edge to a resolved procedure adds that procedure's reads and writes, following further
- *   `executes` edges transitively with a visited set; an unresolved procedure adds nothing.
- * - A procedure in a candidate file that no candidate-attributed symbol executes, directly or through a
- *   chain, credits its own file's candidate as if that candidate executed it. Procedures that only execute
- *   each other, with nothing outside the cycle executing them, each credit their own candidate this way.
+ * - Procedures are executed by canonical name (`SymbolGraph.dataResourceIdentity`). An `executes` edge to a
+ *   resolved procedure points at the winning definition of the name, and executes every definition of it:
+ *   the executing candidate takes on the reads and writes of every copy's body, following further `executes`
+ *   edges transitively; an unresolved procedure adds nothing. A copy that lost resolution is therefore
+ *   executed whenever its name is.
+ * - A procedure name that no candidate-attributed symbol executes, directly or through a chain, credits the
+ *   candidate of each file that defines it, as if that candidate executed it. Executors outside the view
+ *   (unclustered files, test files) do not count as executing. Among such names, one that another of them
+ *   with a definition in a candidate file reaches, from outside its own cycle, counts through that chain
+ *   instead; names that only execute each other, with nothing outside the cycle executing them, each credit
+ *   their own candidates. This is one strongly connected component pass, linear in procedures plus
+ *   executes edges.
  * - Reading a view does not expand to its tables.
  * - A target that no indexed table or view defines is external and has no kind. Resources are keyed by
  *   canonical name; when several definitions share a name, the kind is that of the definition SymbolGraph
@@ -110,21 +192,40 @@ export function computeDataCoupling(input: DataCouplingInput): DataCoupling {
   };
   const isProcedure = (target: string): boolean => nodes.get(target)?.kind === 'procedure';
 
-  /** The resolved procedures one procedure executes. */
-  const executedBy = (procedure: string): string[] =>
-    graph
-      .getForwardEdges(procedure)
-      .filter((edge) => edge.kind === 'executes' && isProcedure(edge.to))
-      .map((edge) => edge.to);
-  /** The procedures reachable from `starts` through `executes` edges, `starts` included. */
+  // Procedures by canonical name: each procedure node maps to its `name::procedure`, each name to its
+  // definitions (the winner first).
+  const procedureName = new Map<string, string>();
+  const definitionsOf = new Map<string, readonly string[]>();
+  for (const node of nodes.values()) {
+    if (node.kind !== 'procedure' || procedureName.has(node.symbolId)) continue;
+    const identity = graph.dataResourceIdentity(node.symbolId);
+    if (!identity) continue;
+    const definitions = identity.definitions.map((definition) => definition.symbolId);
+    definitionsOf.set(identity.canonicalId, definitions);
+    for (const definition of definitions) procedureName.set(definition, identity.canonicalId);
+  }
+
+  /** Per procedure name, the resolved procedure names the bodies of its definitions execute. */
+  const executesNames = new Map<string, readonly string[]>();
+  for (const [name, definitions] of definitionsOf) {
+    const targets = new Set<string>();
+    for (const definition of definitions) {
+      for (const edge of graph.getForwardEdges(definition)) {
+        const target = edge.kind === 'executes' ? procedureName.get(edge.to) : undefined;
+        if (target !== undefined) targets.add(target);
+      }
+    }
+    executesNames.set(name, [...targets]);
+  }
+  /** The procedure names reachable from `starts` through `executes` edges, `starts` included. */
   const closure = (starts: Iterable<string>): Set<string> => {
     const visited = new Set<string>();
     const stack = [...starts];
     while (stack.length > 0) {
-      const procedure = stack.pop()!;
-      if (visited.has(procedure)) continue;
-      visited.add(procedure);
-      for (const next of executedBy(procedure)) if (!visited.has(next)) stack.push(next);
+      const name = stack.pop()!;
+      if (visited.has(name)) continue;
+      visited.add(name);
+      for (const next of executesNames.get(name) ?? []) if (!visited.has(next)) stack.push(next);
     }
     return visited;
   };
@@ -140,12 +241,12 @@ export function computeDataCoupling(input: DataCouplingInput): DataCoupling {
     usage.set(name, byCandidate);
   };
 
-  /** Per candidate, the procedures whose bodies it takes on (with everything they execute). */
+  /** Per candidate, the procedure names whose bodies it takes on (with everything they execute). */
   const executed = new Map<number, string[]>();
-  const execute = (candidate: number, procedure: string): void => {
+  const execute = (candidate: number, name: string): void => {
     const list = executed.get(candidate);
-    if (list) list.push(procedure);
-    else executed.set(candidate, [procedure]);
+    if (list) list.push(name);
+    else executed.set(candidate, [name]);
   };
 
   for (const edge of graph.allEdges()) {
@@ -153,40 +254,37 @@ export function computeDataCoupling(input: DataCouplingInput): DataCoupling {
     const candidate = fileCandidate.get(fileOf(edge.from));
     if (candidate === undefined) continue;
     if (edge.kind === 'executes') {
-      if (isProcedure(edge.to)) execute(candidate, edge.to);
+      const name = procedureName.get(edge.to);
+      if (name !== undefined) execute(candidate, name);
       continue;
     }
     record(candidate, edge.to, edge.kind === 'writes' ? 'writes' : 'reads');
   }
 
-  // The procedures of candidate files that no non-procedure symbol of a candidate file reaches. One that
-  // another of them reaches, without reaching that one back, is executed through that chain and counts there;
-  // the rest credit their own candidate. A cycle with no way in from outside credits each member's candidate.
+  // The procedure names that no non-procedure symbol of a candidate file reaches. A name that another of them
+  // with a definition in a candidate file reaches, from outside its own cycle, counts through that chain; the
+  // rest credit the candidate of each file that defines them. A cycle with no way in from outside credits
+  // each member's candidates.
   const reached = closure([...executed.values()].flat());
-  const unexecuted = [...nodes.values()]
-    .filter((node) => node.kind === 'procedure' && !reached.has(node.symbolId) && fileCandidate.has(fileOf(node.symbolId)))
-    .map((node) => node.symbolId);
-  const reaches = new Map(unexecuted.map((procedure) => [procedure, closure(executedBy(procedure))]));
-  const reachedFrom = new Map<string, string[]>();
-  for (const [from, targets] of reaches) {
-    for (const target of targets) {
-      if (target === from) continue;
-      const list = reachedFrom.get(target);
-      if (list) list.push(from);
-      else reachedFrom.set(target, [from]);
+  const unreached = [...definitionsOf.keys()].filter((name) => !reached.has(name));
+  const inCandidateFile = (name: string): boolean => definitionsOf.get(name)!.some((definition) => fileCandidate.has(fileOf(definition)));
+  const unreachedSet = new Set(unreached);
+  const executesUnreached = (from: string): string[] => executesNames.get(from)!.filter((name) => unreachedSet.has(name));
+  for (const name of unenteredSeeds(unreached, executesUnreached, inCandidateFile)) {
+    for (const definition of definitionsOf.get(name)!) {
+      const candidate = fileCandidate.get(fileOf(definition));
+      if (candidate !== undefined) execute(candidate, name);
     }
   }
-  for (const procedure of unexecuted) {
-    const own = reaches.get(procedure)!;
-    const throughChain = (reachedFrom.get(procedure) ?? []).some((other) => !own.has(other));
-    if (!throughChain) execute(fileCandidate.get(fileOf(procedure))!, procedure);
-  }
 
-  // One walk per candidate over the procedures it executes, directly or through other procedures.
+  // One walk per candidate over the procedure names it executes, directly or through other procedures, and
+  // the body of every definition of each.
   for (const [candidate, starts] of executed) {
-    for (const procedure of closure(starts)) {
-      for (const edge of graph.getForwardEdges(procedure)) {
-        if (edge.kind === 'reads' || edge.kind === 'writes') record(candidate, edge.to, edge.kind);
+    for (const name of closure(starts)) {
+      for (const definition of definitionsOf.get(name)!) {
+        for (const edge of graph.getForwardEdges(definition)) {
+          if (edge.kind === 'reads' || edge.kind === 'writes') record(candidate, edge.to, edge.kind);
+        }
       }
     }
   }
