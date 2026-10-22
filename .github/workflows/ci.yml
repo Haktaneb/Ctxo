@@ -171,7 +171,10 @@ jobs:
 
       # The C# call site to SQL table chain needs the CLI core (blast radius, contexts
       # view), which a plugin must not import, so the test lives in the CLI e2e suite.
+      # It is opt-in (CTXO_DOTNET_E2E=1), so the e2e-tests job skips it.
       - name: Run the end-to-end C# to SQL test
+        env:
+          CTXO_DOTNET_E2E: '1'
         run: pnpm --filter @ctxo/cli test:e2e tests/e2e/csharp-sql-call-site.test.ts
 
   build:

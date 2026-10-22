@@ -16,9 +16,18 @@ import { isolateGitEnv, type IsolatedGitEnv } from '../../src/cli/__tests__/git-
  * End to end, C# call site to SQL table: `ctxo index` loads the real @ctxo/lang-csharp and @ctxo/lang-sql
  * from the CLI's own manifest, the host grants `sqlCallSites` because a `.sql` plugin is present, the
  * Roslyn helper turns a Dapper call's constant SQL into a reads edge, and the edge resolves to the table
- * that lang-sql indexed. Needs a .NET 8+ SDK (the CI dotnet-tests job runs it); skipped without one.
+ * that lang-sql indexed.
+ *
+ * Opt-in: it builds the Roslyn helper and restores NuGet packages, so it runs only with
+ * CTXO_DOTNET_E2E=1 and a .NET 8+ SDK, and skips otherwise. CI runs it in the dotnet-tests job only.
+ * To run it locally after `pnpm -r build`:
+ *
+ *   bash:        CTXO_DOTNET_E2E=1 pnpm --filter @ctxo/cli test:e2e tests/e2e/csharp-sql-call-site.test.ts
+ *   PowerShell:  $env:CTXO_DOTNET_E2E = '1'; pnpm --filter @ctxo/cli test:e2e tests/e2e/csharp-sql-call-site.test.ts
  */
-const HAS_DOTNET = (() => {
+const ENABLED = process.env['CTXO_DOTNET_E2E'] === '1';
+
+const HAS_DOTNET = ENABLED && (() => {
   try {
     const version = execFileSync('dotnet', ['--version'], { encoding: 'utf-8' }).trim();
     return parseInt(version.split('.')[0]!, 10) >= 8;
@@ -124,7 +133,7 @@ function dotnet(args: string[], cwd?: string): void {
   });
 }
 
-describe.skipIf(!HAS_DOTNET)('C# call site to SQL table, end to end', () => {
+describe.skipIf(!ENABLED || !HAS_DOTNET)('C# call site to SQL table, end to end', () => {
   let dir: string;
   let gitEnv: IsolatedGitEnv;
   /** What the index run wrote to stderr. */
