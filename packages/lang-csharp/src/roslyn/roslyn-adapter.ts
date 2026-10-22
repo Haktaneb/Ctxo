@@ -76,6 +76,8 @@ export class RoslynAdapter implements ILanguageAdapter {
   private rootDir: string | null = null;
   private cache = new Map<string, RoslynFileResult>();
   private keepAlive: RoslynKeepAlive | null = null;
+  /** The restart in progress, shared by the requests that find the keep-alive gone. */
+  private restarting: Promise<boolean> | null = null;
   private initialized = false;
   private failure: string | null = null;
 
@@ -94,7 +96,8 @@ export class RoslynAdapter implements ILanguageAdapter {
 
   /**
    * Why the helper failed, or null while it has not: set when batchIndex() gets a failed run
-   * (restore, build, timeout) or startKeepAlive() cannot start the keep-alive process.
+   * (restore, build, timeout), startKeepAlive() cannot start the keep-alive process, or
+   * reindexFile() cannot bring back a keep-alive that stopped after `ready`.
    */
   getFailure(): string | null {
     return this.failure;
@@ -207,23 +210,65 @@ export class RoslynAdapter implements ILanguageAdapter {
 
   /**
    * Incremental re-analysis of a single file (keep-alive mode).
+   *
+   * A keep-alive can stop after `ready`: it shuts itself down after its inactivity timeout, or it
+   * exits. Such a keep-alive is restarted once per call, and a request it dropped by exiting is sent
+   * again. When it cannot come back, getFailure() is set, so the composite falls back to tree-sitter
+   * instead of answering from an empty or stale Roslyn cache. Null when there is no answer.
    */
   async reindexFile(relativePath: string): Promise<ReindexResult | null> {
-    if (!this.keepAlive?.isAlive()) return null;
+    if (this.failure !== null) return null;
 
-    const result = await this.keepAlive.analyzeFile(relativePath);
-    if (result) {
-      this.cache.set(relativePath, result);
-      return {
-        symbols: result.symbols.map(toSymbolNode),
-        edges: toGraphEdges(result.edges),
-        complexity: result.complexity.map(c => ({
-          symbolId: c.symbolId,
-          cyclomatic: c.cyclomatic,
-        })),
-      };
+    let restarted = false;
+    for (;;) {
+      // Read each time: a restart replaces the keep-alive, and dispose() removes it.
+      let keepAlive = this.keepAlive;
+      if (!keepAlive) return null;
+      if (!keepAlive.isAlive()) {
+        if (restarted) {
+          this.failure = 'the keep-alive helper exited again after a restart';
+          return null;
+        }
+        if (!(await this.restartKeepAlive())) return null;
+        restarted = true;
+        keepAlive = this.keepAlive;
+        if (!keepAlive) return null;
+      }
+
+      const result = await keepAlive.analyzeFile(relativePath);
+      if (result) {
+        this.cache.set(relativePath, result);
+        return {
+          symbols: result.symbols.map(toSymbolNode),
+          edges: toGraphEdges(result.edges),
+          complexity: result.complexity.map(c => ({
+            symbolId: c.symbolId,
+            cyclomatic: c.cyclomatic,
+          })),
+        };
+      }
+      // Still running but no answer (the per-request timeout): null, as before.
+      if (keepAlive.isAlive()) return null;
+      // It exited during the request: restart it (once per call) and ask again.
     }
-    return null;
+  }
+
+  /**
+   * Starts a new keep-alive in place of one that stopped; concurrent callers share the attempt.
+   * Resolves false and sets the failure when the helper does not reach `ready`.
+   */
+  private restartKeepAlive(): Promise<boolean> {
+    this.restarting ??= (async () => {
+      log.info('Roslyn keep-alive is not running (idle shutdown or exit); restarting it');
+      const keepAlive = new RoslynKeepAlive(this.roslynProjectDir!, this.solutionPath!, { sqlCallSites: this.sqlCallSites });
+      this.keepAlive = keepAlive;
+      const started = await keepAlive.start();
+      if (!started) this.failure = 'the keep-alive helper stopped and did not restart';
+      return started;
+    })().finally(() => {
+      this.restarting = null;
+    });
+    return this.restarting;
   }
 
   async dispose(): Promise<void> {
