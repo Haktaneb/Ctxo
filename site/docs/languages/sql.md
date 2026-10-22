@@ -145,8 +145,10 @@ The copies still share one identity:
 - Forward edges stay per copy:
   [`get_logic_slice`](/mcp-tools/get-logic-slice) on a copy's full ID walks that
   copy's own body. A 2-part ID walks the winner's body.
-- The [contexts view](/cli/contexts) takes a procedure's body from the winner
-  when a candidate executes it.
+- When a candidate executes a procedure, the [contexts view](/cli/contexts)
+  gives it the bodies of every production copy (outside test files and docs
+  folders), or the winner's body alone when no copy is production. Docs and
+  test copies of a procedure that has a production copy add nothing there.
 
 ## C# interplay
 

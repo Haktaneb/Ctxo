@@ -276,7 +276,7 @@ With [`@ctxo/lang-sql`](/languages/sql) installed, the view knows which candidat
 - **Response budget.** If the detail is still larger than the response limit (`CTXO_RESPONSE_LIMIT`, default 8192 bytes), trailing entries are dropped, by name order, from the longer of the two lists (`dataResources` on a tie) until it fits. `sharedTableCount` and `dataResourcesTotal` keep the totals.
 - Neither list is a truncatable field of the [envelope](/reference/response-envelope). `ctxo contexts --json` has the full lists, including every resource's `writers`.
 - Shared tables are a boundary finding, not a clustering weight: `contextsView.weights.data` defaults to `0`. Data edges never appear in `crossEdges`.
-- A stored procedure's reads and writes count for the candidates that execute it (by its canonical name), not for the candidate that holds the script; only a procedure that no candidate executes credits its own candidate. See [how stored procedures count](/cli/contexts#shared-tables).
+- A stored procedure's reads and writes count for the candidates that execute it (by its canonical name), not for the candidate that holds the script; only a procedure that no candidate executes credits its own candidate. With several copies, the bodies of every production copy count (the winner's alone when no copy is production), and docs and test copies add nothing when a production copy exists. See [how stored procedures count](/cli/contexts#shared-tables).
 - `name` is the 2-part name of the resource. Pass it with its kind (`dbo.loans::table`) to [`get_blast_radius`](/mcp-tools/get-blast-radius) or [`find_importers`](/mcp-tools/find-importers) to see every reader and writer.
 
 ### Field reference

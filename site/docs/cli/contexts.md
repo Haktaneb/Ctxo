@@ -54,8 +54,8 @@ one candidate writes it, `several writers`, or `read only`.
 
 ```
 [ctxo] Contexts view at 4be19c2: 2 candidates cover 64/66 files (97%), 1 hubs, 2 unclustered, 0 collisions, 2 shared tables
-#1  38 files  cohesion 0.78  src/Lending  terms: loan, renewal, due  shared tables: 2
-#2  26 files  cohesion 0.72  src/Members  terms: member, card, fine  shared tables: 2
+#1  38 files  cohesion 0.78  src/Lending  terms: loan, renewal, due shared tables: 2
+#2  26 files  cohesion 0.72  src/Members  terms: member, card, fine shared tables: 2
 hub src/Shared/Db.cs (fan-in, 22 dependents) -> #1
 shared table dbo.loans  #1 reads+writes, #2 reads  owner #1
 shared table dbo.members  #1 reads, #2 reads+writes  owner #2
@@ -71,10 +71,16 @@ How stored procedures count:
   the script. Whether a procedure is executed is decided by its canonical name,
   so another copy of an executed procedure (a later migration, a docs copy)
   does not make its own candidate a writer either.
+- When several files define the procedure, the executing candidate takes on
+  the bodies of all its production copies (outside test files and `docs`,
+  `doc` or `documentation` folders), or the winner's body alone when no copy is
+  production. Docs and test copies of a procedure that has a production copy
+  add nothing.
 - A procedure that no candidate executes credits the candidate that holds its
-  script. Test files and unclustered files are not candidates, so a procedure
-  that only tests or unclustered code run still shows up under the script's
-  candidate.
+  script: with several copies, the candidate of each production copy (or of
+  the winner when no copy is production), and each takes on all those bodies.
+  Test files and unclustered files are not candidates, so a procedure that only
+  tests or unclustered code run still shows up under the script's candidate.
 
 ## Coverage with SQL scripts
 

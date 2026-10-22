@@ -175,7 +175,9 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo with five packages. Per-packag
   `index.ignore` can drop docs or test copies (#156).
 - Contexts view: a stored procedure's reads and writes count for the candidates that execute it,
   decided by its canonical name, and no longer for the candidate that holds the script. A procedure
-  that no candidate executes still credits its own candidate (#156).
+  that no candidate executes still credits its own candidate. When several files define it, the
+  bodies of every production copy count (the winner's alone when no copy is production), and docs
+  and test copies of a procedure that has a production copy add nothing (#156).
 - `get_logic_slice` returns symbol `annotations` at `L4` only; `L1` to `L3` and `get_context_for_task`
   leave them out, so attribute arguments and column lists no longer crowd out dependencies (#156).
 - Data edges stay out of symbol-level communities, god nodes, cross-cluster counts and boundary
