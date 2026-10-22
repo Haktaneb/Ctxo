@@ -50,7 +50,7 @@ describe('Release Packaging', () => {
     expect(files.some((f: string) => f === 'package.json')).toBe(true);
   });
 
-  it('tarball size is reasonable (< 1600KB)', { timeout: 30_000 }, () => {
+  it('tarball size is reasonable (< 1700KB)', { timeout: 30_000 }, () => {
     const output = execSync('npm pack --dry-run --json', { cwd: ROOT, encoding: 'utf-8' });
 
     const info = JSON.parse(output);
@@ -66,7 +66,9 @@ describe('Release Packaging', () => {
     // its shared-directory guard, `--help` for every subcommand, docs shipped in the tarball) to
     // 1450KB (measured 1420.70KB).
     // PR 1A contexts view (file graph, clustering, overlay, CLI) → 1600KB (measured 1564.51KB).
-    expect(sizeKB).toBeLessThan(1600);
+    // PR 1B (plugin protocol v2, @ctxo/lang-sql registration, UTF-16 sources, the doctor C# tier
+    // check) → 1700KB (measured 1606.42KB; 1592.09KB before the C# tier check).
+    expect(sizeKB).toBeLessThan(1700);
     expect(sizeKB).toBeGreaterThan(1); // Sanity: not empty (dist/ may not exist in CI pre-build)
   });
 });

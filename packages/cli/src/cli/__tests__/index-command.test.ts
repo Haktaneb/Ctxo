@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { IndexCommand } from '../index-command.js';
+import * as pluginLoader from '../plugin-loader.js';
 import * as detectorModule from '../../core/overlay/community-detector.js';
 import { isolateGitEnv, type IsolatedGitEnv } from './git-test-env.js';
 
@@ -188,6 +189,52 @@ describe('IndexCommand', () => {
     await new IndexCommand(tempDir).run({ skipCommunity: true });
     const afterMtime = readFileSync(snapshotPath, 'utf-8');
     expect(afterMtime).toBe(beforeMtime);
+  });
+
+  it('the summary and edge quality use the C# tier after the Roslyn batch', async () => {
+    writeFileSync(join(tempDir, 'src', 'LoanService.cs'), 'public class LoanService {}\n', 'utf-8');
+    // A C# composite whose Roslyn helper fails its batch: it then reports the tree-sitter syntax tier.
+    let batchFailed = false;
+    const roslyn = {
+      isReady: () => !batchFailed,
+      batchIndex: vi.fn(async () => {
+        batchFailed = true;
+      }),
+      startKeepAlive: async () => false,
+      reindexFile: async () => null,
+      dispose: async () => {},
+    };
+    const composite = {
+      extractSymbols: async (file: string) => [
+        { symbolId: `${file}::LoanService::class`, name: 'LoanService', kind: 'class' as const, startLine: 0, endLine: 0 },
+      ],
+      extractEdges: async () => [],
+      extractComplexity: async () => [],
+      isSupported: (file: string) => file.endsWith('.cs'),
+      getRoslynDelegate: () => (batchFailed ? null : roslyn),
+      getTier: () => (batchFailed ? 'syntax' : 'full'),
+    };
+    const plugin = {
+      apiVersion: '1',
+      id: 'csharp',
+      name: 'C#',
+      version: '0.0.0',
+      extensions: ['.cs'],
+      tier: 'full',
+      createAdapter: () => composite,
+    };
+    vi.spyOn(pluginLoader, 'loadPlugins').mockResolvedValue([
+      { plugin, adapter: composite, specifier: '@ctxo/lang-csharp' },
+    ] as unknown as Awaited<ReturnType<typeof pluginLoader.loadPlugins>>);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await new IndexCommand(tempDir).run({ skipHistory: true });
+
+    expect(roslyn.batchIndex).toHaveBeenCalledOnce();
+    const stderr = errorSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+    expect(stderr).toContain('[ctxo]   C#: 1 files (syntax tier - the Roslyn helper failed, run "ctxo doctor")');
+    const snapshot = JSON.parse(readFileSync(join(tempDir, '.ctxo', 'index', 'communities.json'), 'utf-8'));
+    expect(snapshot.edgeQuality).toBe('syntax-only');
   });
 
   it('recomputes community snapshot over the FULL project graph during --file incremental re-index', async () => {
