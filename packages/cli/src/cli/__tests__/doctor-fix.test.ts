@@ -18,6 +18,22 @@ import { applyFixes, formatFixReport, type FixAttempt, type FixReport } from '..
 import { InitCommand, type InitOptions } from '../init-command.js';
 import { isolateGitEnv, type IsolatedGitEnv } from './git-test-env.js';
 
+/** Set by a test to make the guard write fail as it does on a read-only `.claude/`. */
+const faults = vi.hoisted(() => ({ guardWrite: false }));
+
+vi.mock('../ai-rules.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../ai-rules.js')>();
+  return {
+    ...actual,
+    ensureClaudeHook: (...args: Parameters<typeof actual.ensureClaudeHook>) => {
+      if (faults.guardWrite && args[1]?.dryRun !== true) {
+        throw Object.assign(new Error("EACCES: permission denied, open '.claude/settings.json'"), { code: 'EACCES' });
+      }
+      return actual.ensureClaudeHook(...args);
+    },
+  };
+});
+
 function report(overrides: Partial<DoctorReport['checks'][number]>[]): DoctorReport {
   const checks = overrides.map((o, i) => ({
     id: o.id ?? `check_${i}`,
@@ -48,6 +64,7 @@ describe('applyFixes', () => {
   });
 
   afterEach(() => {
+    faults.guardWrite = false;
     rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     if (savedCI === undefined) delete process.env['CI'];
     else process.env['CI'] = savedCI;
@@ -424,13 +441,97 @@ describe('applyFixes', () => {
       expect(r.halted).toBe(false);
       const guard = attempt(r, 'Claude guard hook');
       expect(guard?.status).toBe('failed');
-      expect(guard?.error).toContain('.claude/settings.json is not valid JSON or not a settings object; left unchanged');
+      // One next step: the same --fix run that installs the guard also renders the right tier.
+      expect(guard?.error).toBe(
+        '.claude/settings.json is not valid JSON or not a settings object; left unchanged. Fix it, then run "ctxo doctor --fix".',
+      );
       expect(text(SETTINGS)).toBe('not json{{{');
       // CLAUDE.md waits for a readable settings.json: a full block now would read as an opt-out (D5).
       const rules = attempt(r, 'AI rules');
       expect(rules?.status).toBe('skipped');
-      expect(rules?.error).toBe('CLAUDE.md left unchanged until .claude/settings.json is readable');
+      expect(rules?.error).toBe('CLAUDE.md left unchanged while .claude/settings.json is unreadable');
       expect(text('CLAUDE.md')).toBe(PRE_TIER_CLAUDE_MD);
+    });
+
+    it('--fix keeps the Claude Code rules block when the skills install fails', async () => {
+      write('CLAUDE.md', PRE_TIER_CLAUDE_MD);
+      // A file where a skill folder belongs: installSkills writes ctxo-understand, then throws.
+      write('.claude/skills/ctxo-safe-edit', 'not a folder');
+      const claudeMd = bytes('CLAUDE.md');
+
+      const r = await fix(await runAgentChecks());
+
+      expect(attempt(r, 'Skills')?.status).toBe('failed');
+      expect(attempt(r, 'Claude guard hook')?.status).toBe('success');
+      const rules = attempt(r, 'AI rules');
+      expect(rules?.status).toBe('skipped');
+      expect(rules?.error).toBe('CLAUDE.md left unchanged while ctxo skills are missing (ctxo-safe-edit, ctxo-review-pr)');
+      expect(bytes('CLAUDE.md')).toEqual(claudeMd);
+      expect(existsSync(join(tmp, '.claude', 'skills', 'ctxo-understand', 'SKILL.md'))).toBe(true);
+      const after = await runAgentChecks();
+      expect(statuses(after)).toEqual({ ai_rules: 'warn', skills: 'warn', claude_guard_hook: 'pass' });
+      expect(after.checks.find((c) => c.id === 'skills')?.message).toBe('Claude Code: missing ctxo-safe-edit, ctxo-review-pr');
+      expect(after.checks.find((c) => c.id === 'ai_rules')?.message).toContain('CLAUDE.md: rules template outdated');
+    });
+
+    it('--fix keeps the Claude Code rules block when the guard write fails', async () => {
+      write('CLAUDE.md', PRE_TIER_CLAUDE_MD);
+      const claudeMd = bytes('CLAUDE.md');
+      faults.guardWrite = true;
+
+      const r = await fix(await runAgentChecks());
+
+      expect(attempt(r, 'Skills')?.status).toBe('success');
+      const guard = attempt(r, 'Claude guard hook');
+      expect(guard?.status).toBe('failed');
+      expect(guard?.error).toContain('EACCES');
+      const rules = attempt(r, 'AI rules');
+      expect(rules?.status).toBe('skipped');
+      expect(rules?.error).toBe('CLAUDE.md left unchanged while the safe-edit guard is not registered');
+      expect(bytes('CLAUDE.md')).toEqual(claudeMd);
+      expect(existsSync(join(tmp, SETTINGS))).toBe(false);
+      faults.guardWrite = false;
+      const after = await runAgentChecks();
+      expect(statuses(after)).toEqual({ ai_rules: 'warn', skills: 'pass', claude_guard_hook: 'warn' });
+      expect(after.checks.find((c) => c.id === 'ai_rules')?.message).toContain('CLAUDE.md: rules present, guard missing');
+    });
+
+    it('--fix --dry-run plans the agent steps and changes nothing on disk', async () => {
+      write('CLAUDE.md', PRE_TIER_CLAUDE_MD);
+      const claudeMd = bytes('CLAUDE.md');
+      const doctor = await runAgentChecks();
+      expect(statuses(doctor)).toEqual({ ai_rules: 'warn', skills: 'warn', claude_guard_hook: 'warn' });
+
+      const r = await applyFixes(doctor, { projectRoot: tmp, ctxoRoot: join(tmp, '.ctxo'), dryRun: true });
+
+      expect(r.attempts).toEqual([
+        { name: 'Skills', action: 'install missing or outdated ctxo skills', status: 'planned' },
+        { name: 'Claude guard hook', action: 'register ctxo gate-hook in .claude/settings.json', status: 'planned' },
+        { name: 'AI rules', action: 're-render ctxo rules blocks', status: 'planned' },
+      ]);
+      expect(formatFixReport(r).split('\n')).toEqual([
+        '  · Skills: install missing or outdated ctxo skills',
+        '  · Claude guard hook: register ctxo gate-hook in .claude/settings.json',
+        '  · AI rules: re-render ctxo rules blocks',
+      ]);
+      expect(bytes('CLAUDE.md')).toEqual(claudeMd);
+      expect(existsSync(join(tmp, '.claude'))).toBe(false);
+      expect(statuses(await runAgentChecks())).toEqual(statuses(doctor));
+    });
+
+    it('--fix keeps the unterminated-marker warning for a held CLAUDE.md', async () => {
+      write('CLAUDE.md', '# P\n\n' + renderRulesBlock('full').replace('\n<!-- ctxo-rules-end -->', '') + '\n');
+      write(SETTINGS, 'not json{{{');
+      const claudeMd = bytes('CLAUDE.md');
+
+      const r = await fix(await runAgentChecks());
+
+      const rules = attempt(r, 'AI rules');
+      expect(rules?.status).toBe('failed');
+      expect(rules?.error).toBe(
+        'CLAUDE.md: ctxo rules start marker has no end marker; left unchanged; CLAUDE.md left unchanged while .claude/settings.json is unreadable',
+      );
+      expect(bytes('CLAUDE.md')).toEqual(claudeMd);
     });
 
     it('--fix leaves the Claude Code rules block alone while settings.json is unreadable', async () => {
@@ -442,7 +543,14 @@ describe('applyFixes', () => {
       const r = await fix(await runAgentChecks());
 
       expect(attempt(r, 'Claude guard hook')?.status).toBe('failed');
-      expect(attempt(r, 'AI rules')?.status).toBe('success');
+      const rules = attempt(r, 'AI rules');
+      expect(rules?.status).toBe('success');
+      // The held file is a warning line under the success line, never shown as fixed.
+      expect(rules?.warnings).toEqual(['CLAUDE.md left unchanged while .claude/settings.json is unreadable']);
+      const output = formatFixReport(r).split('\n');
+      const rulesLine = output.findIndex((line) => line.includes('AI rules: re-render ctxo rules blocks'));
+      expect(output[rulesLine + 1]).toBe('      ⚠ CLAUDE.md left unchanged while .claude/settings.json is unreadable');
+      expect(text('.ctxo/doctor-fix.log')).toContain('  - warning: CLAUDE.md left unchanged while .claude/settings.json is unreadable');
       expect(bytes('CLAUDE.md')).toEqual(claudeMd);
       expect(text('AGENTS.md')).toBe('# Agents\n\n' + renderRulesBlock('full') + '\n');
       const after = await runAgentChecks();

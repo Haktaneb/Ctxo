@@ -21,6 +21,7 @@ import {
   readClaudeGuardState,
   readRulesStates,
   resolveRulesTier,
+  skillStates,
   skillsExpected,
 } from './ai-rules.js';
 import { InstallCommand } from './install-command.js';
@@ -41,6 +42,8 @@ export interface FixAttempt {
   readonly status: 'success' | 'skipped' | 'failed' | 'planned';
   readonly durationMs?: number;
   readonly error?: string;
+  /** What a successful attempt left undone, such as a rules file it held back; one warning line each. */
+  readonly warnings?: readonly string[];
 }
 
 export interface FixReport {
@@ -65,8 +68,9 @@ export interface FixReport {
  *
  * Steps 3 to 5 never install what the user declined (D5): a versioned full block in CLAUDE.md is
  * an opt-out of the guard and the skills, and `gate.enabled: false` an opt-out of the guard only.
- * An unreadable `.claude/settings.json` is never written; its step fails with the warning, and
- * CLAUDE.md is not re-rendered until the file is readable again.
+ * An unreadable `.claude/settings.json` is never written; its step fails with the warning. Step 5
+ * holds CLAUDE.md while, after steps 3 and 4, its block still expects a guard or skills that are not
+ * in place (whatever stopped them), and reports the hold as a warning.
  *
  * Error handling (D4.6 "dependency-aware continue"):
  *   - Config failure -> skip all dependent steps
@@ -224,10 +228,15 @@ interface FixSkipped {
   readonly skipped: string;
 }
 
+/** A fix body returns this when it did its work but left part of it undone: success with warning lines. */
+interface FixWarned {
+  readonly warnings: readonly string[];
+}
+
 async function run(
   name: string,
   action: string,
-  body: () => Promise<void | FixSkipped>,
+  body: () => Promise<void | FixSkipped | FixWarned>,
   options: FixOptions,
 ): Promise<FixAttempt> {
   if (options.dryRun) {
@@ -236,8 +245,11 @@ async function run(
   const start = Date.now();
   try {
     const outcome = await body();
-    if (outcome) {
+    if (outcome && 'skipped' in outcome) {
       return { name, action, status: 'skipped', durationMs: Date.now() - start, error: outcome.skipped };
+    }
+    if (outcome) {
+      return { name, action, status: 'success', durationMs: Date.now() - start, warnings: outcome.warnings };
     }
     return { name, action, status: 'success', durationMs: Date.now() - start };
   } catch (err) {
@@ -278,16 +290,19 @@ async function fixSkills(projectRoot: string): Promise<void | FixSkipped> {
 }
 
 /**
+ * The failure for an unreadable `.claude/settings.json`. Unlike the `ensureClaudeHook` warning (shared
+ * with init), it names one next step: the same `--fix` run that installs the guard renders the tier.
+ */
+const UNREADABLE_SETTINGS_FAILURE =
+  '.claude/settings.json is not valid JSON or not a settings object; left unchanged. Fix it, then run "ctxo doctor --fix".';
+
+/**
  * Registers the safe-edit guard when CLAUDE.md expects it and the gate is enabled. An unreadable
- * `.claude/settings.json` fails the attempt with the `ensureClaudeHook` warning and is never written.
+ * `.claude/settings.json` fails the attempt and is never written.
  */
 async function fixClaudeGuardHook(projectRoot: string): Promise<void | FixSkipped> {
   const state = readClaudeGuardState(projectRoot);
-  if (state === 'unreadable') {
-    // The dry run only fetches the warning; ensureClaudeHook never writes an unreadable file either way.
-    const { warning } = ensureClaudeHook(projectRoot, { dryRun: true });
-    throw new Error(warning ?? '.claude/settings.json cannot be read; left unchanged');
-  }
+  if (state === 'unreadable') throw new Error(UNREADABLE_SETTINGS_FAILURE);
   if (state === 'present') return { skipped: 'already registered' };
   if (!guardExpected(projectRoot)) {
     return { skipped: 'not expected: CLAUDE.md records an opt-out or has no ctxo block, or gate.enabled is false' };
@@ -301,31 +316,51 @@ async function fixClaudeGuardHook(projectRoot: string): Promise<void | FixSkippe
  * and guard installed earlier in the run. A block from a newer ctxo is left alone (D2). A file with an
  * unterminated start marker is passed on too, so its warning fails the attempt instead of being lost.
  *
- * While `.claude/settings.json` is unreadable, CLAUDE.md is left as it is: the guard cannot be seen,
- * so the tier would resolve to full, and a versioned full block reads as an opt-out (D5) that would
- * hide the missing guard for good. The next run after the file is repaired renders the right tier.
+ * The Claude Code file is held while `claudeRulesHold` finds a reason, and the hold is reported: as
+ * the skip reason when nothing else rendered, otherwise as a warning line under the success line. A
+ * held file still reports a damaged block (from a dry run, which writes nothing).
  */
-async function fixAiRules(projectRoot: string): Promise<void | FixSkipped> {
-  const holdClaudeRules = readClaudeGuardState(projectRoot) === 'unreadable';
+async function fixAiRules(projectRoot: string): Promise<void | FixSkipped | FixWarned> {
   const warnings: string[] = [];
+  const holds: string[] = [];
   let rendered = 0;
-  let held = false;
   for (const state of readRulesStates(projectRoot)) {
     const first = state.scan.blocks[0];
     const renderable = first ? classifyRulesBlock(first).state !== 'newer' : state.scan.unterminated;
     if (!renderable) continue;
-    if (holdClaudeRules && state.platformId === 'claude-code') {
-      held = true;
+    const hold = state.platformId === 'claude-code' ? claudeRulesHold(projectRoot, state.file) : undefined;
+    if (hold) {
+      holds.push(hold);
+      const probe = installRules(projectRoot, state.platformId, { dryRun: true });
+      if (probe.warning) warnings.push(probe.warning);
       continue;
     }
     rendered += 1;
     const result = installRules(projectRoot, state.platformId, { tier: resolveRulesTier(projectRoot, state.platformId) });
     if (result.warning) warnings.push(result.warning);
   }
-  if (warnings.length > 0) throw new Error(warnings.join('; '));
-  if (rendered === 0) {
-    return { skipped: held ? 'CLAUDE.md left unchanged until .claude/settings.json is readable' : 'no ctxo rules block to re-render' };
+  if (warnings.length > 0) throw new Error([...warnings, ...holds].join('; '));
+  if (rendered === 0) return { skipped: holds.length > 0 ? holds.join('; ') : 'no ctxo rules block to re-render' };
+  if (holds.length > 0) return { warnings: holds };
+}
+
+/**
+ * Why the Claude Code rules file must wait, read from disk after the Skills and Claude guard hook
+ * steps: `.claude/settings.json` is unreadable, or the block expects the guard or the skills (D5) and
+ * they are still not in place, whatever stopped them (a failed write, a partial install, an error).
+ * Rendering now would resolve to the full tier, and a versioned full block reads as an opt-out the
+ * user never made, which would hide the missing pieces for good. Undefined when the file can render.
+ */
+function claudeRulesHold(projectRoot: string, file: string): string | undefined {
+  const reasons: string[] = [];
+  const guard = readClaudeGuardState(projectRoot);
+  if (guard === 'unreadable') reasons.push('.claude/settings.json is unreadable');
+  else if (guard === 'absent' && guardExpected(projectRoot)) reasons.push('the safe-edit guard is not registered');
+  if (skillsExpected(projectRoot, 'claude-code')) {
+    const missing = skillStates(projectRoot, 'claude-code').filter((s) => s.state === 'missing').map((s) => s.skill);
+    if (missing.length > 0) reasons.push(`ctxo skills are missing (${missing.join(', ')})`);
   }
+  return reasons.length > 0 ? `${file} left unchanged while ${reasons.join(' and ')}` : undefined;
 }
 
 function hasMissingPlugins(projectRoot: string): boolean {
@@ -443,6 +478,7 @@ function writeLog(
       const dur = a.durationMs != null ? ` (${a.durationMs}ms)` : '';
       const err = a.error ? ` — ${a.error}` : '';
       lines.push(`- [${a.status}] ${a.name}: ${a.action}${dur}${err}`);
+      for (const warning of a.warnings ?? []) lines.push(`  - warning: ${warning}`);
     }
     lines.push('');
     appendFileSync(path, lines.join('\n'));
@@ -459,6 +495,7 @@ export function formatFixReport(report: FixReport): string {
     const dur = a.durationMs != null ? ` (${a.durationMs}ms)` : '';
     const err = a.error ? ` — ${a.error}` : '';
     lines.push(`  ${icon} ${a.name}: ${a.action}${dur}${err}`);
+    for (const warning of a.warnings ?? []) lines.push(`      ⚠ ${warning}`);
   }
   if (report.halted && report.reason) {
     lines.push(`  ! halted: ${report.reason}`);
