@@ -50,7 +50,7 @@ describe('Release Packaging', () => {
     expect(files.some((f: string) => f === 'package.json')).toBe(true);
   });
 
-  it('tarball size is reasonable (< 1650KB)', { timeout: 30_000 }, () => {
+  it('tarball size is reasonable (< 2000KB)', { timeout: 30_000 }, () => {
     const output = execSync('npm pack --dry-run --json', { cwd: ROOT, encoding: 'utf-8' });
 
     const info = JSON.parse(output);
@@ -70,8 +70,9 @@ describe('Release Packaging', () => {
     // The PR 2A final fix (formatter-stable blocks and normalised comparison, linked rules files,
     // versioned skills, one hold rule shared by init, the dry run and --fix, and its JSDoc, shipped
     // as JS and again in the source maps) raised it to 1650KB (measured 1574.88KB: the next 50KB
-    // step, 1600KB, plus 50KB of headroom).
-    expect(sizeKB).toBeLessThan(1650);
+    // step, 1600KB, plus 50KB of headroom). The owner set 2000KB ahead of the stack merge with PR 1B
+    // (#156), which projects to about 1870KB together; PR 2A alone measured 1587.18KB at this change.
+    expect(sizeKB).toBeLessThan(2000);
     expect(sizeKB).toBeGreaterThan(1); // Sanity: not empty (dist/ may not exist in CI pre-build)
   });
 });

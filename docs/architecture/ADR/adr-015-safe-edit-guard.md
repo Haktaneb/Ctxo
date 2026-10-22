@@ -181,4 +181,4 @@ A versioned full block and `gate.enabled: false` pass as opt-outs. `ctxo doctor 
 - A rules file shared by several clients never gets the compact block. Its versioned full block reads as an opt-out, so doctor does not report a missing guard there; init's defaults still install the guard and the skills.
 - A pre-tier or compact block can stay as it is for a while: it is held until the user installs the guard and the skills or declines them.
 - Cursor gets the skills and the full block, but no guard question and no hook.
-- The CLI tarball size limit was raised from 1450 KB to 1650 KB (measured 1574.88 KB with the final fix), per the established practice of raising it with the measured size when a PR crosses it. Sourcemaps keep shipping.
+- The CLI tarball size limit was raised from 1450 KB to 1650 KB (measured 1574.88 KB with the final fix), per the established practice of raising it with the measured size when a PR crosses it, and then to 2000 KB by the owner ahead of the stack merge with PR 1B (about 1870 KB together; 1587.18 KB for this PR alone). Sourcemaps keep shipping.
