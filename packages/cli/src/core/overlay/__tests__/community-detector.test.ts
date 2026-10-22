@@ -223,4 +223,46 @@ describe('CommunityDetector', () => {
       expect(sortedCorrectly).toBe(true);
     }
   });
+
+  describe('data edges', () => {
+    function buildDataGraph(groups = 2): SymbolGraph {
+      const graph = new SymbolGraph();
+      const table = 'db/t.sql::dbo.t::table';
+      graph.addNode(makeNode(table));
+      const files = ['a/x.ts', 'b/y.ts', 'c/z.ts', 'd/w.ts'].slice(0, groups);
+      files.forEach((file, i) => {
+        const f1 = `${file}::F1::function`;
+        const f2 = `${file}::F2::function`;
+        graph.addNode(makeNode(f1));
+        graph.addNode(makeNode(f2));
+        graph.addEdge({ from: f1, to: f2, kind: 'calls' });
+        graph.addEdge({ from: f2, to: f1, kind: 'calls' });
+        graph.addEdge({ from: f1, to: table, kind: i % 2 === 0 ? 'reads' : 'writes' });
+        graph.addEdge({ from: f2, to: table, kind: 'reads' });
+      });
+      return graph;
+    }
+
+    it('data edges do not join communities', () => {
+      const graph = buildDataGraph();
+      const result = new CommunityDetector().detect(graph, pagerankFor(graph));
+      const idOf = (id: string) => result.communities.find((c) => c.symbolId === id)!.communityId;
+      const tableCommunity = idOf('db/t.sql::dbo.t::table');
+      const members = result.communities.filter((c) => c.communityId === tableCommunity);
+      expect(members).toHaveLength(1);
+      expect(idOf('a/x.ts::F1::function')).not.toBe(idOf('b/y.ts::F1::function'));
+    });
+
+    it('crossClusterEdges ignores data edges', () => {
+      const graph = buildDataGraph();
+      const result = new CommunityDetector().detect(graph, pagerankFor(graph));
+      expect(result.crossClusterEdges).toBe(0);
+    });
+
+    it('a table is never a god node', () => {
+      const graph = buildDataGraph(4);
+      const result = new CommunityDetector({ godNodeMinBridged: 1 }).detect(graph, pagerankFor(graph));
+      expect(result.godNodes.map((g) => g.symbolId)).not.toContain('db/t.sql::dbo.t::table');
+    });
+  });
 });

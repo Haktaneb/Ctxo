@@ -1,6 +1,7 @@
 import { UndirectedGraph } from 'graphology';
 
 import { compareCodepoint } from '../compare-codepoint.js';
+import { DATA_EDGE_KINDS } from '../data-coupling/data-kinds.js';
 import type { SymbolGraph } from '../graph/symbol-graph.js';
 import type { CommunityEntry, EdgeQuality, GodNode } from '../types.js';
 import { labelCommunities } from './community-labeler.js';
@@ -67,6 +68,7 @@ export class CommunityDetector {
     const weightByPair = new Map<string, number>();
     for (const edge of graph.allEdges()) {
       if (edge.from === edge.to) continue;
+      if (DATA_EDGE_KINDS.has(edge.kind)) continue;
       if (!gph.hasNode(edge.from) || !gph.hasNode(edge.to)) continue;
       const [a, b] = edge.from < edge.to ? [edge.from, edge.to] : [edge.to, edge.from];
       const key = `${a}|${b}`;
@@ -168,6 +170,7 @@ export class CommunityDetector {
   ): number {
     let count = 0;
     for (const edge of graph.allEdges()) {
+      if (DATA_EDGE_KINDS.has(edge.kind)) continue;
       const from = assignments.get(edge.from);
       const to = assignments.get(edge.to);
       if (from === undefined || to === undefined) continue;
@@ -189,10 +192,12 @@ export class CommunityDetector {
       const forward = graph.getForwardEdges(node.symbolId);
       const reverse = graph.getReverseEdges(node.symbolId);
       for (const edge of forward) {
+        if (DATA_EDGE_KINDS.has(edge.kind)) continue;
         const other = assignments.get(edge.to);
         if (other !== undefined && other !== ownCommunity) bridged.add(other);
       }
       for (const edge of reverse) {
+        if (DATA_EDGE_KINDS.has(edge.kind)) continue;
         const other = assignments.get(edge.from);
         if (other !== undefined && other !== ownCommunity) bridged.add(other);
       }

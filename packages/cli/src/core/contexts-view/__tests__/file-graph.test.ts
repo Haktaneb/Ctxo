@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { applyHubDamping, buildFileGraph, detectHubs, type FileGraph, type FilePair } from '../file-graph.js';
+import { applyHubDamping, buildFileGraph, buildIndexGraph, detectHubs, type FileGraph, type FilePair } from '../file-graph.js';
 import type { CoChangeEntry, EdgeKind, FileIndex, SymbolKind } from '../../types.js';
 
-const WEIGHTS = { dependency: 1, coChange: 1 };
+const WEIGHTS = { dependency: 1, coChange: 1, data: 0 };
 
 function sym(file: string, name: string, kind: SymbolKind = 'function') {
   return { symbolId: `${file}::${name}::${kind}`, name, kind, startLine: 1, endLine: 2 };
@@ -114,8 +114,8 @@ describe('buildFileGraph', () => {
     const coChangeMap = new Map([['a.ts', [co('a.ts', 'e.ts', 0.8)]]]);
     const indices = [fileIndex('a.ts', ['fa']), fileIndex('e.ts', ['fe'])];
     const plain = buildFileGraph({ indices, isNode: all, coChangeMap, weights: WEIGHTS });
-    expect(plain.pairs).toEqual([{ a: 'a.ts', b: 'e.ts', dependency: 0, coChange: 0.8, weight: 0.8 }]);
-    const scaled = buildFileGraph({ indices, isNode: all, coChangeMap, weights: { dependency: 0.5, coChange: 2 } });
+    expect(plain.pairs).toEqual([{ a: 'a.ts', b: 'e.ts', dependency: 0, coChange: 0.8, data: 0, weight: 0.8 }]);
+    const scaled = buildFileGraph({ indices, isNode: all, coChangeMap, weights: { dependency: 0.5, coChange: 2, data: 0 } });
     expect(scaled.pairs[0]!.weight).toBe(1.6);
   });
 
@@ -288,7 +288,7 @@ describe('detectHubs', () => {
 describe('applyHubDamping', () => {
   it('uses the exact factor 1 / log2(2 + dependents), not the rounded display damping', () => {
     const hub = detectHubs(fanInGraph(12), { hubs: AUTO_HUBS, godNodeFiles: new Set() })[0]!;
-    const result = applyHubDamping([{ a: 'a.ts', b: 'h.ts', dependency: 1, coChange: 0, weight: 1 }], [
+    const result = applyHubDamping([{ a: 'a.ts', b: 'h.ts', dependency: 1, coChange: 0, data: 0, weight: 1 }], [
       { ...hub, file: 'h.ts' },
     ]);
     expect(result[0]!.weight).toBe(Math.round((1 / Math.log2(14)) * 1e6) / 1e6);
@@ -297,10 +297,10 @@ describe('applyHubDamping', () => {
 
   it('multiplies edges touching a hub by its damping, once per hub endpoint, and drops configured-hub edges', () => {
     const pairs: FilePair[] = [
-      { a: 'a.ts', b: 'h1.ts', dependency: 1, coChange: 0, weight: 1 },
-      { a: 'a.ts', b: 'b.ts', dependency: 1, coChange: 0, weight: 0.5 },
-      { a: 'h1.ts', b: 'h2.ts', dependency: 1, coChange: 0, weight: 1 },
-      { a: 'a.ts', b: 'zero.ts', dependency: 1, coChange: 0, weight: 1 },
+      { a: 'a.ts', b: 'h1.ts', dependency: 1, coChange: 0, data: 0, weight: 1 },
+      { a: 'a.ts', b: 'b.ts', dependency: 1, coChange: 0, data: 0, weight: 0.5 },
+      { a: 'h1.ts', b: 'h2.ts', dependency: 1, coChange: 0, data: 0, weight: 1 },
+      { a: 'a.ts', b: 'zero.ts', dependency: 1, coChange: 0, data: 0, weight: 1 },
     ];
     const result = applyHubDamping(pairs, [
       { file: 'h1.ts', reasons: ['fan-in'], dependents: 10, damping: 0.5 },
@@ -312,5 +312,103 @@ describe('applyHubDamping', () => {
       ['a.ts', 'b.ts', 0.5],
       ['h1.ts', 'h2.ts', r6(1 / Math.log2(12) / Math.log2(12))],
     ]);
+  });
+});
+
+describe('buildFileGraph data edges', () => {
+  it('a file that only reads a table gains no edgeCounts entry and no dependent for that table file', () => {
+    const indices: FileIndex[] = [
+      fileIndex('app.ts', ['run'], [['app.ts::run::function', 'dbo.t::table', 'reads']]),
+      {
+        file: 'db/t.sql',
+        lastModified: 1,
+        symbols: [sym('db/t.sql', 'dbo.t', 'table')],
+        edges: [],
+        intent: [],
+        antiPatterns: [],
+      },
+    ];
+    const graph = buildFileGraph({ indices, isNode: all, weights: WEIGHTS });
+    expect(graph.edgeCounts).toEqual([]);
+    expect(graph.dependents.get('db/t.sql')).toBe(0);
+    expect(graph.pairs).toEqual([]);
+  });
+
+  /** Two .sql files, a table each plus a procedure, and three code files with calls and data edges. */
+  function dataIndices(): FileIndex[] {
+    const sqlFile = (file: string, symbols: ReturnType<typeof sym>[], edges: Array<[string, string, EdgeKind]> = []) => ({
+      ...fileIndex(file, [], edges),
+      symbols,
+    });
+    return [
+      fileIndex(
+        'a.ts',
+        ['fa', 'ga'],
+        [
+          ['a.ts::fa::function', 'b.ts::fb::function', 'calls'],
+          ['a.ts::fa::function', 'dbo.loans::table', 'reads'],
+          ['a.ts::fa::function', 'dbo.loans::table', 'writes'],
+          ['a.ts::ga::function', 'dbo.loans::table', 'reads'],
+        ],
+      ),
+      fileIndex(
+        'b.ts',
+        ['fb'],
+        [
+          ['b.ts::fb::function', 'dbo.members::table', 'reads'],
+          ['b.ts::fb::function', 'dbo.usp_renew::procedure', 'executes'],
+          ['b.ts::fb::function', 'dbo.ghost::table', 'reads'],
+        ],
+      ),
+      fileIndex('c.ts', ['fc'], [['c.ts::fc::function', 'dbo.loans::table', 'writes']]),
+      sqlFile('db/loans.sql', [sym('db/loans.sql', 'dbo.loans', 'table')]),
+      sqlFile(
+        'db/members.sql',
+        [sym('db/members.sql', 'dbo.members', 'table'), sym('db/members.sql', 'dbo.usp_renew', 'procedure')],
+        [['db/members.sql::dbo.usp_renew::procedure', 'dbo.members::table', 'writes']],
+      ),
+    ];
+  }
+
+  it('data edges add nothing at the default weight and never count as dependents', () => {
+    const withData = buildFileGraph({ indices: dataIndices(), isNode: all, weights: WEIGHTS });
+    const withoutData = buildFileGraph({
+      indices: dataIndices().map((index) => ({
+        ...index,
+        edges: index.edges.filter((edge) => !['reads', 'writes', 'executes'].includes(edge.kind)),
+      })),
+      isNode: all,
+      weights: WEIGHTS,
+    });
+
+    expect(withData.pairs.map(({ a, b, weight }) => ({ a, b, weight }))).toEqual(
+      withoutData.pairs.map(({ a, b, weight }) => ({ a, b, weight })),
+    );
+    expect(withData.pairs.map((p) => [p.a, p.b])).toEqual([['a.ts', 'b.ts']]);
+    expect(withData.edgeCounts).toEqual(withoutData.edgeCounts);
+    expect([...withData.dependents]).toEqual([...withoutData.dependents]);
+    expect(withData.dependents.get('db/loans.sql')).toBe(0);
+    expect(withData.dependents.get('db/members.sql')).toBe(0);
+  });
+
+  it('weights.data above 0 adds the normalized data component', () => {
+    const graph = buildFileGraph({ indices: dataIndices(), isNode: all, weights: { ...WEIGHTS, data: 0.5 } });
+
+    // Distinct data edges per pair: a.ts and db/loans.sql 3 (fa reads, fa writes, ga reads), b.ts and
+    // db/members.sql 2 (a read and an executes), c.ts and db/loans.sql 1; the unresolved dbo.ghost adds none.
+    const data = (count: number) => Math.log2(1 + count) / Math.log2(4);
+    expect(graph.pairs).toEqual([
+      { a: 'a.ts', b: 'b.ts', dependency: 1, coChange: 0, data: 0, weight: 1 },
+      { a: 'a.ts', b: 'db/loans.sql', dependency: 0, coChange: 0, data: 1, weight: 0.5 },
+      { a: 'b.ts', b: 'db/members.sql', dependency: 0, coChange: 0, data: r6(data(2)), weight: r6(0.5 * data(2)) },
+      { a: 'c.ts', b: 'db/loans.sql', dependency: 0, coChange: 0, data: r6(data(1)), weight: r6(0.5 * data(1)) },
+    ]);
+    expect(graph.dependents.get('db/loans.sql')).toBe(0);
+  });
+
+  it('a prebuilt index graph gives the same file graph as the indices alone', () => {
+    const indices = dataIndices();
+    const options = { indices, isNode: all, weights: { ...WEIGHTS, data: 1 } };
+    expect(buildFileGraph({ ...options, graph: buildIndexGraph(indices) })).toEqual(buildFileGraph(options));
   });
 });

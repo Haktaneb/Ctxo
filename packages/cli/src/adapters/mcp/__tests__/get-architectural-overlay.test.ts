@@ -11,6 +11,13 @@ import { ClusterLabelMasker } from '../../../core/overlay/cluster-label-masker.j
 import { resolveContextsViewConfig } from '../../../core/config/load-config.js';
 import type { ContextCandidate, ContextHub, ContextsView } from '../../../core/contexts-view/contexts-view-builder.js';
 import type { TermCollision } from '../../../core/contexts-view/context-terms.js';
+import type {
+  CandidateSharedTable,
+  DataAccessMode,
+  DataResourceUsage,
+} from '../../../core/contexts-view/data-coupling.js';
+import { wrapResponse } from '../../../core/response-envelope.js';
+import { compareCodepoint } from '../../../core/compare-codepoint.js';
 import type { IContextsViewPort } from '../../../ports/i-contexts-view-port.js';
 
 function buildSnapshot(): CommunitySnapshot {
@@ -271,6 +278,7 @@ function candidate(id: number, label: string, fileCount: number): ContextCandida
       frequency: 0.5,
       sharedCommits: 3,
     })),
+    sharedTables: [],
   };
 }
 
@@ -301,7 +309,48 @@ function buildView(candidates: ContextCandidate[], extra: Partial<ContextsView> 
     hubs: [],
     unclustered: { count: 20, files: Array.from({ length: 20 }, (_, i) => `src/u/f-${i}.ts`) },
     collisions: [],
+    dataResources: [],
     ...extra,
+  };
+}
+
+/** A data resource accessed by `[candidate, modes]` pairs (sorted by candidate). */
+function resource(
+  name: string,
+  accessors: Array<[candidate: number, modes: DataAccessMode[]]>,
+  kind: 'table' | 'view' | 'external' = 'table',
+): DataResourceUsage {
+  const accesses = [...accessors].sort(([x], [y]) => x - y).map(([candidate, modes]) => ({ candidate, modes }));
+  const writers = accesses.filter((access) => access.modes.includes('writes')).map((access) => access.candidate);
+  return {
+    name,
+    ...(kind !== 'external' ? { kind } : {}),
+    external: kind === 'external',
+    accesses,
+    writers,
+    ...(writers.length === 1 ? { owner: writers[0]! } : {}),
+  };
+}
+
+/** The view with these resources and, per candidate, the resources of two or more candidates, as the builder lists them. */
+function withData(view: ContextsView, resources: DataResourceUsage[]): ContextsView {
+  const sorted = [...resources].sort((x, y) => compareCodepoint(x.name, y.name));
+  const shared = new Map<number, CandidateSharedTable[]>();
+  for (const { name, kind, external, accesses, owner } of sorted) {
+    if (accesses.length < 2) continue;
+    const entry: CandidateSharedTable = {
+      name,
+      ...(kind !== undefined ? { kind } : {}),
+      external,
+      accesses,
+      ...(owner !== undefined ? { owner } : {}),
+    };
+    for (const access of accesses) shared.set(access.candidate, [...(shared.get(access.candidate) ?? []), entry]);
+  }
+  return {
+    ...view,
+    candidates: view.candidates.map((c) => ({ ...c, sharedTables: shared.get(c.id) ?? [] })),
+    dataResources: sorted,
   };
 }
 
@@ -377,9 +426,12 @@ describe('GetArchitecturalOverlayHandler mode contexts', () => {
       'collisionsTotal',
       'commitSha',
       'coverage',
+      'dataResourcesTotal',
+      'externalResourcesTotal',
       'hint',
       'hubs',
       'hubsTotal',
+      'sharedResourcesTotal',
       'unclustered',
     ]);
     expect(payload.commitSha).toBe('abc1234');
@@ -450,13 +502,17 @@ describe('GetArchitecturalOverlayHandler mode contexts', () => {
       'collisions',
       'collisionsTotal',
       'commitSha',
+      'dataResources',
+      'dataResourcesTotal',
       'hint',
       'hubs',
       'hubsTotal',
     ]);
     expect(payload.commitSha).toBe('abc1234');
     expect(payload.hint).toBe('Run ctxo contexts --json for full member sets.');
-    expect(payload.candidate).toEqual({ ...second, files: second.files.slice(0, 15) });
+    expect(payload.candidate).toEqual({ ...second, files: second.files.slice(0, 15), sharedTableCount: 0 });
+    expect(payload.dataResources).toEqual([]);
+    expect(payload.dataResourcesTotal).toBe(0);
     expect(payload.candidate.fileCount).toBe(40);
     expect(payload.candidate.topTerms).toHaveLength(10);
     expect(payload.candidate.crossEdges).toEqual(second.crossEdges);
@@ -621,6 +677,300 @@ describe('GetArchitecturalOverlayHandler mode contexts', () => {
 
     expect(payload.layers).toBeDefined();
     expect(payload.candidates).toBeUndefined();
+  });
+
+  it('the contexts summary gives sharedTableCount per candidate and the three resource totals', async () => {
+    const view = withData(fixtureView(), [
+      resource('dbo.loans', [[1, ['writes']], [2, ['reads']]]),
+      resource('dbo.members', [[1, ['reads']], [3, ['reads']], [4, ['reads', 'writes']]]),
+      resource('dbo.audit_log', [[2, ['writes']]], 'external'),
+      resource('dbo.fees', [[5, ['reads']], [6, ['reads']]], 'external'),
+      resource('dbo.open_loans', [[7, ['reads']]], 'view'),
+    ]);
+
+    const payload = await call(view, { mode: 'contexts' });
+
+    expect(payload.dataResourcesTotal).toBe(5);
+    expect(payload.sharedResourcesTotal).toBe(3);
+    expect(payload.externalResourcesTotal).toBe(2);
+    expect(payload.dataResources).toBeUndefined();
+    const counts = payload.candidates.map((c: Record<string, unknown>) => c['sharedTableCount']);
+    expect(counts).toEqual([2, 1, 1, 1, 1, 1, undefined, undefined, undefined, undefined, undefined, undefined]);
+    // Present only when above 0, and the rows carry no data arrays.
+    expect('sharedTableCount' in payload.candidates[6]).toBe(false);
+    expect(Object.keys(payload.candidates[0]).sort()).toEqual([
+      'cohesion',
+      'fileCount',
+      'fingerprint',
+      'id',
+      'label',
+      'sharedTableCount',
+      'topTerms',
+    ]);
+
+    // A view without data still gives the three totals, at 0.
+    const plain = await call(fixtureView(), { mode: 'contexts' });
+    expect([plain.dataResourcesTotal, plain.sharedResourcesTotal, plain.externalResourcesTotal]).toEqual([0, 0, 0]);
+  });
+
+  it('the candidate detail caps sharedTables at 15 with sharedTableCount and each accesses list at 10', async () => {
+    // The caps alone: a limit large enough that the fit to the response limit drops nothing.
+    process.env['CTXO_RESPONSE_LIMIT'] = '65536';
+    // 30 candidates; each of 20 tables is written by candidate 1 and read by the 29 others.
+    const resources = Array.from({ length: 20 }, (_, t) =>
+      resource(
+        `dbo.table_${String(t).padStart(2, '0')}`,
+        Array.from({ length: 30 }, (_, i): [number, DataAccessMode[]] => [i + 1, i === 0 ? ['writes'] : ['reads']]),
+      ),
+    );
+    const view = withData(
+      buildView(Array.from({ length: 30 }, (_, i) => candidate(i + 1, `context-${i + 1}`, 3))),
+      resources,
+    );
+
+    const payload = await call(view, { mode: 'contexts', candidate: 1 });
+
+    expect(payload.candidate.sharedTableCount).toBe(20);
+    expect(payload.candidate.sharedTables).toHaveLength(15);
+    expect(payload.candidate.sharedTables.map((t: { name: string }) => t.name)).toEqual(
+      resources.slice(0, 15).map((r) => r.name),
+    );
+    expect(payload.candidate.sharedTables[0]).toEqual({
+      name: 'dbo.table_00',
+      kind: 'table',
+      external: false,
+      accesses: resources[0]!.accesses.slice(0, 10),
+      owner: 1,
+      accessCount: 30,
+    });
+    for (const table of payload.candidate.sharedTables) {
+      expect(table.accesses).toHaveLength(10);
+      expect(table.accessCount).toBe(30);
+    }
+
+    // The requesting candidate's own access is always among the 10.
+    const late = await call(view, { mode: 'contexts', candidate: 25 });
+    expect(late.candidate.sharedTables[0].accesses.map((a: { candidate: number }) => a.candidate)).toEqual([
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 25,
+    ]);
+    expect(view.candidates[0]!.sharedTables).toHaveLength(20);
+    expect(view.candidates[0]!.sharedTables[0]!.accesses).toHaveLength(30);
+  });
+
+  it('the candidate detail lists its own dataResources capped at 15 with a total', async () => {
+    const resources = [
+      ...Array.from({ length: 20 }, (_, i) => {
+        const name = `dbo.r${String(i).padStart(2, '0')}`;
+        if (i === 0) return resource(name, [[1, ['reads', 'writes']], [2, ['reads']]]);
+        if (i === 1) return resource(name, [[1, ['reads']], [2, ['writes']], [3, ['writes']]], 'external');
+        return resource(name, [[1, ['reads']]], i % 2 === 0 ? 'table' : 'view');
+      }),
+      resource('dbo.zz_other', [[2, ['writes']]]),
+    ];
+    const view = withData(buildView([1, 2, 3, 4].map((id) => candidate(id, `context-${id}`, 3))), resources);
+
+    const payload = await call(view, { mode: 'contexts', candidate: 1 });
+
+    expect(payload.dataResourcesTotal).toBe(20);
+    expect(payload.dataResources).toHaveLength(15);
+    expect(payload.dataResources.map((r: { name: string }) => r.name)).toEqual(resources.slice(0, 15).map((r) => r.name));
+    expect(payload.dataResources.slice(0, 3)).toEqual([
+      { name: 'dbo.r00', kind: 'table', external: false, modes: ['reads', 'writes'], owner: 1, writerCount: 1 },
+      { name: 'dbo.r01', external: true, modes: ['reads'], writerCount: 2 },
+      { name: 'dbo.r02', kind: 'table', external: false, modes: ['reads'], writerCount: 0 },
+    ]);
+
+    const second = await call(view, { mode: 'contexts', candidate: 2 });
+    expect(second.dataResources.map((r: { name: string }) => r.name)).toEqual(['dbo.r00', 'dbo.r01', 'dbo.zz_other']);
+    expect(second.dataResourcesTotal).toBe(3);
+
+    const none = await call(view, { mode: 'contexts', candidate: 4 });
+    expect(none.dataResources).toEqual([]);
+    expect(none.dataResourcesTotal).toBe(0);
+  });
+
+  it('summary and detail stay within 8192 bytes on a large view with data', async () => {
+    const raw = async (view: ContextsView, args: Record<string, unknown>) => {
+      const handler = handleGetArchitecturalOverlay(storage, new MaskingPipeline(), undefined, undefined, undefined, port(view));
+      const text = (await handler(args)).content[0]!.text;
+      return { bytes: Buffer.byteLength(text, 'utf-8'), payload: JSON.parse(text) as Record<string, any> };
+    };
+    // 200 resources, three in four shared: resource i is read by up to four candidates and written by the first.
+    const resources = (candidates: number) =>
+      Array.from({ length: 200 }, (_, i) => {
+        const accessors = new Map<number, DataAccessMode[]>();
+        const spread = i % 4 === 3 ? 1 : 4;
+        for (let k = 0; k < spread; k++) accessors.set(((i * 7 + k * 5) % candidates) + 1, k === 0 ? ['reads', 'writes'] : ['reads']);
+        return resource(`dbo.resource_${String(i).padStart(3, '0')}`, [...accessors], i % 10 === 9 ? 'external' : 'table');
+      });
+
+    // Fixture-shaped summary: 12 candidates with PR 1A's hubs and collisions, plus 200 resources. The data adds
+    // counts only, so every candidate still fits untruncated.
+    const fixture = withData(fixtureView(), resources(12));
+    const summary = await raw(fixture, { mode: 'contexts' });
+    expect(summary.payload['candidates']).toHaveLength(12);
+    expect(summary.payload['_meta'].truncated).toBe(false);
+    expect(summary.payload['dataResourcesTotal']).toBe(200);
+    expect(summary.payload['sharedResourcesTotal']).toBe(150);
+    expect(summary.payload['externalResourcesTotal']).toBe(20);
+    expect(summary.bytes).toBeLessThanOrEqual(8192);
+
+    // 120 candidates of 40 files: the summary truncates candidates through the envelope and still fits, and
+    // the details of the first, a middle and the last candidate fit untruncated.
+    const large = withData(
+      buildView(Array.from({ length: 120 }, (_, i) => candidate(i + 1, `src/Modules/Context${String(i + 1).padStart(3, '0')}`, 40))),
+      resources(120),
+    );
+    const largeSummary = await raw(large, { mode: 'contexts' });
+    expect(largeSummary.payload['_meta'].truncated).toBe(true);
+    expect(largeSummary.payload['_meta'].totalItems).toBe(120);
+    expect(largeSummary.payload['dataResourcesTotal']).toBe(200);
+    expect(largeSummary.bytes).toBeLessThanOrEqual(8192);
+    for (const id of [1, 60, 120]) {
+      const detail = await raw(large, { mode: 'contexts', candidate: id });
+      expect(detail.payload['candidate'].sharedTableCount, `candidate ${id}`).toBeGreaterThan(0);
+      expect(detail.payload['dataResourcesTotal'], `candidate ${id}`).toBeGreaterThan(0);
+      expect(detail.payload['_meta'].truncated, `candidate ${id}`).toBe(false);
+      expect(detail.bytes, `candidate ${id}`).toBeLessThanOrEqual(8192);
+    }
+  });
+
+  /**
+   * PR 1A's worst-case detail view (candidate 2 takes part in 20 collisions of 21 occurrences with 20 members) plus
+   * 200 resources with 60-character names, three in four of them accessed by all 12 candidates. With the caps
+   * alone the detail of candidate 2 measured 14823 bytes.
+   */
+  function crowdedDetailView(): ContextsView {
+    const others = [1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+    const collisions: TermCollision[] = Array.from({ length: 20 }, (_, n) => {
+      const name = `entity${String(n).padStart(2, '0')}`;
+      const occurrence = (candidateId: number, i: number) => {
+        const file = `src/Modules/M${String(i).padStart(3, '0')}/Domain/${name}.cs`;
+        return {
+          candidate: candidateId,
+          file,
+          symbolId: `${file}::${name}::class`,
+          members: Array.from({ length: 20 }, (_, m) => `Member${String(m).padStart(2, '0')}`),
+        };
+      };
+      return {
+        name,
+        minJaccard: 0.1,
+        occurrences: [occurrence(2, 0), ...Array.from({ length: 20 }, (_, i) => occurrence(others[i % 11]!, i + 1))],
+      };
+    });
+    const resources = Array.from({ length: 200 }, (_, i) => {
+      const accessors = new Map<number, DataAccessMode[]>();
+      const spread = i % 4 === 3 ? 1 : 12;
+      for (let k = 0; k < spread; k++) accessors.set(((i * 7 + k * 5) % 12) + 1, k === 0 ? ['reads', 'writes'] : ['reads']);
+      const name = `dbo.resource_${String(i).padStart(3, '0')}`;
+      return resource(name.padEnd(60, 'x'), [...accessors], i % 10 === 9 ? 'external' : 'table');
+    });
+    return withData(
+      buildView(
+        MODULES.map((name, i) => candidate(i + 1, `src/Modules/${name}`, 40)),
+        { hubs: fixtureView().hubs, collisions },
+      ),
+      resources,
+    );
+  }
+
+  async function rawDetail(view: ContextsView, id: number) {
+    const handler = handleGetArchitecturalOverlay(storage, new MaskingPipeline(), undefined, undefined, undefined, port(view));
+    const text = (await handler({ mode: 'contexts', candidate: id })).content[0]!.text;
+    return { text, bytes: Buffer.byteLength(text, 'utf-8'), payload: JSON.parse(text) as Record<string, any> };
+  }
+
+  it('the candidate detail fits the response limit with many shared tables by dropping trailing entries', async () => {
+    const view = crowdedDetailView();
+    const own = view.candidates[1]!;
+    const ownResources = view.dataResources.filter((r) => r.accesses.some((a) => a.candidate === 2)).map((r) => r.name);
+
+    const detail = await rawDetail(view, 2);
+    const tables = detail.payload['candidate'].sharedTables as Array<{ name: string; accesses: Array<{ candidate: number }> }>;
+    const resources = detail.payload['dataResources'] as Array<{ name: string }>;
+
+    expect(detail.bytes).toBeLessThanOrEqual(8192);
+    expect(detail.payload['_meta'].truncated).toBe(false);
+    // Fewer shown than exist; the totals still count them all.
+    expect(detail.payload['candidate'].sharedTableCount).toBe(own.sharedTables.length);
+    expect(detail.payload['dataResourcesTotal']).toBe(ownResources.length);
+    expect(tables.length).toBeLessThan(own.sharedTables.length);
+    expect(resources.length).toBeLessThan(ownResources.length);
+    expect(tables.length).toBeGreaterThan(0);
+    expect(resources.length).toBeGreaterThan(0);
+    // The shown entries are a prefix by name of the full sorted lists.
+    expect(tables.map((t) => t.name)).toEqual(own.sharedTables.slice(0, tables.length).map((t) => t.name));
+    expect(resources.map((r) => r.name)).toEqual(ownResources.slice(0, resources.length));
+    // The longer list gave way first, dataResources on a tie: they end at most one apart.
+    expect(Math.abs(tables.length - resources.length)).toBeLessThanOrEqual(1);
+    expect(resources.length).toBeLessThanOrEqual(tables.length);
+    // Each kept table keeps its access cap and this candidate's own access; the other fields stay whole.
+    for (const table of tables) {
+      expect(table.accesses).toHaveLength(10);
+      expect(table.accesses.some((a) => a.candidate === 2)).toBe(true);
+    }
+    expect(detail.payload['candidate'].files).toHaveLength(15);
+    expect(detail.payload['collisions']).toHaveLength(10);
+    // Deterministic: the same input gives the same bytes.
+    expect((await rawDetail(view, 2)).text).toBe(detail.text);
+  });
+
+  it('a larger CTXO_RESPONSE_LIMIT shows more detail entries', async () => {
+    const view = crowdedDetailView();
+    const atDefault = await rawDetail(view, 2);
+
+    process.env['CTXO_RESPONSE_LIMIT'] = '16384';
+    const larger = await rawDetail(view, 2);
+
+    expect(larger.bytes).toBeLessThanOrEqual(16384);
+    expect(larger.bytes).toBeGreaterThan(8192);
+    expect(larger.payload['candidate'].sharedTables.length).toBeGreaterThan(
+      atDefault.payload['candidate'].sharedTables.length,
+    );
+    expect(larger.payload['dataResources'].length).toBeGreaterThan(atDefault.payload['dataResources'].length);
+    // 16 KB holds both lists at their caps.
+    expect(larger.payload['candidate'].sharedTables).toHaveLength(15);
+    expect(larger.payload['dataResources']).toHaveLength(15);
+  });
+
+  it('when even empty data lists do not fit, the detail empties them, keeps the totals and the rest whole', async () => {
+    const view = crowdedDetailView();
+    const own = view.candidates[1]!;
+    const atDefault = await rawDetail(view, 2);
+
+    // Far below what the other fields of the detail take on their own.
+    process.env['CTXO_RESPONSE_LIMIT'] = '512';
+    const tiny = await rawDetail(view, 2);
+
+    expect(tiny.bytes).toBeGreaterThan(512);
+    expect(tiny.payload['candidate'].sharedTables).toEqual([]);
+    expect(tiny.payload['dataResources']).toEqual([]);
+    expect(tiny.payload['candidate'].sharedTableCount).toBe(own.sharedTables.length);
+    expect(tiny.payload['dataResourcesTotal']).toBe(atDefault.payload['dataResourcesTotal']);
+    // Only the two data lists give way: every other field is as at the default limit.
+    expect(tiny.payload['candidate'].files).toEqual(atDefault.payload['candidate'].files);
+    expect(tiny.payload['collisions']).toEqual(atDefault.payload['collisions']);
+    expect(tiny.payload['hubs']).toEqual(atDefault.payload['hubs']);
+  });
+
+  it('TRUNCATABLE_FIELDS is unchanged', () => {
+    process.env['CTXO_RESPONSE_LIMIT'] = '256';
+    const big = Array.from({ length: 40 }, (_, i) => ({ name: `dbo.resource_${i}`, external: false }));
+
+    // None of the data arrays is truncatable: the envelope leaves them whole and reports no truncation.
+    for (const key of ['dataResources', 'sharedTables', 'accesses']) {
+      const wrapped = wrapResponse({ [key]: big }) as Record<string, any>;
+      expect(wrapped[key], key).toHaveLength(40);
+      expect(wrapped['_meta'].truncated, key).toBe(false);
+      expect(wrapped['_meta'].totalItems, key).toBe(0);
+    }
+    // candidates stays the truncatable array of the contexts summary, with its hint.
+    const wrapped = wrapResponse({ candidates: big, dataResources: big }) as Record<string, any>;
+    expect(wrapped['_meta'].truncated).toBe(true);
+    expect(wrapped['_meta'].totalItems).toBe(40);
+    expect(wrapped['_meta'].hint).toContain('candidate: <id>');
+    expect(wrapped['dataResources']).toHaveLength(40);
   });
 
   it('layer keeps precedence over mode contexts and candidate', async () => {

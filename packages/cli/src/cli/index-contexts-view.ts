@@ -10,7 +10,7 @@ import {
   resolveContextsViewConfig,
 } from '../core/config/load-config.js';
 import { buildContextsView, type ContextsView } from '../core/contexts-view/contexts-view-builder.js';
-import { createTestFileClassifier } from '../core/test-files/test-file-classifier.js';
+import { createTestFileClassifier, filesWithTestAnnotations } from '../core/test-files/test-file-classifier.js';
 import type { CommunitySnapshot, FileIndex } from '../core/types.js';
 
 export interface ContextsViewStepOptions {
@@ -33,17 +33,32 @@ function fileOfSymbol(symbolId: string): string {
 }
 
 /**
+ * Whether any `.cs` index entry carries an annotation on any symbol. That is the evidence that the v2 C#
+ * plugin ran, so a `.cs` file without a test annotation really has none.
+ */
+function hasCSharpAnnotations(indices: readonly FileIndex[]): boolean {
+  return indices.some(
+    (index) =>
+      index.file.endsWith('.cs') && index.symbols.some((symbol) => symbol.annotations && symbol.annotations.length > 0),
+  );
+}
+
+/**
  * Builds the contexts view from the merged full index and writes `contexts-view.json` (only when its content
  * changed). A node is a file that is not a test file, not matched by `index.ignore` or `contextsView.exclude`,
  * and still present in the working tree: the committed JSON of a deleted or skip-worktree file must not
- * make it a node. Throws on failure; the caller reports it and carries on.
+ * make it a node. A file is a test file when a test glob matches or a test-framework annotation marks it; once
+ * `.cs` annotations exist, the name-only globs (`*Test.cs`, `*Tests.cs`) alone no longer decide. Throws on
+ * failure; the caller reports it and carries on.
  */
 export function computeAndWriteContextsView(options: ContextsViewStepOptions): ContextsView {
   const { projectRoot, ctxoRoot, config, indices, snapshot, symbolPageRank } = options;
   const exists = options.exists ?? existsSync;
 
   const settings = resolveContextsViewConfig(config);
-  const isTest = createTestFileClassifier(indexTestPatterns(config));
+  const isTest = createTestFileClassifier(indexTestPatterns(config), filesWithTestAnnotations(indices), {
+    annotationAware: hasCSharpAnnotations(indices),
+  });
   const isIgnored = makeGlobMatcher(indexIgnorePatterns(config));
   const isExcluded = makeGlobMatcher([...settings.exclude]);
   // The file graph asks about each file once per index entry and up to four times per co-change pair, and
@@ -80,9 +95,12 @@ export function computeAndWriteContextsView(options: ContextsViewStepOptions): C
   new ArchitectureArtifactsWriter(ctxoRoot, { allowProductionPath: true }).writeContextsView(view);
 
   const { coverage } = view;
+  // A shared table is a resource of two or more candidates, as `ctxo contexts` counts it.
+  const sharedTables = view.dataResources.filter((resource) => resource.accesses.length >= 2).length;
   console.error(
     `[ctxo] Contexts view: ${view.candidates.length} candidates cover ${coverage.covered}/${coverage.files} files ` +
-      `(${Math.round(coverage.ratio * 100)}%), ${view.hubs.length} hubs, ${view.unclustered.count} unclustered`,
+      `(${Math.round(coverage.ratio * 100)}%), ${view.hubs.length} hubs, ${view.unclustered.count} unclustered` +
+      (sharedTables > 0 ? `, ${sharedTables} shared tables` : ''),
   );
   return view;
 }

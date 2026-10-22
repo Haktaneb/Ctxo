@@ -4,12 +4,13 @@ import type { IStoragePort } from '../../ports/i-storage-port.js';
 import type { IMaskingPort } from '../../ports/i-masking-port.js';
 import { ArchitecturalOverlay } from '../../core/overlay/architectural-overlay.js';
 import { compareCodepoint } from '../../core/compare-codepoint.js';
-import { wrapResponse } from '../../core/response-envelope.js';
+import { getThreshold, wrapResponse, type WrapResponseExtras } from '../../core/response-envelope.js';
 import { buildSnapshotStaleness } from '../../core/overlay/snapshot-staleness.js';
 import type { ClusterLabelMasker } from '../../core/overlay/cluster-label-masker.js';
 import type { CommunitySnapshot, GodNode } from '../../core/types.js';
 import type { ContextsView } from '../../core/contexts-view/contexts-view-builder.js';
 import type { TermCollision } from '../../core/contexts-view/context-terms.js';
+import type { CandidateSharedTable } from '../../core/contexts-view/data-coupling.js';
 import type { IContextsViewPort } from '../../ports/i-contexts-view-port.js';
 import type { StalenessCheck } from './get-logic-slice.js';
 
@@ -97,6 +98,10 @@ const DETAIL_FILE_LIMIT = 15;
 const DETAIL_COLLISION_LIMIT = 10;
 /** The candidate's own occurrences per collision, and members per occurrence, in the detail. */
 const DETAIL_OCCURRENCE_LIMIT = 5;
+/** Shared tables of the candidate, and the candidate's own data resources, in the detail. */
+const DETAIL_DATA_LIMIT = 15;
+/** Accesses per shared table in the detail. */
+const DETAIL_ACCESS_LIMIT = 10;
 
 const NO_VIEW_HINT = 'No contexts view available. Run ctxo index to generate one.';
 const SUMMARY_HINT = 'Pass candidate: <id> for one candidate in full; run ctxo contexts --json for the whole view.';
@@ -120,7 +125,11 @@ function collisionSummary(collision: TermCollision) {
   };
 }
 
-/** Every candidate in brief, plus the capped hubs and collisions: small enough to list the whole view. */
+/**
+ * Every candidate in brief, plus the capped hubs and collisions: small enough to list the whole view. Data
+ * coupling appears as counts only (`sharedTableCount` on a candidate with any, and the three resource
+ * totals); the lists are in the detail and in `ctxo contexts --json`.
+ */
 function contextsSummary(view: ContextsView, maskLabel: (label: string) => string): Record<string, unknown> {
   return {
     commitSha: view.commitSha,
@@ -132,6 +141,7 @@ function contextsSummary(view: ContextsView, maskLabel: (label: string) => strin
       fileCount: candidate.fileCount,
       cohesion: candidate.cohesion,
       topTerms: candidate.topTerms.slice(0, SUMMARY_TERM_LIMIT),
+      ...(candidate.sharedTables.length > 0 ? { sharedTableCount: candidate.sharedTables.length } : {}),
     })),
     hubs: view.hubs.slice(0, HUB_COLLISION_LIMIT).map((hub) => ({
       file: hub.file,
@@ -142,8 +152,43 @@ function contextsSummary(view: ContextsView, maskLabel: (label: string) => strin
     collisions: view.collisions.slice(0, HUB_COLLISION_LIMIT).map(collisionSummary),
     collisionsTotal: view.collisions.length,
     unclustered: { count: view.unclustered.count },
+    dataResourcesTotal: view.dataResources.length,
+    sharedResourcesTotal: view.dataResources.filter((resource) => resource.accesses.length >= 2).length,
+    externalResourcesTotal: view.dataResources.filter((resource) => resource.external).length,
     hint: SUMMARY_HINT,
   };
+}
+
+/**
+ * A shared table in the detail: its accesses capped at `DETAIL_ACCESS_LIMIT` by candidate id, the requesting
+ * candidate's own access always kept, with `accessCount`.
+ */
+function sharedTableDetail(table: CandidateSharedTable, id: number) {
+  const own = table.accesses.filter((access) => access.candidate === id);
+  const others = table.accesses.filter((access) => access.candidate !== id).slice(0, DETAIL_ACCESS_LIMIT - own.length);
+  return {
+    ...table,
+    accesses: [...own, ...others].sort((a, b) => a.candidate - b.candidate),
+    accessCount: table.accesses.length,
+  };
+}
+
+/** The resources the candidate reads or writes, compact: its own modes and the writer count. */
+function ownDataResources(view: ContextsView, id: number) {
+  const own: Array<Record<string, unknown>> = [];
+  for (const resource of view.dataResources) {
+    const access = resource.accesses.find((entry) => entry.candidate === id);
+    if (!access) continue;
+    own.push({
+      name: resource.name,
+      ...(resource.kind !== undefined ? { kind: resource.kind } : {}),
+      external: resource.external,
+      modes: access.modes,
+      ...(resource.owner !== undefined ? { owner: resource.owner } : {}),
+      writerCount: resource.writers.length,
+    });
+  }
+  return own;
 }
 
 /**
@@ -151,13 +196,17 @@ function contextsSummary(view: ContextsView, maskLabel: (label: string) => strin
  * collisions it takes part in (at most `DETAIL_COLLISION_LIMIT`), each list with its total. A collision carries
  * its summary fields plus this candidate's own occurrences only, at most `DETAIL_OCCURRENCE_LIMIT`, each as
  * `{ symbolId, members, memberCount }` with the first members in view order: the file is part of the symbol
- * ID, and the other candidates are named in `candidates`. No array here is truncatable, so these caps are
- * what keeps the response within the limit.
+ * ID, and the other candidates are named in `candidates`. The candidate's `sharedTables` keep at most the first
+ * `DETAIL_DATA_LIMIT` by name (with `sharedTableCount`), each with at most `DETAIL_ACCESS_LIMIT` accesses (with
+ * `accessCount`); `dataResources` lists at most the first `DETAIL_DATA_LIMIT` resources it reads or writes, by
+ * name, with `dataResourcesTotal`. No array here is truncatable, so these caps are what keeps the response
+ * within the limit, and `fitDataToLimit` then drops trailing data entries while it is still over.
  */
 function contextsDetail(
   view: ContextsView,
   id: number,
   maskLabel: (label: string) => string,
+  extras: WrapResponseExtras | undefined,
 ): Record<string, unknown> {
   const candidate = view.candidates.find((c) => c.id === id);
   if (!candidate) {
@@ -167,12 +216,17 @@ function contextsDetail(
   const collisions = view.collisions.filter((collision) =>
     collision.occurrences.some((occurrence) => occurrence.candidate === id),
   );
-  return {
+  const dataResources = ownDataResources(view, id);
+  const shownTables = candidate.sharedTables.slice(0, DETAIL_DATA_LIMIT).map((table) => sharedTableDetail(table, id));
+  const shownResources = dataResources.slice(0, DETAIL_DATA_LIMIT);
+  const body = {
     commitSha: view.commitSha,
     candidate: {
       ...candidate,
       label: maskLabel(candidate.label),
       files: candidate.files.slice(0, DETAIL_FILE_LIMIT),
+      sharedTables: shownTables,
+      sharedTableCount: candidate.sharedTables.length,
     },
     hubs: hubs
       .slice(0, HUB_COLLISION_LIMIT)
@@ -190,25 +244,51 @@ function contextsDetail(
         })),
     })),
     collisionsTotal: collisions.length,
+    dataResources: shownResources,
+    dataResourcesTotal: dataResources.length,
     hint: DETAIL_HINT,
   };
+  fitDataToLimit(body, shownTables, shownResources, extras);
+  return body;
+}
+
+/**
+ * K33: the detail must fit the response limit (`CTXO_RESPONSE_LIMIT`, default 8192), and only its data lists
+ * may shrink. While the body, serialised as the envelope sends it, is over the limit, the last entry (by name)
+ * of the longer of `sharedTables` and `dataResources` is dropped, `dataResources` on a tie. `sharedTableCount`
+ * and `dataResourcesTotal` keep the full totals. The lists are the body's own arrays, shortened in place; every
+ * other field stays whole. Deterministic: the same input drops the same entries.
+ */
+function fitDataToLimit(
+  body: Record<string, unknown>,
+  tables: unknown[],
+  resources: unknown[],
+  extras: WrapResponseExtras | undefined,
+): void {
+  const limit = getThreshold();
+  const size = () => Buffer.byteLength(JSON.stringify(wrapResponse(body, extras)), 'utf-8');
+  while ((tables.length > 0 || resources.length > 0) && size() > limit) {
+    if (resources.length >= tables.length) resources.pop();
+    else tables.pop();
+  }
 }
 
 /**
  * Builds the `mode: "contexts"` body from the (read-only, shared, deep-frozen) view: the summary of every
  * candidate, or with `candidate` that one candidate in full. Only copies are built (`map`, `slice`, spread):
  * the view must never be sorted or spliced in place. The full view stays in the artifact and in
- * `ctxo contexts --json`; `settings` is left out here.
+ * `ctxo contexts --json`; `settings` is left out here. `extras` are the envelope extras the response is sent
+ * with, so the detail is measured as it is sent.
  */
 export function buildContextsOverlay(
   view: ContextsView | undefined,
-  options: { candidate?: number; labelMasker?: ClusterLabelMasker } = {},
+  options: { candidate?: number; labelMasker?: ClusterLabelMasker; extras?: WrapResponseExtras } = {},
 ): Record<string, unknown> {
   if (!view) return { found: false, hint: NO_VIEW_HINT };
   const maskLabel = labelMaskerFor(view, options.labelMasker);
   return options.candidate === undefined
     ? contextsSummary(view, maskLabel)
-    : contextsDetail(view, options.candidate, maskLabel);
+    : contextsDetail(view, options.candidate, maskLabel, options.extras);
 }
 
 export function handleGetArchitecturalOverlay(
@@ -260,6 +340,7 @@ export function handleGetArchitecturalOverlay(
         const body = buildContextsOverlay(contextsView?.readContextsView(), {
           candidate: parsed.data.candidate,
           labelMasker: clusterLabelMasker,
+          extras,
         });
         const payload = masking.mask(JSON.stringify(wrapResponse(body, extras)));
         return { content: buildContent(payload) };

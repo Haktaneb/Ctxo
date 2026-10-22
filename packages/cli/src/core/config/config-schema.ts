@@ -18,6 +18,7 @@ export const IndexConfigSchema = z
   .object({
     ignore: z.array(z.string().min(1)).optional(),
     ignoreProjects: z.array(z.string().min(1)).optional(),
+    facts: z.boolean().optional(),
     tests: z.array(z.string().min(1)).optional(),
   })
   .strict();
@@ -101,11 +102,12 @@ export const CommunitiesConfigSchema = z
 
 export const ContextsViewConfigSchema = z
   .object({
-    /** Blend of the two file-edge signals. Defaults: dependency 1.0, coChange 1.0. */
+    /** Blend of the file-edge signals. Defaults: dependency 1.0, coChange 1.0, data 0 (shared tables are a finding, not a clustering weight). */
     weights: z
       .object({
         dependency: z.number().min(0).optional(),
         coChange: z.number().min(0).optional(),
+        data: z.number().min(0).optional(),
       })
       .strict()
       .optional(),

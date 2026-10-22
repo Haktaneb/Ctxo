@@ -356,6 +356,96 @@ describe('buildContextsView', () => {
     expect(b.crossEdges).toEqual([{ candidate: a.id, total: 1, byKind: { uses: 1 } }]);
   });
 
+  it('candidates list sharedTables and the view lists dataResources', () => {
+    const dataEdges: Record<string, Edge[]> = {
+      'src/billing/b1.ts': [[fnOf('src/billing/b1.ts'), 'dbo.loans::table', 'writes']],
+      'src/shipping/s1.ts': [
+        [fnOf('src/shipping/s1.ts'), 'dbo.loans::table', 'reads'],
+        [fnOf('src/shipping/s1.ts'), 'dbo.members::table', 'writes'],
+        [fnOf('src/shipping/s1.ts'), 'dbo.audit_log::table', 'writes'],
+      ],
+      // The hub is assigned to billing, so its read counts for billing.
+      [DB]: [[`${DB}::q00::function`, 'dbo.members::table', 'reads']],
+    };
+    const indices = [
+      ...hubFixture().map((index) =>
+        dataEdges[index.file]
+          ? { ...index, edges: [...index.edges, ...fileIndex(index.file, [], dataEdges[index.file]).edges] }
+          : index,
+      ),
+      // Unclustered: its write is ignored.
+      plain('src/lonely.ts', [[fnOf('src/lonely.ts'), 'dbo.members::table', 'writes']]),
+      fileIndex('db/schema.sql', [sym('db/schema.sql', 'dbo.loans', 'table'), sym('db/schema.sql', 'dbo.members', 'table')]),
+    ];
+
+    const view = buildContextsView(input(indices));
+    const billing = byLabel(view.candidates, 'src/billing');
+    const shipping = byLabel(view.candidates, 'src/shipping');
+    expect([billing.id, shipping.id]).toEqual([1, 2]);
+    expect(view.hubs[0]!.candidate).toBe(1);
+    expect(view.unclustered.files).toEqual(['db/schema.sql', 'src/lonely.ts']);
+
+    const loans = {
+      name: 'dbo.loans',
+      kind: 'table',
+      external: false,
+      accesses: [
+        { candidate: 1, modes: ['writes'] },
+        { candidate: 2, modes: ['reads'] },
+      ],
+    };
+    const members = {
+      name: 'dbo.members',
+      kind: 'table',
+      external: false,
+      accesses: [
+        { candidate: 1, modes: ['reads'] },
+        { candidate: 2, modes: ['writes'] },
+      ],
+    };
+    expect(view.dataResources).toEqual([
+      { name: 'dbo.audit_log', external: true, accesses: [{ candidate: 2, modes: ['writes'] }], writers: [2], owner: 2 },
+      { ...loans, writers: [1], owner: 1 },
+      { ...members, writers: [2], owner: 2 },
+    ]);
+    const shared = [
+      { ...loans, owner: 1 },
+      { ...members, owner: 2 },
+    ];
+    expect(billing.sharedTables).toEqual(shared);
+    expect(shipping.sharedTables).toEqual(shared);
+  });
+
+  it('crossEdges leave out data edges between candidates', () => {
+    const view = buildContextsView(
+      input([
+        ...clique(['a/x.ts', 'a/y.ts', 'a/z.ts'], {
+          'a/x.ts': [
+            [fnOf('a/x.ts'), fnOf('b/x.ts'), 'calls'],
+            [fnOf('a/x.ts'), 'dbo.loans::table', 'reads'],
+            [fnOf('a/x.ts'), 'dbo.usp_close::procedure', 'executes'],
+          ],
+        }),
+        ...clique(['b/x.ts', 'b/y.ts', 'b/z.ts']).map((index) =>
+          index.file === 'b/x.ts'
+            ? {
+                ...index,
+                symbols: [...index.symbols, sym('b/x.ts', 'dbo.loans', 'table'), sym('b/x.ts', 'dbo.usp_close', 'procedure')],
+              }
+            : index,
+        ),
+      ]),
+    );
+    const a = byLabel(view.candidates, 'a');
+    const b = byLabel(view.candidates, 'b');
+
+    expect(a.crossEdges).toEqual([{ candidate: b.id, total: 1, byKind: { calls: 1 } }]);
+    expect(b.crossEdges).toEqual([]);
+    // Only candidate a reads dbo.loans: listed as a resource, shared by no one.
+    expect(view.dataResources.map((resource) => resource.name)).toEqual(['dbo.loans']);
+    expect(a.sharedTables).toEqual([]);
+  });
+
   it('coChangePairs keep the top 10 crossing pairs', () => {
     const left = ['a/w.ts', 'a/x.ts', 'a/y.ts', 'a/z.ts'];
     const right = ['b/w.ts', 'b/x.ts', 'b/y.ts', 'b/z.ts'];
@@ -431,15 +521,52 @@ describe('buildContextsView', () => {
     };
     const pageRank = [...BILLING, ...SHIPPING, DB].map((file, i): [string, number] => [file, (i + 1) / 100]);
 
+    // SQL symbols and data edges: a table with columns, a view and a procedure chain, written and read from
+    // both candidates, the hub and the unclustered file.
+    const withData = (): FileIndex[] => [
+      ...hubFixture(extra).map((index) => {
+        const extraEdges: Record<string, Edge[]> = {
+          'src/billing/b1.ts': [
+            [fnOf('src/billing/b1.ts'), 'dbo.loans::table', 'writes'],
+            [fnOf('src/billing/b1.ts'), 'dbo.open_loans::table', 'reads'],
+            [fnOf('src/billing/b1.ts'), 'dbo.audit_log::table', 'reads'],
+          ],
+          'src/shipping/s1.ts': [
+            [fnOf('src/shipping/s1.ts'), 'dbo.usp_close::procedure', 'executes'],
+            [fnOf('src/shipping/s1.ts'), 'dbo.audit_log::table', 'writes'],
+          ],
+          [DB]: [[`${DB}::q00::function`, 'dbo.loans::table', 'reads']],
+        };
+        return extraEdges[index.file] ? { ...index, edges: [...index.edges, ...fileIndex(index.file, [], extraEdges[index.file]).edges] } : index;
+      }),
+      plain('src/lonely.ts', [[fnOf('src/lonely.ts'), 'dbo.loans::table', 'writes']]),
+      fileIndex(
+        'db/loans.sql',
+        [
+          { ...sym('db/loans.sql', 'dbo.loans', 'table'), name: 'dbo.Loans', annotations: [{ name: 'columns', args: ['due_date', 'member_id'] }] },
+          sym('db/loans.sql', 'dbo.open_loans', 'view'),
+          sym('db/loans.sql', 'dbo.usp_close', 'procedure'),
+          sym('db/loans.sql', 'dbo.usp_log', 'procedure'),
+        ],
+        [
+          ['db/loans.sql::dbo.open_loans::view', 'dbo.loans::table', 'reads'],
+          ['db/loans.sql::dbo.usp_close::procedure', 'dbo.loans::table', 'writes'],
+          ['db/loans.sql::dbo.usp_close::procedure', 'dbo.usp_log::procedure', 'executes'],
+          ['db/loans.sql::dbo.usp_log::procedure', 'dbo.usp_close::procedure', 'executes'],
+          ['db/loans.sql::dbo.usp_log::procedure', 'dbo.audit_log::table', 'reads'],
+        ],
+      ),
+    ];
+
     const forward = buildContextsView(
-      input([...hubFixture(extra), plain('src/lonely.ts')], {
+      input(withData(), {
         coChangeMap: mapOf(entries),
         filePageRank: new Map(pageRank),
       }),
     );
     const reversed = buildContextsView(
       input(
-        [...hubFixture(extra), plain('src/lonely.ts')]
+        withData()
           .reverse()
           .map((index) => ({ ...index, symbols: [...index.symbols].reverse(), edges: [...index.edges].reverse() })),
         { coChangeMap: mapOf([...entries].reverse()), filePageRank: new Map([...pageRank].reverse()) },
@@ -450,6 +577,11 @@ describe('buildContextsView', () => {
     expect(forward.candidates[0]!.coChangePairs).toHaveLength(1);
     expect(forward.collisions.map((collision) => collision.name)).toEqual(['invoice']);
     expect(forward.candidates[0]!.topTerms.length).toBeGreaterThan(0);
+    expect(forward.dataResources.map((resource) => resource.name)).toEqual(['dbo.audit_log', 'dbo.loans', 'dbo.open_loans']);
+    expect(forward.candidates.map((candidate) => candidate.sharedTables.map((table) => table.name))).toEqual([
+      ['dbo.audit_log', 'dbo.loans'],
+      ['dbo.audit_log', 'dbo.loans'],
+    ]);
     expect(JSON.stringify(reversed)).toBe(JSON.stringify(forward));
 
     // Regression: b/x.ts declares Foo as a type and as a variable, and the Foo::class edge resolves by
@@ -501,6 +633,7 @@ describe('buildContextsView', () => {
       hubs: [],
       unclustered: { count: 0, files: [] },
       collisions: [],
+      dataResources: [],
     };
 
     expect(buildContextsView(input([]))).toEqual(empty);

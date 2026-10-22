@@ -1,5 +1,6 @@
 import { compareCodepoint } from '../compare-codepoint.js';
 import { makeGlobMatcher, type ResolvedContextsViewConfig } from '../config/load-config.js';
+import { DATA_EDGE_KINDS } from '../data-coupling/data-kinds.js';
 import { SymbolGraph } from '../graph/symbol-graph.js';
 import type { CoChangeEntry, EdgeKind, FileIndex } from '../types.js';
 
@@ -10,6 +11,9 @@ export const EDGE_KIND_WEIGHTS: Readonly<Record<EdgeKind, number>> = {
   implements: 1,
   uses: 1,
   imports: 0.5,
+  reads: 0,
+  writes: 0,
+  executes: 0,
 };
 
 export interface FileEdgeCount {
@@ -25,6 +29,8 @@ export interface FilePair {
   readonly b: string;
   readonly dependency: number;
   readonly coChange: number;
+  /** Log-normalized count of distinct `reads`, `writes` and `executes` edges between the two files. */
+  readonly data: number;
   readonly weight: number;
 }
 
@@ -40,6 +46,8 @@ export interface FileGraphInput {
   readonly isNode: (file: string) => boolean;
   readonly coChangeMap?: ReadonlyMap<string, readonly CoChangeEntry[]>;
   readonly weights: ResolvedContextsViewConfig['weights'];
+  /** The symbol graph of `indices` from `buildIndexGraph`, when the caller already built it. */
+  readonly graph?: SymbolGraph;
 }
 
 function round(value: number, digits: number): number {
@@ -61,14 +69,12 @@ function orderedPair(x: string, y: string): [string, string] {
 }
 
 /**
- * Builds the undirected file graph: distinct symbol edges between node files, weighted by kind and
- * log-scaled against the strongest pair, blended with the co-change frequency. Deterministic: the
- * same indices in any order, with symbols in any order inside each file, give a deep-equal result.
- * Rounding order: `weight` is computed from the unrounded dependency and rounded once to 6 decimals;
- * `dependency` is rounded to 6 decimals.
+ * The symbol graph of the indices, the one builder of the contexts view: files sorted by path, each file's
+ * symbols sorted by id, all nodes first and then all edges. Deterministic: the same indices in any order,
+ * with symbols in any order inside each file, resolve every edge to the same target.
  */
-export function buildFileGraph(input: FileGraphInput): FileGraph {
-  const sorted = [...input.indices].sort((x, y) => compareCodepoint(x.file, y.file));
+export function buildIndexGraph(indices: readonly FileIndex[]): SymbolGraph {
+  const sorted = [...indices].sort((x, y) => compareCodepoint(x.file, y.file));
   const graph = new SymbolGraph();
   for (const index of sorted) {
     // SymbolGraph resolves a wrong-kind target through a last-wins file::name map, so the order symbols
@@ -79,6 +85,21 @@ export function buildFileGraph(input: FileGraphInput): FileGraph {
   for (const index of sorted) {
     for (const edge of index.edges) graph.addEdge(edge);
   }
+  return graph;
+}
+
+/**
+ * Builds the undirected file graph: distinct symbol edges between node files, weighted by kind and
+ * log-scaled against the strongest pair, blended with the co-change frequency and the data component
+ * (distinct `reads`, `writes` and `executes` edges per pair, log-scaled the same way). Data edges never
+ * count in `edgeCounts` or `dependents`: data coupling is reported separately. Deterministic: the same
+ * indices in any order, with symbols in any order inside each file, give a deep-equal result.
+ * Rounding order: `weight` is computed from the unrounded components and rounded once to 6 decimals;
+ * `dependency` and `data` are rounded to 6 decimals.
+ */
+export function buildFileGraph(input: FileGraphInput): FileGraph {
+  const graph = input.graph ?? buildIndexGraph(input.indices);
+  const sorted = [...input.indices].sort((x, y) => compareCodepoint(x.file, y.file));
 
   const nodes = new Set<string>();
   for (const index of sorted) {
@@ -105,11 +126,21 @@ export function buildFileGraph(input: FileGraphInput): FileGraph {
   const symbolIds = new Set(graph.allNodes().map((node) => node.symbolId));
   const directed = new Map<string, FileEdgeCount>();
   const dependentSets = new Map<string, Set<string>>();
+  const dataCounts = new Map<string, { a: string; b: string; count: number }>();
   for (const edge of graph.allEdges()) {
     if (!symbolIds.has(edge.to)) continue;
     const from = fileOf(edge.from);
     const to = fileOf(edge.to);
     if (from === to || !nodes.has(from) || !nodes.has(to)) continue;
+    // Data coupling is reported separately: a data edge only feeds the data component of its pair.
+    if (DATA_EDGE_KINDS.has(edge.kind)) {
+      const [a, b] = orderedPair(from, to);
+      const pair = pairKey(a, b);
+      const known = dataCounts.get(pair);
+      if (known) known.count++;
+      else dataCounts.set(pair, { a, b, count: 1 });
+      continue;
+    }
     const key = `${from}\n${to}\n${edge.kind}`;
     const known = directed.get(key);
     directed.set(key, { from, to, kind: edge.kind, count: (known?.count ?? 0) + 1 });
@@ -132,18 +163,25 @@ export function buildFileGraph(input: FileGraphInput): FileGraph {
   }
   let maxValue = 0;
   for (const { value } of rawDependency.values()) maxValue = Math.max(maxValue, value);
+  let maxDataCount = 0;
+  for (const { count } of dataCounts.values()) maxDataCount = Math.max(maxDataCount, count);
 
-  const keys = new Set<string>([...rawDependency.keys(), ...coEntries.keys()]);
+  const keys = new Set<string>([...rawDependency.keys(), ...coEntries.keys(), ...dataCounts.keys()]);
   const pairs: FilePair[] = [];
   for (const key of keys) {
     const dep = rawDependency.get(key);
     const co = coEntries.get(key);
-    const ends = (dep ?? co)!;
+    const dataCount = dataCounts.get(key);
+    const ends = (dep ?? co ?? dataCount)!;
     const dependency = dep && maxValue > 0 ? Math.log2(1 + dep.value) / Math.log2(1 + maxValue) : 0;
     const coChange = co?.frequency ?? 0;
-    const weight = round(input.weights.dependency * dependency + input.weights.coChange * coChange, 6);
+    const data = dataCount ? Math.log2(1 + dataCount.count) / Math.log2(1 + maxDataCount) : 0;
+    const weight = round(
+      input.weights.dependency * dependency + input.weights.coChange * coChange + input.weights.data * data,
+      6,
+    );
     if (!(weight > 0)) continue;
-    pairs.push({ a: ends.a, b: ends.b, dependency: round(dependency, 6), coChange, weight });
+    pairs.push({ a: ends.a, b: ends.b, dependency: round(dependency, 6), coChange, data: round(data, 6), weight });
   }
   pairs.sort((x, y) => compareCodepoint(x.a, y.a) || compareCodepoint(x.b, y.b));
 

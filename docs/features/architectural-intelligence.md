@@ -166,12 +166,12 @@ The symbol-level clusters above answer "which symbols move together". A context 
 
 How it is built (on every index run that re-indexes files, written to `.ctxo/index/contexts-view.json`):
 
-1. **Graph.** Nodes are indexed non-test files (minus `index.ignore` and `contextsView.exclude`) plus co-change-only files brought in by `cochange.include`. Test files come from one shared classifier (default globs plus `index.tests`).
+1. **Graph.** Nodes are indexed non-test files (minus `index.ignore` and `contextsView.exclude`) plus co-change-only files brought in by `cochange.include`. Test files come from one shared classifier (default globs plus `index.tests`, and test-framework annotations such as `[Fact]`).
 2. **Weights.** Dependency weight is the log-normalised count of distinct symbol edges between two files (`calls`, `extends`, `implements`, `uses` count 1.0, `imports` 0.5). Co-change weight is the pair's `frequency` from `co-changes.json`. Combined: `weights.dependency * dep + weights.coChange * co`, both 1.0 by default.
 3. **Hubs.** A file is a hub when it holds a god node, or when it is in the top `hubs.topPercent`% (default 1) by distinct dependent files and has at least `hubs.minDependents` (default 10). Every edge touching a hub is multiplied by `1 / log2(2 + dependents)`; files matching `hubs.paths` lose all their edges. Hubs are listed separately and assigned to the candidate of their strongest remaining edge.
 4. **Clustering and folding.** Louvain (`contextsView.resolution`, deterministic), a split of disconnected groups, then groups with fewer than `minCandidateFiles` files (default 3) fold into the neighbour with the strongest total weight. Files left without any edge are `unclustered`.
 5. **Labels.** The longest common directory of the members; at the repo root, the directory of the member with the highest file-level PageRank (`.` if that is the root too). When two or more candidates share a label, each takes its own top-PageRank member's directory (one pass, so labels may still repeat). Candidate IDs are sequential by size, then label; each candidate also has a `fingerprint` (hash of its sorted members) that survives renumbering.
-6. **Terms and collisions.** Top 10 terms per candidate from type names and enum members (camelCase and snake_case tokenized, technical words such as `Service` or `Dto` dropped). A **collision** is the same type name in two candidates with different member shapes (Jaccard below 0.5), the classic "Customer means two things" signal.
+6. **Terms and collisions.** Top 10 terms per candidate from type names, enum members, and the names and columns of SQL tables and views (camelCase and snake_case tokenized, technical words such as `Service` or `Dto` dropped). A **collision** is the same type or table name in two candidates with different member shapes (Jaccard below 0.5; a table's members are its columns), the classic "Customer means two things" signal.
 
 What you get:
 
@@ -194,6 +194,8 @@ What you get:
 ```
 
 `candidate: <id>` returns one candidate in full (up to 15 files, cross-candidate edges by kind, top co-change pairs), its hubs (up to 50) and its collisions (up to 10, each with that candidate's own occurrences, 5 members each, plus `memberCount`). `ctxo contexts` prints a table to stderr and `ctxo contexts --json` prints the whole artifact to stdout. See the [`ctxo contexts` page](../../site/docs/cli/contexts.md).
+
+**Data coupling.** With `@ctxo/lang-sql` installed, the view also reports which candidates read or write which tables and views (`dataResources`, per-candidate `sharedTables`, an ownership hint and external resources). Shared tables are a boundary finding, not a clustering weight: `contextsView.weights.data` defaults to 0. Test files are also recognised by test-framework annotations. See [domain knowledge](domain-knowledge.md).
 
 **Refresh cadence.** The view is recomputed on every index run that re-indexes files (full or incremental) and on every post-commit hook run (`ctxo index --commit HEAD`); a run with nothing to re-index does not rewrite it. `--skip-community` skips it, and `ctxo watch` does not refresh it: run `ctxo index` before reading the view after a long watch session.
 
@@ -292,12 +294,13 @@ Expected on a healthy repo: `modularity >= 0.3`, `edgeQuality: "full" | "mixed"`
 | `cochange:` in `.ctxo/config.yaml` | Window, thresholds, `include` and `exclude` globs (see above) |
 | `ctxo contexts [--json]` | Print the candidate contexts (table to stderr, full `contexts-view.json` to stdout with `--json`) |
 | `communities:` in `.ctxo/config.yaml` | Symbol-level Louvain: `resolution` (1.0), `godNodeMinBridged` (3), `godNodeMaxResults` (25) |
-| `contextsView:` in `.ctxo/config.yaml` | Contexts view: `weights.dependency` / `weights.coChange` (1.0 / 1.0), `exclude` globs, `hubs.auto` (true), `hubs.topPercent` (1), `hubs.minDependents` (10), `hubs.paths` globs, `resolution` (1.0), `minCandidateFiles` (3), `technicalTerms` |
+| `contextsView:` in `.ctxo/config.yaml` | Contexts view: `weights.dependency` / `weights.coChange` / `weights.data` (1.0 / 1.0 / 0), `exclude` globs, `hubs.auto` (true), `hubs.topPercent` (1), `hubs.minDependents` (10), `hubs.paths` globs, `resolution` (1.0), `minCandidateFiles` (3), `technicalTerms` |
 | `index.tests` in `.ctxo/config.yaml` | Extra test-file globs on top of the shared defaults; test files are never contexts-view nodes |
 | `CTXO_RESPONSE_LIMIT=16384 ctxo ...` | Raise truncation threshold for verbose cluster payloads |
 
 ## See also
 
+- [domain-knowledge.md](domain-knowledge.md) - data coupling in the contexts view, plugin protocol v2, `@ctxo/lang-sql`
 - [roadmap.md](../roadmap.md) — deferred items (Leiden opt-in, historical graph reconstruction, GHA template)
 - [CHANGELOG.md](../../CHANGELOG.md) — full diff
 - [Issue #54](https://github.com/alperhankendi/Ctxo/issues/54) — original proposal

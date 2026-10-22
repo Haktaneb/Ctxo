@@ -5,7 +5,7 @@ import type { FilePair } from '../file-graph.js';
 
 function pair(x: string, y: string, weight: number): FilePair {
   const [a, b] = x < y ? [x, y] : [y, x];
-  return { a, b, dependency: weight, coChange: 0, weight };
+  return { a, b, dependency: weight, coChange: 0, data: 0, weight };
 }
 
 function lookup(links: Array<[string, string, number]>): WeightLookup {

@@ -7,10 +7,13 @@ import { ContentHasher } from '../core/staleness/content-hasher.js';
 import { LanguageAdapterRegistry } from '../adapters/language/language-adapter-registry.js';
 import { loadPlugins } from './plugin-loader.js';
 import { InstallCommand } from './install-command.js';
+import { readSourceText } from './read-source.js';
 import { changeLogSize, writeCoChangeMatrix } from './index-cochange.js';
 import { computeAndWriteContextsView } from './index-contexts-view.js';
+import { extractFileFacts } from './index-facts.js';
 import {
   communityDetectorOptions,
+  factsRequested,
   loadConfig,
   indexIgnorePatterns,
   indexIgnoreProjectPatterns,
@@ -71,6 +74,7 @@ interface RoslynLike {
 
 interface CSharpCompositeLike {
   getRoslynDelegate(): RoslynLike | null;
+  /** Re-read after the Roslyn batch: a failed helper switches the composite to the syntax tier. */
   getTier(): 'full' | 'syntax' | 'unavailable';
 }
 
@@ -165,7 +169,11 @@ export class IndexCommand {
 
     // Set up adapters via plugin discovery (TS, Go, C# all plugin-backed)
     const registry = new LanguageAdapterRegistry();
-    const { tsMorphLike, roslynAdapter, csharpTier, goTier, javaTier } = await this.registerDiscoveredPlugins(registry, ignore.ignoreProjectPatterns);
+    const plugins = await this.registerDiscoveredPlugins(registry, ignore.ignoreProjectPatterns, factsRequested(ignore.config));
+    const { tsMorphLike, roslynAdapter, csharpComposite, goTier, javaTier } = plugins;
+    // The C# tier as loaded; re-read after the Roslyn batch, which can switch it to the syntax tier.
+    const csharpTierAtLoad = plugins.csharpTier;
+    let csharpTier = plugins.csharpTier;
     this.supportedExtensions = registry.getSupportedExtensions();
 
     // Emit a language-aware pre-scan so users see the plan before the work runs
@@ -242,13 +250,17 @@ export class IndexCommand {
       /* non-fatal */
     }
 
-    // Phase 0: Roslyn batch index (if available, pre-caches all C# results)
+    // Phase 0: Roslyn batch index (if available, pre-caches all C# results). Full and incremental
+    // (--files, --commit) runs all come through here.
     if (roslynAdapter?.isReady()) {
       const hasCsFiles = files.some(f => f.endsWith('.cs'));
       if (hasCsFiles) {
         await roslynAdapter.batchIndex();
       }
     }
+    // When the helper failed (restore, build, timeout), the C# plugin now runs on tree-sitter: the edge
+    // quality and the summary must say so.
+    if (csharpComposite) csharpTier = csharpComposite.getTier();
 
     // Phase 1a: Extract symbols (CPU-bound, builds symbol registry for edge resolution)
     const symbolRegistry = new Map<string, SymbolKind>();
@@ -266,7 +278,7 @@ export class IndexCommand {
       const relativePath = relative(this.projectRoot, filePath).replace(/\\/g, '/');
 
       try {
-        const source = readFileSync(filePath, 'utf-8');
+        const source = readSourceText(filePath);
         const lastModified = Math.floor(Date.now() / 1000);
 
         const symbols = await adapter.extractSymbols(relativePath, source);
@@ -330,6 +342,16 @@ export class IndexCommand {
         entry.fileIndex.edges = await adapter.extractEdges(entry.relativePath, entry.source);
       } catch (err) {
         console.error(`[ctxo] Edge extraction failed for ${entry.relativePath}: ${(err as Error).message}`);
+      }
+    }
+
+    // Phase 1c: facts, only when requested (index.facts: true). They go into the JSON index, never SQLite.
+    if (factsRequested(ignore.config)) {
+      for (const entry of pendingIndices) {
+        const adapter = registry.getAdapter(entry.relativePath);
+        if (!adapter) continue;
+        const facts = await extractFileFacts(adapter, entry.relativePath, entry.source);
+        if (facts) entry.fileIndex.facts = facts;
       }
     }
 
@@ -587,13 +609,15 @@ export class IndexCommand {
     const tsCount = pendingIndices.filter(e => /\.(ts|tsx|js|jsx)$/.test(e.relativePath)).length;
     const goCount = pendingIndices.filter(e => e.relativePath.endsWith('.go')).length;
     const javaCount = pendingIndices.filter(e => e.relativePath.endsWith('.java')).length;
+    const sqlCount = pendingIndices.filter(e => e.relativePath.toLowerCase().endsWith('.sql')).length;
     console.error(
       `[ctxo] Index complete: ${processed} files indexed${removedPaths.size > 0 ? `, ${removedPaths.size} removed` : ''}`,
     );
     if (tsCount > 0) console.error(`[ctxo]   TypeScript/JS: ${tsCount} files (full tier)`);
-    if (csCount > 0) console.error(`[ctxo]   C#: ${csCount} files (${csharpTier} tier${csharpTier === 'syntax' ? ' - .NET SDK 8+ for full analysis' : ''})`);
+    if (csCount > 0) console.error(`[ctxo]   C#: ${csCount} files (${csharpTier} tier${csharpTierNote(csharpTierAtLoad, csharpTier)})`);
     if (goCount > 0) console.error(`[ctxo]   Go: ${goCount} files (${goTier} tier${goTier === 'syntax' ? ' - Go 1.22+ for full analysis' : ''})`);
     if (javaCount > 0) console.error(`[ctxo]   Java: ${javaCount} files (${javaTier} tier${javaTier === 'syntax' ? ' - JRE 11+ & "ctxo install java --full-tier" for full analysis' : ''})`);
+    if (sqlCount > 0) console.error(`[ctxo]   SQL: ${sqlCount} files (syntax tier)`);
 
     // Dispose Roslyn adapter
     if (roslynAdapter) await roslynAdapter.dispose();
@@ -632,16 +656,19 @@ export class IndexCommand {
   private async registerDiscoveredPlugins(
     registry: LanguageAdapterRegistry,
     ignoreProjectPatterns: string[] = [],
+    facts = false,
   ): Promise<{
     tsMorphLike: TsMorphLike | undefined;
     roslynAdapter: RoslynLike | null;
+    csharpComposite: CSharpCompositeLike | null;
     csharpTier: string;
     goTier: string;
     javaTier: string;
   }> {
-    const loaded = await loadPlugins(this.projectRoot, { ignoreProjects: ignoreProjectPatterns });
+    const loaded = await loadPlugins(this.projectRoot, { ignoreProjects: ignoreProjectPatterns, facts });
     let tsMorphLike: TsMorphLike | undefined;
     let roslynAdapter: RoslynLike | null = null;
+    let csharpComposite: CSharpCompositeLike | null = null;
     let csharpTier = 'unavailable';
     let goTier = 'unavailable';
     let javaTier = 'unavailable';
@@ -675,6 +702,7 @@ export class IndexCommand {
         typeof csCandidate.getRoslynDelegate === 'function' &&
         typeof csCandidate.getTier === 'function'
       ) {
+        csharpComposite = csCandidate as CSharpCompositeLike;
         csharpTier = csCandidate.getTier();
         roslynAdapter = csCandidate.getRoslynDelegate() ?? null;
       }
@@ -700,7 +728,7 @@ export class IndexCommand {
       console.error(`[ctxo] Plugin ${plugin.id}@${plugin.version} (${plugin.tier} tier${tierSuffix}) — ${plugin.extensions.join(', ')}`);
     }
 
-    return { tsMorphLike, roslynAdapter, csharpTier, goTier, javaTier };
+    return { tsMorphLike, roslynAdapter, csharpComposite, csharpTier, goTier, javaTier };
   }
 
   private discoverFilesIn(root: string, ignoreFile: (p: string) => boolean = () => false): string[] {
@@ -841,7 +869,7 @@ export class IndexCommand {
 
       // Slow path: hash-based verification (handles git checkout, cp -p, CI)
       if (indexed.contentHash) {
-        const source = readFileSync(filePath, 'utf-8');
+        const source = readSourceText(filePath);
         const currentHash = hasher.hash(source);
         if (currentHash === indexed.contentHash) continue;
         console.error(`[ctxo] STALE: ${relativePath} (content hash differs)`);
@@ -1164,6 +1192,15 @@ export class IndexCommand {
       );
     }
   }
+}
+
+/**
+ * The hint after the C# tier in the index summary. A plugin that loaded at the full tier and is at the
+ * syntax tier after the Roslyn batch lost its helper (restore or build failure): `ctxo doctor` says why.
+ */
+function csharpTierNote(tierAtLoad: string, tier: string): string {
+  if (tier !== 'syntax') return '';
+  return tierAtLoad === 'full' ? ' - the Roslyn helper failed, run "ctxo doctor"' : ' - .NET SDK 8+ for full analysis';
 }
 
 function pickEdgeQuality(tiers: {

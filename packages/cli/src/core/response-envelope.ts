@@ -71,7 +71,8 @@ const TRUNCATABLE_FIELDS: Record<string, string> = {
   clustersAffected: 'Use get_blast_radius on individual changed symbols for per-cluster impact.',
 };
 
-function getThreshold(): number {
+/** The response limit in bytes: `CTXO_RESPONSE_LIMIT` when it is a positive integer, else 8192. */
+export function getThreshold(): number {
   const env = process.env['CTXO_RESPONSE_LIMIT'];
   if (env) {
     const n = parseInt(env, 10);
