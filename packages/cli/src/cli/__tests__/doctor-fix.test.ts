@@ -426,8 +426,48 @@ describe('applyFixes', () => {
       expect(guard?.status).toBe('failed');
       expect(guard?.error).toContain('.claude/settings.json is not valid JSON or not a settings object; left unchanged');
       expect(text(SETTINGS)).toBe('not json{{{');
+      // CLAUDE.md waits for a readable settings.json: a full block now would read as an opt-out (D5).
+      const rules = attempt(r, 'AI rules');
+      expect(rules?.status).toBe('skipped');
+      expect(rules?.error).toBe('CLAUDE.md left unchanged until .claude/settings.json is readable');
+      expect(text('CLAUDE.md')).toBe(PRE_TIER_CLAUDE_MD);
+    });
+
+    it('--fix leaves the Claude Code rules block alone while settings.json is unreadable', async () => {
+      write('CLAUDE.md', PRE_TIER_CLAUDE_MD);
+      write('AGENTS.md', PRE_TIER_CLAUDE_MD.replace('# P', '# Agents'));
+      write(SETTINGS, 'not json{{{');
+      const claudeMd = bytes('CLAUDE.md');
+
+      const r = await fix(await runAgentChecks());
+
+      expect(attempt(r, 'Claude guard hook')?.status).toBe('failed');
       expect(attempt(r, 'AI rules')?.status).toBe('success');
-      expect(text('CLAUDE.md')).toBe('# P\n\n' + renderRulesBlock('full') + '\n');
+      expect(bytes('CLAUDE.md')).toEqual(claudeMd);
+      expect(text('AGENTS.md')).toBe('# Agents\n\n' + renderRulesBlock('full') + '\n');
+      const after = await runAgentChecks();
+      expect(after.checks.find((c) => c.id === 'ai_rules')?.message).toBe(
+        `CLAUDE.md: rules template outdated (unversioned block, template v${RULES_TEMPLATE_VERSION})`,
+      );
+    });
+
+    it('after settings.json is repaired, --fix installs the guard and renders the compact tier', async () => {
+      write('CLAUDE.md', PRE_TIER_CLAUDE_MD);
+      write(SETTINGS, 'not json{{{');
+      const first = await fix(await runAgentChecks());
+      expect(attempt(first, 'Claude guard hook')?.status).toBe('failed');
+
+      write(SETTINGS, '{ "permissions": { "allow": [] } }\n');
+      const doctor = await runAgentChecks();
+      expect(doctor.checks.find((c) => c.id === 'ai_rules')?.message).toContain('rules present, guard missing');
+      const second = await fix(doctor);
+
+      expect(outcomes(second)).toEqual([['Claude guard hook', 'success'], ['AI rules', 'success']]);
+      const settings = JSON.parse(text(SETTINGS)) as Record<string, unknown>;
+      expect(settings['permissions']).toEqual({ allow: [] });
+      expect(text(SETTINGS)).toContain('ctxo gate-hook');
+      expect(text('CLAUDE.md')).toBe('# P\n\n' + renderRulesBlock('compact') + '\n');
+      expect(statuses(await runAgentChecks())).toEqual(ALL_PASS);
     });
 
     it.each([
@@ -442,6 +482,7 @@ describe('applyFixes', () => {
       write('CLAUDE.md', PRE_TIER_CLAUDE_MD);
       write(SETTINGS, content);
       const before = bytes(SETTINGS);
+      const claudeMd = bytes('CLAUDE.md');
       const doctor = await runAgentChecks();
       expect(statuses(doctor)['claude_guard_hook']).toBe('warn');
 
@@ -449,6 +490,7 @@ describe('applyFixes', () => {
 
       expect(attempt(r, 'Claude guard hook')?.status).toBe('failed');
       expect(bytes(SETTINGS)).toEqual(before);
+      expect(bytes('CLAUDE.md')).toEqual(claudeMd);
     });
 
     it('--fix reports an unterminated rules block as failed and leaves the file unchanged', async () => {

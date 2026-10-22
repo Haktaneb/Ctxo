@@ -65,7 +65,8 @@ export interface FixReport {
  *
  * Steps 3 to 5 never install what the user declined (D5): a versioned full block in CLAUDE.md is
  * an opt-out of the guard and the skills, and `gate.enabled: false` an opt-out of the guard only.
- * An unreadable `.claude/settings.json` is never written; its step fails with the warning.
+ * An unreadable `.claude/settings.json` is never written; its step fails with the warning, and
+ * CLAUDE.md is not re-rendered until the file is readable again.
  *
  * Error handling (D4.6 "dependency-aware continue"):
  *   - Config failure -> skip all dependent steps
@@ -299,20 +300,32 @@ async function fixClaudeGuardHook(projectRoot: string): Promise<void | FixSkippe
  * Re-renders each rules file's ctxo block in the tier the disk supports now, so it follows the skills
  * and guard installed earlier in the run. A block from a newer ctxo is left alone (D2). A file with an
  * unterminated start marker is passed on too, so its warning fails the attempt instead of being lost.
+ *
+ * While `.claude/settings.json` is unreadable, CLAUDE.md is left as it is: the guard cannot be seen,
+ * so the tier would resolve to full, and a versioned full block reads as an opt-out (D5) that would
+ * hide the missing guard for good. The next run after the file is repaired renders the right tier.
  */
 async function fixAiRules(projectRoot: string): Promise<void | FixSkipped> {
+  const holdClaudeRules = readClaudeGuardState(projectRoot) === 'unreadable';
   const warnings: string[] = [];
   let rendered = 0;
+  let held = false;
   for (const state of readRulesStates(projectRoot)) {
     const first = state.scan.blocks[0];
     const renderable = first ? classifyRulesBlock(first).state !== 'newer' : state.scan.unterminated;
     if (!renderable) continue;
+    if (holdClaudeRules && state.platformId === 'claude-code') {
+      held = true;
+      continue;
+    }
     rendered += 1;
     const result = installRules(projectRoot, state.platformId, { tier: resolveRulesTier(projectRoot, state.platformId) });
     if (result.warning) warnings.push(result.warning);
   }
   if (warnings.length > 0) throw new Error(warnings.join('; '));
-  if (rendered === 0) return { skipped: 'no ctxo rules block to re-render' };
+  if (rendered === 0) {
+    return { skipped: held ? 'CLAUDE.md left unchanged until .claude/settings.json is readable' : 'no ctxo rules block to re-render' };
+  }
 }
 
 function hasMissingPlugins(projectRoot: string): boolean {
