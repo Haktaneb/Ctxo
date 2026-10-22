@@ -3,6 +3,15 @@ import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PLATFORMS, generateRules, installRules, detectPlatforms, ensureGitignore, ensureConfig, getMcpConfigTargets, ensureMcpConfig, installSkills, SKILLS, ensureClaudeHook } from '../ai-rules.js';
+import {
+  LEGACY_CURSOR_FRONTMATTER,
+  LEGACY_RULE_BODY,
+  RULES_TEMPLATE_VERSION,
+  renderRulesBlock,
+} from '../../core/agent-rules/rules-block.js';
+
+const EM_DASH = String.fromCharCode(0x2014);
+const BOM = String.fromCharCode(0xfeff);
 
 const tempDirs: string[] = [];
 
@@ -26,12 +35,6 @@ describe('PLATFORMS', () => {
   it('has unique file paths', () => {
     const files = PLATFORMS.map(p => p.file);
     expect(new Set(files).size).toBe(files.length);
-  });
-
-  it('includes claude-code as append mode', () => {
-    const claude = PLATFORMS.find(p => p.id === 'claude-code');
-    expect(claude).toBeDefined();
-    expect(claude!.mode).toBe('append');
   });
 
   it('every platform has at least one detect path', () => {
@@ -107,6 +110,12 @@ describe('generateRules', () => {
     const content = generateRules('claude-code');
     expect(content).not.toContain('alwaysApply');
   });
+
+  it('the generated Cursor frontmatter has no em dash', () => {
+    const content = generateRules('cursor');
+    expect(content.startsWith('---\ndescription: ctxo MCP tool usage rules, always applied\nglobs:\nalwaysApply: true\n---\n\n')).toBe(true);
+    expect(content).not.toContain(EM_DASH);
+  });
 });
 
 describe('installRules', () => {
@@ -149,7 +158,7 @@ describe('installRules', () => {
     const content = readFileSync(claudeMd, 'utf-8');
     expect(content).toContain('# My Project');
     expect(content).toContain('Existing content.');
-    expect(content).toContain('<!-- ctxo-rules-start -->');
+    expect(content).toContain(`<!-- ctxo-rules-start v${RULES_TEMPLATE_VERSION} -->`);
     expect(content).toContain('<!-- ctxo-rules-end -->');
     expect(content).toContain('get_blast_radius');
   });
@@ -163,8 +172,181 @@ describe('installRules', () => {
     installRules(dir, 'claude-code');
 
     const content = readFileSync(claudeMd, 'utf-8');
-    const startCount = (content.match(/<!-- ctxo-rules-start -->/g) ?? []).length;
+    const startCount = (content.match(/<!-- ctxo-rules-start/g) ?? []).length;
     expect(startCount).toBe(1);
+  });
+
+  it.each(PLATFORMS)('a new rules file gets one versioned marked block for every platform ($id)', (platform) => {
+    const dir = makeTempDir();
+
+    const result = installRules(dir, platform.id);
+
+    expect(result).toEqual({ file: platform.file, action: 'created' });
+    const content = readFileSync(join(dir, platform.file), 'utf-8');
+    expect(content).toBe(generateRules(platform.id));
+    expect(content.match(/<!-- ctxo-rules-start/g)).toHaveLength(1);
+    expect(content).toContain(`<!-- ctxo-rules-start v${RULES_TEMPLATE_VERSION} -->\n`);
+    expect(content.endsWith('<!-- ctxo-rules-end -->\n')).toBe(true);
+  });
+
+  it('a second run on a new CLAUDE.md is skipped and keeps one block', () => {
+    const dir = makeTempDir();
+
+    const first = installRules(dir, 'claude-code');
+    const afterFirst = readFileSync(join(dir, 'CLAUDE.md'), 'utf-8');
+    const second = installRules(dir, 'claude-code');
+
+    expect(first.action).toBe('created');
+    expect(second.action).toBe('skipped');
+    const content = readFileSync(join(dir, 'CLAUDE.md'), 'utf-8');
+    expect(content).toBe(afterFirst);
+    expect(content.match(/<!-- ctxo-rules-start/g)).toHaveLength(1);
+  });
+
+  it('a CLAUDE.md that older ctxo versions doubled collapses to one block', () => {
+    const dir = makeTempDir();
+    // Older versions created CLAUDE.md without markers, then appended a marked copy on the next run.
+    const doubled = LEGACY_RULE_BODY + '\n' + '\n<!-- ctxo-rules-start -->\n' + LEGACY_RULE_BODY + '\n<!-- ctxo-rules-end -->\n';
+    writeFileSync(join(dir, 'CLAUDE.md'), doubled, 'utf-8');
+
+    const result = installRules(dir, 'claude-code');
+
+    expect(result.action).toBe('updated');
+    expect(readFileSync(join(dir, 'CLAUDE.md'), 'utf-8')).toBe(renderRulesBlock('full') + '\n');
+  });
+
+  it('create-mode files keep user content outside the block', () => {
+    const dir = makeTempDir();
+    writeFileSync(join(dir, 'AGENTS.md'), '# Team rules\nBe kind.\n', 'utf-8');
+
+    const result = installRules(dir, 'antigravity');
+
+    expect(result.action).toBe('updated');
+    expect(readFileSync(join(dir, 'AGENTS.md'), 'utf-8')).toBe('# Team rules\nBe kind.\n\n' + renderRulesBlock('full') + '\n');
+  });
+
+  it('reports created, then skipped, then updated when the tier changes', () => {
+    const dir = makeTempDir();
+
+    const actions = [
+      installRules(dir, 'windsurf').action,
+      installRules(dir, 'windsurf').action,
+      installRules(dir, 'windsurf', { tier: 'compact' }).action,
+    ];
+
+    expect(actions).toEqual(['created', 'skipped', 'updated']);
+    expect(readFileSync(join(dir, '.windsurfrules'), 'utf-8')).toBe(renderRulesBlock('compact') + '\n');
+  });
+
+  it('replaces an existing marked block in place, never appending a second one (#159 acceptance)', () => {
+    const dir = makeTempDir();
+    writeFileSync(join(dir, 'CLAUDE.md'), 'Intro\n\n<!-- ctxo-rules-start -->\nold\n<!-- ctxo-rules-end -->\n\nOutro\n', 'utf-8');
+
+    const result = installRules(dir, 'claude-code');
+
+    expect(result.action).toBe('updated');
+    expect(readFileSync(join(dir, 'CLAUDE.md'), 'utf-8')).toBe('Intro\n\n' + renderRulesBlock('full') + '\n\nOutro\n');
+  });
+
+  it('upgrades legacy files from earlier ctxo versions without duplicating the rules', () => {
+    const dir = makeTempDir();
+    writeFileSync(join(dir, '.windsurfrules'), LEGACY_RULE_BODY + '\n', 'utf-8');
+    mkdirSync(join(dir, '.cursor', 'rules'), { recursive: true });
+    writeFileSync(join(dir, '.cursor', 'rules', 'ctxo.mdc'), LEGACY_CURSOR_FRONTMATTER + LEGACY_RULE_BODY + '\n', 'utf-8');
+
+    expect(installRules(dir, 'windsurf').action).toBe('updated');
+    expect(installRules(dir, 'cursor').action).toBe('updated');
+
+    expect(readFileSync(join(dir, '.windsurfrules'), 'utf-8')).toBe(renderRulesBlock('full') + '\n');
+    expect(readFileSync(join(dir, '.cursor', 'rules', 'ctxo.mdc'), 'utf-8')).toBe(generateRules('cursor'));
+  });
+
+  it('a current Cursor block under the legacy frontmatter gets the new frontmatter and reports updated', () => {
+    const dir = makeTempDir();
+    const file = join(dir, '.cursor', 'rules', 'ctxo.mdc');
+    mkdirSync(join(dir, '.cursor', 'rules'), { recursive: true });
+    writeFileSync(file, LEGACY_CURSOR_FRONTMATTER + renderRulesBlock('full') + '\n', 'utf-8');
+
+    const result = installRules(dir, 'cursor');
+
+    expect(result.action).toBe('updated');
+    expect(readFileSync(file, 'utf-8')).toBe(generateRules('cursor'));
+    expect(installRules(dir, 'cursor').action).toBe('skipped');
+  });
+
+  it('a legacy Cursor file keeps its CRLF line endings and its BOM', () => {
+    const dir = makeTempDir();
+    const file = join(dir, '.cursor', 'rules', 'ctxo.mdc');
+    mkdirSync(join(dir, '.cursor', 'rules'), { recursive: true });
+    const crlf = (text: string): string => text.replace(/\n/g, '\r\n');
+    writeFileSync(file, BOM + crlf(LEGACY_CURSOR_FRONTMATTER + LEGACY_RULE_BODY + '\n'), 'utf-8');
+
+    const result = installRules(dir, 'cursor');
+
+    expect(result.action).toBe('updated');
+    expect(readFileSync(file, 'utf-8')).toBe(BOM + crlf(generateRules('cursor')));
+  });
+
+  it('an existing Cursor file without the legacy frontmatter gets no frontmatter added', () => {
+    const dir = makeTempDir();
+    const file = join(dir, '.cursor', 'rules', 'ctxo.mdc');
+    mkdirSync(join(dir, '.cursor', 'rules'), { recursive: true });
+    const own = '---\ndescription: team rules\nalwaysApply: true\n---\n\nOur rules.\n';
+    writeFileSync(file, own, 'utf-8');
+
+    const result = installRules(dir, 'cursor');
+
+    expect(result.action).toBe('updated');
+    expect(readFileSync(file, 'utf-8')).toBe(own + '\n' + renderRulesBlock('full') + '\n');
+  });
+
+  it('writes the compact tier when asked', () => {
+    const dir = makeTempDir();
+
+    const result = installRules(dir, 'claude-code', { tier: 'compact' });
+
+    expect(result.action).toBe('created');
+    const content = readFileSync(join(dir, 'CLAUDE.md'), 'utf-8');
+    expect(content).toBe(renderRulesBlock('compact') + '\n');
+    expect(content.trimEnd().split('\n').length).toBeLessThanOrEqual(8);
+  });
+
+  it('dryRun reports the action and writes nothing', () => {
+    const dir = makeTempDir();
+    writeFileSync(join(dir, 'AGENTS.md'), '# Team rules\n', 'utf-8');
+
+    expect(installRules(dir, 'cursor', { dryRun: true })).toEqual({ file: '.cursor/rules/ctxo.mdc', action: 'created' });
+    expect(existsSync(join(dir, '.cursor'))).toBe(false);
+
+    expect(installRules(dir, 'antigravity', { dryRun: true }).action).toBe('updated');
+    expect(readFileSync(join(dir, 'AGENTS.md'), 'utf-8')).toBe('# Team rules\n');
+  });
+
+  it('an unterminated block is left byte-for-byte unchanged with a warning', () => {
+    const dir = makeTempDir();
+    const file = join(dir, 'CLAUDE.md');
+    writeFileSync(file, 'Intro\r\n\r\n<!-- ctxo-rules-start -->\r\nold rules\r\n', 'utf-8');
+    const before = readFileSync(file);
+
+    const result = installRules(dir, 'claude-code');
+
+    expect(result.action).toBe('skipped');
+    expect(result.warning).toContain('CLAUDE.md');
+    expect(result.warning).toContain('no end marker');
+    expect(readFileSync(file).equals(before)).toBe(true);
+  });
+
+  it('a block from a newer ctxo is left unchanged with a warning', () => {
+    const dir = makeTempDir();
+    const file = join(dir, 'CLAUDE.md');
+    writeFileSync(file, '<!-- ctxo-rules-start v99.0 -->\nfuture rules\n<!-- ctxo-rules-end -->\n', 'utf-8');
+    const before = readFileSync(file);
+
+    const result = installRules(dir, 'claude-code');
+
+    expect(result.action).toBe('skipped');
+    expect(result.warning).toBe('CLAUDE.md: rules block v99.0 comes from a newer ctxo; left unchanged');
+    expect(readFileSync(file).equals(before)).toBe(true);
   });
 
   it('creates CLAUDE.md if it does not exist (append mode)', () => {

@@ -491,8 +491,7 @@ export class InitCommand {
     for (const id of toolIds) {
       const platform = PLATFORMS.find(p => p.id === id);
       if (platform) {
-        const exists = existsSync(join(this.projectRoot, platform.file));
-        const action = platform.mode === 'append' && exists ? 'append section' : 'create';
+        const action = installRules(this.projectRoot, id, { dryRun: true }).action;
         console.error(`  ${platform.file.padEnd(42)} (${action})`);
       }
     }

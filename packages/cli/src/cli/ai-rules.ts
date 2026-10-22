@@ -2,11 +2,18 @@
  * Platform configurations and MCP tool usage rule generator.
  *
  * Each platform entry defines where the AI coding assistant reads its
- * project-level instructions and how ctxo should write them.
+ * project-level instructions; ctxo upserts one marked rules block into that file.
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import {
+  LEGACY_CURSOR_FRONTMATTER,
+  renderRulesBlock,
+  textShape,
+  upsertRulesBlock,
+  type RulesTier,
+} from '../core/agent-rules/rules-block.js';
 
 /* ------------------------------------------------------------------ */
 /*  Claude Code safe-edit gate hook                                    */
@@ -48,9 +55,8 @@ export function ensureClaudeHook(projectRoot: string): InstallResult {
 export interface Platform {
   id: string;
   name: string;
+  /** The rules file, project-relative with forward slashes; ctxo upserts a marked block into it */
   file: string;
-  /** 'append' inserts a marked section into an existing file; 'create' writes from scratch */
-  mode: 'append' | 'create';
   /** Paths to check for auto-detection (relative to project root) */
   detectPaths: string[];
   /** Show a star next to this platform name */
@@ -58,15 +64,15 @@ export interface Platform {
 }
 
 export const PLATFORMS: Platform[] = [
-  { id: 'claude-code',    name: 'Claude Code',        file: 'CLAUDE.md',                      mode: 'append',  detectPaths: ['CLAUDE.md', '.claude'],                    starred: true },
-  { id: 'cursor',         name: 'Cursor',             file: '.cursor/rules/ctxo.mdc',         mode: 'create',  detectPaths: ['.cursor', '.cursorrules'],                  starred: false },
-  { id: 'github-copilot', name: 'GitHub Copilot',     file: '.github/copilot-instructions.md', mode: 'create',  detectPaths: ['.github', '.vscode'],                      starred: false },
-  { id: 'windsurf',       name: 'Windsurf',           file: '.windsurfrules',                  mode: 'create',  detectPaths: ['.windsurfrules', '.windsurf'],              starred: false },
-  { id: 'antigravity',    name: 'Google Antigravity',  file: 'AGENTS.md',                      mode: 'create',  detectPaths: ['AGENTS.md', 'GEMINI.md', '.gemini'],       starred: false },
-  { id: 'augment',        name: 'Augment Code',       file: 'augment-guidelines.md',           mode: 'create',  detectPaths: ['augment-guidelines.md', '.augment'],        starred: false },
-  { id: 'amazonq',        name: 'Amazon Q',           file: '.amazonq/rules/ctxo.md',         mode: 'create',  detectPaths: ['.amazonq'],                                starred: false },
-  { id: 'gemini-cli',     name: 'Gemini CLI',          file: 'GEMINI.md',                       mode: 'append',  detectPaths: ['.gemini/settings.json', 'GEMINI.md'],      starred: false },
-  { id: 'continue',       name: 'Continue',            file: '.continue/rules/ctxo.md',         mode: 'create',  detectPaths: ['.continue'],                                starred: false },
+  { id: 'claude-code',    name: 'Claude Code',        file: 'CLAUDE.md',                       detectPaths: ['CLAUDE.md', '.claude'],                    starred: true },
+  { id: 'cursor',         name: 'Cursor',             file: '.cursor/rules/ctxo.mdc',          detectPaths: ['.cursor', '.cursorrules'],                  starred: false },
+  { id: 'github-copilot', name: 'GitHub Copilot',     file: '.github/copilot-instructions.md', detectPaths: ['.github', '.vscode'],                      starred: false },
+  { id: 'windsurf',       name: 'Windsurf',           file: '.windsurfrules',                  detectPaths: ['.windsurfrules', '.windsurf'],              starred: false },
+  { id: 'antigravity',    name: 'Google Antigravity', file: 'AGENTS.md',                       detectPaths: ['AGENTS.md', 'GEMINI.md', '.gemini'],       starred: false },
+  { id: 'augment',        name: 'Augment Code',       file: 'augment-guidelines.md',           detectPaths: ['augment-guidelines.md', '.augment'],        starred: false },
+  { id: 'amazonq',        name: 'Amazon Q',           file: '.amazonq/rules/ctxo.md',          detectPaths: ['.amazonq'],                                starred: false },
+  { id: 'gemini-cli',     name: 'Gemini CLI',         file: 'GEMINI.md',                       detectPaths: ['.gemini/settings.json', 'GEMINI.md'],      starred: false },
+  { id: 'continue',       name: 'Continue',           file: '.continue/rules/ctxo.md',         detectPaths: ['.continue'],                                starred: false },
 ];
 
 export function detectPlatforms(projectRoot: string): Set<string> {
@@ -79,71 +85,40 @@ export function detectPlatforms(projectRoot: string): Set<string> {
   return detected;
 }
 
-const SECTION_START = '<!-- ctxo-rules-start -->';
-const SECTION_END = '<!-- ctxo-rules-end -->';
-
 /* ------------------------------------------------------------------ */
 /*  Rule content                                                       */
 /* ------------------------------------------------------------------ */
 
-function ruleBody(): string {
-  return `## ctxo MCP Tool Usage (MANDATORY)
-
-**ALWAYS use ctxo MCP tools before reading source files or making code changes.** The ctxo index contains dependency graphs, git intent, anti-patterns, and change health that cannot be derived from reading files alone. Skipping these tools leads to blind edits and broken dependencies.
-
-### Before ANY Code Modification
-1. Call \`get_blast_radius\` for the symbol you are about to change — understand what breaks
-2. Call \`get_why_context\` for the same symbol — check for revert history or anti-patterns
-3. Only then read and edit source files
-
-### Before Starting a Task
-| Task Type | REQUIRED First Call |
-|---|---|
-| Fixing a bug | \`get_context_for_task(taskType: "fix")\` |
-| Adding/extending a feature | \`get_context_for_task(taskType: "extend")\` |
-| Refactoring | \`get_context_for_task(taskType: "refactor")\` |
-| Understanding code | \`get_context_for_task(taskType: "understand")\` |
-
-### Before Reviewing a PR or Diff
-- Call \`get_pr_impact\` — single call gives full risk assessment with co-change analysis
-
-### When Exploring or Searching Code
-- Use \`search_symbols\` for name/regex lookup — DO NOT grep source files for symbol discovery
-- Use \`get_ranked_context\` for natural language queries — DO NOT manually browse directories
-
-### Orientation in Unfamiliar Areas
-- Call \`get_architectural_overlay\` to understand layer boundaries
-- Call \`get_symbol_importance\` to identify critical symbols
-
-### NEVER Do These
-- NEVER edit a function without first calling \`get_blast_radius\` on it
-- NEVER skip \`get_why_context\` — reverted code and anti-patterns are invisible without it
-- NEVER grep source files to find symbols when \`search_symbols\` exists
-- NEVER manually trace imports when \`find_importers\` gives the full reverse dependency graph`;
-}
-
-/* ------------------------------------------------------------------ */
-/*  Per-platform rendering                                             */
-/* ------------------------------------------------------------------ */
-
-function cursorFrontmatter(): string {
-  return `---
-description: ctxo MCP tool usage rules — always applied
+/** The frontmatter of a new Cursor rules file; LEGACY_CURSOR_FRONTMATTER is the one it replaces. */
+const CURSOR_FRONTMATTER = `---
+description: ctxo MCP tool usage rules, always applied
 globs:
 alwaysApply: true
 ---
 
 `;
+
+/** The content of a new rules file: the marked block (after the frontmatter for Cursor). */
+export function generateRules(platformId: string, tier: RulesTier = 'full'): string {
+  const block = renderRulesBlock(tier) + '\n';
+  return platformId === 'cursor' ? CURSOR_FRONTMATTER + block : block;
 }
 
-export function generateRules(platformId: string): string {
-  const body = ruleBody();
-
-  if (platformId === 'cursor') {
-    return cursorFrontmatter() + body + '\n';
+/**
+ * Swaps a leading LEGACY_CURSOR_FRONTMATTER for CURSOR_FRONTMATTER. The swapped lines keep their
+ * BOM and line endings; anything else is returned as it is.
+ */
+function replaceLegacyCursorFrontmatter(content: string): string {
+  const lineBreaks = LEGACY_CURSOR_FRONTMATTER.split('\n').length - 1;
+  let end = 0;
+  for (let i = 0; i < lineBreaks; i++) {
+    const next = content.indexOf('\n', end);
+    if (next < 0) return content;
+    end = next + 1;
   }
-
-  return body + '\n';
+  const head = textShape(content.slice(0, end));
+  if (head.text !== LEGACY_CURSOR_FRONTMATTER) return content;
+  return head.restore(CURSOR_FRONTMATTER) + content.slice(end);
 }
 
 /* ------------------------------------------------------------------ */
@@ -151,52 +126,59 @@ export function generateRules(platformId: string): string {
 /* ------------------------------------------------------------------ */
 
 export interface InstallResult {
+  /** Project-relative, forward slashes */
   file: string;
   action: 'created' | 'updated' | 'skipped';
+  /** Why a file was left unchanged although it needs attention */
+  warning?: string;
 }
 
-export function installRules(projectRoot: string, platformId: string): InstallResult {
+/**
+ * Upserts the ctxo rules block into a platform's rules file. A missing file gets
+ * `generateRules`; an existing one keeps every byte outside the ctxo block. The action compares
+ * the final content with the original: equal is `skipped`. `dryRun` computes the same action and
+ * writes nothing, not even a directory.
+ */
+export function installRules(
+  projectRoot: string,
+  platformId: string,
+  options: { readonly tier?: RulesTier; readonly dryRun?: boolean } = {},
+): InstallResult {
   const platform = PLATFORMS.find(p => p.id === platformId);
   if (!platform) throw new Error(`Unknown platform: ${platformId}`);
 
+  const tier = options.tier ?? 'full';
   const filePath = join(projectRoot, platform.file);
-  const content = generateRules(platformId);
 
-  // Ensure parent directory exists
-  const dir = dirname(filePath);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-
-  if (platform.mode === 'create') {
-    // For 'create' mode: write or replace entire file
-    writeFileSync(filePath, content, 'utf-8');
-    return { file: platform.file, action: existsSync(filePath) ? 'updated' : 'created' };
-  }
-
-  // 'append' mode: insert marked section into existing file
   if (!existsSync(filePath)) {
-    writeFileSync(filePath, content, 'utf-8');
+    if (!options.dryRun) {
+      mkdirSync(dirname(filePath), { recursive: true });
+      writeFileSync(filePath, generateRules(platformId, tier), 'utf-8');
+    }
     return { file: platform.file, action: 'created' };
   }
 
   const existing = readFileSync(filePath, 'utf-8');
-
-  // Already has ctxo rules section — replace it
-  if (existing.includes(SECTION_START)) {
-    const re = new RegExp(`${escapeRegExp(SECTION_START)}[\\s\\S]*?${escapeRegExp(SECTION_END)}`, 'm');
-    const updated = existing.replace(re, `${SECTION_START}\n${content}${SECTION_END}`);
-    writeFileSync(filePath, updated, 'utf-8');
-    return { file: platform.file, action: 'updated' };
+  const upsert = upsertRulesBlock(existing, renderRulesBlock(tier));
+  if (upsert.kind === 'unterminated') {
+    return {
+      file: platform.file,
+      action: 'skipped',
+      warning: `${platform.file}: ctxo rules start marker has no end marker; left unchanged`,
+    };
+  }
+  if (upsert.kind === 'newer') {
+    return {
+      file: platform.file,
+      action: 'skipped',
+      warning: `${platform.file}: rules block v${upsert.version} comes from a newer ctxo; left unchanged`,
+    };
   }
 
-  // Append new section
-  const separator = existing.endsWith('\n') ? '\n' : '\n\n';
-  const updated = existing + separator + `${SECTION_START}\n${content}${SECTION_END}\n`;
-  writeFileSync(filePath, updated, 'utf-8');
+  const content = platformId === 'cursor' ? replaceLegacyCursorFrontmatter(upsert.content) : upsert.content;
+  if (content === existing) return { file: platform.file, action: 'skipped' };
+  if (!options.dryRun) writeFileSync(filePath, content, 'utf-8');
   return { file: platform.file, action: 'updated' };
-}
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /* ------------------------------------------------------------------ */
