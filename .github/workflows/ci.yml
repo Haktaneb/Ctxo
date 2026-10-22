@@ -74,9 +74,9 @@ jobs:
       - name: Run unit tests with coverage
         run: pnpm --filter @ctxo/cli test:unit:coverage
 
-      # lang-csharp runs its `unit` vitest project only: the tree-sitter, mocked
+      # lang-csharp runs its `unit` vitest project here: the tree-sitter, mocked
       # Roslyn and packaging tests need no .NET. The `dotnet` project (Roslyn
-      # integration tests) builds the helper and is left out of CI.
+      # integration tests) builds the helper and runs in the dotnet-tests job.
       - name: Run plugin-api, sql-extract and lang-sql tests, and the lang-csharp unit tests
         run: |
           pnpm --filter @ctxo/plugin-api --filter @ctxo/sql-extract --filter @ctxo/lang-sql test
@@ -135,6 +135,38 @@ jobs:
           name: coverage-report
           path: packages/cli/coverage/
           retention-days: 14
+
+  # The release gate (`pnpm -r test`) runs the lang-csharp `dotnet` project, so pull
+  # requests run it too: the helper build and NuGet restore, the ScriptDom side of the
+  # SQL conformance corpus, SQL call sites, annotations, the restore-failure fallback
+  # and roll forward.
+  dotnet-tests:
+    name: .NET Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 10.9.0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 8.0.x
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build workspace packages
+        run: pnpm -r build
+
+      - name: Run the lang-csharp dotnet tests
+        run: pnpm --filter @ctxo/lang-csharp test --project dotnet
 
   build:
     name: Build
