@@ -111,7 +111,7 @@ A plugin declares the lowest protocol version it works on: `apiVersion: '1'` or 
 All additive; a v1 plugin needs no change:
 
 - Symbol kinds `table`, `view`, `procedure` and edge kinds `reads`, `writes`, `executes` (`SYMBOL_KINDS`, `EDGE_KINDS`, `DATA_RESOURCE_KINDS`).
-- `SymbolNode.annotations`: host-language attributes, annotations and decorators (capped at 20 per symbol, 10 positional and 10 named entries, 200 characters per value).
+- `SymbolNode.annotations`: host-language attributes, annotations and decorators (capped at 20 per symbol, 10 positional entries and 10 named entries plus the reserved `type`, 200 characters per value; a source argument named `type` is not kept).
 - `ILanguageAdapter.extractFacts` and `CodeFact` (`FACT_KINDS`): called only when the host asks for facts.
 - `PluginContext.capabilities` (`PluginCapabilities`): `facts` when `index.facts: true` is set, `sqlCallSites` when a plugin for `.sql` is installed.
 - Peer ranges: the official plugins accept `@ctxo/plugin-api` `^0.7.3 || ^0.8.0 || ^0.9.0`; `@ctxo/lang-sql` accepts `^0.8.0 || ^0.9.0`.

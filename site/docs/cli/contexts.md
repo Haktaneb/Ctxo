@@ -64,6 +64,36 @@ shared table dbo.members  #1 reads, #2 reads+writes  owner #2
 `ctxo index` reports the same count at the end of its contexts line
 (`, 2 shared tables`) when there is any.
 
+How stored procedures count:
+
+- A procedure's reads and writes count for the candidates that execute it,
+  directly or through other procedures, not for the candidate whose files hold
+  the script. Whether a procedure is executed is decided by its canonical name,
+  so another copy of an executed procedure (a later migration, a docs copy)
+  does not make its own candidate a writer either.
+- A procedure that no candidate executes credits the candidate that holds its
+  script. Test files and unclustered files are not candidates, so a procedure
+  that only tests or unclustered code run still shows up under the script's
+  candidate.
+
+## Coverage with SQL scripts
+
+At the default `contextsView.weights.data` of 0, a `.sql` file joins a
+candidate only through co-change. Scripts that never change together with other
+files are listed as unclustered and lower `coverage`, so a SQL-heavy repository
+can show a noticeably lower ratio (0.91 instead of 0.99 on one production
+fixture, with the candidates unchanged). To leave such scripts out of the view,
+add them to `contextsView.exclude`.
+
+## Collisions and SQL tables
+
+A table takes part in collisions with its columns as members, and names compare
+with ASCII case and `_` ignored. A C# entity class and the table of the same
+name (`LoanItems` and `dbo.loan_items`) can therefore show up as a collision
+when the class's members differ from the columns. Such an entry usually means an
+entity mapped to its table, not two meanings of one term, so treat it as
+possible noise.
+
 ## JSON output shape
 
 `--json` prints the whole artifact, including the settings that produced it and

@@ -48,7 +48,7 @@ The catch-all for non-call references: type positions, generic arguments, identi
 
 Emitted by [`@ctxo/lang-sql`](/languages/sql) from view, procedure and function bodies, and by the [C# plugin](/languages/csharp#sql-at-call-sites) for constant SQL at known data-access call sites (only when a SQL plugin is installed). `reads` comes from `FROM`, `JOIN`, `APPLY` and `MERGE ... USING`; `writes` from `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `TRUNCATE TABLE`, `SELECT ... INTO` and `OUTPUT ... INTO` targets; `executes` from `EXEC` of a procedure.
 
-The target is a canonical 2-part name reference: `dbo.loans::table` for `reads` and `writes`, `dbo.usp_closeloan::procedure` for `executes` (lowercase ASCII, delimiters stripped, default schema `dbo`). The graph resolves a table reference to any `table` or `view` with that name, and a procedure reference to a `procedure`; when several files define the object, the first file in sorted path order wins. A reference that no indexed file defines stays unresolved.
+The target is a canonical 2-part name reference: `dbo.loans::table` for `reads` and `writes`, `dbo.usp_closeloan::procedure` for `executes` (lowercase ASCII, delimiters stripped, default schema `dbo`). The graph resolves a table reference to any `table` or `view` with that name, and a procedure reference to a `procedure`. When several files define the object, a copy outside test files and docs folders wins, then the first file in sorted path order; see [several definitions](/reference/symbol-ids#several-definitions-of-one-object). A reference that no indexed file defines stays unresolved.
 
 ```json
 { "from": "db/lending.sql::dbo.usp_closeloan::procedure", "to": "dbo.loans::table", "kind": "writes" }

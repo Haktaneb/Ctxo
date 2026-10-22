@@ -65,7 +65,10 @@ plugins a project needs. Detection combines two signals:
    extension table (e.g. `.ts` and `.tsx` both map to `typescript`, and `.sql`
    maps to `sql`).
 
-The result drives the auto-install flow.
+A manifest marker is enough on its own. A language found by extension only,
+such as SQL, needs at least 5 files that are also at least 2% of the files
+`git ls-files` lists (files without an extension are not counted). The result
+drives the auto-install flow.
 
 ## Auto-install
 

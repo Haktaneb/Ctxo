@@ -276,6 +276,8 @@ With [`@ctxo/lang-sql`](/languages/sql) installed, the view knows which candidat
 - **Response budget.** If the detail is still larger than the response limit (`CTXO_RESPONSE_LIMIT`, default 8192 bytes), trailing entries are dropped, by name order, from the longer of the two lists (`dataResources` on a tie) until it fits. `sharedTableCount` and `dataResourcesTotal` keep the totals.
 - Neither list is a truncatable field of the [envelope](/reference/response-envelope). `ctxo contexts --json` has the full lists, including every resource's `writers`.
 - Shared tables are a boundary finding, not a clustering weight: `contextsView.weights.data` defaults to `0`. Data edges never appear in `crossEdges`.
+- A stored procedure's reads and writes count for the candidates that execute it (by its canonical name), not for the candidate that holds the script; only a procedure that no candidate executes credits its own candidate. See [how stored procedures count](/cli/contexts#shared-tables).
+- `name` is the 2-part name of the resource. Pass it with its kind (`dbo.loans::table`) to [`get_blast_radius`](/mcp-tools/get-blast-radius) or [`find_importers`](/mcp-tools/find-importers) to see every reader and writer.
 
 ### Field reference
 
@@ -288,7 +290,7 @@ With [`@ctxo/lang-sql`](/languages/sql) installed, the view knows which candidat
 | `candidates[].cohesion` | Internal weight over internal plus boundary weight (hub edges excluded). Higher means a tighter group. |
 | `candidates[].topTerms` | Dominant type-name words by number of files, technical words (`Service`, `Dto`, ...) dropped. |
 | `hubs[].reasons` | `fan-in`, `god-node` or `configured`. Hubs are damped, not clustered, and assigned to the candidate of their strongest remaining edge. |
-| `collisions[]` | The same type or table name in two candidates with different member shapes (Jaccard below 0.5; a table's members are its columns): input for a glossary session, not a definition. |
+| `collisions[]` | The same type or table name in two candidates with different member shapes (Jaccard below 0.5; a table's members are its columns): input for a glossary session, not a definition. A C# entity class next to the table of the same name can appear here; that is often an entity mapped to its table, so treat it as possible noise. |
 | `unclustered` | Files with no edge to any candidate. |
 
 ## Killer example: regex lies, communities don't

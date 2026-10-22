@@ -105,16 +105,20 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo with five packages. Per-packag
   functions become symbols (tables carry a `columns` annotation), and their bodies give `reads`,
   `writes` and `executes` edges to canonical `schema.name` targets (default schema `dbo`).
   `ctxo install sql` (alias `tsql`) installs it, and language detection, `ctxo doctor` and
-  `ctxo index --install-missing` suggest it when the repository has `.sql` files.
+  `ctxo index --install-missing` suggest it when the repository has at least 5 `.sql` files that are
+  also at least 2% of its files.
 - C# attribute annotations: `@ctxo/lang-csharp` reports the attributes written on each symbol in both
-  the Roslyn and the tree-sitter tier (20 per symbol, 10 positional and 10 named entries, 200
-  characters per value). The Roslyn tier keeps constant arguments, including enum constants,
-  `typeof(T)` and arrays; the tree-sitter tier keeps literal arguments only (strings, numbers,
-  booleans).
+  the Roslyn and the tree-sitter tier (20 per symbol, 10 positional entries and 10 named entries plus
+  the reserved `type`, 200 characters per value; a source argument named `type` is dropped in both
+  tiers). The Roslyn tier keeps constant arguments, including strings, enum constants, `typeof(T)`
+  and arrays; the tree-sitter tier keeps literal arguments only (strings, numbers, booleans).
 - SQL edges at C# call sites: with `@ctxo/lang-sql` installed, the Roslyn helper parses constant SQL at
   known ADO.NET (`SqlCommand`, `CommandText`, `CommandType.StoredProcedure`), Dapper, `SqlBulkCopy` and
   EF Core raw SQL call sites with ScriptDom and adds `reads`, `writes` and `executes` edges from the
   calling method. Only compile-time constants count.
+- Dapper `CommandDefinition` is a known call site: its constructor's `commandText` is parsed, and a
+  `commandType` argument of `CommandType.StoredProcedure` (named or positional) makes it a procedure
+  name (#156).
 - Contexts view: `dataResources` (every table or view a candidate reads or writes, with access modes,
   writers, the owning candidate and an `external` flag) and `sharedTables` per candidate (resources of
   two or more candidates). `get_architectural_overlay` `mode: "contexts"` gives counts in the summary
@@ -160,6 +164,20 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo with five packages. Per-packag
   guards heavily used tables and procedures (#156).
 - C# users see a one-time change in their committed index JSON on the first re-index after upgrading:
   annotations are always on (#156).
+- **Run a full `ctxo index` after upgrading `@ctxo/lang-csharp`.** An incremental run (`--files`,
+  `--commit`, and so the post-commit hook) annotates only the files it re-indexes, but the contexts
+  view already counts the index as annotated: until a full run, name-only `*Test.cs` / `*Tests.cs`
+  matches that were not re-indexed show up as production files. A bare capital `Tests/` or `Test/`
+  folder is not a default test glob (`**/tests/**` is case-sensitive); add it to `index.tests` (#156).
+- When several files define the same table, view or procedure, data references resolve to a
+  definition outside test files (default test globs), then outside `docs`, `doc` and
+  `documentation` folders, then to the codepoint-smallest symbol ID. `index.tests` is not consulted;
+  `index.ignore` can drop docs or test copies (#156).
+- Contexts view: a stored procedure's reads and writes count for the candidates that execute it,
+  decided by its canonical name, and no longer for the candidate that holds the script. A procedure
+  that no candidate executes still credits its own candidate (#156).
+- `get_logic_slice` returns symbol `annotations` at `L4` only; `L1` to `L3` and `get_context_for_task`
+  leave them out, so attribute arguments and column lists no longer crowd out dependencies (#156).
 - Data edges stay out of symbol-level communities, god nodes, cross-cluster counts and boundary
   violations; data coupling is reported by the contexts view (#156).
 - Symbols in `.sql` files are never reported as dead code (#156).
@@ -208,6 +226,21 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo with five packages. Per-packag
 - A failed Roslyn helper restore or build no longer leaves every C# file with zero symbols; the plugin
   falls back to tree-sitter (#156).
 - `ctxo watch` no longer hangs when the Roslyn helper exits before it is ready (#156).
+- A huge `.sql` file (a data dump or seed script) no longer crashes `ctxo index` or the post-commit
+  hook by exhausting memory: `@ctxo/lang-sql` skips `.sql` files larger than 5 MiB, with one warning
+  per file (`skipped <file>: <n> MiB is over the 5 MiB SQL size limit`) and no symbols or edges for
+  it (#156).
+- `ctxo watch` no longer writes a C# file with zero symbols after the Roslyn keep-alive shut down for
+  inactivity or crashed: the next re-index restarts it once, and falls back to tree-sitter if the
+  restart fails (#156).
+- The impact tools agree for every copy of a table, view or procedure that several files define, and
+  for its 2-part ID (`dbo.loans::table`): `get_blast_radius`, `find_importers` (direct and
+  transitive), `get_pr_impact`, `get_context_for_task`, the safe-edit gate and `ctxo blast-radius`
+  report the dependents of the winning definition. A non-winning copy, such as a
+  `CREATE OR ALTER PROCEDURE` in a new migration, used to report zero dependents, and a 2-part ID
+  found the symbol but no dependents or importers. `get_logic_slice` now walks a 2-part procedure's
+  dependencies (each copy's full ID keeps its own body), and `get_why_context` reads the winner's
+  file for a 2-part ID (#156).
 
 ### Compatibility
 

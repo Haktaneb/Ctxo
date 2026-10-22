@@ -61,6 +61,8 @@ Parameters:
 - level (number 1-4, default 3): L1=signature, L2=direct deps, L3=full closure, L4=with token budget
 - intent (string, optional): Filter dependencies by keyword
 
+Nodes carry their `annotations` (C# attributes, SQL table `columns`) at L4 only; L1-L3 omit them (and nodes from the SQLite fallback have none). A 2-part data ID such as `dbo.usp_closeloan::procedure` walks the body of the winning definition; a copy's full ID walks that copy's own body.
+
 When to use: Understanding what a symbol depends on (downstream view).
 Instead of: get_blast_radius (upstream/impact), get_context_for_task (task-specific).
 
@@ -68,13 +70,14 @@ Instead of: get_blast_radius (upstream/impact), get_context_for_task (task-speci
 Find all symbols that would break if a target changes.
 
 Parameters:
-- symbolId (string, required): Symbol ID
+- symbolId (string, required): Symbol ID, or the 2-part ID of a table, view or procedure (`dbo.loans::table`)
 - confidence (enum: confirmed|likely|potential, optional): Filter by tier
 - intent (string, optional): Filter by keyword
 
 Returns: impactedSymbols array with symbolId, depth, riskScore, confidence, edgeKinds, coChangeFrequency (when the dependent's file co-changes with the target's file).
 3-tier model by the strongest edge that reaches each dependent: confirmed (calls/extends/implements and the data edges reads/writes/executes), likely (uses/co-changed), potential (imports-only). A potential dependent whose file co-changes with the target's file at frequency above 0.5 is promoted to likely. The traversal is transitive across all tiers; riskScore falls with depth.
 Also returns coChangedFiles (when co-change data exists): up to 10 files that co-change with the target's file at frequency >= 0.5 but have no graph path to it, each with file, frequency, sharedCommits. Informational: not counted in tiers, risk scores or the safe-edit gate.
+Every copy of a table, view or procedure that several files define, and its 2-part ID, reports the same dependents (those of the winning definition).
 
 When to use: BEFORE modifying any symbol, including a SQL table, view or procedure.
 Instead of: get_logic_slice (forward deps), get_pr_impact (PR-level).
@@ -139,7 +142,7 @@ Task types:
 - refactor: Importers + complexity + churn (restructuring)
 - understand: Full slice + architecture (learning)
 
-Context entries that depend on the symbol (its blast radius) carry an optional confidence tier (confirmed|likely|potential); co-change history can raise potential to likely.
+Context entries that depend on the symbol (its blast radius) carry an optional confidence tier (confirmed|likely|potential); co-change history can raise potential to likely. Entries carry no symbol annotations (use get_logic_slice level 4). A 2-part data ID (`dbo.loans::table`) is accepted.
 
 When to use: BEST starting point when you know the symbol AND your intent.
 
@@ -184,7 +187,7 @@ Instead of: get_pr_impact (full PR risk assessment).
 Find all symbols that depend on a given symbol (reverse dependency).
 
 Parameters:
-- symbolId (string, required): Symbol ID
+- symbolId (string, required): Symbol ID, or the 2-part ID of a table, view or procedure (`dbo.loans::table`; every copy gives the same importers)
 - edgeKinds (string[], optional): Filter by imports|calls|extends|implements|uses|reads|writes|executes (the last three are data access)
 - transitive (boolean, default false): Follow transitive reverse edges
 - maxDepth (number 1-10, default 5): Max BFS depth
@@ -299,7 +302,8 @@ All symbols use deterministic IDs: `"<relativePath>::<name>::<kind>"`
 - Example: `"src/core/graph/symbol-graph.ts::SymbolGraph::class"`, `"db/lending.sql::dbo.loans::table"`
 - Valid kinds: function, class, interface, method, variable, type, table, view, procedure
 - Valid edge kinds: imports, calls, extends, implements, uses, reads, writes, executes
-- Edge targets may also be 2-part name references (`<name>::<kind>`); data edges point at canonical names such as `dbo.loans::table` (lowercase, delimiters stripped, default schema `dbo`), resolved to the defining `table` or `view` (first file in sorted path order)
+- Edge targets may also be 2-part name references (`<name>::<kind>`); data edges point at canonical names such as `dbo.loans::table` (lowercase, delimiters stripped, default schema `dbo`), resolved to the defining `table` or `view`. With several definitions, the winner is a copy outside test files (default test globs; `index.tests` is not consulted), then outside `docs`/`doc`/`documentation` folders, then the codepoint-smallest symbol ID
+- Impact tools (get_blast_radius, find_importers, get_pr_impact, get_context_for_task, the gate, `ctxo blast-radius`) accept a 2-part data ID and give every copy of a multi-defined object the winner's dependents; forward edges (get_logic_slice) stay per copy; get_why_context with a 2-part ID reads the winner's file
 
 ### Resources
 - `ctxo://status` — Health check resource (confirms server is running)
@@ -388,32 +392,36 @@ Two services can look independent in the graph while both write the same table. 
 ### Protocol v2 (`@ctxo/plugin-api`)
 
 - Kinds: `SYMBOL_KINDS` adds `table`, `view`, `procedure`; `EDGE_KINDS` adds `reads`, `writes`, `executes`; `DATA_RESOURCE_KINDS = ['table', 'view']` is what core analyses use.
-- Annotations: `SymbolNode.annotations?: { name, args?, named? }[]`. Always on. Host-language attributes are capped at 20 per symbol, 10 positional and 10 named entries, 200 characters per value; `named.type` is reserved for the fully qualified type name. lang-sql's `columns` annotation lists every column of a table. Core checks shape only; JSON index only.
+- Annotations: `SymbolNode.annotations?: { name, args?, named? }[]`. Always on. Host-language attributes are capped at 20 per symbol, 10 positional entries and 10 named entries plus the reserved `type`, 200 characters per value; `named.type` is reserved for the fully qualified type name, and a source argument named `type` is not kept. lang-sql's `columns` annotation lists every column of a table. Core checks shape only; JSON index only.
 - Facts: `FACT_KINDS = ['literal-comparison', 'normalization', 'retry-timeout', 'endpoint']`, `CodeFact { kind, symbolId, line (0-based), text (single line, trimmed, max 200 chars), detail? }`, optional `ILanguageAdapter.extractFacts`. Called only when `index.facts: true`; results go to the file's index JSON under `facts`. No official plugin implements it yet.
 - Capabilities: `PluginContext.capabilities?: { facts?, sqlCallSites? }`, computed before any `createAdapter` call and offered to every plugin. `sqlCallSites` is set only when a plugin for `.sql` is installed.
 - Versioning: `SUPPORTED_API_VERSIONS = ['1', '2']`; plugins declare the lowest version they work on. Older CLIs skip `@ctxo/lang-sql` with a warning and drop the new kinds from a newer index with a warning.
 
 ### `@ctxo/lang-sql`
 
-- `ctxo install sql` (alias `tsql`). Syntax tier, no database, no .NET. Detection, `ctxo doctor` and `ctxo index --install-missing` suggest it when `.sql` files exist.
+- `ctxo install sql` (alias `tsql`). Syntax tier, no database, no .NET. Detection, `ctxo doctor` and `ctxo index --install-missing` suggest it when the repository has at least 5 `.sql` files that are also at least 2% of its files (as `git ls-files` lists them).
 - Definitions: `CREATE [OR ALTER] TABLE | VIEW | PROC[EDURE] | FUNCTION`, `ALTER VIEW | PROC[EDURE] | FUNCTION`. Symbol IDs carry the canonical name (`db/lending.sql::dbo.loans::table`); `name` keeps the declared spelling. Functions map to `function`.
 - Accesses from view, procedure and function bodies: `FROM`, `JOIN`, `APPLY`, `MERGE ... USING` -> reads; `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `TRUNCATE TABLE`, `SELECT ... INTO`, `OUTPUT ... INTO` -> writes; `EXEC` / `EXECUTE` -> executes. Temp tables, table variables, CTE names, aliases, 3- and 4-part names and the `sys` / `information_schema` schemas are skipped. Only ASCII A-Z is case-folded.
 - Limits: T-SQL only with `dbo` as the default schema; top-level DML in scripts is skipped; `ALTER TABLE ... ADD` columns count only in the defining file; a CTE name reused later in a batch without `;` is skipped by sql-extract but read by ScriptDom.
+- Size limit: a `.sql` file larger than 5 MiB is skipped (no symbols, edges or facts) with one warning per file: `skipped <file>: <n> MiB is over the 5 MiB SQL size limit`. Use `index.ignore` for dumps to silence it.
+- Several definitions of one object (migrations, docs or test copies): see "Symbol ID Format" above for the winner; every copy reports the winner's dependents, each copy keeps its own forward edges, and the contexts view takes a procedure's body from the winner. The winner among production copies is the codepoint-smallest path, not necessarily the newest migration (`V10__` sorts before `V7__`).
 
 ### SQL at C# call sites
 
-With lang-sql installed and the Roslyn tier (.NET SDK 8+), the C# helper parses constant SQL with ScriptDom at: `SqlCommand` constructor `cmdText`; `CommandText` assignments on `SqlCommand`, `DbCommand`, `IDbCommand` and subtypes (a procedure name when `CommandType = StoredProcedure` is set on the same local or in the same object initializer); Dapper `SqlMapper` methods starting with `Query` or `Execute` (`sql` argument; `commandType: CommandType.StoredProcedure` means a procedure name); `SqlBulkCopy.DestinationTableName` (writes); EF Core `FromSqlRaw`, `ExecuteSqlRaw`, `ExecuteSqlRawAsync`, `SqlQueryRaw` (EF `{0}` placeholders become parameters before parsing). Only compile-time constants count: use `const string`; `static readonly` fields, runtime strings and `CommandText +=` are non-constant. Dapper `IN @ids` is read as `IN (@ids)`. The tree-sitter fallback gives no SQL edges. `DEBUG=ctxo:roslyn` logs the constant, non-constant and unparsable counts.
+With lang-sql installed and the Roslyn tier (.NET SDK 8+), the C# helper parses constant SQL with ScriptDom at: `SqlCommand` constructor `cmdText`; `CommandText` assignments on `SqlCommand`, `DbCommand`, `IDbCommand` and subtypes (a procedure name when `CommandType = StoredProcedure` is set on the same local or in the same object initializer); Dapper `SqlMapper` methods starting with `Query` or `Execute` (`sql` argument; `commandType: CommandType.StoredProcedure` means a procedure name); the Dapper `CommandDefinition` constructor (`commandText` argument; a named or positional `commandType` of `StoredProcedure` means a procedure name; the edge belongs to the method that constructs it); `SqlBulkCopy.DestinationTableName` (writes); EF Core `FromSqlRaw`, `ExecuteSqlRaw`, `ExecuteSqlRawAsync`, `SqlQueryRaw` (EF `{0}` placeholders become parameters before parsing). Only compile-time constants count: use `const string`; `static readonly` fields, runtime strings and `CommandText +=` are non-constant. Dapper `IN @ids` is read as `IN (@ids)`. The tree-sitter fallback gives no SQL edges. `DEBUG=ctxo:roslyn` logs the constant, non-constant and unparsable counts.
 
 ### C# annotations and test files
 
-- The C# plugin reports attributes in both tiers. Roslyn keeps constant arguments (numbers in invariant culture, booleans, enum constants as `Type.Member`, `typeof(T)` as a display string, arrays flattened, nulls skipped); tree-sitter keeps literal arguments only (strings, numbers, booleans). In the Roslyn semantic path a `name:` argument arrives in `args`; tree-sitter puts it in `named`. Roslyn formats real-number exponents its own way.
-- Test files (contexts view): a test glob match, or any symbol carrying `Fact`, `Theory`, `SkippableFact`, `SkippableTheory`, `Test`, `TestCase`, `TestCaseSource`, `TestFixture`, `TestMethod`, `DataTestMethod` or `TestClass`. Once C# annotations exist in the index, a file matched only by `**/*Test.cs` or `**/*Tests.cs` needs a test annotation. Missed: test classes with only other attributes (FsCheck `[Property]`) and unannotated `*Tests.cs` in a bare capital `Tests/` or `Test/` folder; fix with an `index.tests` glob.
+- The C# plugin reports attributes in both tiers. Roslyn keeps constant arguments (strings and characters as their value, numbers in invariant culture, booleans, enum constants as `Type.Member`, `typeof(T)` as a display string, arrays flattened, nulls skipped); tree-sitter keeps literal arguments only (strings, numbers, booleans). In the Roslyn semantic path a `name:` argument arrives in `args`; tree-sitter puts it in `named`. Roslyn formats real-number exponents its own way. A source argument named `type` is dropped in both tiers (`named.type` is reserved).
+- Test files (contexts view): a test glob match, or any symbol carrying `Fact`, `Theory`, `SkippableFact`, `SkippableTheory`, `Test`, `TestCase`, `TestCaseSource`, `TestFixture`, `TestMethod`, `DataTestMethod` or `TestClass`. Once C# annotations exist in the index, a file matched only by `**/*Test.cs` or `**/*Tests.cs` needs a test annotation. Missed: test classes with only other attributes (FsCheck `[Property]`), custom attributes derived from `Fact` or `Theory` (names match exactly, base types are not resolved) and unannotated `*Tests.cs` in a bare capital `Tests/` or `Test/` folder (not a default test glob); fix with an `index.tests` glob.
+- Run a full `ctxo index` after upgrading `@ctxo/lang-csharp`: an incremental run annotates only the files it re-indexes, while the contexts view already counts the index as annotated, so name-only test matches that were not re-indexed show up as production files until the full run.
 
 ### Data coupling in core and the contexts view
 
 - `reads`, `writes`, `executes` are confirmed blast-radius dependents, so the safe-edit gate also guards heavily used tables and procedures. Data edges stay out of symbol-level communities, god nodes, cross-cluster counts and boundary violations. `.sql` symbols are never dead code.
-- Contexts view artifact: top-level `dataResources` (`name`, `kind?`, `external`, `accesses` per candidate with `modes`, `writers`, `owner?` when exactly one candidate writes it) and per-candidate `sharedTables` (resources of two or more candidates). An `executes` edge to an indexed procedure adds that procedure's reads and writes, transitively; reading a view does not expand to its tables; unclustered files are ignored and hubs count for their assigned candidate.
-- `contextsView.weights.data` (default 0) weights data edges between an accessing file and the defining `.sql` file in the file graph. Table and view names and columns join the term harvest; tables take part in collisions with their columns.
+- Contexts view artifact: top-level `dataResources` (`name`, `kind?`, `external`, `accesses` per candidate with `modes`, `writers`, `owner?` when exactly one candidate writes it) and per-candidate `sharedTables` (resources of two or more candidates). An `executes` edge to an indexed procedure adds that procedure's reads and writes, transitively; reading a view does not expand to its tables; unclustered files and test files are ignored and hubs count for their assigned candidate.
+- Procedure attribution: procedure bodies count only for the candidates that execute them, decided by canonical name (a non-winning copy of an executed procedure credits nobody). A procedure that no candidate executes, directly or through other procedures, credits the candidate whose file holds it; procedures that only execute each other each credit their own candidate. A procedure that only tests or unclustered files execute therefore still credits the script's candidate.
+- `contextsView.weights.data` (default 0) weights data edges between an accessing file and the defining `.sql` file in the file graph. At 0, a `.sql` file joins a candidate only through co-change, so scripts without a co-change partner stay unclustered and lower `coverage` (0.99 to 0.91 on one fixture, candidates unchanged); `contextsView.exclude` leaves them out. Table and view names and columns join the term harvest; tables take part in collisions with their columns, so a C# class and a same-name table can collide (often an entity mapped to its table: possible noise).
 - `ctxo index` appends `, <S> shared tables` to its contexts line; `ctxo contexts` prints the count and one `shared` line per shared resource (owner, several writers or read only).
 - Size: a table shared by k candidates is listed k times with k accesses each in the artifact (k squared growth); the MCP responses are capped.
 
@@ -426,11 +434,11 @@ Five outcomes:
 4. `dotnet restore` of the helper succeeds: pass, "full tier (.NET SDK <version>, Roslyn helper restores)".
 5. The restore fails or times out (120 s): warn, "syntax tier: the Roslyn helper could not restore (<first error line>)". Fix: make `Microsoft.SqlServer.TransactSql.ScriptDom` and the `Microsoft.CodeAnalysis` packages reachable from your NuGet sources (nuget.org or a mirror), then run `ctxo index`.
 
-When the helper cannot restore or build during `ctxo index`, the C# plugin falls back to tree-sitter (symbols and attribute annotations with literal arguments kept; `named.type`, non-literal argument values and SQL edges lost) and the summary reads `C#: N files (syntax tier - the Roslyn helper failed, run "ctxo doctor")`. The helper targets `net8.0` with `RollForward` `Major`, so the .NET host can roll forward to a newer major runtime when no 8.x is installed; the built helper has been run with `dotnet exec --fx-version` on .NET 8, 9 and 10. A lone `.csproj` without a solution now indexes in the Roslyn tier.
+When the helper cannot restore or build during `ctxo index`, the C# plugin falls back to tree-sitter (symbols and attribute annotations with literal arguments kept; `named.type`, non-literal argument values and SQL edges lost) and the summary reads `C#: N files (syntax tier - the Roslyn helper failed, run "ctxo doctor")`. In `ctxo watch`, a keep-alive that shut down for inactivity or crashed is restarted once on the next re-index; if that fails, the file falls back to tree-sitter instead of being written with zero symbols. The helper targets `net8.0` with `RollForward` `Major`, so the .NET host can roll forward to a newer major runtime when no 8.x is installed; the built helper has been run with `dotnet exec --fx-version` on .NET 8, 9 and 10. A lone `.csproj` without a solution now indexes in the Roslyn tier.
 
 ### Upgrade notes
 
-- First re-index after upgrading rewrites the committed JSON of C# files once (annotations).
+- First re-index after upgrading rewrites the committed JSON of C# files once (annotations). Make it a full `ctxo index` (see "C# annotations and test files").
 - UTF-16 files with a BOM are decoded; their hash changes once, so `ctxo index --check` reports them stale until the next `ctxo index`.
 - Shared conformance corpus: packages/sql-extract/corpus (`<case>.sql` + `<case>.expected.json`, modes `statement` and `file`), run by sql-extract, lang-sql and (with .NET) ScriptDom.
 

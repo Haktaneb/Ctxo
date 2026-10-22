@@ -42,11 +42,11 @@ Ctxo is a Model Context Protocol (MCP) server that delivers Logic-Slices to AI c
 - [Overview](https://alperhankendi.github.io/Ctxo/docs/mcp-tools/overview): All tools grouped.
 - [Tool Selection Guide](https://alperhankendi.github.io/Ctxo/docs/mcp-tools/tool-selection-guide): Which tool for which task.
 - [Response Format](https://alperhankendi.github.io/Ctxo/docs/mcp-tools/response-format): `_meta` envelope summary.
-- [get_logic_slice](https://alperhankendi.github.io/Ctxo/docs/mcp-tools/get-logic-slice): Symbol + deps (L1-L4).
+- [get_logic_slice](https://alperhankendi.github.io/Ctxo/docs/mcp-tools/get-logic-slice): Symbol + deps (L1-L4); node annotations at L4 only.
 - [get_context_for_task](https://alperhankendi.github.io/Ctxo/docs/mcp-tools/get-context-for-task): Task-aware context.
 - [get_ranked_context](https://alperhankendi.github.io/Ctxo/docs/mcp-tools/get-ranked-context): BM25 + PageRank search.
 - [search_symbols](https://alperhankendi.github.io/Ctxo/docs/mcp-tools/search-symbols): Name or regex search.
-- [get_blast_radius](https://alperhankendi.github.io/Ctxo/docs/mcp-tools/get-blast-radius): Impact score + tiers.
+- [get_blast_radius](https://alperhankendi.github.io/Ctxo/docs/mcp-tools/get-blast-radius): Impact score + tiers; accepts 2-part data IDs such as `dbo.loans::table`.
 - [get_pr_impact](https://alperhankendi.github.io/Ctxo/docs/mcp-tools/get-pr-impact): Full PR risk assessment.
 - [get_change_intelligence](https://alperhankendi.github.io/Ctxo/docs/mcp-tools/get-change-intelligence): Per-symbol complexity × churn.
 - [get_changed_symbols](https://alperhankendi.github.io/Ctxo/docs/mcp-tools/get-changed-symbols): Symbols in recent diffs.
@@ -73,9 +73,9 @@ Ctxo is a Model Context Protocol (MCP) server that delivers Logic-Slices to AI c
 - [Overview](https://alperhankendi.github.io/Ctxo/docs/languages/overview): Tier matrix and detection.
 - [TypeScript](https://alperhankendi.github.io/Ctxo/docs/languages/typescript): `@ctxo/lang-typescript` (ts-morph).
 - [Go](https://alperhankendi.github.io/Ctxo/docs/languages/go): `@ctxo/lang-go` (tree-sitter + analyzer).
-- [C#](https://alperhankendi.github.io/Ctxo/docs/languages/csharp): `@ctxo/lang-csharp` (Roslyn + tree-sitter), attribute annotations, SQL edges at known call sites.
+- [C#](https://alperhankendi.github.io/Ctxo/docs/languages/csharp): `@ctxo/lang-csharp` (Roslyn + tree-sitter), attribute annotations, SQL edges at known call sites (ADO.NET, Dapper including `CommandDefinition`, `SqlBulkCopy`, EF Core).
 - [Java](https://alperhankendi.github.io/Ctxo/docs/languages/java): `@ctxo/lang-java` (tree-sitter + Eclipse JDT analyzer).
-- [SQL](https://alperhankendi.github.io/Ctxo/docs/languages/sql): `@ctxo/lang-sql` (T-SQL tables, views, procedures and their reads, writes and executes).
+- [SQL](https://alperhankendi.github.io/Ctxo/docs/languages/sql): `@ctxo/lang-sql` (T-SQL tables, views, procedures and their reads, writes and executes; several definitions of one object; 5 MiB file size limit).
 - [Writing a Plugin](https://alperhankendi.github.io/Ctxo/docs/languages/writing-a-plugin): Plugin API, protocol v1 and v2 (data kinds, annotations, facts, capabilities).
 
 ## Visualizer
@@ -91,7 +91,7 @@ Ctxo is a Model Context Protocol (MCP) server that delivers Logic-Slices to AI c
 ## Reference
 
 - [Config Schema](https://alperhankendi.github.io/Ctxo/docs/reference/config-schema): Full `.ctxo/config.yaml`, including the `cochange` window, `contextsView.weights.data`, `index.facts` and annotation-based test detection.
-- [Symbol IDs](https://alperhankendi.github.io/Ctxo/docs/reference/symbol-ids): `<file>::<name>::<kind>`, and 2-part data references such as `dbo.loans::table`.
+- [Symbol IDs](https://alperhankendi.github.io/Ctxo/docs/reference/symbol-ids): `<file>::<name>::<kind>`, and 2-part data references such as `dbo.loans::table`, which the impact tools accept as input.
 - [Edge Kinds](https://alperhankendi.github.io/Ctxo/docs/reference/edge-kinds): imports, calls, extends, implements, uses, reads, writes, executes.
 - [Response Envelope](https://alperhankendi.github.io/Ctxo/docs/reference/response-envelope): `_meta` fields.
 - [CI Integration](https://alperhankendi.github.io/Ctxo/docs/reference/ci-integration): `ctxo index --check`.

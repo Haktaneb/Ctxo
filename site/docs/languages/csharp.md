@@ -124,14 +124,15 @@ tiers. They are always on and live in the JSON index only.
 
 - `name` is the attribute name as written, without namespace and without the
   `Attribute` suffix.
-- Only constant arguments are kept. In the Roslyn tier: numbers in invariant
-  culture, `true` and `false`, enum constants as `Type.Member`, `typeof(T)` as
-  the type's display string, array arguments flattened, nulls skipped. `args`
-  and `named` are omitted when empty.
-- Caps: 20 attributes per symbol, 10 positional and 10 named entries each, 200
-  characters per value.
+- Only constant arguments are kept. In the Roslyn tier: strings and characters
+  as their value, numbers in invariant culture, `true` and `false`, enum
+  constants as `Type.Member`, `typeof(T)` as the type's display string, array
+  arguments flattened, nulls skipped. `args` and `named` are omitted when empty.
+- Caps: 20 attributes per symbol, 10 positional entries and 10 named entries
+  plus the reserved `type` each, 200 characters per value.
 - `named.type` is the attribute class's fully qualified name. Only the Roslyn
-  tier knows it, when the class resolves.
+  tier knows it, when the class resolves. A source argument that is itself
+  named `type` is dropped in both tiers, so it never takes that key.
 - **Tier differences.**
   - Tree-sitter keeps literal arguments only (strings, numbers, booleans).
     Enum constants, `typeof(T)`, array arguments and other expressions are
@@ -149,6 +150,22 @@ Test-framework attributes (`Fact`, `Theory`, `Test`, `TestCase`, `TestMethod`,
 matched only by the name globs `**/*Test.cs` or `**/*Tests.cs` needs one of them
 to count as a test. See the [config reference](/reference/config-schema#test-files).
 
+- **Exact names only.** Custom attributes derived from `Fact` or `Theory` (a
+  project's own `[LoanFact]`, say) are not recognised, because attribute base
+  types are not resolved. A `*Tests.cs` file outside the test folders that uses
+  only such attributes becomes a production file; add an `index.tests` glob.
+- **Capital `Tests/` folders.** A bare `Tests/` or `Test/` folder is not a
+  default test glob (`**/tests/**` is case-sensitive). Add it to `index.tests`.
+
+::: warning Run a full `ctxo index` after upgrading
+After upgrading `@ctxo/lang-csharp`, run a full `ctxo index` once. An
+incremental run (`--files`, `--commit`, and so the post-commit hook) gives
+annotations only to the files it re-indexes, but the contexts view already
+counts the index as annotated. Until the full run, every name-only
+`*Test.cs` / `*Tests.cs` match that has not been re-indexed yet shows up as a
+production file.
+:::
+
 ## SQL at call sites
 
 With [`@ctxo/lang-sql`](/languages/sql) installed and the Roslyn tier active,
@@ -162,6 +179,7 @@ style targets, the same ones the SQL plugin defines.
 | `SqlCommand` (Microsoft.Data.SqlClient, System.Data.SqlClient) | constructor argument `cmdText` | `CommandType = CommandType.StoredProcedure` on the same command in the same method |
 | `CommandText` on `SqlCommand`, `DbCommand`, `IDbCommand` and subtypes | simple assignment | same |
 | Dapper `SqlMapper` methods starting with `Query` or `Execute` | argument `sql` | `commandType: CommandType.StoredProcedure` |
+| Dapper `CommandDefinition` constructor | argument `commandText` | its `commandType` argument (named or positional) is `CommandType.StoredProcedure` |
 | `SqlBulkCopy.DestinationTableName` | simple assignment | never; the table is written |
 | EF Core `FromSqlRaw`, `ExecuteSqlRaw`, `ExecuteSqlRawAsync`, `SqlQueryRaw` | argument `sql` | never |
 
@@ -192,8 +210,17 @@ public sealed class LoanRepository
 
     public IEnumerable<int> OpenLoans(IDbConnection connection) =>
         connection.Query<int>(OpenLoansSql);                             // no edge: static readonly
+
+    public void RenewLoan(IDbConnection connection, int id) =>
+        connection.Execute(new CommandDefinition(
+            "dbo.usp_RenewLoan", new { id },
+            commandType: CommandType.StoredProcedure));                  // executes dbo.usp_renewloan
 }
 ```
+
+The `SqlMapper` overloads that take a `CommandDefinition` have no `sql`
+argument, so the definition's constructor is the call site: the edge belongs to
+the method that constructs it.
 
 - **Constants only.** Literals, `const` fields, constant concatenation, verbatim
   and raw strings count. SQL built at runtime, interpolation with holes,
@@ -234,6 +261,10 @@ directory that contains the `.sln`.
 - **Cold start:** the first Roslyn run restores NuGet packages for
   `ctxo-roslyn` (Roslyn and ScriptDom) and warms up MSBuild. Subsequent runs
   are much faster thanks to the keep-alive process used by `ctxo watch`.
+- **Idle keep-alive:** the `ctxo watch` keep-alive shuts itself down after a
+  period without requests. The next re-index restarts it once; if the restart
+  fails, the file is re-indexed with tree-sitter instead of being written with
+  zero symbols.
 - **Restore failures:** when the helper cannot restore or build, indexing falls
   back to tree-sitter instead of losing the C# files. Run `ctxo doctor` to see
   the restore error.

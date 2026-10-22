@@ -42,9 +42,12 @@ A data edge goes from code (a C# method, a SQL view, procedure or function) to
 a table, view or procedure. Its target is a 2-part name reference such as
 `dbo.loans::table`, because the caller does not know which file defines the
 object. The graph resolves it to any `table` or `view` with that name (a
-procedure reference to a `procedure`), taking the first file in sorted path
-order when several define it. Two services that never import each other but
-both write `dbo.loans` therefore meet at the `dbo.loans` node.
+procedure reference to a `procedure`). When several files define it, a copy
+outside test files and docs folders wins, then the first file in sorted path
+order, and every copy reports the winner's dependents (see
+[several definitions](/languages/sql#several-definitions-of-one-object)). Two
+services that never import each other but both write `dbo.loans` therefore meet
+at the `dbo.loans` node.
 
 Data edges count as `confirmed` dependents in blast radius, take part in
 PageRank, and stay out of symbol-level communities and boundary violations.

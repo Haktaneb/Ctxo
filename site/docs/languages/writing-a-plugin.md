@@ -109,11 +109,12 @@ export interface SymbolAnnotation {
 }
 ```
 
-Cap them yourself: 20 per symbol, 10 positional and 10 named entries each,
-200 characters per value (truncate longer values), and omit `args` and `named`
-when empty. `named.type` is reserved for the fully qualified type name when you
-know it. The CLI checks shape only, and keeps a symbol whose annotations are
-malformed by dropping them.
+Cap them yourself: 20 per symbol, 10 positional entries and 10 named entries
+plus the reserved `type` each, 200 characters per value (truncate longer
+values), and omit `args` and `named` when empty. `named.type` is reserved for
+the fully qualified type name when you know it: never copy a source argument
+that is itself named `type` into `named`. The CLI checks shape only, and keeps
+a symbol whose annotations are malformed by dropping them.
 
 **Facts.** Implement `extractFacts` only if you can report `CodeFact`s
 (`FACT_KINDS`: `literal-comparison`, `normalization`, `retry-timeout`,

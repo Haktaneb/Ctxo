@@ -40,7 +40,7 @@ ctxo doctor [options]
 | SQLite cache | `.ctxo/.cache/symbols.db` present and usable |
 | Config file | `.ctxo/config.yaml` is valid YAML and conforms to the schema; invalid `index.*` and `cochange.include` / `cochange.exclude` globs are warned about |
 | ts-morph, tree-sitter | Runtime parsers load |
-| Language coverage | Every detected language has a registered plugin (`.sql` files suggest `@ctxo/lang-sql`) |
+| Language coverage | Every detected language has a registered plugin (at least 5 `.sql` files that are also at least 2% of all files suggest `@ctxo/lang-sql`) |
 | Java analysis tier (`java_tier`) | Which Java tier is active |
 | C# analysis tier (`csharp_tier`) | Which C# tier is active, and whether the Roslyn helper can restore its NuGet packages. See [below](#c-analysis-tier) |
 | Disk usage | Free space sufficient for the index |
@@ -67,8 +67,9 @@ The warning's fix hint: make `Microsoft.SqlServer.TransactSql.ScriptDom` and the
 `Microsoft.CodeAnalysis` packages reachable from your NuGet sources (nuget.org
 or a mirror), then run `ctxo index`. Until then the C# plugin falls back to
 tree-sitter: symbols and attribute annotations (literal arguments only) are
-kept, the Roslyn-only annotation details and the SQL call-site edges are lost. The language coverage check already reports a missing plugin,
-so the third row passes.
+kept, the Roslyn-only annotation details and the SQL call-site edges are lost.
+The language coverage check already reports a missing plugin, so the third row
+passes.
 
 ## Remediation order (`--fix`)
 

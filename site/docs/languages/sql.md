@@ -43,9 +43,11 @@ yarn add -D @ctxo/lang-sql
 :::
 
 `ctxo init`, `ctxo doctor` (language coverage) and `ctxo index --install-missing`
-suggest the plugin when the repository has `.sql` files. It is a protocol v2
-plugin: an older CLI skips it with a warning, so upgrade `@ctxo/cli` together
-with it.
+suggest the plugin when the repository has at least 5 `.sql` files and they are
+at least 2% of its files (as `git ls-files` lists them). SQL has no manifest
+file, so a few scripts in a large code base do not trigger the suggestion;
+install the plugin yourself in that case. It is a protocol v2 plugin: an older
+CLI skips it with a warning, so upgrade `@ctxo/cli` together with it.
 
 ## What it extracts
 
@@ -72,8 +74,9 @@ the declared spelling, without delimiters and without an added schema.
 
 Edge targets are 2-part references such as `dbo.loans::table` and
 `dbo.usp_notifymember::procedure`. Ctxo resolves a table reference to the
-defining `table` or `view`, whichever defines the name, and when several files
-define the same object, the first file in sorted path order wins.
+defining `table` or `view`, whichever defines the name. See
+[several definitions](#several-definitions-of-one-object) for what happens when
+more than one file defines it.
 
 ```sql
 -- db/lending.sql
@@ -113,21 +116,56 @@ END
   dynamic SQL (`EXEC (@sql)`, `EXEC @proc`) and `EXECUTE AS`. A recursive
   procedure has no self edge. SQL objects carry no complexity metrics.
 
+## Several definitions of one object
+
+Migration history often defines one object several times: the procedure is
+created in `db/migrations/V1__init.sql` and changed with
+`CREATE OR ALTER PROCEDURE` in `db/migrations/V7__close_loan.sql`, and a copy of
+the schema sits in `docs/`. Every data edge points at one definition, the
+winner, picked in this order:
+
+1. outside test files, by the default test globs (`index.tests` is not
+   consulted);
+2. then not under a folder named `docs`, `doc` or `documentation` (ASCII case
+   ignored);
+3. then the codepoint-smallest symbol ID (the first file in sorted path order).
+
+Among production copies that means the smallest path, not necessarily the
+newest migration: `V10__` sorts before `V7__`. To keep docs or test copies out
+of the index altogether, add them to `index.ignore`.
+
+The copies still share one identity:
+
+- [`get_blast_radius`](/mcp-tools/get-blast-radius),
+  [`find_importers`](/mcp-tools/find-importers), `get_pr_impact`,
+  `get_context_for_task`, the safe-edit guard and `ctxo blast-radius` give the
+  same answer for every copy and for the 2-part ID (`dbo.usp_closeloan::procedure`):
+  the winner's dependents. A pull request that adds `CREATE OR ALTER PROCEDURE`
+  in a new migration therefore reports the procedure's callers.
+- Forward edges stay per copy:
+  [`get_logic_slice`](/mcp-tools/get-logic-slice) on a copy's full ID walks that
+  copy's own body. A 2-part ID walks the winner's body.
+- The [contexts view](/cli/contexts) takes a procedure's body from the winner
+  when a candidate executes it.
+
 ## C# interplay
 
 When this plugin is installed, the CLI tells every plugin that `.sql` files
 are indexed (`capabilities.sqlCallSites`). The [C# plugin](/languages/csharp#sql-at-call-sites)
 then adds `reads`, `writes` and `executes` edges from C# methods to the same
-`dbo.loans::table` targets, for constant SQL at known ADO.NET, Dapper,
-`SqlBulkCopy` and EF Core call sites (Roslyn tier, .NET SDK 8+). A C# method and
-the stored procedure that both touch `dbo.loans` then meet in the graph:
+`dbo.loans::table` targets, for constant SQL at known ADO.NET, Dapper
+(including `CommandDefinition`), `SqlBulkCopy` and EF Core call sites (Roslyn
+tier, .NET SDK 8+). A C# method and the stored procedure that both touch
+`dbo.loans` then meet in the graph:
 
 - [`get_blast_radius`](/mcp-tools/get-blast-radius) on a table lists its readers
   and writers as `confirmed` dependents, in SQL and in C#.
 - [`find_importers`](/mcp-tools/find-importers) with `edgeKinds: ["writes"]`
   lists every writer of a table.
 - The [contexts view](/cli/contexts) reports tables that two or more candidate
-  contexts read or write.
+  contexts read or write. A procedure's reads and writes count for the
+  candidates that execute it, not for the candidate that holds the script,
+  unless no candidate executes it.
 
 Without this plugin the C# plugin emits no SQL edges. A table that C# code
 references but no indexed `.sql` file defines stays an unresolved reference in
@@ -142,6 +180,13 @@ the graph and appears as an external resource in the contexts view.
   the index.
 - **Communities.** Data edges stay out of symbol-level communities and boundary
   violations; the contexts view reports data coupling instead.
+- **Contexts view coverage.** At the default `contextsView.weights.data` of 0, a
+  `.sql` file joins a candidate only through co-change. Scripts that never
+  change together with other files stay unclustered and lower `coverage`; on one
+  production fixture, 48 such scripts took it from 0.99 to 0.91 without moving
+  any other file. Leave them out with `contextsView.exclude` if the number
+  matters. A table that shares its name with a C# class can also appear as a
+  [collision](/cli/contexts#collisions-and-sql-tables).
 - **Search.** [`search_symbols`](/mcp-tools/search-symbols) and
   [`get_symbol_importance`](/mcp-tools/get-symbol-importance) accept `kind`
   `table`, `view` and `procedure`.
@@ -149,6 +194,12 @@ the graph and appears as an external resource in the contexts view.
 ## Known limitations
 
 - **T-SQL only**, with `dbo` as the default schema. Neither is configurable yet.
+- **Size limit: 5 MiB.** A `.sql` file larger than 5 MiB is skipped: no
+  symbols, no edges, and one warning from `ctxo index`
+  (`skipped <file>: <n> MiB is over the 5 MiB SQL size limit`). Such files are
+  usually data dumps or seed scripts, whose top-level DML gives no edges anyway,
+  and parsing them could exhaust memory. Keep definitions in their own scripts,
+  or add a dump to `index.ignore` to silence the warning.
 - **Top-level DML is skipped.** An `INSERT` or `SELECT` outside any definition
   (a migration or seed script) produces no edges. Co-change still links those
   scripts to the code that changes with them.
