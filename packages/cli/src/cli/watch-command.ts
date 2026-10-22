@@ -1,5 +1,5 @@
 import { join, extname, relative } from 'node:path';
-import { readFileSync } from 'node:fs';
+import { readSourceText } from './read-source.js';
 import { LanguageAdapterRegistry } from '../adapters/language/language-adapter-registry.js';
 import { loadPlugins } from './plugin-loader.js';
 import { JsonIndexWriter } from '../adapters/storage/json-index-writer.js';
@@ -103,7 +103,7 @@ export class WatchCommand {
               hash: c.hash, message: c.message, date: c.date, kind: 'commit' as const,
             }));
             const antiPatterns: AntiPattern[] = revertDetector.detect(commits);
-            const source = readFileSync(filePath, 'utf-8');
+            const source = readSourceText(filePath);
 
             const fileIndex = buildWatchFileIndex(relativePath, {
               lastModified: Math.floor(Date.now() / 1000),
@@ -124,7 +124,7 @@ export class WatchCommand {
         }
 
         // Default path: use adapter from registry (tree-sitter or ts-morph)
-        const source = readFileSync(filePath, 'utf-8');
+        const source = readSourceText(filePath);
         const lastModified = Math.floor(Date.now() / 1000);
 
         const symbols = await adapter.extractSymbols(relativePath, source);

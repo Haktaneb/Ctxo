@@ -390,6 +390,7 @@ Usage:
   ctxo install python -y    Batch install, no prompt
   ctxo install ts --global  Install globally
   ctxo install py --dry-run Show command without running
+  ctxo install sql          SQL plugin: .sql definitions, data edges from C# call sites
   ctxo update              Check + apply updates for ctxo + plugins
   ctxo update --check      Check only, no install
   ctxo update --print      Print install command, never execute

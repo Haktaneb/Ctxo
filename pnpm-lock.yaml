@@ -75,6 +75,9 @@ importers:
       '@ctxo/lang-java':
         specifier: workspace:*
         version: link:../lang-java
+      '@ctxo/lang-sql':
+        specifier: workspace:*
+        version: link:../lang-sql
       '@ctxo/lang-typescript':
         specifier: workspace:*
         version: link:../lang-typescript

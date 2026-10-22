@@ -7,6 +7,7 @@ import { ContentHasher } from '../core/staleness/content-hasher.js';
 import { LanguageAdapterRegistry } from '../adapters/language/language-adapter-registry.js';
 import { loadPlugins } from './plugin-loader.js';
 import { InstallCommand } from './install-command.js';
+import { readSourceText } from './read-source.js';
 import { changeLogSize, writeCoChangeMatrix } from './index-cochange.js';
 import { computeAndWriteContextsView } from './index-contexts-view.js';
 import { extractFileFacts } from './index-facts.js';
@@ -268,7 +269,7 @@ export class IndexCommand {
       const relativePath = relative(this.projectRoot, filePath).replace(/\\/g, '/');
 
       try {
-        const source = readFileSync(filePath, 'utf-8');
+        const source = readSourceText(filePath);
         const lastModified = Math.floor(Date.now() / 1000);
 
         const symbols = await adapter.extractSymbols(relativePath, source);
@@ -599,6 +600,7 @@ export class IndexCommand {
     const tsCount = pendingIndices.filter(e => /\.(ts|tsx|js|jsx)$/.test(e.relativePath)).length;
     const goCount = pendingIndices.filter(e => e.relativePath.endsWith('.go')).length;
     const javaCount = pendingIndices.filter(e => e.relativePath.endsWith('.java')).length;
+    const sqlCount = pendingIndices.filter(e => e.relativePath.toLowerCase().endsWith('.sql')).length;
     console.error(
       `[ctxo] Index complete: ${processed} files indexed${removedPaths.size > 0 ? `, ${removedPaths.size} removed` : ''}`,
     );
@@ -606,6 +608,7 @@ export class IndexCommand {
     if (csCount > 0) console.error(`[ctxo]   C#: ${csCount} files (${csharpTier} tier${csharpTier === 'syntax' ? ' - .NET SDK 8+ for full analysis' : ''})`);
     if (goCount > 0) console.error(`[ctxo]   Go: ${goCount} files (${goTier} tier${goTier === 'syntax' ? ' - Go 1.22+ for full analysis' : ''})`);
     if (javaCount > 0) console.error(`[ctxo]   Java: ${javaCount} files (${javaTier} tier${javaTier === 'syntax' ? ' - JRE 11+ & "ctxo install java --full-tier" for full analysis' : ''})`);
+    if (sqlCount > 0) console.error(`[ctxo]   SQL: ${sqlCount} files (syntax tier)`);
 
     // Dispose Roslyn adapter
     if (roslynAdapter) await roslynAdapter.dispose();
@@ -854,7 +857,7 @@ export class IndexCommand {
 
       // Slow path: hash-based verification (handles git checkout, cp -p, CI)
       if (indexed.contentHash) {
-        const source = readFileSync(filePath, 'utf-8');
+        const source = readSourceText(filePath);
         const currentHash = hasher.hash(source);
         if (currentHash === indexed.contentHash) continue;
         console.error(`[ctxo] STALE: ${relativePath} (content hash differs)`);
