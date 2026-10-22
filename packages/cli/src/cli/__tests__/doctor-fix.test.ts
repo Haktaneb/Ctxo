@@ -1,12 +1,21 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { DoctorReport } from '../../core/diagnostics/types.js';
+import { LEGACY_RULE_BODY, RULES_TEMPLATE_VERSION, renderRulesBlock } from '../../core/agent-rules/rules-block.js';
+import { HealthChecker } from '../../adapters/diagnostics/health-checker.js';
+import {
+  AiRulesCheck,
+  ClaudeGuardHookCheck,
+  SkillsCheck,
+} from '../../adapters/diagnostics/checks/agent-setup-check.js';
 import { JsonIndexWriter } from '../../adapters/storage/json-index-writer.js';
 import { buildFileIndex } from '../../adapters/storage/__tests__/test-fixtures.js';
-import { applyFixes, formatFixReport } from '../doctor-fix.js';
+import { ensureClaudeHook } from '../ai-rules.js';
+import { applyFixes, formatFixReport, type FixAttempt, type FixReport } from '../doctor-fix.js';
+import { InitCommand, type InitOptions } from '../init-command.js';
 import { isolateGitEnv, type IsolatedGitEnv } from './git-test-env.js';
 
 function report(overrides: Partial<DoctorReport['checks'][number]>[]): DoctorReport {
@@ -190,6 +199,283 @@ describe('applyFixes', () => {
       { projectRoot: tmp, ctxoRoot: join(tmp, '.ctxo'), dryRun: true },
     );
     expect(r.attempts.some((a) => a.name === 'Orphaned index files')).toBe(true);
+  });
+
+  describe('agent setup', () => {
+    /** A CLAUDE.md written by a ctxo version before the tiers: an unversioned marked block. */
+    const PRE_TIER_CLAUDE_MD = '# P\n\n<!-- ctxo-rules-start -->\n' + LEGACY_RULE_BODY + '\n<!-- ctxo-rules-end -->\n';
+    const SETTINGS = join('.claude', 'settings.json');
+    const ALL_PASS = { ai_rules: 'pass', skills: 'pass', claude_guard_hook: 'pass' };
+
+    /** Writes a project-relative file, creating its directory. */
+    function write(file: string, content: string): void {
+      const path = join(tmp, file);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, content, 'utf-8');
+    }
+
+    function bytes(file: string): Buffer {
+      return readFileSync(join(tmp, file));
+    }
+
+    function text(file: string): string {
+      return readFileSync(join(tmp, file), 'utf-8');
+    }
+
+    /** The three agent-setup checks, run as `ctxo doctor` runs them. */
+    function runAgentChecks(): Promise<DoctorReport> {
+      return new HealthChecker([new AiRulesCheck(), new SkillsCheck(), new ClaudeGuardHookCheck()], { quiet: true })
+        .runAll({ projectRoot: tmp, ctxoRoot: join(tmp, '.ctxo') });
+    }
+
+    function statuses(r: DoctorReport): Record<string, string> {
+      return Object.fromEntries(r.checks.map((c) => [c.id, c.status]));
+    }
+
+    function fix(r: DoctorReport): Promise<FixReport> {
+      return applyFixes(r, { projectRoot: tmp, ctxoRoot: join(tmp, '.ctxo'), yes: true });
+    }
+
+    function attempt(r: FixReport, name: string): FixAttempt | undefined {
+      return r.attempts.find((a) => a.name === name);
+    }
+
+    function outcomes(r: FixReport): [string, FixAttempt['status']][] {
+      return r.attempts.map((a) => [a.name, a.status]);
+    }
+
+    /** `ctxo init --tools claude-code --yes --no-install` plus `options`, in a fresh temp repo, quietly. */
+    async function init(options: InitOptions): Promise<void> {
+      execFileSync('git', ['init', '-q'], { cwd: tmp });
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        await new InitCommand(tmp).run({ tools: ['claude-code'], yes: true, noInstall: true, ...options });
+      } finally {
+        errorSpy.mockRestore();
+      }
+    }
+
+    it('schedules Skills, Claude guard hook and AI rules after Git hooks and before Language plugins', async () => {
+      const r = await applyFixes(
+        report([
+          { id: 'language_coverage' },
+          { id: 'claude_guard_hook' },
+          { id: 'skills' },
+          { id: 'ai_rules' },
+          { id: 'git_hooks' },
+        ]),
+        { projectRoot: tmp, ctxoRoot: join(tmp, '.ctxo'), dryRun: true },
+      );
+
+      expect(r.attempts).toEqual([
+        { name: 'Git hooks', action: 're-install ctxo git hooks', status: 'planned' },
+        { name: 'Skills', action: 'install missing or outdated ctxo skills', status: 'planned' },
+        { name: 'Claude guard hook', action: 'register ctxo gate-hook in .claude/settings.json', status: 'planned' },
+        { name: 'AI rules', action: 're-render ctxo rules blocks', status: 'planned' },
+        { name: 'Language plugins', action: 'install missing @ctxo/lang-* packages', status: 'planned' },
+      ]);
+    });
+
+    it('runs the D13 order: config, git hooks, skills, guard, rules, then plugins, index and cache', async () => {
+      const r = await applyFixes(
+        report([
+          { id: 'sqlite_cache' },
+          { id: 'index_freshness' },
+          { id: 'language_coverage' },
+          { id: 'ai_rules' },
+          { id: 'claude_guard_hook' },
+          { id: 'skills' },
+          { id: 'git_hooks' },
+          { id: 'config_file' },
+        ]),
+        { projectRoot: tmp, ctxoRoot: join(tmp, '.ctxo'), dryRun: true },
+      );
+
+      expect(r.attempts.map((a) => a.name)).toEqual([
+        'Config',
+        'Git hooks',
+        'Skills',
+        'Claude guard hook',
+        'AI rules',
+        'Language plugins',
+        'Index',
+        'SQLite cache',
+      ]);
+    });
+
+    it('re-renders AI rules when only the skills check failed', async () => {
+      const r = await applyFixes(report([{ id: 'skills' }]), {
+        projectRoot: tmp,
+        ctxoRoot: join(tmp, '.ctxo'),
+        dryRun: true,
+      });
+
+      expect(r.attempts.map((a) => a.name)).toEqual(['Skills', 'AI rules']);
+    });
+
+    it('re-renders AI rules when only the claude_guard_hook check failed', async () => {
+      const r = await applyFixes(report([{ id: 'claude_guard_hook' }]), {
+        projectRoot: tmp,
+        ctxoRoot: join(tmp, '.ctxo'),
+        dryRun: true,
+      });
+
+      expect(r.attempts.map((a) => a.name)).toEqual(['Claude guard hook', 'AI rules']);
+    });
+
+    it('the AI rules re-render follows the skills installed in the same run', async () => {
+      // Compact block and guard present, skills missing: doctor expects full. Once the skills are
+      // installed, the re-render must see them and keep the block compact.
+      ensureClaudeHook(tmp);
+      write('CLAUDE.md', '# P\n\n' + renderRulesBlock('compact') + '\n');
+      const before = bytes('CLAUDE.md');
+      const doctor = await runAgentChecks();
+      expect(statuses(doctor)).toEqual({ ai_rules: 'warn', skills: 'warn', claude_guard_hook: 'pass' });
+      expect(doctor.checks.find((c) => c.id === 'ai_rules')?.message).toBe(
+        'CLAUDE.md: rules tier does not match the guard and skills (expected full)',
+      );
+
+      const r = await fix(doctor);
+
+      // Content first: re-rendered before the skills were installed, the block would turn full here.
+      expect(text('CLAUDE.md')).toBe('# P\n\n' + renderRulesBlock('compact') + '\n');
+      expect(bytes('CLAUDE.md')).toEqual(before);
+      expect(statuses(await runAgentChecks())).toEqual(ALL_PASS);
+      expect(outcomes(r)).toEqual([['Skills', 'success'], ['AI rules', 'success']]);
+    });
+
+    it('doctor reports rules present, guard missing and rules template outdated, and --fix resolves both (#159 acceptance)', async () => {
+      write('CLAUDE.md', PRE_TIER_CLAUDE_MD);
+
+      const doctor = await runAgentChecks();
+      const aiRules = doctor.checks.find((c) => c.id === 'ai_rules');
+      expect(aiRules?.message).toContain('rules present, guard missing');
+      expect(aiRules?.message).toContain('rules template outdated');
+
+      const r = await fix(doctor);
+
+      expect(r.halted).toBe(false);
+      const claudeMd = text('CLAUDE.md');
+      expect(claudeMd.match(/<!-- ctxo-rules-start/g)).toHaveLength(1);
+      expect(claudeMd).toBe('# P\n\n' + renderRulesBlock('compact') + '\n');
+      expect(text(SETTINGS)).toContain('ctxo gate-hook');
+      expect(statuses(await runAgentChecks())).toEqual(ALL_PASS);
+      expect(outcomes(r)).toEqual([['Skills', 'success'], ['Claude guard hook', 'success'], ['AI rules', 'success']]);
+    });
+
+    it('--fix leaves a deliberate opt-out alone', async () => {
+      await init({ noGuard: true });
+      const claudeMd = bytes('CLAUDE.md');
+      const doctor = await runAgentChecks();
+      expect(statuses(doctor)).toEqual(ALL_PASS);
+
+      // A real run, not a dry one: config_file fails too, so the run has work to do around the agent steps.
+      const r = await fix({
+        ...doctor,
+        checks: [...doctor.checks, { id: 'config_file', title: 'Config file', status: 'fail', message: 'missing' }],
+      });
+
+      expect(r.attempts.map((a) => a.name)).toEqual(['Config']);
+      expect(existsSync(join(tmp, SETTINGS))).toBe(false);
+      expect(bytes('CLAUDE.md')).toEqual(claudeMd);
+    });
+
+    it.each<[string, InitOptions]>([
+      ['--no-guard', { noGuard: true }],
+      ['--no-guard --skip skills', { noGuard: true, skip: ['skills'] }],
+    ])('--fix installs nothing declined by init %s even when the report lists every agent check', async (_flags, options) => {
+      await init(options);
+      const claudeMd = bytes('CLAUDE.md');
+      const skillsDir = join(tmp, '.claude', 'skills');
+      const hadSkills = existsSync(skillsDir);
+
+      const r = await fix(
+        report([{ id: 'config_file' }, { id: 'ai_rules' }, { id: 'skills' }, { id: 'claude_guard_hook' }]),
+      );
+
+      expect(attempt(r, 'Claude guard hook')?.status).toBe('skipped');
+      expect(existsSync(join(tmp, SETTINGS))).toBe(false);
+      expect(existsSync(skillsDir)).toBe(hadSkills);
+      expect(bytes('CLAUDE.md')).toEqual(claudeMd);
+    });
+
+    it('--fix with gate.enabled false installs the skills but not the guard', async () => {
+      write('CLAUDE.md', PRE_TIER_CLAUDE_MD);
+      write('.ctxo/config.yaml', 'gate:\n  enabled: false\n');
+      const doctor = await runAgentChecks();
+      expect(statuses(doctor)).toEqual({ ai_rules: 'warn', skills: 'warn', claude_guard_hook: 'pass' });
+
+      const r = await fix(doctor);
+
+      expect(outcomes(r)).toEqual([['Skills', 'success'], ['AI rules', 'success']]);
+      expect(existsSync(join(tmp, SETTINGS))).toBe(false);
+      expect(existsSync(join(tmp, '.claude', 'skills', 'ctxo-safe-edit', 'SKILL.md'))).toBe(true);
+      expect(text('CLAUDE.md')).toBe('# P\n\n' + renderRulesBlock('full') + '\n');
+      expect(statuses(await runAgentChecks())).toEqual(ALL_PASS);
+    });
+
+    it('--fix reports a corrupt settings.json as failed and leaves it unchanged', async () => {
+      write('CLAUDE.md', PRE_TIER_CLAUDE_MD);
+      write(SETTINGS, 'not json{{{');
+      const doctor = await runAgentChecks();
+
+      const r = await fix(doctor);
+
+      expect(r.halted).toBe(false);
+      const guard = attempt(r, 'Claude guard hook');
+      expect(guard?.status).toBe('failed');
+      expect(guard?.error).toContain('.claude/settings.json is not valid JSON or not a settings object; left unchanged');
+      expect(text(SETTINGS)).toBe('not json{{{');
+      expect(attempt(r, 'AI rules')?.status).toBe('success');
+      expect(text('CLAUDE.md')).toBe('# P\n\n' + renderRulesBlock('full') + '\n');
+    });
+
+    it.each([
+      ['null', 'null'],
+      ['an array', '[]'],
+      ['a string', '"settings"'],
+      ['hooks as an array', '{ "hooks": [] }'],
+      ['PreToolUse as an object', '{ "hooks": { "PreToolUse": {} } }'],
+      ['a PreToolUse entry without hooks', '{ "hooks": { "PreToolUse": [{ "matcher": "Edit" }] } }'],
+      ['JSONC comments', '// team settings\n{ "hooks": {} }\n'],
+    ])('--fix leaves an unreadable settings.json unchanged: %s', async (_shape, content) => {
+      write('CLAUDE.md', PRE_TIER_CLAUDE_MD);
+      write(SETTINGS, content);
+      const before = bytes(SETTINGS);
+      const doctor = await runAgentChecks();
+      expect(statuses(doctor)['claude_guard_hook']).toBe('warn');
+
+      const r = await fix(doctor);
+
+      expect(attempt(r, 'Claude guard hook')?.status).toBe('failed');
+      expect(bytes(SETTINGS)).toEqual(before);
+    });
+
+    it('--fix reports an unterminated rules block as failed and leaves the file unchanged', async () => {
+      write('AGENTS.md', '# Agents\n\n' + renderRulesBlock('full').replace('\n<!-- ctxo-rules-end -->', '') + '\n');
+      const before = bytes('AGENTS.md');
+      const doctor = await runAgentChecks();
+      expect(statuses(doctor)['ai_rules']).toBe('warn');
+
+      const r = await fix(doctor);
+
+      const rules = attempt(r, 'AI rules');
+      expect(rules?.status).toBe('failed');
+      expect(rules?.error).toContain('AGENTS.md: ctxo rules start marker has no end marker; left unchanged');
+      expect(bytes('AGENTS.md')).toEqual(before);
+    });
+
+    it('--fix leaves a rules block from a newer ctxo alone and re-renders the others', async () => {
+      write('CLAUDE.md', renderRulesBlock('full').replace(`v${RULES_TEMPLATE_VERSION}`, 'v99.0') + '\n');
+      write('.windsurfrules', LEGACY_RULE_BODY + '\n');
+      const before = bytes('CLAUDE.md');
+
+      const r = await fix(report([{ id: 'ai_rules' }]));
+
+      expect(attempt(r, 'AI rules')?.status).toBe('success');
+      expect(bytes('CLAUDE.md')).toEqual(before);
+      expect(text('.windsurfrules')).toBe(renderRulesBlock('full') + '\n');
+    });
   });
 });
 

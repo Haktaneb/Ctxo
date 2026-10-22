@@ -10,7 +10,19 @@ import {
   officialPluginFor,
   type KnownLanguage,
 } from '../core/detection/detect-languages.js';
-import { ensureConfig } from './ai-rules.js';
+import { classifyRulesBlock } from '../core/agent-rules/rules-block.js';
+import {
+  SKILL_PLATFORMS,
+  ensureClaudeHook,
+  ensureConfig,
+  guardExpected,
+  installRules,
+  installSkills,
+  readClaudeGuardState,
+  readRulesStates,
+  resolveRulesTier,
+  skillsExpected,
+} from './ai-rules.js';
 import { InstallCommand } from './install-command.js';
 import { InitCommand } from './init-command.js';
 import { IndexCommand } from './index-command.js';
@@ -40,15 +52,24 @@ export interface FixReport {
 /**
  * Apply ordered fixes derived from a doctor report.
  *
- * Order (PRD §5.2 D4.4):
+ * Order (PRD §5.2 D4.4, with the agent-setup steps of PR 2A D13):
  *   1. Config (bootstraps defaults other steps may need)
  *   2. Git hooks (cheap; depends on .git existing)
- *   3. Language coverage (install missing plugins)
- *   4. Index (requires adapters — so run AFTER plugin install)
- *   5. SQLite cache (last; rebuild from index JSONs)
+ *   3. Skills (install missing or outdated ctxo skills where the setup expects them)
+ *   4. Claude guard hook (register ctxo gate-hook in .claude/settings.json)
+ *   5. AI rules (re-render the rules blocks; runs whenever any of the three agent checks
+ *      failed, after 3 and 4, so the tier follows the skills and guard fixed in this run)
+ *   6. Language coverage (install missing plugins)
+ *   7. Index (requires adapters, so it runs AFTER plugin install)
+ *   8. SQLite cache (last; rebuild from index JSONs)
+ *
+ * Steps 3 to 5 never install what the user declined (D5): a versioned full block in CLAUDE.md is
+ * an opt-out of the guard and the skills, and `gate.enabled: false` an opt-out of the guard only.
+ * An unreadable `.claude/settings.json` is never written; its step fails with the warning.
  *
  * Error handling (D4.6 "dependency-aware continue"):
  *   - Config failure -> skip all dependent steps
+ *   - Skills, Claude guard hook or AI rules failure -> reported; the next steps still run
  *   - Plugin install failure -> skip index (can't rebuild adapters) but DO rebuild cache
  *
  * Never fixable here: runtime, git repo, disk. Those remain as CheckResult
@@ -90,6 +111,39 @@ export async function applyFixes(report: DoctorReport, options: FixOptions): Pro
         'Git hooks',
         're-install ctxo git hooks',
         () => fixHooks(options.projectRoot),
+        options,
+      ),
+    );
+  }
+
+  if (fixableIds.has('skills')) {
+    attempts.push(
+      await run(
+        'Skills',
+        'install missing or outdated ctxo skills',
+        () => fixSkills(options.projectRoot),
+        options,
+      ),
+    );
+  }
+
+  if (fixableIds.has('claude_guard_hook')) {
+    attempts.push(
+      await run(
+        'Claude guard hook',
+        'register ctxo gate-hook in .claude/settings.json',
+        () => fixClaudeGuardHook(options.projectRoot),
+        options,
+      ),
+    );
+  }
+
+  if (fixableIds.has('ai_rules') || fixableIds.has('skills') || fixableIds.has('claude_guard_hook')) {
+    attempts.push(
+      await run(
+        'AI rules',
+        're-render ctxo rules blocks',
+        () => fixAiRules(options.projectRoot),
         options,
       ),
     );
@@ -210,6 +264,55 @@ async function fixHooks(projectRoot: string): Promise<void | FixSkipped> {
     // installHooks already printed the warning with the blocks to add by hand.
     return { skipped: `shared hooks directory (${result.sharedScope} core.hooksPath); ctxo does not write there, add the blocks by hand` };
   }
+}
+
+/**
+ * Installs the bundled skills on every skill platform that expects them: one ctxo skill is already
+ * there, or the platform's rules block is pre-tier or compact. A deliberate opt-out expects none.
+ */
+async function fixSkills(projectRoot: string): Promise<void | FixSkipped> {
+  const platforms = SKILL_PLATFORMS.filter((id) => skillsExpected(projectRoot, id));
+  if (platforms.length === 0) return { skipped: 'no platform expects the ctxo skills' };
+  for (const id of platforms) installSkills(projectRoot, id);
+}
+
+/**
+ * Registers the safe-edit guard when CLAUDE.md expects it and the gate is enabled. An unreadable
+ * `.claude/settings.json` fails the attempt with the `ensureClaudeHook` warning and is never written.
+ */
+async function fixClaudeGuardHook(projectRoot: string): Promise<void | FixSkipped> {
+  const state = readClaudeGuardState(projectRoot);
+  if (state === 'unreadable') {
+    // The dry run only fetches the warning; ensureClaudeHook never writes an unreadable file either way.
+    const { warning } = ensureClaudeHook(projectRoot, { dryRun: true });
+    throw new Error(warning ?? '.claude/settings.json cannot be read; left unchanged');
+  }
+  if (state === 'present') return { skipped: 'already registered' };
+  if (!guardExpected(projectRoot)) {
+    return { skipped: 'not expected: CLAUDE.md records an opt-out or has no ctxo block, or gate.enabled is false' };
+  }
+  const result = ensureClaudeHook(projectRoot);
+  if (result.warning) throw new Error(result.warning);
+}
+
+/**
+ * Re-renders each rules file's ctxo block in the tier the disk supports now, so it follows the skills
+ * and guard installed earlier in the run. A block from a newer ctxo is left alone (D2). A file with an
+ * unterminated start marker is passed on too, so its warning fails the attempt instead of being lost.
+ */
+async function fixAiRules(projectRoot: string): Promise<void | FixSkipped> {
+  const warnings: string[] = [];
+  let rendered = 0;
+  for (const state of readRulesStates(projectRoot)) {
+    const first = state.scan.blocks[0];
+    const renderable = first ? classifyRulesBlock(first).state !== 'newer' : state.scan.unterminated;
+    if (!renderable) continue;
+    rendered += 1;
+    const result = installRules(projectRoot, state.platformId, { tier: resolveRulesTier(projectRoot, state.platformId) });
+    if (result.warning) warnings.push(result.warning);
+  }
+  if (warnings.length > 0) throw new Error(warnings.join('; '));
+  if (rendered === 0) return { skipped: 'no ctxo rules block to re-render' };
 }
 
 function hasMissingPlugins(projectRoot: string): boolean {
