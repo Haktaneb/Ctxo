@@ -5,9 +5,17 @@ import type { ChildProcess } from 'node:child_process';
 vi.mock('node:child_process', () => ({
   spawn: vi.fn(),
 }));
+// Only the composite test below loads the adapter; discovery then finds a helper and a solution.
+const discovery = vi.hoisted(() => ({
+  detectDotnetSdk: vi.fn(),
+  findCtxoRoslynProject: vi.fn(),
+  discoverSolution: vi.fn(),
+}));
+vi.mock('../roslyn/solution-discovery.js', () => discovery);
 
 import { spawn } from 'node:child_process';
 import { runBatchIndex, RoslynKeepAlive } from '../roslyn/roslyn-process.js';
+import { CSharpCompositeAdapter } from '../composite-adapter.js';
 
 /** A child process that the test drives: it emits what `dotnet run` would. */
 class FakeProcess extends EventEmitter {
@@ -137,6 +145,38 @@ describe('runBatchIndex', () => {
     expect((vi.mocked(spawn).mock.calls[0]![2] as { timeout?: number }).timeout).toBe(5_000);
   });
 
+  it('runBatchIndex reports failure when spawn throws', async () => {
+    vi.mocked(spawn).mockImplementationOnce(() => {
+      throw new Error('spawn EINVAL');
+    });
+
+    const result = await settledWithin(runBatchIndex(HELPER_DIR, SOLUTION), 1_000);
+    expect(result).toMatchObject({ ok: false, files: [], projectGraph: null, error: 'spawn EINVAL' });
+  });
+
+  it('a failed batch logs its error text once', async () => {
+    discovery.detectDotnetSdk.mockReturnValue({ available: true, version: '8.0.404' });
+    discovery.findCtxoRoslynProject.mockReturnValue(HELPER_DIR);
+    discovery.discoverSolution.mockReturnValue(SOLUTION);
+    const composite = new CSharpCompositeAdapter();
+    await composite.initialize('/work/lending');
+
+    const proc = nextProcess();
+    const batch = composite.getRoslynDelegate()!.batchIndex();
+    proc.stdout.emit('data', Buffer.from(`${HELPER_DIR}/ctxo-roslyn.csproj : error NU1101: Unable to find package Lending.Feed.\n`));
+    proc.stderr.emit('data', Buffer.from('The build failed. Fix the build errors and run again.\n'));
+    proc.emit('close', 1);
+    await batch;
+    await composite.extractSymbols('Loans/LoanService.cs', 'public class LoanService {}');
+
+    const written = vi.mocked(process.stderr.write).mock.calls.map((call) => String(call[0])).join('');
+    expect(written.split('error NU1101: Unable to find package Lending.Feed.')).toHaveLength(2);
+    expect(written.split('The build failed.')).toHaveLength(2);
+    // The batch still says that it failed and why, in short.
+    expect(written).toContain('[ctxo:roslyn] ctxo-roslyn failed (exit code 1)');
+    expect(composite.getTier()).toBe('syntax');
+  });
+
   it('runBatchIndex reports failure when dotnet cannot be spawned', async () => {
     const proc = nextProcess();
     const pending = runBatchIndex(HELPER_DIR, SOLUTION);
@@ -176,6 +216,16 @@ describe('RoslynKeepAlive', () => {
       ['run', '--project', HELPER_DIR, '--', SOLUTION, '--keep-alive'],
       ['run', '--project', HELPER_DIR, '--', SOLUTION, '--keep-alive', '--sql-call-sites'],
     ]);
+  });
+
+  it('keep-alive start resolves false when spawn throws', async () => {
+    vi.mocked(spawn).mockImplementationOnce(() => {
+      throw new Error('spawn EINVAL');
+    });
+    const keepAlive = new RoslynKeepAlive(HELPER_DIR, SOLUTION);
+
+    expect(await settledWithin(keepAlive.start(), 1_000)).toBe(false);
+    expect(keepAlive.isAlive()).toBe(false);
   });
 
   it('keep-alive start resolves true on ready', async () => {

@@ -112,8 +112,9 @@ function failureText(buildErrors: readonly string[], stderr: string, fallback: s
 /**
  * Run ctxo-roslyn in one-shot batch mode.
  * Spawns `dotnet run`, reads JSONL from stdout, returns parsed results.
- * Never rejects: a failed run (restore or build error, timeout, missing dotnet) resolves with
- * `ok: false`, no files and the reason in `error`.
+ * Never rejects: a failed run (restore or build error, timeout, missing dotnet, a spawn that throws)
+ * resolves with `ok: false`, no files and the reason in `error`. The run logs only that it failed and
+ * how it ended; the error text goes to `error`, which the composite's fallback warning reports.
  */
 export async function runBatchIndex(
   projectDir: string,
@@ -121,11 +122,6 @@ export async function runBatchIndex(
   options: RoslynRunOptions = {},
 ): Promise<RoslynBatchResult> {
   return new Promise((resolve) => {
-    const proc = spawn('dotnet', helperArgs(projectDir, solutionPath, [], options), {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: options.timeoutMs ?? 120_000,
-    });
-
     const files: RoslynFileResult[] = [];
     let projectGraph: RoslynProjectGraph | null = null;
     let totalFiles = 0;
@@ -138,13 +134,24 @@ export async function runBatchIndex(
     const fail = (reason: string): void => {
       if (settled) return;
       settled = true;
-      const error = failureText(buildErrors, stderr, reason);
-      log.error(`ctxo-roslyn failed (${reason}): ${error}`);
-      resolve({ files: [], projectGraph: null, totalFiles: 0, elapsed: '', ok: false, error });
+      log.error(`ctxo-roslyn failed (${reason})`);
+      resolve({ files: [], projectGraph: null, totalFiles: 0, elapsed: '', ok: false, error: failureText(buildErrors, stderr, reason) });
     };
 
+    let proc: ChildProcess;
+    try {
+      proc = spawn('dotnet', helperArgs(projectDir, solutionPath, [], options), {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: options.timeoutMs ?? 120_000,
+      });
+    } catch (err) {
+      stderr = (err as Error).message;
+      fail('spawn error');
+      return;
+    }
+
     let buffer = '';
-    proc.stdout.on('data', (chunk: Buffer) => {
+    proc.stdout!.on('data', (chunk: Buffer) => {
       buffer += chunk.toString();
       let newlineIdx: number;
       while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
@@ -187,7 +194,7 @@ export async function runBatchIndex(
       }
     });
 
-    proc.stderr.on('data', (chunk: Buffer) => {
+    proc.stderr!.on('data', (chunk: Buffer) => {
       stderr += chunk.toString();
     });
 
@@ -203,9 +210,9 @@ export async function runBatchIndex(
     });
 
     proc.on('error', (err) => {
-      // The spawn error is the reason; the output, if any, comes first.
+      // The spawn error ends the error text; the output, if any, comes first.
       stderr += `${stderr ? '\n' : ''}${err.message}`;
-      fail(`spawn error: ${err.message}`);
+      fail('spawn error');
     });
   });
 }
@@ -232,8 +239,9 @@ export class RoslynKeepAlive {
   }
 
   /**
-   * Resolves true once the helper reports `ready`, and false when it fails to spawn or exits
-   * before that (a restore or build failure), so `ctxo watch` never hangs at start.
+   * Resolves true once the helper reports `ready`, and false when it fails to spawn (an error event
+   * or a spawn that throws) or exits before that (a restore or build failure), so `ctxo watch` never
+   * hangs at start. Never rejects.
    */
   async start(): Promise<boolean> {
     return new Promise((resolve) => {
@@ -245,9 +253,16 @@ export class RoslynKeepAlive {
       };
 
       const args = helperArgs(this.projectDir, this.solutionPath, ['--keep-alive'], { sqlCallSites: this.sqlCallSites });
-      this.proc = spawn('dotnet', args, {
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
+      try {
+        this.proc = spawn('dotnet', args, {
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+      } catch (err) {
+        log.error(`Roslyn keep-alive error: ${(err as Error).message}`);
+        this.proc = null;
+        settle(false);
+        return;
+      }
 
       this.proc.stdout!.on('data', (chunk: Buffer) => {
         this.buffer += chunk.toString();

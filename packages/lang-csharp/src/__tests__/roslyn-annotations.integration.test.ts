@@ -104,6 +104,13 @@ describe.skipIf(!HAS_DOTNET)('Roslyn attribute annotations', () => {
     ]);
   });
 
+  it('HasASourceTypeKey drops a source argument named type, which is reserved for the resolved class', () => {
+    expect(method('HasASourceTypeKey').annotations).toEqual([
+      { name: 'Shelf', named: { Level: '2', type: 'CsharpV2Sample.Tests.ShelfAttribute' } },
+      { name: 'Unshelved', named: { Level: '3' } },
+    ]);
+  });
+
   it('the tree-sitter tier gives the same literal-only annotations without named.type', async () => {
     // Rows whose arguments are all literals must match across tiers once the
     // Roslyn-only named.type is removed. HasALongArg is left out: it passes a
@@ -128,6 +135,7 @@ describe.skipIf(!HAS_DOTNET)('Roslyn attribute annotations', () => {
       'HasTwentyFiveAttributes',
       'HasElevenNamedArgs',
       'HasQualifiedAndGenericNames',
+      'HasASourceTypeKey',
     ];
     for (const row of rows) {
       const syntax = syntaxSymbols.find(s => s.kind === 'method' && methodName(s) === row);

@@ -10,7 +10,8 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 /// attribute uses its semantic data when its class resolves, otherwise the
 /// syntax. Caps: 20 attributes per symbol, 10 positional and 10 named entries
 /// per attribute, 200 characters per value. <c>named.type</c> is reserved for
-/// the resolved attribute class and comes on top of the 10 named entries.
+/// the resolved attribute class and comes on top of the 10 named entries; a
+/// source argument named <c>type</c> is dropped, as in the tree-sitter tier.
 /// </summary>
 static class AttributeAnnotations
 {

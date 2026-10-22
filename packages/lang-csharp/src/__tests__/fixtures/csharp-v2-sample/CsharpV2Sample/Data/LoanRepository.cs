@@ -81,6 +81,70 @@ public sealed class LoanRepository : ILoanRepository
         return loans;
     }
 
+    // A definition held in a variable: the constructor is still the call site.
+    public IEnumerable<Loan> DefinitionInVariable(int memberId)
+    {
+        var definition = new CommandDefinition("SELECT * FROM dbo.Members WHERE Id = @memberId", new { memberId });
+        return _db.Query<Loan>(definition);
+    }
+
+    // commandType passed by position (commandText, parameters, transaction, commandTimeout, commandType).
+    public int PositionalCommandType(int id) =>
+        _db.Execute(new CommandDefinition("dbo.usp_ExtendLoan", new { id }, null, null, CommandType.StoredProcedure));
+
+    // EF Core formats raw SQL: {0} and {1,8:N2} become parameters, and the escaped {{fn ...}} becomes
+    // the ODBC escape {fn ...}.
+    public int WaiveFines(int loanId) =>
+        _context.Database.ExecuteSqlRaw(
+            "UPDATE dbo.Fines SET Note = {{fn UCASE(Note)}} WHERE LoanId = {0} AND Amount > {1,8:N2}", loanId, 0m);
+
+    // Only the EF Core rows rewrite format items: for Dapper, {0} is not T-SQL.
+    public IEnumerable<Loan> FormatItemInDapper(int loanId) =>
+        _db.Query<Loan>("SELECT * FROM dbo.Fines WHERE LoanId = {0}");
+
+    // One command runs a query, then a procedure: CommandType is set later in the same body.
+    public void ReusedCommand(int loanId)
+    {
+        using var cmd = _db.CreateCommand();
+        cmd.CommandText = "SELECT Id FROM dbo.Fines WHERE LoanId = @loanId";
+        cmd.ExecuteNonQuery();
+        cmd.CommandType = CommandType.StoredProcedure;
+        cmd.CommandText = "dbo.usp_WaiveFines";
+        cmd.ExecuteNonQuery();
+    }
+
+    // CommandType set in the initializer of the command that takes the text.
+    public void PlaceHold(int loanId)
+    {
+        var cmd = new SqlCommand("dbo.usp_PlaceHold", _connection) { CommandType = CommandType.StoredProcedure };
+        cmd.ExecuteNonQuery();
+    }
+
+    // CommandType set in the initializer, CommandText assigned to the local later.
+    public void CancelHold(int holdId)
+    {
+        var cmd = new SqlCommand { CommandType = CommandType.StoredProcedure };
+        cmd.CommandText = "dbo.usp_CancelHold";
+        cmd.ExecuteNonQuery();
+    }
+
+    // CommandType is tracked on locals and initializers only: a parameter's text reads as statements.
+    public void ExpireHolds(SqlCommand command)
+    {
+        command.CommandType = CommandType.StoredProcedure;
+        command.CommandText = "dbo.usp_ExpireHolds";
+        command.ExecuteNonQuery();
+    }
+
+    // `+=` builds the text at runtime: the first text counts, the appended one is non-constant.
+    public void AppendedText(int loanId)
+    {
+        using var cmd = _db.CreateCommand();
+        cmd.CommandText = "SELECT * FROM dbo.Holds";
+        cmd.CommandText += " WHERE LoanId = @loanId";
+        cmd.ExecuteNonQuery();
+    }
+
     public IEnumerable<Loan> Dynamic(string table) => _db.Query<Loan>("SELECT * FROM " + table);
 
     public IEnumerable<Loan> StaticReadonly() => _db.Query<Loan>(StaticSql);

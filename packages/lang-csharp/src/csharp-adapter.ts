@@ -317,7 +317,8 @@ export class CSharpAdapter extends TreeSitterAdapter {
 /**
  * Annotations from the `attribute_list` children of a declaration, in source
  * order. Literal arguments only; no `named.type` (the syntax tier never
- * resolves types). Same caps as the Roslyn tier.
+ * resolves types), and a source argument named `type` is dropped because the
+ * key is reserved, as in the Roslyn tier. Same caps as the Roslyn tier.
  */
 function attributeAnnotations(declaration: SyntaxNode): SymbolAnnotation[] | undefined {
   const annotations: SymbolAnnotation[] = [];

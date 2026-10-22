@@ -350,6 +350,17 @@ describe('CSharpAdapter - attribute annotations', () => {
     expect(ctor?.annotations?.map(a => a.name)).toEqual(Array.from({ length: 20 }, (_, i) => `A${i}`));
   });
 
+  it('tree-sitter drops a source argument named type, which is reserved for the resolved class', async () => {
+    const source = 'public class Hold { [Shelf(type = "reference", Level = 2)] [Unshelved(type: "loan", Level = 3)] [Tag(@type: "x")] public void Place() {} }';
+    const symbols = await adapter.extractSymbols('Holds/Hold.cs', source);
+
+    expect(symbols.find(s => s.name === 'Hold.Place(0)')?.annotations).toEqual([
+      { name: 'Shelf', named: { Level: '2' } },
+      { name: 'Unshelved', named: { Level: '3' } },
+      { name: 'Tag' },
+    ]);
+  });
+
   it('tree-sitter keeps at most 10 named entries', async () => {
     const eleven = Array.from({ length: 11 }, (_, i) => `K${i + 1} = "${i + 1}"`).join(', ');
     const source = `public class Hold { [Keys(${eleven})] public void Place() {} }`;

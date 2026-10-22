@@ -42,11 +42,12 @@ export type SymbolId = string;
 /**
  * A host-language attribute or decorator attached to a symbol (protocol v2).
  * `name` is the attribute name as written, without namespace and without an
- * `Attribute` suffix. `named.type` carries the fully qualified type name when
- * known. Plugins cap host-language attributes at 20 per symbol, 10 positional
- * and 10 named entries per annotation, and 200 characters per value; longer
- * values are truncated. `args` and `named` are omitted when empty. Core checks
- * shape only, not caps.
+ * `Attribute` suffix. `named.type` is reserved: it carries the fully qualified
+ * type name when known, and a source argument named `type` is dropped. Plugins
+ * cap host-language attributes at 20 per symbol, 10 positional entries and at
+ * most 10 named entries plus the reserved `type` per annotation, and 200
+ * characters per value; longer values are truncated. `args` and `named` are
+ * omitted when empty. Core checks shape only, not caps.
  */
 export interface SymbolAnnotation {
   readonly name: string;

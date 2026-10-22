@@ -21,8 +21,8 @@ sealed class SqlStats
 /// <c>reads</c> and <c>writes</c> to <c>&lt;schema.name&gt;::table</c> and
 /// <c>executes</c> to <c>&lt;schema.name&gt;::procedure</c>, the 2-part ids of
 /// the TypeScript SQL plugin. Only <see cref="IOperation.ConstantValue"/>
-/// counts as text, so interpolation with holes, <c>static readonly</c> fields
-/// and concatenation with non-constants are non-constant.
+/// counts as text, so interpolation with non-constant holes, <c>static
+/// readonly</c> fields and concatenation with non-constants are non-constant.
 /// </summary>
 static class SqlCallSites
 {
@@ -35,9 +35,12 @@ static class SqlCallSites
         @"\{\{|\}\}|\{([0-9]+) *(?:,[^{}]*)?(?::[^{}]*)?\}",
         RegexOptions.CultureInvariant);
 
-    public static void Collect(IOperation body, Action<string, string> addEdge, SqlStats stats)
+    /// <summary>
+    /// Adds the data edges of one method or constructor body, given as every
+    /// operation of the body in pre-order (the walk the code edges already made).
+    /// </summary>
+    public static void Collect(IReadOnlyList<IOperation> operations, Action<string, string> addEdge, SqlStats stats)
     {
-        var operations = Enumerate(body).ToList();
         var procedures = new ProcedureCommands(operations);
 
         foreach (var op in operations)
@@ -95,11 +98,13 @@ static class SqlCallSites
             if (SqlText.CanonicalName(text) is { } table) addEdge(table + "::table", Writes);
             return;
         }
-        if (procedure)
+        if (procedure && SqlText.CanonicalName(text) is { } procedureName)
         {
-            if (SqlText.CanonicalName(text) is { } name) addEdge(name + "::procedure", Executes);
+            addEdge(procedureName + "::procedure", Executes);
             return;
         }
+        // A text that is no procedure name is read as statements: CommandType counts wherever the
+        // body sets it, so a reused command can run a query before it runs a procedure.
 
         var sql = form == SqlTextForm.FormatStatements ? FormatItemsToParameters(text) : text;
         var accesses = SqlText.Extract(sql);
@@ -151,19 +156,6 @@ static class SqlCallSites
             "}}" => "}",
             _ => "@p" + match.Groups[1].Value,
         });
-
-    static IEnumerable<IOperation> Enumerate(IOperation root)
-    {
-        var stack = new Stack<IOperation>();
-        stack.Push(root);
-        while (stack.Count > 0)
-        {
-            var current = stack.Pop();
-            yield return current;
-            foreach (var child in current.ChildOperations.Reverse())
-                stack.Push(child);
-        }
-    }
 
     /// <summary>
     /// The commands of one body whose <c>CommandType</c> is set to

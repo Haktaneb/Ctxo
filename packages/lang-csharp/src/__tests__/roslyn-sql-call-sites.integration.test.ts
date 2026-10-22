@@ -32,6 +32,15 @@ const CALL_SITE_ROWS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['ProcByDefinition', ['executes dbo.usp_renewloan::procedure']],
   ['BulkLoad', ['writes dbo.loanstaging::table']],
   ['RawEf', ['reads dbo.loans::table', 'writes dbo.holds::table']],
+  ['DefinitionInVariable', ['reads dbo.members::table']],
+  ['PositionalCommandType', ['executes dbo.usp_extendloan::procedure']],
+  ['WaiveFines', ['writes dbo.fines::table']],
+  ['FormatItemInDapper', []],
+  ['ReusedCommand', ['executes dbo.usp_waivefines::procedure', 'reads dbo.fines::table']],
+  ['PlaceHold', ['executes dbo.usp_placehold::procedure']],
+  ['CancelHold', ['executes dbo.usp_cancelhold::procedure']],
+  ['ExpireHolds', []],
+  ['AppendedText', ['reads dbo.holds::table']],
   ['Dynamic', []],
   ['StaticReadonly', []],
   ['Broken', []],
@@ -39,22 +48,29 @@ const CALL_SITE_ROWS: ReadonlyArray<readonly [string, readonly string[]]> = [
 
 /**
  * The calls and implements edges of LoanRepository.cs, with or without SQL call sites.
- * Archive calls framework members only, which give no edges.
+ * Archive, ReusedCommand and AppendedText call framework members only, which give no edges.
  */
 const CODE_EDGES: readonly string[] = [
   `calls ${REPOSITORY}.Broken::method -> ${DAPPER}.Execute::method`,
   `calls ${REPOSITORY}.ByDefinition::method -> ${DAPPER}.Query::method`,
   `calls ${REPOSITORY}.BulkLoad::method -> ${SQL_CLIENT}.SqlBulkCopy.WriteToServer::method`,
+  `calls ${REPOSITORY}.CancelHold::method -> ${SQL_CLIENT}.SqlCommand.ExecuteNonQuery::method`,
   `calls ${REPOSITORY}.Close::method -> ${SQL_CLIENT}.SqlCommand.ExecuteNonQuery::method`,
+  `calls ${REPOSITORY}.DefinitionInVariable::method -> ${DAPPER}.Query::method`,
   `calls ${REPOSITORY}.Dynamic::method -> ${DAPPER}.Query::method`,
+  `calls ${REPOSITORY}.ExpireHolds::method -> ${SQL_CLIENT}.SqlCommand.ExecuteNonQuery::method`,
+  `calls ${REPOSITORY}.FormatItemInDapper::method -> ${DAPPER}.Query::method`,
   `calls ${REPOSITORY}.GetActive::method -> ${DAPPER}.Query::method`,
   `calls ${REPOSITORY}.GetByIds::method -> ${DAPPER}.Query::method`,
   `calls ${REPOSITORY}.Notify::method -> ${DAPPER}.Execute::method`,
+  `calls ${REPOSITORY}.PlaceHold::method -> ${SQL_CLIENT}.SqlCommand.ExecuteNonQuery::method`,
+  `calls ${REPOSITORY}.PositionalCommandType::method -> ${DAPPER}.Execute::method`,
   `calls ${REPOSITORY}.ProcByDefinition::method -> ${DAPPER}.Execute::method`,
   `calls ${REPOSITORY}.RawEf::method -> ${EF_CORE}.DbContext.Set::method`,
   `calls ${REPOSITORY}.RawEf::method -> ${EF_CORE}.RelationalDatabaseFacadeExtensions.ExecuteSqlRaw::method`,
   `calls ${REPOSITORY}.RawEf::method -> ${EF_CORE}.RelationalQueryableExtensions.FromSqlRaw::method`,
   `calls ${REPOSITORY}.StaticReadonly::method -> ${DAPPER}.Query::method`,
+  `calls ${REPOSITORY}.WaiveFines::method -> ${EF_CORE}.RelationalDatabaseFacadeExtensions.ExecuteSqlRaw::method`,
   `implements ${REPOSITORY}::class -> ${REPOSITORY_FILE}::Lending.Data.ILoanRepository::interface`,
 ];
 
@@ -101,9 +117,15 @@ describe.skipIf(!HAS_DOTNET)('Roslyn SQL call sites with the capability', () => 
     expect(dataEdgesOf(edges, method)).toEqual([...expected].sort());
   });
 
-  it('the batch reports 11 constant, 2 non-constant and 1 unparsable SQL texts', () => {
+  it('every data edge of the file comes from a listed method', () => {
+    const all = edges.filter(e => DATA_EDGE_KINDS.has(e.kind)).map(e => `${e.from} ${e.kind} ${e.to}`).sort();
+    const listed = CALL_SITE_ROWS.flatMap(([method, expected]) => expected.map(edge => `${REPOSITORY}.${method}::method ${edge}`)).sort();
+    expect(all).toEqual(listed);
+  });
+
+  it('the batch reports 21 constant, 3 non-constant and 2 unparsable SQL texts', () => {
     expect(batch?.ok).toBe(true);
-    expect(batch?.sql).toEqual({ constant: 11, nonConstant: 2, unparsable: 1 });
+    expect(batch?.sql).toEqual({ constant: 21, nonConstant: 3, unparsable: 2 });
   });
 
   it('existing calls and implements edges are unchanged', () => {

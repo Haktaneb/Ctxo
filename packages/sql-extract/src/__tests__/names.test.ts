@@ -11,7 +11,7 @@ describe('canonicalSqlName', () => {
   it('canonicalizes bracketed, bare and quoted names', () => {
     expect(canonicalSqlName('[dbo].[Loan Items]')).toBe('dbo.loan items');
     expect(canonicalSqlName('Loans')).toBe('dbo.loans');
-    expect(canonicalSqlName('"Sales"."Orders"')).toBe('sales.orders');
+    expect(canonicalSqlName('"Circulation"."Holds"')).toBe('circulation.holds');
   });
 
   it('skips 3- and 4-part names, temp tables, table variables and system schemas', () => {

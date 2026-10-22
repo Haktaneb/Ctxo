@@ -21,7 +21,8 @@ static class SqlText
 
     /// <summary>
     /// The accesses of a statement or a script. Text the parser rejects gives
-    /// no accesses and its error count; this method never throws.
+    /// no accesses and its error count. An exception from the parser counts as
+    /// one error and is written to stderr on one line.
     /// </summary>
     public static Accesses Extract(string sql)
     {
@@ -29,14 +30,16 @@ static class SqlText
         var writes = new SortedSet<string>(StringComparer.Ordinal);
         var executes = new SortedSet<string>(StringComparer.Ordinal);
 
+        var text = RewriteDapperLists(WithoutByteOrderMark(sql));
         TSqlFragment? fragment;
         IList<ParseError> errors;
         try
         {
-            fragment = NewParser().Parse(new StringReader(RewriteDapperLists(WithoutByteOrderMark(sql))), out errors);
+            fragment = NewParser().Parse(new StringReader(text), out errors);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            Console.Error.WriteLine($"[ctxo-roslyn] ScriptDom failed on SQL text: {OneLine($"{ex.GetType().Name}: {ex.Message}")}");
             return new Accesses(reads, writes, executes, 1);
         }
         if (errors.Count > 0 || fragment == null)
@@ -89,6 +92,10 @@ static class SqlText
         foreach (var truncated in nodes.TruncatedTables)
         {
             if (CanonicalName(truncated) is { } name) writes.Add(name);
+        }
+        foreach (var bulkTarget in nodes.BulkInsertTargets)
+        {
+            if (CanonicalName(bulkTarget) is { } name) writes.Add(name);
         }
 
         foreach (var table in nodes.Tables)
@@ -286,6 +293,9 @@ static class SqlText
     static string WithoutByteOrderMark(string text) =>
         text.Length > 0 && text[0] == ByteOrderMark ? text[1..] : text;
 
+    /// <summary>The text with every line break turned into a space.</summary>
+    static string OneLine(string text) => text.Replace("\r\n", " ", StringComparison.Ordinal).Replace('\r', ' ').Replace('\n', ' ');
+
     /// <summary>The single part of a one-part name, else null.</summary>
     static string? OnePart(NamedTableReference table) =>
         table.SchemaObject?.Identifiers is { Count: 1 } ids ? ids[0]?.Value : null;
@@ -339,9 +349,10 @@ static class SqlText
     }
 
     /// <summary>
-    /// Dapper expands a list parameter written <c>IN @ids</c>, which T-SQL
-    /// rejects, so <c>IN @p</c> becomes <c>IN (@p)</c> before parsing. Only
-    /// code is rewritten: strings, comments and delimited names are kept.
+    /// Dapper expands a list parameter written <c>IN @ids</c> or <c>IN@ids</c>,
+    /// which T-SQL rejects, so <c>IN @p</c> becomes <c>IN (@p)</c> and
+    /// <c>IN@p</c> becomes <c>IN(@p)</c> before parsing. Only code is
+    /// rewritten: strings, comments and delimited names are kept.
     /// </summary>
     static string RewriteDapperLists(string sql)
     {
@@ -361,9 +372,13 @@ static class SqlText
 
             var start = i;
             while (i < sql.Length && IsWordChar(sql[i])) i++;
-            if (i - start != 2 || (sql[start] | 0x20) != 'i' || (sql[start + 1] | 0x20) != 'n') continue;
+            if (i - start < 2 || (sql[start] | 0x20) != 'i' || (sql[start + 1] | 0x20) != 'n') continue;
 
-            var variable = SkipTrivia(sql, i);
+            // `@` is a word character, so `IN@p` reads as one word that starts with IN.
+            int variable;
+            if (i - start == 2) variable = SkipTrivia(sql, i);
+            else if (sql[start + 2] == '@') variable = start + 2;
+            else continue;
             if (variable + 1 >= sql.Length || sql[variable] != '@' || sql[variable + 1] == '@' || !IsWordChar(sql[variable + 1]))
                 continue;
             var end = variable + 1;
@@ -432,12 +447,14 @@ static class SqlText
         public readonly List<DataModificationSpecification> Modifications = [];
         public readonly List<SchemaObjectName> SelectIntoTargets = [];
         public readonly List<SchemaObjectName> TruncatedTables = [];
+        public readonly List<SchemaObjectName> BulkInsertTargets = [];
         public readonly List<ExecuteSpecification> Executes = [];
         public readonly List<StatementWithCtesAndXmlNamespaces> CteStatements = [];
 
         public override void Visit(NamedTableReference node) => Tables.Add(node);
         public override void Visit(DataModificationSpecification node) => Modifications.Add(node);
         public override void Visit(TruncateTableStatement node) { if (node.TableName != null) TruncatedTables.Add(node.TableName); }
+        public override void Visit(BulkInsertStatement node) { if (node.To != null) BulkInsertTargets.Add(node.To); }
         public override void Visit(ExecuteSpecification node) => Executes.Add(node);
 
         public override void Visit(SelectStatement node)

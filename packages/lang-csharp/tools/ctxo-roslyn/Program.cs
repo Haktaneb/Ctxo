@@ -400,7 +400,9 @@ List<CtxoEdge> ExtractEdges(
         var operation = model.GetOperation(body);
         if (operation == null) continue;
 
-        foreach (var op in EnumerateOperations(operation))
+        // One walk of the body serves the code edges and the SQL call sites.
+        var operations = EnumerateOperations(operation).ToList();
+        foreach (var op in operations)
         {
             switch (op)
             {
@@ -451,7 +453,7 @@ List<CtxoEdge> ExtractEdges(
         {
             try
             {
-                SqlCallSites.Collect(operation, (toId, kind) => AddEdge(edges, seen, fromId, toId, kind), sqlStats);
+                SqlCallSites.Collect(operations, (toId, kind) => AddEdge(edges, seen, fromId, toId, kind), sqlStats);
             }
             catch (Exception ex)
             {

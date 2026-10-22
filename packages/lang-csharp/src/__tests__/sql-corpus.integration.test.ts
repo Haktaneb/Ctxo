@@ -91,8 +91,11 @@ describe.skipIf(!HAS_DOTNET)('ScriptDom side of the SQL conformance corpus', () 
       // JOIN ends in IN and a table variable follows it: only the IN predicates are rewritten.
       'SELECT * FROM dbo.Loans AS l JOIN @Ids AS i ON i.Id = l.Id',
       'WHERE l.MemberId NOT IN @members AND l.BookId in @books',
-      // A delimited name is not code, so its text is kept as written.
+      // A delimited name is not code, so its text is kept as written, with or without the space.
       'SELECT * FROM [Holds IN @branch]',
+      'SELECT * FROM [Fines IN@branch]',
+      // A word that only starts with IN is not the keyword.
+      'SELECT * FROM dbo.Members AS m WHERE m.Id = 1 OR INDEXED@x = 1',
     ].join('\n'));
     // ScriptDom accepts a few reserved words (DISK, DUMP, LOAD, PRECISION, SECURITYAUDIT, WITHIN)
     // as unquoted names; sql-extract never starts a name with a reserved word.
@@ -144,7 +147,7 @@ describe.skipIf(!HAS_DOTNET)('ScriptDom side of the SQL conformance corpus', () 
   it('Dapper IN @p is rewritten only after the IN keyword and only outside delimited names', () => {
     expect(accessesOf(lines.get(extra.dapper()))).toEqual({
       errors: 0,
-      reads: ['dbo.holds in @branch', 'dbo.loans'],
+      reads: ['dbo.fines in@branch', 'dbo.holds in @branch', 'dbo.loans', 'dbo.members'],
       writes: [],
       executes: [],
     });
@@ -177,7 +180,7 @@ describe.skipIf(!HAS_DOTNET)('ScriptDom side of the SQL conformance corpus', () 
 const NAME_CASES: Array<[string, string | null]> = [
   ['[dbo].[Loan Items]', 'dbo.loan items'],
   ['Loans', 'dbo.loans'],
-  ['"Sales"."Orders"', 'sales.orders'],
+  ['"Circulation"."Holds"', 'circulation.holds'],
   ['[dbo].[usp_CloseLoan]', 'dbo.usp_closeloan'],
   ['usp_RenewLoan', 'dbo.usp_renewloan'],
   ['[dbo].[usp Close Loan]', 'dbo.usp close loan'],

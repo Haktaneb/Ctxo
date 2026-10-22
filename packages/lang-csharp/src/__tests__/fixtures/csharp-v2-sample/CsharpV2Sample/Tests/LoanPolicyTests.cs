@@ -41,6 +41,13 @@ public sealed class FooAttribute<T> : System.Attribute
 {
 }
 
+// A property spelled `type`, which annotations reserve for the resolved attribute class.
+public sealed class ShelfAttribute : System.Attribute
+{
+    public string? type { get; set; }
+    public int Level { get; set; }
+}
+
 public class LoanPolicyTests
 {
     // 50 characters; LongText repeats it five times (250 characters).
@@ -85,6 +92,12 @@ public class LoanPolicyTests
 
     [System.ObsoleteAttribute, global::X.YAttribute, Foo<int>]
     public void HasQualifiedAndGenericNames()
+    {
+    }
+
+    [Shelf(type = "reference", Level = 2)]
+    [Unshelved(type: "loan", Level = 3)]
+    public void HasASourceTypeKey()
     {
     }
 }
