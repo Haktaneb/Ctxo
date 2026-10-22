@@ -95,27 +95,37 @@ function pickEsmEntry(exportsField: unknown): string | undefined {
 
 const cliFallbackRequire = createRequire(import.meta.url);
 
+/**
+ * Absolute path of `${specifier}/package.json`, found the way the plugin loader
+ * finds a plugin: through `projectRequire` (the consumer project) first, then
+ * from the CLI's own location. The CLI fallback matters for a global install
+ * run in a repository without a package.json, and for dev/test flows (where the
+ * CLI source lives inside the plugin's monorepo) that resolve without a
+ * populated node_modules. Throws the project lookup's error when neither finds it.
+ *
+ * Anchored on `${specifier}/package.json` because `require.resolve(spec)` fails
+ * for ESM-only packages whose "exports" map has no "require" condition.
+ */
+export function resolvePluginPackageJson(specifier: string, projectRequire: NodeJS.Require): string {
+  try {
+    return projectRequire.resolve(`${specifier}/package.json`);
+  } catch (primary) {
+    try {
+      return cliFallbackRequire.resolve(`${specifier}/package.json`);
+    } catch {
+      throw primary;
+    }
+  }
+}
+
 function resolvePluginEntryUrl(
   specifier: string,
   manifestRequire: NodeJS.Require,
 ): string {
   // Resolve bare specifiers against the consumer project's node_modules first,
   // not the CLI bundle location. Matters when `ctxo` runs via npx, where plain
-  // import() would look in ~/.npm/_npx/<hash>/node_modules. We anchor via
-  // `${spec}/package.json` because `require.resolve(spec)` fails for ESM-only
-  // packages whose "exports" map has no "require" condition. Fall back to the
-  // CLI's own location so dev/test flows (where the CLI source lives inside
-  // the plugin's monorepo) still resolve without a populated node_modules.
-  let pkgJsonPath: string;
-  try {
-    pkgJsonPath = manifestRequire.resolve(`${specifier}/package.json`);
-  } catch (primary) {
-    try {
-      pkgJsonPath = cliFallbackRequire.resolve(`${specifier}/package.json`);
-    } catch {
-      throw primary;
-    }
-  }
+  // import() would look in ~/.npm/_npx/<hash>/node_modules.
+  const pkgJsonPath = resolvePluginPackageJson(specifier, manifestRequire);
   const pkgDir = dirname(pkgJsonPath);
   const pkgJson = JSON.parse(readFileSync(pkgJsonPath, 'utf-8')) as {
     main?: string;

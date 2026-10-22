@@ -13,14 +13,20 @@ vi.mock('node:child_process', async (importOriginal) => ({
   spawnSync,
 }));
 
-// Package resolution looks only in the project's own node_modules, never in the folders above the temp
-// directory, so the outcome cannot depend on a @ctxo/lang-csharp installed somewhere on this machine.
+// The node_modules folder next to the CLI, or null when the CLI has no plugins around it.
+const cli = vi.hoisted(() => ({ nodeModules: null as string | null }));
+
+// Package resolution looks only in two places, never in the folders above the temp directory, so the
+// outcome cannot depend on a @ctxo/lang-csharp installed somewhere on this machine: the project's own
+// node_modules (a lookup anchored on its package.json) and `cli.nodeModules` (any other anchor, which
+// is the plugin loader's own module URL, i.e. the CLI's location).
 vi.mock('node:module', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:module')>()),
   createRequire: (from: string) => ({
     resolve: (id: string): string => {
-      const candidate = join(dirname(from), 'node_modules', id);
-      if (existsSync(candidate)) return candidate;
+      const nodeModules = from.endsWith('package.json') ? join(dirname(from), 'node_modules') : cli.nodeModules;
+      const candidate = nodeModules === null ? null : join(nodeModules, id);
+      if (candidate !== null && existsSync(candidate)) return candidate;
       throw Object.assign(new Error(`Cannot find module '${id}'`), { code: 'MODULE_NOT_FOUND' });
     },
   }),
@@ -46,19 +52,32 @@ function tempDir(prefix: string): string {
   return dir;
 }
 
+/** Installs @ctxo/lang-csharp and its helper project into `nodeModules`; returns the helper project path. */
+function installPlugin(nodeModules: string): string {
+  const pkgDir = join(nodeModules, '@ctxo', 'lang-csharp');
+  const helper = join(pkgDir, 'tools', 'ctxo-roslyn', 'ctxo-roslyn.csproj');
+  mkdirSync(dirname(helper), { recursive: true });
+  writeFileSync(join(pkgDir, 'package.json'), '{"name":"@ctxo/lang-csharp","version":"0.0.0"}');
+  writeFileSync(helper, '<Project />');
+  return helper;
+}
+
 /** A project with C# sources; with `plugin`, it also has @ctxo/lang-csharp and its helper project. */
 function lendingProject(plugin: boolean): { root: string; helper: string } {
   const root = tempDir('ctxo-cs-run-');
   writeFileSync(join(root, 'package.json'), '{"name":"lending-app"}');
   writeFileSync(join(root, 'Lending.csproj'), '<Project />');
-  const pkgDir = join(root, 'node_modules', '@ctxo', 'lang-csharp');
-  const helper = join(pkgDir, 'tools', 'ctxo-roslyn', 'ctxo-roslyn.csproj');
-  if (plugin) {
-    mkdirSync(dirname(helper), { recursive: true });
-    writeFileSync(join(pkgDir, 'package.json'), '{"name":"@ctxo/lang-csharp","version":"0.0.0"}');
-    writeFileSync(helper, '<Project />');
-  }
+  const nodeModules = join(root, 'node_modules');
+  const helper = join(nodeModules, '@ctxo', 'lang-csharp', 'tools', 'ctxo-roslyn', 'ctxo-roslyn.csproj');
+  if (plugin) installPlugin(nodeModules);
   return { root, helper };
+}
+
+/** A node_modules folder next to the CLI, holding @ctxo/lang-csharp; returns the helper project path. */
+function cliPlugin(): string {
+  const nodeModules = join(tempDir('ctxo-cs-cli-'), 'node_modules');
+  cli.nodeModules = nodeModules;
+  return installPlugin(nodeModules);
 }
 
 const run = (root: string) => new CSharpTierCheck().run({ projectRoot: root, ctxoRoot: join(root, '.ctxo') });
@@ -66,6 +85,7 @@ const run = (root: string) => new CSharpTierCheck().run({ projectRoot: root, ctx
 beforeEach(() => {
   spawnSync.mockReset();
   resetDotnetSdkCacheForTests();
+  cli.nodeModules = null;
 });
 
 afterEach(() => {
@@ -75,6 +95,11 @@ afterEach(() => {
 describe('resolveHelperProject (hermetic resolution)', () => {
   it('returns null when @ctxo/lang-csharp does not resolve from the project', () => {
     expect(resolveHelperProject(lendingProject(false).root)).toBeNull();
+  });
+
+  it('falls back to the CLI location when the project does not resolve it', () => {
+    const cliHelper = cliPlugin();
+    expect(resolveHelperProject(lendingProject(false).root)).toBe(cliHelper);
   });
 });
 
@@ -113,6 +138,28 @@ describe('CSharpTierCheck.run', () => {
     const [command, args, options] = restoreCalls()[0] as [string, string[], { timeout: number }];
     expect([command, ...args]).toEqual(['dotnet', 'restore', helper, '--nologo', '-v', 'q']);
     expect(options.timeout).toBe(120_000);
+  });
+
+  it('csharp_tier finds lang-csharp next to the CLI when the project has no package.json', async () => {
+    dotnet('8.0.404');
+    const cliHelper = cliPlugin();
+    const root = tempDir('ctxo-cs-run-bare-');
+    writeFileSync(join(root, 'Lending.csproj'), '<Project />');
+    expect(existsSync(join(root, 'package.json'))).toBe(false);
+    const r = await run(root);
+    expect(r).toEqual({ id: 'csharp_tier', title: 'C# analysis tier', status: 'pass', message: 'full tier (.NET SDK 8.0.404, Roslyn helper restores)' });
+    expect(restoreCalls()).toHaveLength(1);
+    expect((restoreCalls()[0] as [string, string[]])[1][1]).toBe(cliHelper);
+  });
+
+  it("csharp_tier prefers the project's lang-csharp", async () => {
+    dotnet('8.0.404');
+    cliPlugin();
+    const { root, helper } = lendingProject(true);
+    const r = await run(root);
+    expect(r.message).toBe('full tier (.NET SDK 8.0.404, Roslyn helper restores)');
+    expect(restoreCalls()).toHaveLength(1);
+    expect((restoreCalls()[0] as [string, string[]])[1][1]).toBe(helper);
   });
 
   it('reports a restore that runs past the timeout as timed out', async () => {

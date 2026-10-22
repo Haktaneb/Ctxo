@@ -4,6 +4,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import type { IHealthCheck, CheckContext, CheckResult } from '../../../core/diagnostics/types.js';
 import { detectDotnetSdkVersion, parseDotnetSdkMajor } from '../../../core/detection/detect-dotnet-sdk.js';
+import { resolvePluginPackageJson } from '../../language/plugin-discovery.js';
 import { findSourceFile } from './java-tier-check.js';
 
 /** Restoring the helper can download the Roslyn and ScriptDom packages on a cold cache. */
@@ -118,13 +119,14 @@ export function restoreFailureMessage(r: {
 }
 
 /**
- * The ctxo-roslyn.csproj of the @ctxo/lang-csharp the project resolves, or null.
- * Resolved from the project, not from the CLI, which may be installed globally.
+ * The ctxo-roslyn.csproj of the @ctxo/lang-csharp the plugin loader would load, or null.
+ * Resolved the way the loader resolves a plugin: from the project first, then from the
+ * CLI's own location (a global install in a repository without a package.json, a dev build).
  */
 export function resolveHelperProject(projectRoot: string): string | null {
   try {
     const requireFromProject = createRequire(join(projectRoot, 'package.json'));
-    const pkgJson = requireFromProject.resolve('@ctxo/lang-csharp/package.json');
+    const pkgJson = resolvePluginPackageJson('@ctxo/lang-csharp', requireFromProject);
     const csproj = join(dirname(pkgJson), 'tools', 'ctxo-roslyn', 'ctxo-roslyn.csproj');
     return existsSync(csproj) ? csproj : null;
   } catch {
