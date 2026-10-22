@@ -22,6 +22,25 @@ public sealed class NoteAttribute : System.Attribute
     public string Text { get; }
 }
 
+public sealed class KeysAttribute : System.Attribute
+{
+    public string? K1 { get; set; }
+    public string? K2 { get; set; }
+    public string? K3 { get; set; }
+    public string? K4 { get; set; }
+    public string? K5 { get; set; }
+    public string? K6 { get; set; }
+    public string? K7 { get; set; }
+    public string? K8 { get; set; }
+    public string? K9 { get; set; }
+    public string? K10 { get; set; }
+    public string? K11 { get; set; }
+}
+
+public sealed class FooAttribute<T> : System.Attribute
+{
+}
+
 public class LoanPolicyTests
 {
     // 50 characters; LongText repeats it five times (250 characters).
@@ -56,6 +75,16 @@ public class LoanPolicyTests
 
     [A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, A17, A18, A19, A20, A21, A22, A23, A24]
     public void HasTwentyFiveAttributes()
+    {
+    }
+
+    [Keys(K1 = "1", K2 = "2", K3 = "3", K4 = "4", K5 = "5", K6 = "6", K7 = "7", K8 = "8", K9 = "9", K10 = "10", K11 = "11")]
+    public void HasElevenNamedArgs()
+    {
+    }
+
+    [System.ObsoleteAttribute, global::X.YAttribute, Foo<int>]
+    public void HasQualifiedAndGenericNames()
     {
     }
 }

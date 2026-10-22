@@ -349,6 +349,16 @@ describe('CSharpAdapter - attribute annotations', () => {
     const ctor = symbols.find(s => s.name === 'Fine.Fine(0)');
     expect(ctor?.annotations?.map(a => a.name)).toEqual(Array.from({ length: 20 }, (_, i) => `A${i}`));
   });
+
+  it('tree-sitter keeps at most 10 named entries', async () => {
+    const eleven = Array.from({ length: 11 }, (_, i) => `K${i + 1} = "${i + 1}"`).join(', ');
+    const source = `public class Hold { [Keys(${eleven})] public void Place() {} }`;
+    const symbols = await adapter.extractSymbols('Holds/Hold.cs', source);
+
+    const named: Record<string, string> = {};
+    for (let i = 1; i <= 10; i++) named[`K${i}`] = String(i);
+    expect(symbols.find(s => s.name === 'Hold.Place(0)')?.annotations).toEqual([{ name: 'Keys', named }]);
+  });
 });
 
 describe('CSharpAdapter — isSupported', () => {

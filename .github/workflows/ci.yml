@@ -74,12 +74,13 @@ jobs:
       - name: Run unit tests with coverage
         run: pnpm --filter @ctxo/cli test:unit:coverage
 
-      # The lang-csharp packaging test guards the helper sources in the npm
-      # tarball; its other tests are not part of CI (the dotnet ones need .NET).
-      - name: Run plugin-api, sql-extract and lang-sql tests, and the lang-csharp packaging test
+      # lang-csharp runs its `unit` vitest project only: the tree-sitter, mocked
+      # Roslyn and packaging tests need no .NET. The `dotnet` project (Roslyn
+      # integration tests) builds the helper and is left out of CI.
+      - name: Run plugin-api, sql-extract and lang-sql tests, and the lang-csharp unit tests
         run: |
           pnpm --filter @ctxo/plugin-api --filter @ctxo/sql-extract --filter @ctxo/lang-sql test
-          pnpm --filter @ctxo/lang-csharp test packaging
+          pnpm --filter @ctxo/lang-csharp test --project unit
 
       - name: Unit Test Report
         uses: dorny/test-reporter@d1b5dff021aa968b288b02285a8bf47471c5928a # v3.2.0

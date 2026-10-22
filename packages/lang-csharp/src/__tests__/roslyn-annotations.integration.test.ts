@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type { SymbolNode } from '@ctxo/plugin-api';
+import type { SymbolAnnotation, SymbolNode } from '@ctxo/plugin-api';
 import { RoslynAdapter } from '../roslyn/roslyn-adapter.js';
+import { CSharpAdapter } from '../csharp-adapter.js';
 
 const HAS_DOTNET = (() => {
   try {
@@ -84,5 +86,53 @@ describe.skipIf(!HAS_DOTNET)('Roslyn attribute annotations', () => {
     const cls = symbols.find(s => s.name === TEST_CLASS && s.kind === 'class');
     expect(cls).toBeDefined();
     expect(cls).not.toHaveProperty('annotations');
+  });
+
+  it('HasElevenNamedArgs keeps 10 named entries plus the reserved type', () => {
+    const named: Record<string, string> = {};
+    for (let i = 1; i <= 10; i++) named[`K${i}`] = String(i);
+    expect(method('HasElevenNamedArgs').annotations).toEqual([
+      { name: 'Keys', named: { ...named, type: 'CsharpV2Sample.Tests.KeysAttribute' } },
+    ]);
+  });
+
+  it('qualified, global:: and generic attribute names keep only the last identifier', () => {
+    expect(method('HasQualifiedAndGenericNames').annotations).toEqual([
+      { name: 'Obsolete', named: { type: 'System.ObsoleteAttribute' } },
+      { name: 'Y', named: { type: 'X.YAttribute' } },
+      { name: 'Foo', named: { type: 'CsharpV2Sample.Tests.FooAttribute<int>' } },
+    ]);
+  });
+
+  it('the tree-sitter tier gives the same literal-only annotations without named.type', async () => {
+    // Rows whose arguments are all literals must match across tiers once the
+    // Roslyn-only named.type is removed. HasALongArg is left out: it passes a
+    // const, which only Roslyn resolves. Two documented differences are kept
+    // out of the fixture: `name:` arguments (positional constructor arguments
+    // in Roslyn, named entries in tree-sitter) and real numbers in exponent
+    // form (.NET and JavaScript format them differently).
+    const source = readFileSync(resolve(FIXTURE_DIR, TESTS_FILE), 'utf-8');
+    const syntaxSymbols = await new CSharpAdapter().extractSymbols(TESTS_FILE, source);
+    const methodName = (s: SymbolNode) => s.name.replace(/\(\d+\)$/, '').split('.').pop()!;
+    const withoutType = (annotations: readonly SymbolAnnotation[] | undefined) =>
+      annotations?.map(({ named, ...rest }) => {
+        const { type: _type, ...others } = named ?? {};
+        return Object.keys(others).length > 0 ? { ...rest, named: others } : rest;
+      });
+
+    const rows = [
+      'MemberHoldsAtMostFiveLoans',
+      'CharacterizesOverdueFees',
+      'UsesAnUnresolvedAttribute',
+      'HasTwelveArgs',
+      'HasTwentyFiveAttributes',
+      'HasElevenNamedArgs',
+      'HasQualifiedAndGenericNames',
+    ];
+    for (const row of rows) {
+      const syntax = syntaxSymbols.find(s => s.kind === 'method' && methodName(s) === row);
+      expect(syntax, `tree-sitter ${row}`).toBeDefined();
+      expect(syntax!.annotations, row).toEqual(withoutType(method(row).annotations));
+    }
   });
 });

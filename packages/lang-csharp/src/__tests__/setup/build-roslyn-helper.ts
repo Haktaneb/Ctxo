@@ -43,6 +43,10 @@ export default function setup(): void {
   if (parseInt(version.split('.')[0]!, 10) < 8) return;
 
   dotnet(['build', HELPER_CSPROJ], 'Building the ctxo-roslyn helper');
+  // The fixtures target net8.0 and have no package references, so restore
+  // only needs the net8.0 targeting pack (Microsoft.NETCore.App.Ref 8.x).
+  // A .NET 8 SDK ships it; with only a newer SDK installed, restore fetches
+  // it from NuGet and needs network access.
   for (const project of FIXTURE_PROJECTS) {
     dotnet(['restore', project], `Restoring ${project}`);
   }

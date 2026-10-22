@@ -10,7 +10,7 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 /// attribute uses its semantic data when its class resolves, otherwise the
 /// syntax. Caps: 20 attributes per symbol, 10 positional and 10 named entries
 /// per attribute, 200 characters per value. <c>named.type</c> is reserved for
-/// the resolved attribute class.
+/// the resolved attribute class and comes on top of the 10 named entries.
 /// </summary>
 static class AttributeAnnotations
 {
@@ -61,11 +61,11 @@ static class AttributeAnnotations
     static CtxoAnnotation Build(
         string name, List<string> args, List<KeyValuePair<string, string>> named, string? typeName)
     {
-        var namedLimit = typeName != null ? MaxEntries - 1 : MaxEntries;
+        // Up to 10 entries from the source, as in the tree-sitter tier, plus the reserved `type`.
         var namedOut = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var (key, value) in named)
         {
-            if (namedOut.Count == namedLimit) break;
+            if (namedOut.Count == MaxEntries) break;
             if (key == TypeKey) continue; // reserved for the resolved class
             namedOut.TryAdd(key, value);
         }
