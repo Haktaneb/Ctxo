@@ -5,7 +5,7 @@
  * project-level instructions; ctxo upserts one marked rules block into that file.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
 import { join, dirname, relative, sep } from 'node:path';
 import {
   LEGACY_CURSOR_FRONTMATTER,
@@ -109,9 +109,52 @@ function platformRulesState(projectRoot: string, platform: Platform): PlatformRu
   return { platformId: platform.id, file: platform.file, scan: scanRulesBlocks(readFileSync(path, 'utf-8')) };
 }
 
-/** The scan of every platform whose rules file exists, in PLATFORMS order. */
+/**
+ * The scan of every platform whose rules file exists, in PLATFORMS order. Platforms whose rules files
+ * are one file on disk (`linkedRulesPlatforms`) give one entry, under the first of them.
+ */
 export function readRulesStates(projectRoot: string): PlatformRulesState[] {
-  return PLATFORMS.flatMap((platform) => platformRulesState(projectRoot, platform) ?? []);
+  const states: PlatformRulesState[] = [];
+  const covered = new Set<string>();
+  for (const platform of PLATFORMS) {
+    if (covered.has(platform.id)) continue;
+    const state = platformRulesState(projectRoot, platform);
+    if (!state) continue;
+    for (const id of linkedRulesPlatforms(projectRoot, platform.id)) covered.add(id);
+    states.push(state);
+  }
+  return states;
+}
+
+/**
+ * Whether two existing paths are one file on disk: the same real path (a symlink), or the same device
+ * and inode (a hard link, which has a real path of its own). Both are checked.
+ */
+function sameFileOnDisk(a: string, b: string): boolean {
+  try {
+    if (realpathSync(a) === realpathSync(b)) return true;
+    const sa = statSync(a, { bigint: true });
+    const sb = statSync(b, { bigint: true });
+    return sa.ino !== 0n && sa.dev === sb.dev && sa.ino === sb.ino;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The other platforms whose rules file is the same file on disk as this platform's, in PLATFORMS
+ * order: for example an AGENTS.md or GEMINI.md linked to CLAUDE.md. `[]` when the file does not exist.
+ * Such a file serves several clients, so the writer and doctor both give it the full tier.
+ */
+export function linkedRulesPlatforms(projectRoot: string, platformId: string): string[] {
+  const platform = PLATFORMS.find((p) => p.id === platformId);
+  const path = platform ? join(projectRoot, platform.file) : undefined;
+  if (!path || !existsSync(path)) return [];
+  return PLATFORMS.filter((other) => {
+    if (other.id === platformId) return false;
+    const otherPath = join(projectRoot, other.file);
+    return existsSync(otherPath) && sameFileOnDisk(path, otherPath);
+  }).map((other) => other.id);
 }
 
 /** The first ctxo block in a platform's rules file; undefined without the file or a block. */
@@ -181,7 +224,8 @@ export function gateEnabled(projectRoot: string): boolean {
 
 /**
  * The rules tier for a platform from what is on disk. `planned` counts a guard or skills that the
- * caller is about to install (or would install in a dry run) as present.
+ * caller is about to install (or would install in a dry run) as present. A rules file linked to
+ * another platform's (`linkedRulesPlatforms`) gets the full tier.
  */
 export function resolveRulesTier(
   projectRoot: string,
@@ -191,7 +235,8 @@ export function resolveRulesTier(
   const guardPresent = planned.guard === true || readClaudeGuardState(projectRoot) === 'present';
   const skillsComplete =
     planned.skills === true || skillStates(projectRoot, 'claude-code').every((s) => s.state !== 'missing');
-  return expectedRulesTier(platformId, { guardPresent, skillsComplete, gateEnabled: gateEnabled(projectRoot) });
+  const sharedFile = linkedRulesPlatforms(projectRoot, platformId).length > 0;
+  return expectedRulesTier(platformId, { guardPresent, skillsComplete, gateEnabled: gateEnabled(projectRoot), sharedFile });
 }
 
 export interface Platform {
@@ -279,7 +324,8 @@ export interface InstallResult {
  * Upserts the ctxo rules block into a platform's rules file. A missing file gets
  * `generateRules`; an existing one keeps every byte outside the ctxo block. The action compares
  * the final content with the original: equal is `skipped`. `dryRun` computes the same action and
- * writes nothing, not even a directory.
+ * writes nothing, not even a directory. A file that is also another platform's rules file
+ * (`linkedRulesPlatforms`) is written in the full tier, whatever `tier` says.
  */
 export function installRules(
   projectRoot: string,
@@ -289,7 +335,8 @@ export function installRules(
   const platform = PLATFORMS.find(p => p.id === platformId);
   if (!platform) throw new Error(`Unknown platform: ${platformId}`);
 
-  const tier = options.tier ?? 'full';
+  // A file another platform also reads gets the full tier whatever the caller asked (doctor agrees).
+  const tier = linkedRulesPlatforms(projectRoot, platformId).length > 0 ? 'full' : (options.tier ?? 'full');
   const filePath = join(projectRoot, platform.file);
 
   if (!existsSync(filePath)) {

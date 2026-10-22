@@ -1,8 +1,12 @@
-import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
+import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, linkSync, symlinkSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { PLATFORMS, generateRules, installRules, detectPlatforms, ensureGitignore, ensureConfig, ensureIndexDir, getMcpConfigTargets, ensureMcpConfig, installSkills, skillStates, SKILLS, SKILL_PLATFORMS, ensureClaudeHook, readClaudeGuardState, resolveRulesTier, gateEnabled } from '../ai-rules.js';
+import { PLATFORMS, generateRules, installRules, detectPlatforms, ensureGitignore, ensureConfig, ensureIndexDir, getMcpConfigTargets, ensureMcpConfig, installSkills, skillStates, SKILLS, SKILL_PLATFORMS, ensureClaudeHook, readClaudeGuardState, resolveRulesTier, gateEnabled, linkedRulesPlatforms, readRulesStates } from '../ai-rules.js';
+import { InitCommand } from '../init-command.js';
+import { AiRulesCheck } from '../../adapters/diagnostics/checks/agent-setup-check.js';
+import { isolateGitEnv, type IsolatedGitEnv } from './git-test-env.js';
 import {
   LEGACY_CURSOR_FRONTMATTER,
   LEGACY_RULE_BODY,
@@ -1127,5 +1131,114 @@ describe('resolveRulesTier', () => {
     expect(resolveRulesTier(root, 'claude-code', { skills: true })).toBe('full');
     expect(resolveRulesTier(root, 'cursor', { guard: true, skills: true })).toBe('full');
     expect(existsSync(join(root, '.claude'))).toBe(false);
+  });
+});
+
+describe('linked rules files', () => {
+  let gitEnv: IsolatedGitEnv | undefined;
+
+  beforeEach(() => {
+    gitEnv = isolateGitEnv();
+  });
+
+  afterEach(() => {
+    gitEnv?.restore();
+    gitEnv = undefined;
+  });
+
+  /** Whether this machine lets the current user create a file symlink (Windows needs a privilege). */
+  const canSymlink = ((): boolean => {
+    const dir = mkdtempSync(join(tmpdir(), 'ctxo-symlink-probe-'));
+    try {
+      writeFileSync(join(dir, 'target'), '', 'utf-8');
+      symlinkSync(join(dir, 'target'), join(dir, 'link'), 'file');
+      return true;
+    } catch {
+      return false;
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  })();
+
+  /** A git project whose AGENTS.md is CLAUDE.md under a second name, made by `link(existing, newPath)`. */
+  function linkedProject(link: (existing: string, newPath: string) => void): string {
+    const dir = makeTempDir();
+    execFileSync('git', ['init', '-q'], { cwd: dir });
+    writeFileSync(join(dir, 'CLAUDE.md'), '# Project\n', 'utf-8');
+    link(join(dir, 'CLAUDE.md'), join(dir, 'AGENTS.md'));
+    return dir;
+  }
+
+  /** `ctxo init --only skills,guard,rules --tools claude-code,antigravity -y`; returns the rules rows as `<file> (<action>)`. */
+  async function initRules(dir: string): Promise<string[]> {
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(' '));
+    });
+    try {
+      await new InitCommand(dir).run({
+        tools: ['claude-code', 'antigravity'],
+        yes: true,
+        noInstall: true,
+        only: ['skills', 'guard', 'rules'],
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    return lines
+      .map((line) => line.replace(/^\[ctxo\] \S+ /, ''))
+      .filter((line) => line.startsWith('CLAUDE.md') || line.startsWith('AGENTS.md'));
+  }
+
+  async function expectConvergence(dir: string): Promise<void> {
+    expect(linkedRulesPlatforms(dir, 'claude-code')).toEqual(['antigravity']);
+    expect(linkedRulesPlatforms(dir, 'antigravity')).toEqual(['claude-code']);
+
+    expect(await initRules(dir)).toEqual(['CLAUDE.md (updated)', 'AGENTS.md (unchanged)']);
+    const content = readFileSync(join(dir, 'CLAUDE.md'), 'utf-8');
+    expect(content).toBe('# Project\n\n' + renderRulesBlock('full') + '\n');
+    expect(readFileSync(join(dir, 'AGENTS.md'), 'utf-8')).toBe(content);
+
+    expect(await initRules(dir)).toEqual(['CLAUDE.md (unchanged)', 'AGENTS.md (unchanged)']);
+    expect(readFileSync(join(dir, 'CLAUDE.md'), 'utf-8')).toBe(content);
+
+    // Doctor reads the shared file once, under CLAUDE.md, and expects the full tier there.
+    expect(readRulesStates(dir).map((s) => s.file)).toEqual(['CLAUDE.md']);
+    expect(await new AiRulesCheck().run({ projectRoot: dir, ctxoRoot: join(dir, '.ctxo') })).toMatchObject({
+      status: 'pass',
+      message: `CLAUDE.md v${RULES_TEMPLATE_VERSION} full`,
+    });
+  }
+
+  it('a hard-linked AGENTS.md and CLAUDE.md converge on the full tier in one run', async () => {
+    await expectConvergence(linkedProject((existing, newPath) => linkSync(existing, newPath)));
+  });
+
+  it.skipIf(!canSymlink)('a symlinked AGENTS.md and CLAUDE.md converge on the full tier in one run', async () => {
+    await expectConvergence(linkedProject((existing, newPath) => symlinkSync(existing, newPath, 'file')));
+  });
+
+  it('a linked CLAUDE.md resolves and is written in the full tier even when the guard and skills are installed', () => {
+    const dir = linkedProject((existing, newPath) => linkSync(existing, newPath));
+    ensureClaudeHook(dir);
+    installSkills(dir, 'claude-code');
+
+    expect(resolveRulesTier(dir, 'claude-code')).toBe('full');
+    expect(resolveRulesTier(dir, 'claude-code', { guard: true, skills: true })).toBe('full');
+    expect(installRules(dir, 'claude-code', { tier: 'compact' })).toEqual({ file: 'CLAUDE.md', action: 'updated' });
+    expect(readFileSync(join(dir, 'AGENTS.md'), 'utf-8')).toBe('# Project\n\n' + renderRulesBlock('full') + '\n');
+  });
+
+  it('separate files with equal content are not linked', () => {
+    const dir = makeTempDir();
+    writeFileSync(join(dir, 'CLAUDE.md'), '# Same\n', 'utf-8');
+    writeFileSync(join(dir, 'AGENTS.md'), '# Same\n', 'utf-8');
+    ensureClaudeHook(dir);
+    installSkills(dir, 'claude-code');
+
+    expect(linkedRulesPlatforms(dir, 'claude-code')).toEqual([]);
+    expect(linkedRulesPlatforms(dir, 'windsurf')).toEqual([]);
+    expect(resolveRulesTier(dir, 'claude-code')).toBe('compact');
+    expect(readRulesStates(dir).map((s) => s.file)).toEqual(['CLAUDE.md', 'AGENTS.md']);
   });
 });

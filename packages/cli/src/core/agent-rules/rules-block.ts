@@ -465,11 +465,21 @@ export interface TierFacts {
   readonly guardPresent: boolean;
   readonly skillsComplete: boolean;
   readonly gateEnabled: boolean;
+  /** The rules file is also another client's rules file (a linked AGENTS.md and CLAUDE.md); absent: not shared. */
+  readonly sharedFile?: boolean;
 }
 
-/** Compact only for Claude Code with the guard hook, every skill and an enabled gate; full otherwise. */
+/**
+ * Compact only for Claude Code with the guard hook, every skill and an enabled gate, in a rules file
+ * no other client reads; full otherwise. A shared file serves clients the guard and skills do not
+ * back, so it gets the full tier.
+ */
 export function expectedRulesTier(platformId: string, facts: TierFacts): RulesTier {
-  return platformId === 'claude-code' && facts.guardPresent && facts.skillsComplete && facts.gateEnabled
+  return platformId === 'claude-code' &&
+    facts.guardPresent &&
+    facts.skillsComplete &&
+    facts.gateEnabled &&
+    facts.sharedFile !== true
     ? 'compact'
     : 'full';
 }

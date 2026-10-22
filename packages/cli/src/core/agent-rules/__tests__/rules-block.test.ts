@@ -343,6 +343,9 @@ describe('block classification and tier policy', () => {
       }
     }
     expect(expectedRulesTier('cursor', { guardPresent: true, skillsComplete: true, gateEnabled: true })).toBe('full');
+    const backed = { guardPresent: true, skillsComplete: true, gateEnabled: true };
+    expect(expectedRulesTier('claude-code', { ...backed, sharedFile: false })).toBe('compact');
+    expect(expectedRulesTier('claude-code', { ...backed, sharedFile: true })).toBe('full');
   });
 
   it('guardAndSkillsExpected is true for legacy, unversioned and compact blocks and false for a versioned full block or none', () => {
