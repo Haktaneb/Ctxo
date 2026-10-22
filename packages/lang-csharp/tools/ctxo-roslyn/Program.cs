@@ -42,7 +42,7 @@ var solutionPath = cliArgs.FirstOrDefault(a => !a.StartsWith("--"));
 
 if (string.IsNullOrEmpty(solutionPath))
 {
-    WriteError("Usage: dotnet run -- <solution.sln> [--keep-alive]");
+    WriteError("Usage: dotnet run -- <solution.sln|project.csproj> [--keep-alive]");
     return 1;
 }
 
@@ -87,6 +87,13 @@ if (solutionPath.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase))
             // OpenProjectAsync auto-loads referenced projects; skip duplicates.
         }
     }
+    solution = workspace.CurrentSolution;
+}
+else if (solutionPath.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
+{
+    // A repository with a lone project and no solution file. Like the .slnx
+    // loop, OpenProjectAsync also loads the projects it references.
+    await workspace.OpenProjectAsync(solutionPath);
     solution = workspace.CurrentSolution;
 }
 else
@@ -283,6 +290,7 @@ List<CtxoSymbol> ExtractSymbols(SyntaxNode root, SemanticModel model, string fil
             EndLine = nodeSpan.EndLinePosition.Line,
             StartOffset = node.Span.Start,
             EndOffset = node.Span.End,
+            Annotations = AttributeAnnotations.For(node, symbol, model),
         });
     }
 
@@ -702,6 +710,7 @@ record CtxoSymbol
     [JsonPropertyName("endLine")] public int EndLine { get; init; }
     [JsonPropertyName("startOffset")] public int StartOffset { get; init; }
     [JsonPropertyName("endOffset")] public int EndOffset { get; init; }
+    [JsonPropertyName("annotations")] public List<CtxoAnnotation>? Annotations { get; init; }
 }
 
 record CtxoEdge

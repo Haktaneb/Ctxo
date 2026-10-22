@@ -2,9 +2,29 @@ import { relative, dirname, resolve } from 'node:path';
 import type { SymbolNode, GraphEdge, ComplexityMetrics, SymbolKind, ILanguageAdapter, ReindexResult } from '@ctxo/plugin-api';
 import { createLogger } from '../logger.js';
 import { detectDotnetSdk, discoverSolution, findCtxoRoslynProject } from './solution-discovery.js';
-import { runBatchIndex, RoslynKeepAlive, type RoslynBatchResult, type RoslynFileResult } from './roslyn-process.js';
+import {
+  runBatchIndex,
+  RoslynKeepAlive,
+  type RoslynBatchResult,
+  type RoslynFileResult,
+  type RoslynSymbol,
+} from './roslyn-process.js';
 
 const log = createLogger('ctxo:roslyn');
+
+/** Maps a helper symbol to a SymbolNode; optional fields appear only when present. */
+export function toSymbolNode(s: RoslynSymbol): SymbolNode {
+  return {
+    symbolId: s.symbolId,
+    name: s.name,
+    kind: s.kind as SymbolKind,
+    startLine: s.startLine,
+    endLine: s.endLine,
+    ...(s.startOffset != null ? { startOffset: s.startOffset } : {}),
+    ...(s.endOffset != null ? { endOffset: s.endOffset } : {}),
+    ...(s.annotations && s.annotations.length > 0 ? { annotations: s.annotations } : {}),
+  };
+}
 
 export class RoslynAdapter implements ILanguageAdapter {
   readonly extensions = ['.cs'] as const;
@@ -88,15 +108,7 @@ export class RoslynAdapter implements ILanguageAdapter {
     const cached = this.cache.get(filePath);
     if (!cached) return [];
 
-    return cached.symbols.map(s => ({
-      symbolId: s.symbolId,
-      name: s.name,
-      kind: s.kind as SymbolKind,
-      startLine: s.startLine,
-      endLine: s.endLine,
-      ...(s.startOffset != null ? { startOffset: s.startOffset } : {}),
-      ...(s.endOffset != null ? { endOffset: s.endOffset } : {}),
-    }));
+    return cached.symbols.map(toSymbolNode);
   }
 
   async extractEdges(filePath: string, _source: string): Promise<GraphEdge[]> {
@@ -144,15 +156,7 @@ export class RoslynAdapter implements ILanguageAdapter {
     if (result) {
       this.cache.set(relativePath, result);
       return {
-        symbols: result.symbols.map(s => ({
-          symbolId: s.symbolId,
-          name: s.name,
-          kind: s.kind as SymbolKind,
-          startLine: s.startLine,
-          endLine: s.endLine,
-          ...(s.startOffset != null ? { startOffset: s.startOffset } : {}),
-          ...(s.endOffset != null ? { endOffset: s.endOffset } : {}),
-        })),
+        symbols: result.symbols.map(toSymbolNode),
         edges: result.edges.map(e => ({
           from: e.from,
           to: e.to,

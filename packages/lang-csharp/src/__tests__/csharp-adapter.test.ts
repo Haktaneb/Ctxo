@@ -297,6 +297,60 @@ namespace App {
   });
 });
 
+describe('CSharpAdapter - attribute annotations', () => {
+  const adapter = new CSharpAdapter();
+
+  it('tree-sitter emits attribute annotations with literal arguments', async () => {
+    const source = '[Route("api/loans")] public class LoanController { [HttpGet("{id}")] [Obsolete(DiagnosticId = "X1")] public void Get(int id) {} }';
+    const symbols = await adapter.extractSymbols('Api/LoanController.cs', source);
+
+    const cls = symbols.find(s => s.name === 'LoanController');
+    expect(cls?.annotations).toEqual([{ name: 'Route', args: ['api/loans'] }]);
+
+    const method = symbols.find(s => s.name === 'LoanController.Get(1)');
+    expect(method?.annotations).toEqual([
+      { name: 'HttpGet', args: ['{id}'] },
+      { name: 'Obsolete', named: { DiagnosticId: 'X1' } },
+    ]);
+  });
+
+  it('tree-sitter strips the Attribute suffix and a namespace qualifier', async () => {
+    const source = 'public class LoanTests { [Xunit.FactAttribute] public void Renews() {} }';
+    const symbols = await adapter.extractSymbols('Tests/LoanTests.cs', source);
+
+    const method = symbols.find(s => s.name === 'LoanTests.Renews(0)');
+    expect(method?.annotations).toEqual([{ name: 'Fact' }]);
+    expect(symbols.find(s => s.name === 'LoanTests')).not.toHaveProperty('annotations');
+  });
+
+  it('tree-sitter unquotes string forms, keeps literals only and applies the caps', async () => {
+    const twelve = Array.from({ length: 12 }, (_, i) => String(i + 1)).join(', ');
+    const twentyFive = Array.from({ length: 25 }, (_, i) => `A${i}`).join(', ');
+    const long = 'x'.repeat(250);
+    const source = [
+      '[Hold(days: 7)] public class Fine {',
+      `  [Note(@"c:\\fines""due", """raw "text" """, "tab\\there", true, -2, 1.5, 0x10, Ref, typeof(int), null, type: "reserved")]`,
+      `  [Args(${twelve})] [Long("${long}")]`,
+      '  public void Accrue() {}',
+      `  [${twentyFive}] public Fine() {}`,
+      '}',
+    ].join('\n');
+    const symbols = await adapter.extractSymbols('Fines/Fine.cs', source);
+
+    expect(symbols.find(s => s.name === 'Fine')?.annotations).toEqual([{ name: 'Hold', named: { days: '7' } }]);
+
+    const accrue = symbols.find(s => s.name === 'Fine.Accrue(0)');
+    expect(accrue?.annotations).toEqual([
+      { name: 'Note', args: ['c:\\fines"due', 'raw "text" ', 'tab\there', 'true', '-2', '1.5', '16'] },
+      { name: 'Args', args: ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10'] },
+      { name: 'Long', args: ['x'.repeat(200)] },
+    ]);
+
+    const ctor = symbols.find(s => s.name === 'Fine.Fine(0)');
+    expect(ctor?.annotations?.map(a => a.name)).toEqual(Array.from({ length: 20 }, (_, i) => `A${i}`));
+  });
+});
+
 describe('CSharpAdapter — isSupported', () => {
   const adapter = new CSharpAdapter();
 

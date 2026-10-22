@@ -19,6 +19,15 @@ export interface RoslynSymbol {
   endLine: number;
   startOffset?: number;
   endOffset?: number;
+  /** Attribute annotations; absent when the declaration has none. */
+  annotations?: RoslynAnnotation[];
+}
+
+/** One attribute as the helper reports it (shape of the protocol v2 SymbolAnnotation). */
+export interface RoslynAnnotation {
+  name: string;
+  args?: string[];
+  named?: Record<string, string>;
 }
 
 export interface RoslynEdge {

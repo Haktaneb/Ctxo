@@ -8,6 +8,55 @@ vi.mock('node:child_process', () => ({
 
 import { execFileSync } from 'node:child_process';
 import { detectDotnetSdk } from '../roslyn/solution-discovery.js';
+import { toSymbolNode } from '../roslyn/roslyn-adapter.js';
+
+describe('toSymbolNode', () => {
+  it('toSymbolNode copies annotations and omits an absent list', () => {
+    const withAnnotations = toSymbolNode({
+      symbolId: 'Tests/LoanTests.cs::Tests.LoanTests.Renews::method',
+      name: 'Tests.LoanTests.Renews',
+      kind: 'method',
+      startLine: 4,
+      endLine: 8,
+      startOffset: 40,
+      endOffset: 90,
+      annotations: [
+        { name: 'Fact', named: { type: 'Xunit.FactAttribute' } },
+        { name: 'Trait', args: ['Rule', 'LEND-03'] },
+      ],
+    });
+    expect(withAnnotations).toEqual({
+      symbolId: 'Tests/LoanTests.cs::Tests.LoanTests.Renews::method',
+      name: 'Tests.LoanTests.Renews',
+      kind: 'method',
+      startLine: 4,
+      endLine: 8,
+      startOffset: 40,
+      endOffset: 90,
+      annotations: [
+        { name: 'Fact', named: { type: 'Xunit.FactAttribute' } },
+        { name: 'Trait', args: ['Rule', 'LEND-03'] },
+      ],
+    });
+
+    const without = toSymbolNode({
+      symbolId: 'Loans/Loan.cs::Loans.Loan::class',
+      name: 'Loans.Loan',
+      kind: 'class',
+      startLine: 0,
+      endLine: 3,
+    });
+    expect(without).toEqual({
+      symbolId: 'Loans/Loan.cs::Loans.Loan::class',
+      name: 'Loans.Loan',
+      kind: 'class',
+      startLine: 0,
+      endLine: 3,
+    });
+    expect(without).not.toHaveProperty('annotations');
+    expect(without).not.toHaveProperty('startOffset');
+  });
+});
 
 describe('solution-discovery', () => {
   beforeEach(() => {
