@@ -11,6 +11,13 @@ using Microsoft.CodeAnalysis.Operations;
 
 // ── Entry Point ──────────────────────────────────────────────────────
 
+// SQL text needs no solution and no MSBuild, so the SQL modes run before
+// MSBuild registration.
+if (args.Length > 0 && args[0] == "--sql-extract")
+    return RunSqlExtract(args[1..]);
+if (args.Length > 0 && args[0] == "--sql-name")
+    return RunSqlName(args[1..]);
+
 // RegisterDefaults() uses the VS installer API on Windows and fails on
 // SDK-only machines (no Visual Studio installed). Fall back to locating
 // the SDK via DOTNET_ROOT or the dotnet executable on PATH.
@@ -648,6 +655,73 @@ void WriteStderr(string message) =>
 
 void WriteLine(string json) =>
     Console.WriteLine(json);
+
+// ── SQL Modes ────────────────────────────────────────────────────────
+
+// --sql-extract <file> [<file>...]: the accesses of each file's SQL text,
+// one line per file:
+// {"type":"sqlExtract","file":"<as given>","reads":[...],"writes":[...],"executes":[...],"errors":<n>}.
+// A file that cannot be read gives empty lists and errors 1.
+static int RunSqlExtract(string[] files)
+{
+    if (files.Length == 0)
+    {
+        Console.Error.WriteLine("[ctxo-roslyn] Usage: dotnet run -- --sql-extract <file> [<file>...]");
+        return 1;
+    }
+    foreach (var file in files)
+    {
+        var text = ReadSqlFile(file);
+        var accesses = text == null
+            ? new SqlText.Accesses(new SortedSet<string>(StringComparer.Ordinal), new SortedSet<string>(StringComparer.Ordinal), new SortedSet<string>(StringComparer.Ordinal), 1)
+            : SqlText.Extract(text);
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
+            type = "sqlExtract",
+            file,
+            reads = accesses.Reads,
+            writes = accesses.Writes,
+            executes = accesses.Executes,
+            errors = accesses.Errors,
+        }));
+    }
+    return 0;
+}
+
+// --sql-name <file> [<file>...]: each file holds one multipart name, such as
+// a procedure name sent without EXEC; one line per file:
+// {"type":"sqlName","file":"<as given>","name":"<schema.name>"|null}.
+static int RunSqlName(string[] files)
+{
+    if (files.Length == 0)
+    {
+        Console.Error.WriteLine("[ctxo-roslyn] Usage: dotnet run -- --sql-name <file> [<file>...]");
+        return 1;
+    }
+    foreach (var file in files)
+    {
+        var text = ReadSqlFile(file);
+        var name = text == null ? null : SqlText.CanonicalName(text);
+        Console.WriteLine(JsonSerializer.Serialize(new { type = "sqlName", file, name }));
+    }
+    return 0;
+}
+
+// UTF-8, or UTF-16 when a byte order mark says so; the mark is not part of
+// the text. Null (and a stderr message) when the file cannot be read.
+static string? ReadSqlFile(string path)
+{
+    try
+    {
+        using var reader = new StreamReader(path, new System.Text.UTF8Encoding(false), detectEncodingFromByteOrderMarks: true);
+        return reader.ReadToEnd();
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+    {
+        Console.Error.WriteLine($"[ctxo-roslyn] Cannot read {path}: {ex.Message}");
+        return null;
+    }
+}
 
 // ── MSBuild SDK Discovery ────────────────────────────────────────────
 
