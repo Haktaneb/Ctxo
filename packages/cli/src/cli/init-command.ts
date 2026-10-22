@@ -19,6 +19,7 @@ import {
   forwardSlashes,
   type SharedHooksScope,
 } from './git-hooks.js';
+import type { InitPart } from './init-parts.js';
 
 const requireCjs = createRequire(import.meta.url);
 
@@ -54,10 +55,17 @@ export interface HooksInstallResult {
 export interface InitOptions {
   tools?: string[];
   yes?: boolean;
+  /** `--rules`: deprecated alias for `skip: ['git-hooks', 'guard']`; it also skips the plugin step. */
   rulesOnly?: boolean;
   dryRun?: boolean;
   /** Skip language detection prompt + any install invocation. */
   noInstall?: boolean;
+  /** `--only`: install exactly these parts. The router rejects it together with `skip` or `rulesOnly`. */
+  only?: InitPart[];
+  /** `--skip`: install everything except these parts. */
+  skip?: InitPart[];
+  /** `--no-guard`: no safe-edit guard, and the rules use the full block. */
+  noGuard?: boolean;
 }
 
 /* ------------------------------------------------------------------ */
