@@ -29,41 +29,46 @@ const UNREADABLE_SETTINGS_WARNING =
 /** Whether the safe-edit guard is registered: `unreadable` means `.claude/settings.json` cannot be read safely. */
 export type ClaudeGuardState = 'present' | 'absent' | 'unreadable';
 
+const UTF8_BOM = '\uFEFF';
+
 type SettingsRead =
   | { readonly kind: 'missing' }
   | { readonly kind: 'unreadable' }
-  | { readonly kind: 'ok'; readonly json: Record<string, unknown>; readonly hasHook: boolean };
+  | { readonly kind: 'ok'; readonly json: Record<string, unknown>; readonly hasHook: boolean; readonly bom: boolean };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**
- * Reads a Claude Code settings file. `unreadable` covers text that fails `JSON.parse` (JSONC comments
- * included) and JSON that is not a plain object, has a `hooks` that is not a plain object, a
- * `hooks.PreToolUse` that is not an array, or a `PreToolUse` entry that is not a plain object with a
- * `hooks` array.
+ * Reads a Claude Code settings file; a leading UTF-8 BOM is ignored and reported as `bom`.
+ * `unreadable` covers text that fails `JSON.parse` (JSONC comments included) and JSON that is not a
+ * plain object, has a `hooks` that is not a plain object, a `hooks.PreToolUse` that is not an array,
+ * or a `PreToolUse` entry that is not a plain object with a `hooks` array.
  */
 function readSettings(path: string): SettingsRead {
   if (!existsSync(path)) return { kind: 'missing' };
   let json: unknown;
+  let bom: boolean;
   try {
-    json = JSON.parse(readFileSync(path, 'utf-8'));
+    const shape = textShape(readFileSync(path, 'utf-8'));
+    bom = shape.bom;
+    json = JSON.parse(shape.text);
   } catch {
     return { kind: 'unreadable' };
   }
   if (!isPlainObject(json)) return { kind: 'unreadable' };
-  if (json.hooks === undefined) return { kind: 'ok', json, hasHook: false };
+  if (json.hooks === undefined) return { kind: 'ok', json, hasHook: false, bom };
   if (!isPlainObject(json.hooks)) return { kind: 'unreadable' };
   const pre = json.hooks.PreToolUse;
-  if (pre === undefined) return { kind: 'ok', json, hasHook: false };
+  if (pre === undefined) return { kind: 'ok', json, hasHook: false, bom };
   if (!Array.isArray(pre)) return { kind: 'unreadable' };
   let hasHook = false;
   for (const entry of pre as unknown[]) {
     if (!isPlainObject(entry) || !Array.isArray(entry.hooks)) return { kind: 'unreadable' };
     if ((entry.hooks as unknown[]).some((h) => isPlainObject(h) && h.command === CTXO_HOOK_COMMAND)) hasHook = true;
   }
-  return { kind: 'ok', json, hasHook };
+  return { kind: 'ok', json, hasHook, bom };
 }
 
 /** The shared settings file and whether the guard is registered there or in the local one (read only, D11). */
@@ -88,8 +93,9 @@ export function readClaudeGuardState(projectRoot: string): ClaudeGuardState {
 /**
  * Registers the safe-edit guard under `hooks.PreToolUse` in `.claude/settings.json`. A guard already
  * registered there or in `.claude/settings.local.json` is `skipped`. An unreadable settings file is
- * never overwritten: `skipped` with a warning. Every other setting and hook is kept, and the entry
- * goes last. `dryRun` computes the same action and writes nothing, not even a directory.
+ * never overwritten: `skipped` with a warning. Every other setting and hook is kept, the entry goes
+ * last, and a UTF-8 BOM is written back. `dryRun` computes the same action and writes nothing, not
+ * even a directory.
  */
 export function ensureClaudeHook(projectRoot: string, options: { readonly dryRun?: boolean } = {}): InstallResult {
   const filePath = join(projectRoot, '.claude', 'settings.json');
@@ -112,7 +118,8 @@ export function ensureClaudeHook(projectRoot: string, options: { readonly dryRun
   const hooks = isPlainObject(shared.json.hooks) ? shared.json.hooks : {};
   const pre = Array.isArray(hooks.PreToolUse) ? (hooks.PreToolUse as unknown[]) : [];
   const updated = { ...shared.json, hooks: { ...hooks, PreToolUse: [...pre, ctxoEntry] } };
-  if (!options.dryRun) writeFileSync(filePath, JSON.stringify(updated, null, 2) + '\n', 'utf-8');
+  const body = JSON.stringify(updated, null, 2) + '\n';
+  if (!options.dryRun) writeFileSync(filePath, (shared.bom ? UTF8_BOM : '') + body, 'utf-8');
   return { file: CLAUDE_SETTINGS_FILE, action: 'updated' };
 }
 

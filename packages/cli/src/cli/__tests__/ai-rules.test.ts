@@ -941,6 +941,23 @@ describe('ensureClaudeHook', () => {
     expect(ensureClaudeHook(root).action).toBe('skipped');
   });
 
+  it('reads a settings.json with a UTF-8 BOM and keeps the BOM', () => {
+    const root = makeTempDir();
+    const settings = { permissions: { allow: ['Bash(pnpm test)'] } };
+    const file = writeClaudeSettings(root, 'settings.json', BOM + JSON.stringify(settings, null, 2) + '\n');
+
+    const result = ensureClaudeHook(root);
+
+    expect(result).toEqual({ file: '.claude/settings.json', action: 'updated' });
+    const bytes = readFileSync(file);
+    expect([...bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+    expect(JSON.parse(bytes.subarray(3).toString('utf-8'))).toEqual({
+      ...settings,
+      hooks: { PreToolUse: [CTXO_GUARD_ENTRY] },
+    });
+    expect(ensureClaudeHook(root).action).toBe('skipped');
+  });
+
   it('does not duplicate a guard registered in settings.local.json', () => {
     const root = makeTempDir();
     const local = writeClaudeSettings(root, 'settings.local.json', JSON.stringify({ hooks: { PreToolUse: [CTXO_GUARD_ENTRY] } }));
@@ -998,6 +1015,22 @@ describe('readClaudeGuardState', () => {
     const corruptLocal = makeTempDir();
     writeClaudeSettings(corruptLocal, 'settings.local.json', 'not json{{{');
     expect(readClaudeGuardState(corruptLocal)).toBe('absent');
+  });
+
+  it('reads a BOM settings file', () => {
+    const guarded = BOM + JSON.stringify({ hooks: { PreToolUse: [CTXO_GUARD_ENTRY] } }, null, 2) + '\r\n';
+
+    const shared = makeTempDir();
+    writeClaudeSettings(shared, 'settings.json', guarded);
+    expect(readClaudeGuardState(shared)).toBe('present');
+
+    const local = makeTempDir();
+    writeClaudeSettings(local, 'settings.local.json', guarded);
+    expect(readClaudeGuardState(local)).toBe('present');
+
+    const unguarded = makeTempDir();
+    writeClaudeSettings(unguarded, 'settings.json', BOM + '{"permissions":{}}');
+    expect(readClaudeGuardState(unguarded)).toBe('absent');
   });
 });
 
