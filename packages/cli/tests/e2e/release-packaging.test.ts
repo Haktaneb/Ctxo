@@ -50,7 +50,7 @@ describe('Release Packaging', () => {
     expect(files.some((f: string) => f === 'package.json')).toBe(true);
   });
 
-  it('tarball size is reasonable (< 1450KB)', { timeout: 30_000 }, () => {
+  it('tarball size is reasonable (< 1550KB)', { timeout: 30_000 }, () => {
     const output = execSync('npm pack --dry-run --json', { cwd: ROOT, encoding: 'utf-8' });
 
     const info = JSON.parse(output);
@@ -64,8 +64,10 @@ describe('Release Packaging', () => {
     // incremental --files/--commit runs, stale-entry pruning) raised the limit to 1400KB, and the
     // rest of PR 0 (one snapshot per commit, co-change in every blast-radius caller, hook v2 with
     // its shared-directory guard, `--help` for every subcommand, docs shipped in the tarball) to
-    // 1450KB (measured 1420.70KB).
-    expect(sizeKB).toBeLessThan(1450);
+    // 1450KB (measured 1420.70KB). PR 2A (#159: tiered rules block and its parser, init parts
+    // pipeline, agent-setup doctor checks and fixes, about 49KB of new source shipped as JS plus
+    // source maps, and the longer docs) raised it to 1550KB (measured 1527.10KB).
+    expect(sizeKB).toBeLessThan(1550);
     expect(sizeKB).toBeGreaterThan(1); // Sanity: not empty (dist/ may not exist in CI pre-build)
   });
 });

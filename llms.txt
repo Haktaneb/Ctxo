@@ -52,6 +52,13 @@ Language adapters ship as separate npm packages and are discovered by scanning t
 - Finding unused code? -> find_dead_code
 - Safe to delete? -> find_importers
 
+## New: tiered agent rules, granular init, agent-setup doctor checks (#159)
+
+- Two rules tiers inside versioned markers (`<!-- ctxo-rules-start v<version> -->` / `<!-- ctxo-rules-end -->`). Claude Code gets a compact block (4 lines in `CLAUDE.md`) when the safe-edit guard hook, all three skills and an enabled gate (`gate.enabled` not false) are in place; every other client, and Claude Code without them, gets the full block. The full block's first rule is narrowed: "For structural questions (dependencies, impact, history), use ctxo tools first; reading a file to see its contents needs no index call."
+- The rules writer replaces the ctxo block in place in every rules file (versioned, unversioned or the old unmarked body), collapses duplicates, keeps everything outside the block (BOM and line endings included), and leaves a block from a newer ctxo or an unterminated block unchanged with a warning. `ctxo-understand` carries a question-to-tool table for all 14 tools.
+- `ctxo init` parts: `rules`, `skills`, `guard`, `mcp`, `git-hooks`, `config`. New flags `--only <parts>`, `--skip <parts>`, `--no-guard`; `--rules` is a deprecated alias for `--skip git-hooks,guard`. `--dry-run` lists every file init would create or change. A corrupt or oddly shaped `.claude/settings.json` is never overwritten.
+- New doctor checks `ai_rules`, `skills` and `claude_guard_hook` (warn only). `ctxo doctor --fix` installs the skills and the guard, then re-renders the rules blocks; it holds the `CLAUDE.md` block until the guard and skills are in place, installs nothing the user declined (a versioned full block or `gate.enabled: false`), and replaces edited ctxo skills with the bundled copy.
+
 ## New: co-change engine, incremental indexing, one snapshot per commit (#157)
 
 - Co-change is built from one `git log` pass with its own window, independent of `--max-history` (which controls per-file intent depth only). Config: `cochange:` in `.ctxo/config.yaml` (maxCommits 2000 or "all", since, maxFilesPerCommit 30, minShared 2, include, exclude). Overrides: `ctxo index --cochange-commits <n|all>`, `--cochange-since <duration>`. Merge commits are excluded; commits above `maxFilesPerCommit` are skipped and counted (`massSkipped`); renames are followed.

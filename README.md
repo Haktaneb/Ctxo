@@ -71,6 +71,25 @@ The safe-edit guard closes this loop deterministically. When you run `ctxo init`
 
 If an agent tries to edit a high-impact symbol without first calling `get_blast_radius`, the hook blocks the edit and tells the agent what to check. Once the agent runs the tool, the edit goes through normally. Fires once per symbol per session, fail-open on any uncertainty.
 
+With the hook and the skills doing the work, the always-loaded `CLAUDE.md` block shrinks to four lines:
+
+```markdown
+## ctxo
+This repo has a ctxo index: dependency graph, git intent, change health. For structural questions (who depends on X, what breaks if X changes, why X looks like this), use the ctxo MCP tools before grepping.
+A pre-edit guard blocks the first edit to a high-impact symbol until `get_blast_radius` has been called for it.
+Skills: `ctxo-understand` (orient at task start), `ctxo-safe-edit` (before changing a symbol), `ctxo-review-pr` (before reviewing a diff).
+```
+
+Every other client, and Claude Code without the guard, gets the full tool guide. Re-running `ctxo init` replaces the block in place and keeps the rest of your file; `ctxo doctor` warns when the block, the skills or the hook drift, and `ctxo doctor --fix` repairs them.
+
+**Pick the parts:**
+
+```shell
+ctxo init --only guard,skills   # add just the guard and the skills
+ctxo init --skip git-hooks      # everything except the git hooks
+ctxo init --no-guard            # no guard; CLAUDE.md gets the full block
+```
+
 **Tune it:**
 
 ```shell

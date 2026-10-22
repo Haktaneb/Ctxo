@@ -74,6 +74,24 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo with five packages. Per-packag
 - `distinctCommits` on `driftSignals`, `boundaryViolations` and their committed artifacts (#157).
 - `ctxo <command> --help` and `-h` print the help for every subcommand without running it (#157).
 - ADR-016: co-change engine, incremental indexing and snapshot policy.
+- **Tiered agent rules (#159).** Claude Code gets a compact 4-line ctxo block in `CLAUDE.md` when the
+  safe-edit guard hook, all three skills and an enabled gate are in place; every other client, and
+  Claude Code without them, gets the full block. The tier is chosen from what is on disk after the
+  skills and guard are installed.
+- **Versioned rules markers (#159).** Blocks sit between `<!-- ctxo-rules-start v<version> -->` and
+  `<!-- ctxo-rules-end -->` (template version `0.13`) and are replaced in place, together with
+  unversioned blocks and the old unmarked body. A block from a newer ctxo, or a start marker without
+  an end marker, leaves the file unchanged with a warning.
+- **Init parts (#159).** `ctxo init --only <parts>`, `--skip <parts>` and `--no-guard` over the parts
+  `rules`, `skills`, `guard`, `mcp`, `git-hooks` and `config`, run in one order for the interactive,
+  non-interactive and dry-run paths. `--only` cannot be combined with `--skip` or `--rules`.
+- `ctxo init --dry-run` lists every file init would create or change, with `would create`,
+  `would update` or `unchanged`, and writes nothing (#159).
+- Doctor checks `ai_rules`, `skills` and `claude_guard_hook` (#159). `ctxo doctor --fix` installs
+  missing or outdated skills and the guard, then re-renders the rules blocks in the tier that now
+  applies. It installs nothing the user declined, never writes an unreadable `.claude/settings.json`,
+  and holds the `CLAUDE.md` block until the guard and skills are in place.
+- ADR-015 amendment: tiered rules (#159).
 
 ### Changed
 
@@ -98,6 +116,19 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo with five packages. Per-packag
   `STALE` until the next `ctxo index` after upgrading (#157).
 - `ctxo index --max-history` controls per-file intent depth only; the co-change window has its own
   settings (#157).
+- The full rules block opens with a narrowed rule: "For structural questions (dependencies, impact,
+  history), use ctxo tools first; reading a file to see its contents needs no index call." Step 3
+  reads "Only then edit the source", and the block has no em dashes (#159).
+- `ctxo-understand` carries a question-to-tool selection guide for all 14 tools, and its description
+  no longer says "before reading source files" (#159).
+- `ctxo init --rules` is deprecated: it now means `--skip git-hooks,guard`, still skips the plugin
+  step, and prints a notice (#159).
+- Rules files that init used to overwrite whole (`.cursor/rules/ctxo.mdc`, `AGENTS.md`,
+  `.github/copilot-instructions.md` and the rest) keep the user's content outside the ctxo block
+  (#159).
+- `ctxo doctor --fix` replaces an edited ctxo skill with the bundled copy; copy a customised skill
+  under another name (#159).
+- Init output drops the em dash: `[ctxo] ✓ <file> (<created|updated|unchanged>)` (#159).
 
 ### Fixed
 
@@ -121,6 +152,12 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo with five packages. Per-packag
   the post-commit hook (`ctxo index --commit HEAD`) never returned and `git commit` hung. The
   variable now applies only when `ctxo` runs without arguments; `ctxo --http` without `--port`
   now listens on its default port 3001 instead of failing on an invalid port (#157).
+- A new `CLAUDE.md` (or `GEMINI.md`) was written without markers, so the next `ctxo init` appended a
+  second ctxo block (#159).
+- Rules files written in create mode always reported `updated`, even when nothing changed (#159).
+- A corrupt or oddly shaped `.claude/settings.json` (invalid JSON, `null`, an array, `PreToolUse`
+  as an object) was overwritten or crashed `ctxo init`. It is now left unchanged with a warning, and
+  `ctxo doctor` reports it (#159).
 
 ## [0.8.0-alpha.0] - 2026-04-13
 

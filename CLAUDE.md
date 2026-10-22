@@ -46,7 +46,11 @@ ctxo index --cochange-commits 500   # co-change window in commits (default 2000,
 ctxo index --cochange-since 12m     # co-change window by age from HEAD (d, w, m, y)
 ctxo watch                          # file watcher for incremental re-index
 ctxo sync                           # rebuild SQLite from committed JSON
-ctxo init                           # install git hooks (post-commit v2) + language detection/install prompt
+ctxo init                           # rules, skills, guard, MCP config, git hooks (post-commit v2), config + plugin install prompt
+ctxo init --only <parts>            # install only these parts: rules,skills,guard,mcp,git-hooks,config
+ctxo init --skip <parts>            # install every part except these
+ctxo init --no-guard                # no safe-edit guard (CLAUDE.md gets the full rules block)
+ctxo init --dry-run                 # list every file init would create or change; writes nothing
 ctxo init --no-install              # init without plugin install prompt
 ctxo status                         # show index manifest
 ctxo doctor                         # health check all subsystems (--json, --quiet)
@@ -159,6 +163,8 @@ cochange:                      # co-change matrix window (independent of --max-h
 ### Safe-Edit Guard
 
 A PreToolUse hook (Claude Code only) that blocks an Edit to a high-impact symbol until the agent has checked blast radius via the MCP tool. Registered in `.claude/settings.json` by `ctxo init`. Fires once per symbol per session, fail-open on any uncertainty.
+
+Rules are tiered (#159, [ADR-015 amendment](docs/architecture/ADR/adr-015-safe-edit-guard.md#amendment-tiered-rules-159)): `ctxo init` writes a compact block into `CLAUDE.md` when the guard, all three skills and an enabled gate are in place, and the full block everywhere else, inside versioned `<!-- ctxo-rules-start v<version> -->` markers that are replaced in place; the `ai_rules`, `skills` and `claude_guard_hook` doctor checks report drift, and `ctxo doctor --fix` repairs it.
 
 Gate decision: primary = blast-radius confirmed+likely dependents vs `minDependents` floor; secondary = PageRank percentile. Config in `.ctxo/config.yaml`:
 

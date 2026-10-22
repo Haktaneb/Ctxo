@@ -52,7 +52,7 @@ cochange:
 | `stats.enabled` | boolean | `true` | Session recording opt-out. Set `false` to disable local stats capture. |
 | `index.ignore` | string[] | `[]` | Picomatch globs applied to file paths **after** `git ls-files`. |
 | `index.ignoreProjects` | string[] | `[]` | Picomatch globs applied to workspace roots. Skipped workspaces are never enumerated. |
-| `gate.enabled` | boolean | `true` | Enable or disable the safe-edit guard PreToolUse hook. |
+| `gate.enabled` | boolean | `true` | Enable or disable the safe-edit guard PreToolUse hook. `false` also makes `ctxo init` write the full rules block for Claude Code, and `ctxo doctor` stops expecting the guard. |
 | `gate.sensitivity` | `strict` \| `balanced` \| `lenient` | `balanced` | How aggressively the guard flags high-impact symbols. |
 | `cochange.maxCommits` | positive integer or `"all"` | `2000` | Co-change window: the last N non-merge commits from HEAD. Independent of `ctxo index --max-history`. |
 | `cochange.since` | string (`30d`, `2w`, `12m`, `1y`) | unset | Also limit the window by age, counted back from HEAD's committer date (never the wall clock). Applies together with `maxCommits`. |
