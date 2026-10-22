@@ -151,7 +151,7 @@ describe('generateRules', () => {
 });
 
 describe('installRules', () => {
-  it('creates a new file for create-mode platforms', () => {
+  it('creates a missing rules file', () => {
     const dir = makeTempDir();
     const result = installRules(dir, 'windsurf');
 
@@ -247,7 +247,7 @@ describe('installRules', () => {
     expect(readFileSync(join(dir, 'CLAUDE.md'), 'utf-8')).toBe(renderRulesBlock('full') + '\n');
   });
 
-  it('create-mode files keep user content outside the block', () => {
+  it('an existing AGENTS.md keeps user content outside the block', () => {
     const dir = makeTempDir();
     writeFileSync(join(dir, 'AGENTS.md'), '# Team rules\nBe kind.\n', 'utf-8');
 
@@ -382,12 +382,85 @@ describe('installRules', () => {
     expect(readFileSync(file).equals(before)).toBe(true);
   });
 
-  it('creates CLAUDE.md if it does not exist (append mode)', () => {
+  it('creates CLAUDE.md if it does not exist', () => {
     const dir = makeTempDir();
     const result = installRules(dir, 'claude-code');
 
     expect(result.action).toBe('created');
     expect(existsSync(join(dir, 'CLAUDE.md'))).toBe(true);
+  });
+
+  it('a CLAUDE.md with CRLF line endings and a BOM keeps both when its block is rewritten', () => {
+    const dir = makeTempDir();
+    const file = join(dir, 'CLAUDE.md');
+    const crlf = (text: string): string => text.replace(/\n/g, '\r\n');
+    const preTier = '# P\n\n<!-- ctxo-rules-start -->\n' + LEGACY_RULE_BODY + '\n<!-- ctxo-rules-end -->\n\nNotes\n';
+    writeFileSync(file, BOM + crlf(preTier), 'utf-8');
+
+    expect(installRules(dir, 'claude-code')).toEqual({ file: 'CLAUDE.md', action: 'updated' });
+    expect(readFileSync(file, 'utf-8')).toBe(BOM + crlf('# P\n\n' + renderRulesBlock('full') + '\n\nNotes\n'));
+    expect(installRules(dir, 'claude-code').action).toBe('skipped');
+  });
+
+  it('a legacy GEMINI.md is upgraded in place', () => {
+    const dir = makeTempDir();
+    writeFileSync(join(dir, 'GEMINI.md'), '# Gemini\n\n' + LEGACY_RULE_BODY + '\n\nMore notes\n', 'utf-8');
+
+    expect(installRules(dir, 'gemini-cli')).toEqual({ file: 'GEMINI.md', action: 'updated' });
+    expect(readFileSync(join(dir, 'GEMINI.md'), 'utf-8')).toBe('# Gemini\n\n' + renderRulesBlock('full') + '\n\nMore notes\n');
+  });
+
+  it('a dry run of a current rules file reports unchanged (skipped)', () => {
+    const dir = makeTempDir();
+    installRules(dir, 'windsurf');
+    const before = readFileSync(join(dir, '.windsurfrules'));
+
+    expect(installRules(dir, 'windsurf', { dryRun: true })).toEqual({ file: '.windsurfrules', action: 'skipped' });
+    expect(readFileSync(join(dir, '.windsurfrules')).equals(before)).toBe(true);
+  });
+
+  it('a rules path that cannot be read gets a warning instead of an error, in a dry run too', () => {
+    const dir = makeTempDir();
+    mkdirSync(join(dir, 'CLAUDE.md'));
+
+    for (const dryRun of [true, false]) {
+      let result: ReturnType<typeof installRules> | undefined;
+      expect(() => { result = installRules(dir, 'claude-code', { dryRun }); }).not.toThrow();
+      expect(result).toMatchObject({ file: 'CLAUDE.md', action: 'skipped' });
+      expect(result?.warning).toMatch(/^CLAUDE\.md: could not be read \(.+\); left unchanged$/);
+    }
+    expect(readdirSync(join(dir, 'CLAUDE.md'))).toEqual([]);
+  });
+
+  it('an empty or whitespace-only Cursor rules file gets the frontmatter, like a created one', () => {
+    const dir = makeTempDir();
+    const file = join(dir, '.cursor', 'rules', 'ctxo.mdc');
+    mkdirSync(join(dir, '.cursor', 'rules'), { recursive: true });
+
+    writeFileSync(file, '', 'utf-8');
+    expect(installRules(dir, 'cursor')).toEqual({ file: '.cursor/rules/ctxo.mdc', action: 'updated' });
+    expect(readFileSync(file, 'utf-8')).toBe(generateRules('cursor'));
+    expect(installRules(dir, 'cursor').action).toBe('skipped');
+
+    writeFileSync(file, BOM + ' \r\n\r\n', 'utf-8');
+    expect(installRules(dir, 'cursor').action).toBe('updated');
+    expect(readFileSync(file, 'utf-8')).toBe(BOM + generateRules('cursor').replace(/\n/g, '\r\n'));
+  });
+
+  it('an end marker without a start marker is left byte-for-byte unchanged with a warning', () => {
+    const dir = makeTempDir();
+    const file = join(dir, 'CLAUDE.md');
+    writeFileSync(file, 'Intro\n\nold rules\n<!-- ctxo-rules-end -->\n', 'utf-8');
+    const before = readFileSync(file);
+
+    const result = installRules(dir, 'claude-code');
+
+    expect(result).toEqual({
+      file: 'CLAUDE.md',
+      action: 'skipped',
+      warning: 'CLAUDE.md: ctxo rules end marker has no start marker; left unchanged',
+    });
+    expect(readFileSync(file).equals(before)).toBe(true);
   });
 
   it('throws on unknown platform ID', () => {
@@ -832,6 +905,22 @@ describe('installSkills', () => {
     }
   });
 
+  it('installSkills warns instead of throwing when a skill path is a directory', () => {
+    const root = makeTempDir();
+    const blocked = join(root, '.claude', 'skills', 'ctxo-safe-edit', 'SKILL.md');
+    mkdirSync(blocked, { recursive: true });
+
+    for (const dryRun of [true, false]) {
+      let results: ReturnType<typeof installSkills> = [];
+      expect(() => { results = installSkills(root, 'claude-code', { dryRun }); }).not.toThrow();
+      expect(results[1]).toMatchObject({ file: '.claude/skills/ctxo-safe-edit/SKILL.md', action: 'skipped' });
+      expect(results[1]?.warning).toMatch(/^\.claude\/skills\/ctxo-safe-edit\/SKILL\.md: could not be read \(.+\); left unchanged$/);
+    }
+    expect(existsSync(join(root, '.claude', 'skills', 'ctxo-understand', 'SKILL.md'))).toBe(true);
+    expect(readdirSync(blocked)).toEqual([]);
+    expect(skillStates(root, 'claude-code').map((s) => s.state)).toEqual(['current', 'missing', 'current']);
+  });
+
   it('installSkills leaves a skill from a newer ctxo alone with a warning', () => {
     const root = makeTempDir();
     installSkills(root, 'claude-code');
@@ -961,6 +1050,14 @@ describe('bundled skills', () => {
     expect(GUIDE_TOOLS).toHaveLength(14);
   });
 
+  it('the guide tools are exactly the MCP tools the server registers', () => {
+    // packages/cli/src/index.ts registers every tool with server.registerTool('<name>', ...).
+    const source = readFileSync(join(import.meta.dirname, '..', '..', 'index.ts'), 'utf-8');
+    const registered = [...source.matchAll(/\bregisterTool\(\s*'([a-z_]+)'/g)].map((m) => m[1]);
+    expect(registered.length).toBeGreaterThan(0);
+    expect([...registered].sort()).toEqual([...GUIDE_TOOLS].sort());
+  });
+
   it('ctxo-understand matches the narrowed rules wording', () => {
     const text = bundledSkill('ctxo-understand');
     expect(text).not.toContain('before reading source files');
@@ -1028,6 +1125,7 @@ describe('ensureClaudeHook', () => {
     '{\n  // comment\n}',
     '{"hooks":{"PreToolUse":[null]}}',
     '{"hooks":{"PreToolUse":[{"hooks":"x"}]}}',
+    '{"hooks":{"PreToolUse":[{"matcher":"Edit"}]}}',
   ])('treats valid JSON with an unexpected shape like corrupt JSON (%j)', (text) => {
     const root = makeTempDir();
     const file = writeClaudeSettings(root, 'settings.json', text);
@@ -1079,6 +1177,54 @@ describe('ensureClaudeHook', () => {
       hooks: { PreToolUse: [CTXO_GUARD_ENTRY] },
     });
     expect(ensureClaudeHook(root).action).toBe('skipped');
+  });
+
+  it('writes the exact bytes of an updated settings file', () => {
+    const root = makeTempDir();
+    const file = writeClaudeSettings(root, 'settings.json', '{"permissions":{}}\n');
+
+    expect(ensureClaudeHook(root)).toEqual({ file: '.claude/settings.json', action: 'updated' });
+
+    expect(readFileSync(file, 'utf-8')).toBe(
+      JSON.stringify({ permissions: {}, hooks: { PreToolUse: [CTXO_GUARD_ENTRY] } }, null, 2) + '\n',
+    );
+  });
+
+  it('writes an updated settings file back with its BOM and CRLF line endings', () => {
+    const root = makeTempDir();
+    const crlf = (text: string): string => text.replace(/\n/g, '\r\n');
+    const settings = { permissions: { allow: ['Bash(pnpm test)'] } };
+    const file = writeClaudeSettings(root, 'settings.json', BOM + crlf(JSON.stringify(settings, null, 2) + '\n'));
+
+    expect(ensureClaudeHook(root)).toEqual({ file: '.claude/settings.json', action: 'updated' });
+
+    const expected = { ...settings, hooks: { PreToolUse: [CTXO_GUARD_ENTRY] } };
+    expect(readFileSync(file, 'utf-8')).toBe(BOM + crlf(JSON.stringify(expected, null, 2) + '\n'));
+    expect(ensureClaudeHook(root).action).toBe('skipped');
+  });
+
+  it('finds a guard next to a malformed sibling entry and adds no second one', () => {
+    const malformedSibling = { matcher: 'Write' };
+
+    const local = makeTempDir();
+    const localFile = writeClaudeSettings(local, 'settings.local.json', JSON.stringify({ hooks: { PreToolUse: [malformedSibling, CTXO_GUARD_ENTRY] } }));
+    const localBefore = readFileSync(localFile);
+    expect(readClaudeGuardState(local)).toBe('present');
+    expect(ensureClaudeHook(local)).toEqual({ file: '.claude/settings.json', action: 'skipped' });
+    expect(existsSync(join(local, '.claude', 'settings.json'))).toBe(false);
+    expect(readFileSync(localFile).equals(localBefore)).toBe(true);
+
+    const shared = makeTempDir();
+    const sharedFile = writeClaudeSettings(shared, 'settings.json', JSON.stringify({ hooks: { PreToolUse: [CTXO_GUARD_ENTRY, malformedSibling] } }));
+    const sharedBefore = readFileSync(sharedFile);
+    expect(readClaudeGuardState(shared)).toBe('present');
+    expect(ensureClaudeHook(shared)).toEqual({ file: '.claude/settings.json', action: 'skipped' });
+    expect(readFileSync(sharedFile).equals(sharedBefore)).toBe(true);
+
+    // Without the guard, the malformed entry still makes the file unreadable: it is never written.
+    const unguarded = makeTempDir();
+    writeClaudeSettings(unguarded, 'settings.json', JSON.stringify({ hooks: { PreToolUse: [malformedSibling] } }));
+    expect(readClaudeGuardState(unguarded)).toBe('unreadable');
   });
 
   it('does not duplicate a guard registered in settings.local.json', () => {

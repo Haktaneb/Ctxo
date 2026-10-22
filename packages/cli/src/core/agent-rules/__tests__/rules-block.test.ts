@@ -140,6 +140,7 @@ describe('scanRulesBlocks', () => {
 
     expect(scanRulesBlocks(content)).toEqual({
       unterminated: false,
+      orphanEnd: false,
       blocks: [
         { start: at(versioned), end: at(versioned) + versioned.length, marked: true, version: '0.9', body: 'A' },
         { start: at(unversioned), end: at(unversioned) + unversioned.length, marked: true, version: undefined, body: 'B\nB2' },
@@ -152,6 +153,7 @@ describe('scanRulesBlocks', () => {
     const legacy = scanRulesBlocks('# Mine\n\n' + LEGACY_RULE_BODY + '\n');
     expect(legacy).toEqual({
       unterminated: false,
+      orphanEnd: false,
       blocks: [{ start: 8, end: 8 + LEGACY_RULE_BODY.length, marked: false, body: LEGACY_RULE_BODY }],
     });
 
@@ -168,7 +170,22 @@ describe('scanRulesBlocks', () => {
   });
 
   it('scanRulesBlocks ignores a marker that is not on its own line', () => {
-    expect(scanRulesBlocks('see `<!-- ctxo-rules-start -->` here\n')).toEqual({ blocks: [], unterminated: false });
+    expect(scanRulesBlocks('see `<!-- ctxo-rules-start -->` here\n')).toEqual({ blocks: [], unterminated: false, orphanEnd: false });
+  });
+
+  it('scanRulesBlocks also reads markers inside a code fence, as documented', () => {
+    const fenced = 'Docs\n\n```md\n' + START + '\nexample\n' + END + '\n```\n';
+    expect(scanRulesBlocks(fenced).blocks.map((b) => b.body)).toEqual(['example']);
+  });
+
+  it('scanRulesBlocks flags an end marker without a start marker', () => {
+    expect(scanRulesBlocks('Intro\n\nold rules\n' + END + '\n')).toEqual({ blocks: [], unterminated: false, orphanEnd: true });
+    const after = scanRulesBlocks(START + '\nx\n' + END + '\n\n' + END + '\n');
+    expect(after.orphanEnd).toBe(true);
+    expect(after.blocks).toHaveLength(1);
+    expect(scanRulesBlocks(END + '\n' + START + '\nx\n' + END + '\n').orphanEnd).toBe(true);
+    expect(scanRulesBlocks(START + '\nx\n' + END + '\n').orphanEnd).toBe(false);
+    expect(scanRulesBlocks(START + '\nold\n' + START + '\nnew\n' + END + '\n')).toMatchObject({ unterminated: true, orphanEnd: false });
   });
 
   it('scanRulesBlocks reads CRLF text with a BOM in normalised offsets', () => {
@@ -224,6 +241,11 @@ describe('upsertRulesBlock', () => {
 
   it('upsertRulesBlock leaves an unterminated block alone', () => {
     expect(upsertRulesBlock('# P\n\n' + START + '\nold\n', block)).toEqual({ kind: 'unterminated' });
+  });
+
+  it('upsertRulesBlock leaves a file with an orphan end marker alone instead of adding a second block', () => {
+    expect(upsertRulesBlock('# P\n\nold rules\n' + END + '\n', block)).toEqual({ kind: 'orphan-end' });
+    expect(upsertRulesBlock('# P\n\n' + START + '\nx\n' + END + '\n' + END + '\n', block)).toEqual({ kind: 'orphan-end' });
   });
 
   it('upsertRulesBlock leaves a block from a newer template alone', () => {

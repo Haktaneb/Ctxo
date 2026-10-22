@@ -22,6 +22,7 @@ import {
   type RulesBlockSpan,
   type RulesScan,
   type RulesTier,
+  type TextShape,
 } from '../core/agent-rules/rules-block.js';
 import { loadConfig } from '../core/config/load-config.js';
 
@@ -37,46 +38,45 @@ const UNREADABLE_SETTINGS_WARNING =
 /** Whether the safe-edit guard is registered: `unreadable` means `.claude/settings.json` cannot be read safely. */
 export type ClaudeGuardState = 'present' | 'absent' | 'unreadable';
 
-const UTF8_BOM = '\uFEFF';
-
 type SettingsRead =
   | { readonly kind: 'missing' }
   | { readonly kind: 'unreadable' }
-  | { readonly kind: 'ok'; readonly json: Record<string, unknown>; readonly hasHook: boolean; readonly bom: boolean };
+  | { readonly kind: 'ok'; readonly json: Record<string, unknown>; readonly hasHook: boolean; readonly shape: TextShape };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**
- * Reads a Claude Code settings file; a leading UTF-8 BOM is ignored and reported as `bom`.
- * `unreadable` covers text that fails `JSON.parse` (JSONC comments included) and JSON that is not a
- * plain object, has a `hooks` that is not a plain object, a `hooks.PreToolUse` that is not an array,
- * or a `PreToolUse` entry that is not a plain object with a `hooks` array.
+ * Reads a Claude Code settings file; a leading UTF-8 BOM and CRLF line endings are kept in `shape`, so
+ * a rewrite restores them (D2). `unreadable` covers text that fails `JSON.parse` (JSONC comments
+ * included) and JSON that is not a plain object, has a `hooks` that is not a plain object, a
+ * `hooks.PreToolUse` that is not an array, or a `PreToolUse` entry that is not a plain object with a
+ * `hooks` array. The guard counts wherever its own entry is well formed: a file that registers it is
+ * `ok` with `hasHook` even next to a malformed entry, because ctxo never writes a file with the guard.
  */
 function readSettings(path: string): SettingsRead {
   if (!existsSync(path)) return { kind: 'missing' };
   let json: unknown;
-  let bom: boolean;
+  let shape: TextShape;
   try {
-    const shape = textShape(readFileSync(path, 'utf-8'));
-    bom = shape.bom;
+    shape = textShape(readFileSync(path, 'utf-8'));
     json = JSON.parse(shape.text);
   } catch {
     return { kind: 'unreadable' };
   }
   if (!isPlainObject(json)) return { kind: 'unreadable' };
-  if (json.hooks === undefined) return { kind: 'ok', json, hasHook: false, bom };
+  if (json.hooks === undefined) return { kind: 'ok', json, hasHook: false, shape };
   if (!isPlainObject(json.hooks)) return { kind: 'unreadable' };
   const pre = json.hooks.PreToolUse;
-  if (pre === undefined) return { kind: 'ok', json, hasHook: false, bom };
+  if (pre === undefined) return { kind: 'ok', json, hasHook: false, shape };
   if (!Array.isArray(pre)) return { kind: 'unreadable' };
-  let hasHook = false;
-  for (const entry of pre as unknown[]) {
-    if (!isPlainObject(entry) || !Array.isArray(entry.hooks)) return { kind: 'unreadable' };
-    if ((entry.hooks as unknown[]).some((h) => isPlainObject(h) && h.command === CTXO_HOOK_COMMAND)) hasHook = true;
-  }
-  return { kind: 'ok', json, hasHook, bom };
+  const wellFormed = (pre as unknown[]).filter(
+    (entry): entry is { hooks: unknown[] } => isPlainObject(entry) && Array.isArray(entry.hooks),
+  );
+  const hasHook = wellFormed.some((entry) => entry.hooks.some((h) => isPlainObject(h) && h.command === CTXO_HOOK_COMMAND));
+  if (!hasHook && wellFormed.length !== pre.length) return { kind: 'unreadable' };
+  return { kind: 'ok', json, hasHook, shape };
 }
 
 /** The shared settings file and whether the guard is registered there or in the local one (read only, D11). */
@@ -191,8 +191,8 @@ export function skillsExpected(projectRoot: string, platformId: string): boolean
  * Registers the safe-edit guard under `hooks.PreToolUse` in `.claude/settings.json`. A guard already
  * registered there or in `.claude/settings.local.json` is `skipped`. An unreadable settings file is
  * never overwritten: `skipped` with a warning. Every other setting and hook is kept, the entry goes
- * last, and a UTF-8 BOM is written back. `dryRun` computes the same action and writes nothing, not
- * even a directory.
+ * last, and the file's UTF-8 BOM and line endings are written back (D2). `dryRun` computes the same
+ * action and writes nothing, not even a directory.
  */
 export function ensureClaudeHook(projectRoot: string, options: { readonly dryRun?: boolean } = {}): InstallResult {
   const filePath = join(projectRoot, '.claude', 'settings.json');
@@ -216,7 +216,7 @@ export function ensureClaudeHook(projectRoot: string, options: { readonly dryRun
   const pre = Array.isArray(hooks.PreToolUse) ? (hooks.PreToolUse as unknown[]) : [];
   const updated = { ...shared.json, hooks: { ...hooks, PreToolUse: [...pre, ctxoEntry] } };
   const body = JSON.stringify(updated, null, 2) + '\n';
-  if (!options.dryRun) writeFileSync(filePath, (shared.bom ? UTF8_BOM : '') + body, 'utf-8');
+  if (!options.dryRun) writeFileSync(filePath, shared.shape.restore(body), 'utf-8');
   return { file: CLAUDE_SETTINGS_FILE, action: 'updated' };
 }
 
@@ -329,6 +329,14 @@ export interface InstallResult {
  * the final content with the original: equal is `skipped`. `dryRun` computes the same action and
  * writes nothing, not even a directory. A file that is also another platform's rules file
  * (`linkedRulesPlatforms`) is written in the full tier, whatever `tier` says.
+ *
+ * Cursor's file also gets its frontmatter: a leading LEGACY_CURSOR_FRONTMATTER is swapped for the
+ * current one (its BOM and line endings kept), and an empty or whitespace-only file is written as a
+ * created one would be. Other frontmatter is left alone.
+ *
+ * A file that cannot be read (a directory, no permission), a damaged block (a start marker without an
+ * end marker, an end marker without a start marker) and a block from a newer ctxo are `skipped` with
+ * a warning and left unchanged, in a dry run too.
  */
 export function installRules(
   projectRoot: string,
@@ -350,13 +358,34 @@ export function installRules(
     return { file: platform.file, action: 'created' };
   }
 
-  const existing = readFileSync(filePath, 'utf-8');
+  let existing: string;
+  try {
+    existing = readFileSync(filePath, 'utf-8');
+  } catch (err) {
+    return { file: platform.file, action: 'skipped', warning: unreadableWarning(platform.file, err) };
+  }
+
+  if (platformId === 'cursor' && textShape(existing).text.trim() === '') {
+    // An empty Cursor file gets what a created one gets: the frontmatter, then the block.
+    const content = textShape(existing).restore(generateRules(platformId, tier));
+    if (content === existing) return { file: platform.file, action: 'skipped' };
+    if (!options.dryRun) writeFileSync(filePath, content, 'utf-8');
+    return { file: platform.file, action: 'updated' };
+  }
+
   const upsert = upsertRulesBlock(existing, renderRulesBlock(tier));
   if (upsert.kind === 'unterminated') {
     return {
       file: platform.file,
       action: 'skipped',
       warning: `${platform.file}: ctxo rules start marker has no end marker; left unchanged`,
+    };
+  }
+  if (upsert.kind === 'orphan-end') {
+    return {
+      file: platform.file,
+      action: 'skipped',
+      warning: `${platform.file}: ctxo rules end marker has no start marker; left unchanged`,
     };
   }
   if (upsert.kind === 'newer') {
@@ -371,6 +400,13 @@ export function installRules(
   if (content === existing) return { file: platform.file, action: 'skipped' };
   if (!options.dryRun) writeFileSync(filePath, content, 'utf-8');
   return { file: platform.file, action: 'updated' };
+}
+
+/** The warning for a rules or skill file ctxo could not read (a directory in its place, no permission). */
+function unreadableWarning(file: string, err: unknown): string {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  const reason = code ?? (err instanceof Error ? err.message : String(err));
+  return `${file}: could not be read (${reason}); left unchanged`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -415,7 +451,8 @@ export interface SkillState {
    * `current` also covers a copy that differs only in formatting: line endings, a UTF-8 BOM, trailing
    * whitespace, blank lines or table padding (`normaliseMarkdown`). `newer`: the copy's
    * `<!-- ctxo-skill -->` marker is above SKILLS_TEMPLATE_VERSION (a newer ctxo wrote it); it is left
-   * alone and is not outdated. A copy with no marker or an older one is `outdated`.
+   * alone and is not outdated. A copy with no marker or an older one is `outdated`. `missing` also
+   * covers a path that cannot be read as a file (such as a directory).
    */
   readonly state: 'current' | 'missing' | 'outdated' | 'newer';
 }
@@ -426,6 +463,8 @@ interface SkillPlanEntry extends SkillState {
   readonly to: string;
   /** The installed copy's marker version; set for `newer`. */
   readonly version?: string;
+  /** Set when something other than a readable file is at `to` (a directory, no permission): the warning. */
+  readonly blocked?: string;
 }
 
 function skillPlan(projectRoot: string, platformId: string): SkillPlanEntry[] {
@@ -437,7 +476,13 @@ function skillPlan(projectRoot: string, platformId: string): SkillPlanEntry[] {
     const to = target(projectRoot, skill);
     const file = relative(projectRoot, to).split(sep).join('/');
     if (!existsSync(to)) return { skill, file, state: 'missing', bundled, to };
-    const installed = readFileSync(to, 'utf-8');
+    let installed: string;
+    try {
+      installed = readFileSync(to, 'utf-8');
+    } catch (err) {
+      // Not a readable skill, so it counts as missing; installSkills warns instead of writing over it.
+      return { skill, file, state: 'missing', bundled, to, blocked: unreadableWarning(file, err) };
+    }
     const version = skillTemplateVersion(installed);
     if (version !== undefined && compareTemplateVersions(version, SKILLS_TEMPLATE_VERSION) > 0) {
       return { skill, file, state: 'newer', bundled, to, version };
@@ -456,15 +501,17 @@ export function skillStates(projectRoot: string, platformId: string): SkillState
 /**
  * Copies the bundled skills into the platform's skill folder. A skill equal to the bundled one
  * (formatting ignored, see `SkillState`) is `skipped` and not rewritten; a missing one is `created`, a
- * different one `updated`. A skill from a newer ctxo is `skipped` with a warning and left unchanged.
- * `dryRun` computes the same actions and writes nothing, not even a directory.
+ * different one `updated`. A skill from a newer ctxo, and a skill path that cannot be read (such as a
+ * directory), are `skipped` with a warning and left unchanged. `dryRun` computes the same actions and
+ * writes nothing, not even a directory.
  */
 export function installSkills(
   projectRoot: string,
   platformId: string,
   options: { readonly dryRun?: boolean } = {},
 ): InstallResult[] {
-  return skillPlan(projectRoot, platformId).map(({ file, state, bundled, to, version }): InstallResult => {
+  return skillPlan(projectRoot, platformId).map(({ file, state, bundled, to, version, blocked }): InstallResult => {
+    if (blocked !== undefined) return { file, action: 'skipped', warning: blocked };
     if (state === 'current') return { file, action: 'skipped' };
     if (state === 'newer') {
       return { file, action: 'skipped', warning: `${file}: skill v${version ?? ''} comes from a newer ctxo; left unchanged` };

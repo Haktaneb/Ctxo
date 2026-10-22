@@ -27,6 +27,7 @@ export const RULES_TEMPLATE_VERSION: string = '0.13';
  */
 export const SKILLS_TEMPLATE_VERSION: string = '0.13';
 
+/** Marker lines; they also match inside a fenced code block, so a fenced copy of a block counts as one. */
 const START_MARKER_RE = /^<!-- ctxo-rules-start(?: v(\S+))? -->[ \t]*$/gm;
 const END_MARKER_RE = /^<!-- ctxo-rules-end -->[ \t]*$/gm;
 const VERSION_RE = /^\d+\.\d+$/;
@@ -90,6 +91,10 @@ alwaysApply: true
 /*
  * Both bodies are written in the layout Prettier prints (a blank line after each heading, a padded
  * table), so a repo that formats its markdown leaves them byte-for-byte alone.
+ *
+ * The spec caps the compact tier at 8 lines including its heading. Prettier forces blank lines after
+ * the start marker, after the heading and before the end marker, so the cap counts non-blank lines
+ * only: the rendered compact block has 6 (both markers, the heading, three lines of text), 9 in all.
  */
 
 const COMPACT_RULE_BODY = `## ctxo
@@ -243,6 +248,8 @@ export interface RulesScan {
   readonly blocks: readonly RulesBlockSpan[];
   /** A start marker has no end marker before the next start marker or the end of the text. */
   readonly unterminated: boolean;
+  /** An end marker closes no block: no start marker before it, or its block was already closed. */
+  readonly orphanEnd: boolean;
 }
 
 /** Finds every ctxo block in a file's content. Strips a leading BOM and normalises '\r\n' first. */
@@ -275,8 +282,10 @@ function scanNormalised(text: string): RulesScan {
     });
   });
 
+  const closing = new Set(marked.map((b) => b.end));
+  const orphanEnd = ends.some((m) => !closing.has(m.index + m[0].length));
   const blocks = [...marked, ...legacySpans(text, marked)].sort((a, b) => a.start - b.start);
-  return { blocks, unterminated };
+  return { blocks, unterminated, orphanEnd };
 }
 
 /** LEGACY_RULE_BODY's lines in their comparison form, blank lines left out. */
@@ -325,15 +334,18 @@ function legacySpans(text: string, marked: readonly RulesBlockSpan[]): RulesBloc
 export type UpsertResult =
   | { readonly kind: 'inserted' | 'replaced' | 'unchanged'; readonly content: string }
   | { readonly kind: 'unterminated' }
+  | { readonly kind: 'orphan-end' }
   | { readonly kind: 'newer'; readonly version: string };
 
 /**
  * Writes `block` into a file's content: replaces the first ctxo block in place (marked, unmarked or
  * legacy), removes any later ones, or appends when there is none.
  *
- * Leaves the content alone when a start marker is unterminated, or when a block comes from a newer
- * template. Every byte outside the ctxo blocks is kept, the BOM included; the new block takes the
- * dominant line ending of the text around it, so a mixed-ending file is never rewritten wholesale.
+ * Leaves the content alone when a start marker is unterminated, when an end marker closes no block
+ * (a deleted start line would otherwise leave the old body and a second block), or when a block comes
+ * from a newer template (D8, D2). Every byte outside the ctxo blocks is kept, the BOM included; the new
+ * block takes the dominant line ending of the text around it, so a mixed-ending file is never
+ * rewritten wholesale.
  * A single block with the same marker version as `block` and a body that differs only in formatting
  * (`normaliseMarkdown`) is `unchanged`, so ctxo and a formatter never rewrite each other's output.
  */
@@ -344,6 +356,7 @@ export function upsertRulesBlock(existing: string, block: string): UpsertResult 
   const text = shape.text;
   const scan = scanNormalised(text);
   if (scan.unterminated) return { kind: 'unterminated' };
+  if (scan.orphanEnd) return { kind: 'orphan-end' };
 
   for (const b of scan.blocks) {
     if (b.version !== undefined && compareTemplateVersions(b.version, RULES_TEMPLATE_VERSION) > 0) {
