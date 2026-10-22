@@ -45,11 +45,15 @@ var jsonOptions = new JsonSerializerOptions
 
 var cliArgs = Environment.GetCommandLineArgs().Skip(1).ToArray();
 var keepAlive = cliArgs.Contains("--keep-alive");
+// SQL text at known data-access call sites becomes reads, writes and executes
+// edges; the host sets the flag only when a SQL plugin is loaded.
+var sqlCallSites = cliArgs.Contains("--sql-call-sites");
+var sqlStats = new SqlStats();
 var solutionPath = cliArgs.FirstOrDefault(a => !a.StartsWith("--"));
 
 if (string.IsNullOrEmpty(solutionPath))
 {
-    WriteError("Usage: dotnet run -- <solution.sln|project.csproj> [--keep-alive]");
+    WriteError("Usage: dotnet run -- <solution.sln|project.csproj> [--keep-alive] [--sql-call-sites]");
     return 1;
 }
 
@@ -161,10 +165,18 @@ async Task RunBatchIndex(Solution sol, Dictionary<ProjectId, Compilation> comps)
     var projectGraph = BuildProjectGraph(sol);
     WriteLine(JsonSerializer.Serialize(projectGraph, jsonOptions));
 
-    // Done
+    // Done; the SQL call-site stats only when they were collected
     sw.Stop();
-    var done = new { type = "done", totalFiles, elapsed = $"{sw.Elapsed.TotalSeconds:F1}s" };
-    WriteLine(JsonSerializer.Serialize(done, jsonOptions));
+    var elapsed = sw.Elapsed.TotalSeconds.ToString("F1", System.Globalization.CultureInfo.InvariantCulture) + "s";
+    if (sqlCallSites)
+    {
+        var sql = new { constant = sqlStats.Constant, nonConstant = sqlStats.NonConstant, unparsable = sqlStats.Unparsable };
+        WriteLine(JsonSerializer.Serialize(new { type = "done", totalFiles, elapsed, sql }, jsonOptions));
+    }
+    else
+    {
+        WriteLine(JsonSerializer.Serialize(new { type = "done", totalFiles, elapsed }, jsonOptions));
+    }
 }
 
 // ── Keep-Alive Mode ──────────────────────────────────────────────────
@@ -430,6 +442,20 @@ List<CtxoEdge> ExtractEdges(
                     }
                     break;
                 }
+            }
+        }
+
+        // Data edges: constant SQL text at known data-access call sites. They
+        // are optional, so a failure here never costs the file its code edges.
+        if (sqlCallSites)
+        {
+            try
+            {
+                SqlCallSites.Collect(operation, (toId, kind) => AddEdge(edges, seen, fromId, toId, kind), sqlStats);
+            }
+            catch (Exception ex)
+            {
+                WriteError($"SQL call sites skipped in {fromId}: {ex.Message}");
             }
         }
     }

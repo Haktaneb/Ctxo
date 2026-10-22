@@ -5,6 +5,11 @@ import { createLogger } from './logger.js';
 
 const log = createLogger('ctxo:lang-csharp');
 
+export interface CSharpCompositeAdapterOptions {
+  /** Ask the Roslyn helper for SQL call-site edges (the host's `sqlCallSites` capability). */
+  readonly sqlCallSites?: boolean;
+}
+
 /**
  * Chooses between the full-tier Roslyn launcher and the syntax-tier tree-sitter
  * adapter at initialize() time. Forwards extract*() calls to the active delegate
@@ -14,17 +19,27 @@ const log = createLogger('ctxo:lang-csharp');
  * When the Roslyn helper fails later (its batch run or its keep-alive cannot
  * restore, build or start), the composite switches to tree-sitter once, so the
  * C# files keep their syntax-tier symbols instead of getting none.
+ *
+ * SQL call-site edges (reads, writes, executes) come from the Roslyn helper
+ * only; the tree-sitter tier, including after a fallback, emits none.
  */
 export class CSharpCompositeAdapter implements ILanguageAdapter {
+  /** The `sqlCallSites` option as constructed, whatever tier is active. */
+  readonly sqlCallSites: boolean;
+
   private delegate: ILanguageAdapter | null = null;
   private roslyn: RoslynAdapter | null = null;
   private treeSitter: CSharpAdapter | null = null;
   private symbolRegistry: Map<string, SymbolKind> | null = null;
   private fellBack = false;
 
+  constructor(options: CSharpCompositeAdapterOptions = {}) {
+    this.sqlCallSites = options.sqlCallSites === true;
+  }
+
   async initialize(rootDir: string): Promise<void> {
     try {
-      const roslyn = new RoslynAdapter();
+      const roslyn = new RoslynAdapter({ sqlCallSites: this.sqlCallSites });
       await roslyn.initialize(rootDir);
       if (roslyn.isReady()) {
         this.roslyn = roslyn;

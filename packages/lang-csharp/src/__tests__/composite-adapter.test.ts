@@ -12,12 +12,16 @@ const discovery = vi.hoisted(() => ({
 const helper = vi.hoisted(() => ({
   runBatchIndex: vi.fn(),
   keepAliveStart: vi.fn(),
+  keepAliveArgs: [] as unknown[][],
 }));
 
 vi.mock('../roslyn/solution-discovery.js', () => discovery);
 vi.mock('../roslyn/roslyn-process.js', () => ({
   runBatchIndex: helper.runBatchIndex,
   RoslynKeepAlive: class {
+    constructor(...args: unknown[]) {
+      helper.keepAliveArgs.push(args);
+    }
     start = helper.keepAliveStart;
     isAlive = (): boolean => false;
     analyzeFile = async (): Promise<null> => null;
@@ -74,6 +78,7 @@ beforeEach(() => {
   discovery.discoverSolution.mockReturnValue(SOLUTION);
   helper.runBatchIndex.mockReset();
   helper.keepAliveStart.mockReset();
+  helper.keepAliveArgs.length = 0;
   stderrWrite = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
 });
 
@@ -150,5 +155,43 @@ describe('CSharpCompositeAdapter Roslyn fallback', () => {
     const symbols = await composite.extractSymbols(LOAN_SERVICE, SOURCE);
     expect(symbols.map((s) => s.symbolId)).toEqual([`${LOAN_SERVICE}::LoanService::class`]);
     expect(fallbackWarnings()).toHaveLength(1);
+  });
+});
+
+describe('CSharpCompositeAdapter SQL call sites', () => {
+  const HELPER_DIR = join(ROOT, 'tools', 'ctxo-roslyn');
+
+  it('passes sqlCallSites to the Roslyn batch and keep-alive', async () => {
+    helper.runBatchIndex.mockResolvedValue(successfulBatch());
+    helper.keepAliveStart.mockResolvedValue(true);
+    const composite = new CSharpCompositeAdapter({ sqlCallSites: true });
+    await composite.initialize(ROOT);
+
+    await composite.getRoslynDelegate()!.batchIndex();
+    await composite.getIncrementalReindex()!.startKeepAlive();
+
+    expect(helper.runBatchIndex).toHaveBeenCalledWith(HELPER_DIR, SOLUTION, { sqlCallSites: true });
+    expect(helper.keepAliveArgs).toEqual([[HELPER_DIR, SOLUTION, { sqlCallSites: true }]]);
+  });
+
+  it('runs the helper without SQL call sites by default', async () => {
+    helper.runBatchIndex.mockResolvedValue(successfulBatch());
+    const composite = await fullTierComposite();
+
+    await composite.getRoslynDelegate()!.batchIndex();
+
+    expect(composite.sqlCallSites).toBe(false);
+    expect(helper.runBatchIndex).toHaveBeenCalledWith(HELPER_DIR, SOLUTION, { sqlCallSites: false });
+  });
+
+  it('sqlCallSites reports the option as constructed after a fallback to tree-sitter', async () => {
+    helper.runBatchIndex.mockResolvedValue(failedBatch());
+    const composite = new CSharpCompositeAdapter({ sqlCallSites: true });
+    await composite.initialize(ROOT);
+
+    await composite.getRoslynDelegate()!.batchIndex();
+
+    expect(composite.getTier()).toBe('syntax');
+    expect(composite.sqlCallSites).toBe(true);
   });
 });

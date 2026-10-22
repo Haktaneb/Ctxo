@@ -48,6 +48,20 @@ export interface RoslynProjectGraph {
   edges: Array<{ from: string; to: string; kind: string }>;
 }
 
+/** SQL texts at known C# call sites, from the helper's `done` line (`--sql-call-sites` only). */
+export interface RoslynSqlStats {
+  constant: number;
+  nonConstant: number;
+  unparsable: number;
+}
+
+export interface RoslynRunOptions {
+  /** Emit reads, writes and executes edges for SQL text at known call sites (`--sql-call-sites`). */
+  readonly sqlCallSites?: boolean;
+  /** Batch: kill the run after this many ms (default 120_000). Keep-alive: shut down after this much inactivity (default 300_000). */
+  readonly timeoutMs?: number;
+}
+
 export interface RoslynBatchResult {
   files: RoslynFileResult[];
   projectGraph: RoslynProjectGraph | null;
@@ -57,6 +71,27 @@ export interface RoslynBatchResult {
   ok: boolean;
   /** Why the run failed (ok false only): the tail of the error output, at most 500 characters. */
   error?: string;
+  /** SQL call-site stats; present only when the run had `sqlCallSites` and the helper reported them. */
+  sql?: RoslynSqlStats;
+}
+
+const SQL_CALL_SITES_FLAG = '--sql-call-sites';
+
+/** `dotnet run` arguments for the helper; the SQL flag comes last and only when enabled. */
+function helperArgs(projectDir: string, solutionPath: string, mode: readonly string[], options: RoslynRunOptions): string[] {
+  return [
+    'run', '--project', projectDir, '--', solutionPath,
+    ...mode,
+    ...(options.sqlCallSites === true ? [SQL_CALL_SITES_FLAG] : []),
+  ];
+}
+
+/** The `sql` object of a `done` line, or undefined when it is absent or malformed. */
+function toSqlStats(value: unknown): RoslynSqlStats | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const { constant, nonConstant, unparsable } = value as Record<string, unknown>;
+  if (typeof constant !== 'number' || typeof nonConstant !== 'number' || typeof unparsable !== 'number') return undefined;
+  return { constant, nonConstant, unparsable };
 }
 
 /** Longest `RoslynBatchResult.error`. */
@@ -83,18 +118,19 @@ function failureText(buildErrors: readonly string[], stderr: string, fallback: s
 export async function runBatchIndex(
   projectDir: string,
   solutionPath: string,
-  timeoutMs = 120_000,
+  options: RoslynRunOptions = {},
 ): Promise<RoslynBatchResult> {
   return new Promise((resolve) => {
-    const proc = spawn('dotnet', ['run', '--project', projectDir, '--', solutionPath], {
+    const proc = spawn('dotnet', helperArgs(projectDir, solutionPath, [], options), {
       stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: timeoutMs,
+      timeout: options.timeoutMs ?? 120_000,
     });
 
     const files: RoslynFileResult[] = [];
     let projectGraph: RoslynProjectGraph | null = null;
     let totalFiles = 0;
     let elapsed = '';
+    let sql: RoslynSqlStats | undefined;
     let stderr = '';
     const buildErrors: string[] = [];
     let settled = false;
@@ -142,6 +178,7 @@ export async function runBatchIndex(
             case 'done':
               totalFiles = obj.totalFiles ?? 0;
               elapsed = obj.elapsed ?? '';
+              sql = toSqlStats(obj.sql);
               break;
           }
         } catch {
@@ -162,7 +199,7 @@ export async function runBatchIndex(
       }
       if (settled) return;
       settled = true;
-      resolve({ files, projectGraph, totalFiles, elapsed, ok: true });
+      resolve({ files, projectGraph, totalFiles, elapsed, ok: true, ...(sql ? { sql } : {}) });
     });
 
     proc.on('error', (err) => {
@@ -184,12 +221,14 @@ export class RoslynKeepAlive {
   private projectDir: string;
   private solutionPath: string;
   private timeoutMs: number;
+  private sqlCallSites: boolean;
   private inactivityTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(projectDir: string, solutionPath: string, timeoutMs = 300_000) {
+  constructor(projectDir: string, solutionPath: string, options: RoslynRunOptions = {}) {
     this.projectDir = projectDir;
     this.solutionPath = solutionPath;
-    this.timeoutMs = timeoutMs;
+    this.timeoutMs = options.timeoutMs ?? 300_000;
+    this.sqlCallSites = options.sqlCallSites === true;
   }
 
   /**
@@ -205,7 +244,8 @@ export class RoslynKeepAlive {
         resolve(started);
       };
 
-      this.proc = spawn('dotnet', ['run', '--project', this.projectDir, '--', this.solutionPath, '--keep-alive'], {
+      const args = helperArgs(this.projectDir, this.solutionPath, ['--keep-alive'], { sqlCallSites: this.sqlCallSites });
+      this.proc = spawn('dotnet', args, {
         stdio: ['pipe', 'pipe', 'pipe'],
       });
 

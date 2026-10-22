@@ -6,11 +6,50 @@ import {
   runBatchIndex,
   RoslynKeepAlive,
   type RoslynBatchResult,
+  type RoslynEdge,
   type RoslynFileResult,
   type RoslynSymbol,
 } from './roslyn-process.js';
 
 const log = createLogger('ctxo:roslyn');
+
+/** A symbol ID with at least three non-empty `::` segments (`file::name::kind`). */
+const VALID_SYMBOL_ID = /^.+::.+::.+$/;
+/** Edge kinds whose target may be a 2-part SQL resource reference. */
+const DATA_EDGE_KINDS: ReadonlySet<string> = new Set(['reads', 'writes', 'executes']);
+/** Kinds of a 2-part SQL resource reference (`dbo.loans::table`), which core resolves to a SQL symbol. */
+const DATA_TARGET_KINDS: ReadonlySet<string> = new Set(['table', 'view', 'procedure']);
+
+/** True for a 2-part `<name>::table|view|procedure` reference with a non-empty name. */
+function isDataTarget(id: string): boolean {
+  const segments = id.split('::');
+  return segments.length === 2 && segments[0] !== '' && DATA_TARGET_KINDS.has(segments[1]!);
+}
+
+/** True for a data edge (reads, writes, executes) whose target is a 2-part SQL resource reference. */
+function hasDataTarget(edge: RoslynEdge): boolean {
+  return DATA_EDGE_KINDS.has(edge.kind) && isDataTarget(edge.to);
+}
+
+/**
+ * Maps helper edges to GraphEdges. Keeps an edge when `from` and `to` are 3-part symbol IDs,
+ * and a reads, writes or executes edge whose `to` is a 2-part `<name>::table|view|procedure`
+ * reference; drops every other edge (malformed IDs, 2-part targets on code edges).
+ */
+export function toGraphEdges(edges: readonly RoslynEdge[]): GraphEdge[] {
+  const result: GraphEdge[] = [];
+  for (const e of edges) {
+    if (!VALID_SYMBOL_ID.test(e.from)) continue;
+    if (!VALID_SYMBOL_ID.test(e.to) && !hasDataTarget(e)) continue;
+    result.push({ from: e.from, to: e.to, kind: e.kind as GraphEdge['kind'] });
+  }
+  return result;
+}
+
+export interface RoslynAdapterOptions {
+  /** Pass `--sql-call-sites` to the helper (batch and keep-alive): SQL text at known call sites becomes data edges. */
+  readonly sqlCallSites?: boolean;
+}
 
 /** Maps a helper symbol to a SymbolNode; optional fields appear only when present. */
 export function toSymbolNode(s: RoslynSymbol): SymbolNode {
@@ -29,6 +68,8 @@ export function toSymbolNode(s: RoslynSymbol): SymbolNode {
 export class RoslynAdapter implements ILanguageAdapter {
   readonly extensions = ['.cs'] as const;
   readonly tier = 'full' as const;
+  /** Whether the helper emits SQL call-site edges, as constructed. */
+  readonly sqlCallSites: boolean;
 
   private roslynProjectDir: string | null = null;
   private solutionPath: string | null = null;
@@ -37,6 +78,10 @@ export class RoslynAdapter implements ILanguageAdapter {
   private keepAlive: RoslynKeepAlive | null = null;
   private initialized = false;
   private failure: string | null = null;
+
+  constructor(options: RoslynAdapterOptions = {}) {
+    this.sqlCallSites = options.sqlCallSites === true;
+  }
 
   isSupported(filePath: string): boolean {
     return filePath.endsWith('.cs');
@@ -90,7 +135,7 @@ export class RoslynAdapter implements ILanguageAdapter {
   async batchIndex(): Promise<RoslynBatchResult | null> {
     if (!this.isReady()) return null;
 
-    const result = await runBatchIndex(this.roslynProjectDir!, this.solutionPath!);
+    const result = await runBatchIndex(this.roslynProjectDir!, this.solutionPath!, { sqlCallSites: this.sqlCallSites });
     if (!result.ok) {
       this.failure = result.error || 'the batch run failed';
       this.cache.clear();
@@ -117,6 +162,10 @@ export class RoslynAdapter implements ILanguageAdapter {
     }
 
     log.info(`Roslyn batch index: ${result.totalFiles} files in ${result.elapsed}`);
+    if (result.sql) {
+      const { constant, nonConstant, unparsable } = result.sql;
+      log.debug(`Roslyn SQL call sites: ${constant} constant, ${nonConstant} non-constant, ${unparsable} unparsable`);
+    }
     return result;
   }
 
@@ -131,15 +180,7 @@ export class RoslynAdapter implements ILanguageAdapter {
     const cached = this.cache.get(filePath);
     if (!cached) return [];
 
-    // Filter out edges with invalid symbol ID format (must be file::name::kind with non-empty segments)
-    const VALID_SYMBOL_ID = /^.+::.+::.+$/;
-    return cached.edges
-      .filter(e => VALID_SYMBOL_ID.test(e.from) && VALID_SYMBOL_ID.test(e.to))
-      .map(e => ({
-        from: e.from,
-        to: e.to,
-        kind: e.kind as GraphEdge['kind'],
-      }));
+    return toGraphEdges(cached.edges);
   }
 
   async extractComplexity(filePath: string, _source: string): Promise<ComplexityMetrics[]> {
@@ -158,7 +199,7 @@ export class RoslynAdapter implements ILanguageAdapter {
   async startKeepAlive(): Promise<boolean> {
     if (!this.isReady()) return false;
 
-    this.keepAlive = new RoslynKeepAlive(this.roslynProjectDir!, this.solutionPath!);
+    this.keepAlive = new RoslynKeepAlive(this.roslynProjectDir!, this.solutionPath!, { sqlCallSites: this.sqlCallSites });
     const started = await this.keepAlive.start();
     if (!started) this.failure = 'the keep-alive helper did not start';
     return started;
@@ -175,11 +216,7 @@ export class RoslynAdapter implements ILanguageAdapter {
       this.cache.set(relativePath, result);
       return {
         symbols: result.symbols.map(toSymbolNode),
-        edges: result.edges.map(e => ({
-          from: e.from,
-          to: e.to,
-          kind: e.kind as GraphEdge['kind'],
-        })),
+        edges: toGraphEdges(result.edges),
         complexity: result.complexity.map(c => ({
           symbolId: c.symbolId,
           cyclomatic: c.cyclomatic,
@@ -228,7 +265,8 @@ function rewriteAllPaths(
     edges: file.edges.map(e => ({
       ...e,
       from: rewrite(e.from),
-      to: rewrite(e.to),
+      // A 2-part SQL resource reference holds no file path.
+      to: hasDataTarget(e) ? e.to : rewrite(e.to),
     })),
     complexity: file.complexity.map(c => ({
       ...c,

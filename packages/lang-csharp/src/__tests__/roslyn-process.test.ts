@@ -90,6 +90,7 @@ describe('runBatchIndex', () => {
     expect(result.error).toBeUndefined();
     expect(result.files).toEqual([file]);
     expect(result.totalFiles).toBe(1);
+    expect(result).not.toHaveProperty('sql');
   });
 
   it('runBatchIndex reports failure when the helper is killed and keeps at most 500 characters', async () => {
@@ -103,6 +104,37 @@ describe('runBatchIndex', () => {
     expect(result.ok).toBe(false);
     expect(result.error!.length).toBeLessThanOrEqual(500);
     expect(result.error!.endsWith('loans overdue')).toBe(true);
+  });
+
+  it('runBatchIndex appends --sql-call-sites only when enabled', async () => {
+    for (const options of [undefined, { sqlCallSites: false }, { sqlCallSites: true }]) {
+      const proc = nextProcess();
+      const pending = runBatchIndex(HELPER_DIR, SOLUTION, options);
+      proc.emit('close', 0);
+      await pending;
+    }
+
+    const calls = vi.mocked(spawn).mock.calls;
+    expect(calls.map((call) => call[1])).toEqual([
+      ['run', '--project', HELPER_DIR, '--', SOLUTION],
+      ['run', '--project', HELPER_DIR, '--', SOLUTION],
+      ['run', '--project', HELPER_DIR, '--', SOLUTION, '--sql-call-sites'],
+    ]);
+    expect(calls.map((call) => (call[2] as { timeout?: number }).timeout)).toEqual([120_000, 120_000, 120_000]);
+  });
+
+  it('runBatchIndex reads the sql stats from the done line', async () => {
+    const proc = nextProcess();
+    const pending = runBatchIndex(HELPER_DIR, SOLUTION, { sqlCallSites: true, timeoutMs: 5_000 });
+
+    const sql = { constant: 9, nonConstant: 2, unparsable: 1 };
+    proc.stdout.emit('data', Buffer.from(`${JSON.stringify({ type: 'done', totalFiles: 4, elapsed: '1.2s', sql })}\n`));
+    proc.emit('close', 0);
+
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    expect(result.sql).toEqual(sql);
+    expect((vi.mocked(spawn).mock.calls[0]![2] as { timeout?: number }).timeout).toBe(5_000);
   });
 
   it('runBatchIndex reports failure when dotnet cannot be spawned', async () => {
@@ -129,6 +161,21 @@ describe('RoslynKeepAlive', () => {
 
     expect(await settledWithin(started, 1_000)).toBe(false);
     expect(keepAlive.isAlive()).toBe(false);
+  });
+
+  it('the keep-alive process gets the same flag', async () => {
+    for (const options of [undefined, { sqlCallSites: false }, { sqlCallSites: true }]) {
+      const proc = nextProcess();
+      const started = new RoslynKeepAlive(HELPER_DIR, SOLUTION, options).start();
+      proc.emit('close', 1);
+      expect(await settledWithin(started, 1_000)).toBe(false);
+    }
+
+    expect(vi.mocked(spawn).mock.calls.map((call) => call[1])).toEqual([
+      ['run', '--project', HELPER_DIR, '--', SOLUTION, '--keep-alive'],
+      ['run', '--project', HELPER_DIR, '--', SOLUTION, '--keep-alive'],
+      ['run', '--project', HELPER_DIR, '--', SOLUTION, '--keep-alive', '--sql-call-sites'],
+    ]);
   });
 
   it('keep-alive start resolves true on ready', async () => {
