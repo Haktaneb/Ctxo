@@ -7,7 +7,6 @@ import {
   restoreFailureMessage,
   resolveHelperProject,
   projectHasCSharp,
-  CSharpTierCheck,
 } from '../checks/csharp-tier-check.js';
 import { findSourceFile, findJavaFile } from '../checks/java-tier-check.js';
 
@@ -49,6 +48,11 @@ describe('evaluateCSharpTier', () => {
     const r = evaluateCSharpTier({ hasCSharp: true, sdkVersion: '10.0.100', helperProject: HELPER, restore: { ok: true } });
     expect(r.status).toBe('pass');
     expect(r.message).toBe('full tier (.NET SDK 10.0.100, Roslyn helper restores)');
+  });
+
+  it('pass: full tier with no restore claim when the restore was not probed', () => {
+    const r = evaluateCSharpTier({ hasCSharp: true, sdkVersion: '8.0.404', helperProject: HELPER, restore: null });
+    expect(r).toEqual({ id: 'csharp_tier', title: 'C# analysis tier', status: 'pass', message: 'full tier (.NET SDK 8.0.404)' });
   });
 
   it('warn: syntax tier when the Roslyn helper cannot restore', () => {
@@ -110,17 +114,47 @@ describe('restoreFailureMessage', () => {
     expect(dirOnly).toBe('ctxo-roslyn/obj/project.assets.json : error NU1105: loans project unreadable');
   });
 
+  it('a warning that mentions Error is not taken for the restore failure', () => {
+    const stdout = [
+      'ctxo-roslyn.csproj : warning NU1900: Error occurred while getting package vulnerability data: the lending feed is offline',
+      'ctxo-roslyn.csproj : error NU1101: Unable to find package Microsoft.SqlServer.TransactSql.ScriptDom.',
+      '',
+    ].join('\r\n');
+    expect(restoreFailureMessage({ stdout, stderr: '', status: 1, timedOut: false }))
+      .toBe('ctxo-roslyn.csproj : error NU1101: Unable to find package Microsoft.SqlServer.TransactSql.ScriptDom.');
+
+    // Without an MSBuild error shape, the first line that mentions error in any case still counts.
+    expect(restoreFailureMessage({ stdout: 'warning NU1900: Error occurred\n', stderr: '', status: 1, timedOut: false }))
+      .toBe('warning NU1900: Error occurred');
+  });
+
+  it('drops a Windows helper path printed in another letter case', () => {
+    const helperProject = 'C:\\Lending\\node_modules\\@ctxo\\lang-csharp\\tools\\ctxo-roslyn\\ctxo-roslyn.csproj';
+    const stdout = [
+      'c:\\lending\\node_modules\\@ctxo\\lang-csharp\\tools\\ctxo-roslyn\\ctxo-roslyn.csproj : error NU1101: Unable to find package Microsoft.SqlServer.TransactSql.ScriptDom.',
+      'C:/LENDING/node_modules/@ctxo/lang-csharp/tools/ctxo-roslyn/obj/project.assets.json : error NU1105: loans project unreadable',
+    ].join('\r\n');
+
+    const message = restoreFailureMessage({ stdout, stderr: '', status: 1, timedOut: false, helperProject });
+    expect(message).toBe('ctxo-roslyn.csproj : error NU1101: Unable to find package Microsoft.SqlServer.TransactSql.ScriptDom.');
+    const dirOnly = restoreFailureMessage({ stdout: stdout.split('\r\n')[1]!, stderr: '', status: 1, timedOut: false, helperProject });
+    expect(dirOnly).toBe('ctxo-roslyn/obj/project.assets.json : error NU1105: loans project unreadable');
+
+    // A POSIX path keeps its case: another case is another path there.
+    const posix = '/work/Lending/node_modules/@ctxo/lang-csharp/tools/ctxo-roslyn/ctxo-roslyn.csproj';
+    const other = `${posix.toLowerCase()} : error NU1101: missing`;
+    expect(restoreFailureMessage({ stdout: other, stderr: '', status: 1, timedOut: false, helperProject: posix })).toBe(other);
+  });
+
   it('falls back to the exit code, and reports a timeout', () => {
     expect(restoreFailureMessage({ stdout: 'loans restored\n', stderr: '', status: 3, timedOut: false })).toBe('exit code 3');
     expect(restoreFailureMessage({ stdout: 'error: partial\n', stderr: '', status: null, timedOut: true })).toBe('timed out');
   });
 });
 
+// The null case of resolveHelperProject and the run() paths live in csharp-tier-check.run.test.ts, with
+// spawnSync and module resolution mocked, so they do not depend on what this machine has installed.
 describe('resolveHelperProject', () => {
-  it('returns null when @ctxo/lang-csharp does not resolve from the project', () => {
-    expect(resolveHelperProject(tempDir('ctxo-cs-nohelper-'))).toBeNull();
-  });
-
   it('returns the helper project beside the package the project resolves', () => {
     const root = tempDir('ctxo-cs-helper-');
     writeFileSync(join(root, 'package.json'), '{"name":"lending-app"}');
@@ -171,22 +205,5 @@ describe('findSourceFile', () => {
     expect(findSourceFile(dir, '.cs', 4)).toBe(true);
     expect(findSourceFile(dir, '.java', 4)).toBe(false);
     expect(findJavaFile(dir, 4)).toBe(false);
-  });
-});
-
-describe('CSharpTierCheck', () => {
-  it('passes without running dotnet when the project has no C#', async () => {
-    const root = tempDir('ctxo-cs-run-empty-');
-    const r = await new CSharpTierCheck().run({ projectRoot: root, ctxoRoot: join(root, '.ctxo') });
-    expect(r).toEqual({ id: 'csharp_tier', title: 'C# analysis tier', status: 'pass', message: 'no C# sources detected' });
-  });
-
-  it('reports the syntax tier without a restore probe when @ctxo/lang-csharp is not installed', async () => {
-    const root = tempDir('ctxo-cs-run-noplugin-');
-    writeFileSync(join(root, 'Lending.csproj'), '');
-    const r = await new CSharpTierCheck().run({ projectRoot: root, ctxoRoot: join(root, '.ctxo') });
-    // With or without a .NET 8+ SDK on this machine, the outcome is a syntax-tier pass.
-    expect(r.status).toBe('pass');
-    expect(r.message.startsWith('syntax tier (')).toBe(true);
   });
 });

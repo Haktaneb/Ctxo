@@ -22,10 +22,13 @@ export function readSourceText(absolutePath: string): string {
   return bytes.toString('utf-8');
 }
 
+const UTF16_BOM_LENGTH = 2;
+
 /** Decodes the code units after a 2-byte BOM. A trailing odd byte cannot form a code unit and is ignored. */
 function decodeUtf16(bytes: Buffer, bigEndian: boolean): string {
-  const end = bytes.length - ((bytes.length - 2) % 2);
+  const textLength = bytes.length - UTF16_BOM_LENGTH;
+  const wholeUnitsLength = textLength - (textLength % 2);
   // Copy: swap16 works in place and `subarray` would reach back into `bytes`.
-  const units = Buffer.from(bytes.subarray(2, end));
+  const units = Buffer.from(bytes.subarray(UTF16_BOM_LENGTH, UTF16_BOM_LENGTH + wholeUnitsLength));
   return (bigEndian ? units.swap16() : units).toString('utf16le');
 }

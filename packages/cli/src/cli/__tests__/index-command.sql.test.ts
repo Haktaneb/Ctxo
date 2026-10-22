@@ -187,6 +187,49 @@ describe('IndexCommand with the real @ctxo/lang-sql plugin', () => {
     expect(exitSpy).not.toHaveBeenCalledWith(1);
   });
 
+  it('a UTF-8 file with a BOM indexes and ctxo index --check reports it fresh', async () => {
+    const FINES_FILE = 'db/tables/Fines.sql';
+    const FINES_SQL = ['CREATE TABLE dbo.Fines (', '  FineId int NOT NULL,', '  LoanId int NOT NULL', ');', ''].join('\n');
+    writeBytes(project, FINES_FILE, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(FINES_SQL, 'utf-8')]));
+    project.commit('add fines');
+    await new IndexCommand(project.dir).run({ skipHistory: true });
+
+    const fines = entryFor(project.dir, FINES_FILE);
+    expect(fines.symbols).toHaveLength(1);
+    expect(fines.symbols[0]).toMatchObject({
+      symbolId: `${FINES_FILE}::dbo.fines::table`,
+      kind: 'table',
+      annotations: [{ name: 'columns', args: ['fineid', 'loanid'] }],
+    });
+    // A UTF-8 BOM stays in the text, as readFileSync gives it, so the hash is that of the BOM and the script.
+    expect(fines.contentHash).toBe(new ContentHasher().hash(String.fromCharCode(0xfeff) + FINES_SQL));
+
+    // A newer mtime sends --check down the hash path, which must read the file the same way.
+    const later = new Date(Date.now() + 120_000);
+    utimesSync(join(project.dir, FINES_FILE), later, later);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    errorSpy.mockClear();
+    await new IndexCommand(project.dir).run({ check: true });
+
+    expect(stderr()).toContain('Index is up to date');
+    expect(stderr()).not.toContain('STALE');
+    expect(exitSpy).not.toHaveBeenCalledWith(1);
+  });
+
+  it('the same script saved as UTF-16 LE and as UTF-8 gives the same symbols', async () => {
+    const UTF8_FILE = 'db/utf8/Loans.sql';
+    writeBytes(project, UTF8_FILE, LOANS_SQL);
+    project.commit('add the UTF-8 copy');
+    await new IndexCommand(project.dir).run({ skipHistory: true });
+
+    const withoutId = ({ symbolId: _symbolId, ...rest }: FileIndex['symbols'][number]) => rest;
+    const utf16 = entryFor(project.dir, LOANS_FILE);
+    const utf8 = entryFor(project.dir, UTF8_FILE);
+    expect(utf8.symbols.map(withoutId)).toEqual(utf16.symbols.map(withoutId));
+    expect(utf8.symbols).toHaveLength(1);
+    expect(utf8.contentHash).toBe(utf16.contentHash);
+  });
+
   it('the summary reports the SQL files', async () => {
     await new IndexCommand(project.dir).run({ skipHistory: true });
 

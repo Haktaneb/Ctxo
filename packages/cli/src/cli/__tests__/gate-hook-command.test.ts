@@ -84,6 +84,27 @@ describe('GateHookCommand.evaluate', () => {
   });
 });
 
+describe('GateHookCommand.evaluate on a UTF-16 source', () => {
+  it('locates the edited line in a UTF-16 file with a BOM, as the index reads it', () => {
+    const root = fixture();
+    const text = 'export function A() {\n  return 1;\n}\n';
+    for (const [bom, body] of [
+      [[0xff, 0xfe], Buffer.from(text, 'utf16le')],
+      [[0xfe, 0xff], Buffer.from(text, 'utf16le').swap16()],
+    ] as const) {
+      writeFileSync(join(root, 'src', 'a.ts'), Buffer.concat([Buffer.from(bom), body]));
+      const res = new GateHookCommand(root).evaluate({
+        session_id: `utf16-${bom[0]}`,
+        transcript_path: join(root, 'none.jsonl'),
+        tool_name: 'Edit',
+        tool_input: { file_path: join(root, 'src', 'a.ts'), old_string: 'return 1;', new_string: 'return 2;' },
+      });
+      expect(res.block).toBe(true);
+    }
+    rmSync(root, { recursive: true, force: true });
+  });
+});
+
 describe('GateHookCommand.evaluate on SQL definitions', () => {
   it('guards an edit to a new migration copy of a procedure that three methods execute', () => {
     const root = mkdtempSync(join(tmpdir(), 'ctxo-gh-sql-'));

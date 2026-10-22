@@ -124,9 +124,9 @@ describe('ContextsCommand', () => {
     expect(lines[0]).toBe(
       '[ctxo] Contexts view at abc1234: 3 candidates cover 3/4 files (75%), 2 hubs, 1 unclustered, 1 collisions, 3 shared tables',
     );
-    expect(lines).toContain('#1  3 files  cohesion 0.82  src/billing  terms: invoice, tax, ledger  shared tables: 2');
-    expect(lines).toContain('#2  2 files  cohesion 1  src/auth  terms: token  shared tables: 3');
-    expect(lines).toContain('#3  2 files  cohesion 1  src/shipping  terms: parcel  shared tables: 2');
+    expect(lines).toContain('#1  3 files  cohesion 0.82  src/billing  terms: invoice, tax, ledger shared tables: 2');
+    expect(lines).toContain('#2  2 files  cohesion 1  src/auth  terms: token shared tables: 3');
+    expect(lines).toContain('#3  2 files  cohesion 1  src/shipping  terms: parcel shared tables: 2');
     expect(lines.filter((line) => line.startsWith('shared '))).toEqual([
       'shared external dbo.audit_log  #2 writes, #3 writes  several writers',
       'shared table dbo.loans  #1 reads+writes, #2 reads  owner #1',

@@ -111,6 +111,7 @@ describe('ArchitectureArtifactsWriter', () => {
       hubs: [],
       unclustered: { count: 0, files: [] },
       collisions: [],
+      dataResources: [],
     };
     const writer = new ArchitectureArtifactsWriter(ctxoRoot);
     const path = join(ctxoRoot, 'index', 'contexts-view.json');

@@ -17,6 +17,7 @@ import type {
   DataResourceUsage,
 } from '../../../core/contexts-view/data-coupling.js';
 import { wrapResponse } from '../../../core/response-envelope.js';
+import { compareCodepoint } from '../../../core/compare-codepoint.js';
 import type { IContextsViewPort } from '../../../ports/i-contexts-view-port.js';
 
 function buildSnapshot(): CommunitySnapshot {
@@ -333,7 +334,7 @@ function resource(
 
 /** The view with these resources and, per candidate, the resources of two or more candidates, as the builder lists them. */
 function withData(view: ContextsView, resources: DataResourceUsage[]): ContextsView {
-  const sorted = [...resources].sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
+  const sorted = [...resources].sort((x, y) => compareCodepoint(x.name, y.name));
   const shared = new Map<number, CandidateSharedTable[]>();
   for (const { name, kind, external, accesses, owner } of sorted) {
     if (accesses.length < 2) continue;
@@ -931,6 +932,26 @@ describe('GetArchitecturalOverlayHandler mode contexts', () => {
     // 16 KB holds both lists at their caps.
     expect(larger.payload['candidate'].sharedTables).toHaveLength(15);
     expect(larger.payload['dataResources']).toHaveLength(15);
+  });
+
+  it('when even empty data lists do not fit, the detail empties them, keeps the totals and the rest whole', async () => {
+    const view = crowdedDetailView();
+    const own = view.candidates[1]!;
+    const atDefault = await rawDetail(view, 2);
+
+    // Far below what the other fields of the detail take on their own.
+    process.env['CTXO_RESPONSE_LIMIT'] = '512';
+    const tiny = await rawDetail(view, 2);
+
+    expect(tiny.bytes).toBeGreaterThan(512);
+    expect(tiny.payload['candidate'].sharedTables).toEqual([]);
+    expect(tiny.payload['dataResources']).toEqual([]);
+    expect(tiny.payload['candidate'].sharedTableCount).toBe(own.sharedTables.length);
+    expect(tiny.payload['dataResourcesTotal']).toBe(atDefault.payload['dataResourcesTotal']);
+    // Only the two data lists give way: every other field is as at the default limit.
+    expect(tiny.payload['candidate'].files).toEqual(atDefault.payload['candidate'].files);
+    expect(tiny.payload['collisions']).toEqual(atDefault.payload['collisions']);
+    expect(tiny.payload['hubs']).toEqual(atDefault.payload['hubs']);
   });
 
   it('TRUNCATABLE_FIELDS is unchanged', () => {

@@ -39,7 +39,7 @@ export class ContextsCommand {
     ];
     for (const c of candidates) {
       const terms = c.topTerms.slice(0, 3).map((t) => t.term).join(', ');
-      const tables = c.sharedTables.length > 0 ? `  shared tables: ${c.sharedTables.length}` : '';
+      const tables = c.sharedTables.length > 0 ? ` shared tables: ${c.sharedTables.length}` : '';
       lines.push(`#${c.id}  ${c.fileCount} files  cohesion ${c.cohesion}  ${c.label}  terms: ${terms}${tables}`);
     }
     for (const h of hubs) {

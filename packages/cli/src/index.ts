@@ -148,6 +148,9 @@ function registerTools(
     openWorldHint: false,
   } as const;
 
+  // The tools that resolve a symbol id through the graph also take the 2-part id of a SQL object.
+  const SYMBOL_ID_FORMAT = 'format: file::name::kind; a SQL table, view or procedure also as name::kind, for example dbo.loans::table';
+
   // Register tools — each handler wrapped with session recording
   const logicSliceHandler = withRecording('get_logic_slice', handleGetLogicSlice(storage, masking, staleness, ctxoRoot), recorder);
   const whyContextHandler = withRecording('get_why_context', handleGetWhyContext(storage, git, masking, staleness, ctxoRoot, clusterLabelMasker), recorder);
@@ -158,7 +161,7 @@ function registerTools(
     {
       description: 'Retrieve a symbol and all its transitive dependencies as a Logic-Slice. Use this when you need to UNDERSTAND what a symbol depends on (downstream view). L1=signature only, L2=direct deps, L3=full closure, L4=with token budget and symbol annotations (attributes, columns; only L4 includes them). Use `intent` to filter dependencies by keyword (e.g., "core", "adapter"). All responses include `_meta` with item counts and truncation info. For impact analysis (what BREAKS if this changes), use get_blast_radius instead. For task-specific context, use get_context_for_task.',
       inputSchema: {
-        symbolId: z.string().optional().describe('Single symbol ID (format: file::name::kind)'),
+        symbolId: z.string().optional().describe(`Single symbol ID (${SYMBOL_ID_FORMAT})`),
         symbolIds: z.array(z.string()).optional().describe('Batch: array of symbol IDs'),
         level: z.number().min(1).max(4).optional().default(3).describe('Detail level (L1=signature, L2=direct deps, L3=full closure, L4=with token budget and annotations)'),
         intent: z.string().optional().describe('Filter dependencies by intent keywords (e.g., "core", "adapter")'),
@@ -173,7 +176,7 @@ function registerTools(
     {
       description: 'Retrieve git commit history intent and anti-pattern warnings (reverts, rollbacks) for a symbol. Use this when you need to understand WHY code was written this way or whether it has a history of problems. Pair with get_change_intelligence for complexity/churn scores.',
       inputSchema: {
-        symbolId: z.string().min(1).describe('The symbol ID (format: file::name::kind)'),
+        symbolId: z.string().min(1).describe(`The symbol ID (${SYMBOL_ID_FORMAT})`),
         maxCommits: z.number().int().min(1).optional().describe('Limit commit history to N most recent commits'),
       },
       annotations: toolAnnotations,
@@ -200,7 +203,7 @@ function registerTools(
     {
       description: 'BEFORE modifying any symbol (a function, class, method or type, or a SQL table, view or procedure), call this to understand impact. Returns every symbol that depends on the target, directly or transitively, with risk scores that fall with depth. Each dependent is in the tier of its strongest edge: confirmed (`calls`, `extends`, `implements` and the data edges `reads`, `writes`, `executes`), likely (co-changed or `uses`), and potential (`imports`). When co-change history exists, `coChangedFiles` lists up to 10 files that often change together with the target\'s file but have no dependency path to it (informational: not counted in the tiers or risk scores). Use `confidence` to filter by tier, `intent` to filter by keyword. Large results are auto-truncated with `_meta.hint` for drill-in. For what a symbol DEPENDS ON (downstream), use get_logic_slice instead. For full PR-level analysis, use get_pr_impact.',
       inputSchema: {
-        symbolId: z.string().min(1).describe('The symbol ID (format: file::name::kind)'),
+        symbolId: z.string().min(1).describe(`The symbol ID (${SYMBOL_ID_FORMAT}). Every definition of a SQL object, and its name::kind id, has the same dependents`),
         confidence: z.enum(['confirmed', 'likely', 'potential']).optional().describe('Filter by confidence tier'),
         intent: z.string().optional().describe('Filter impacted symbols by intent keywords (e.g., "test", "adapter")'),
       },
@@ -247,7 +250,7 @@ function registerTools(
     {
       description: 'Get task-optimized context for a symbol based on what you are about to do. Specify taskType: "fix" (bug investigation - includes history + anti-patterns), "extend" (add feature - includes deps + blast radius), "refactor" (restructure - includes importers + complexity), or "understand" (learn - includes full slice + architecture). Context entries that depend on the symbol (its blast radius) carry an optional `confidence` tier: confirmed, likely or potential, where co-change history can raise potential to likely. This is the BEST starting point when you know both the symbol and your intent.',
       inputSchema: {
-        symbolId: z.string().min(1).describe('The symbol ID (format: file::name::kind)'),
+        symbolId: z.string().min(1).describe(`The symbol ID (${SYMBOL_ID_FORMAT})`),
         taskType: z.enum(['fix', 'extend', 'refactor', 'understand']).describe('Task type determines which context is most relevant'),
         tokenBudget: z.number().optional().default(4000).describe('Max tokens for context (default 4000)'),
       },
@@ -313,7 +316,7 @@ function registerTools(
     {
       description: 'Find all symbols that import or depend on a given symbol (reverse dependency / "who uses this?"). Use this to check if a symbol is safe to modify or delete. Supports transitive traversal for deep impact chains. Use `intent` to filter by keyword (e.g., "test", "core"). For forward dependencies (what this symbol uses), use get_logic_slice. For aggregated impact with risk scores, use get_blast_radius.',
       inputSchema: {
-        symbolId: z.string().min(1).describe('The symbol ID (format: file::name::kind)'),
+        symbolId: z.string().min(1).describe(`The symbol ID (${SYMBOL_ID_FORMAT}). Every definition of a SQL object, and its name::kind id, has the same importers`),
         edgeKinds: z.array(EdgeKindSchema).optional().describe('Filter by edge kinds (reads, writes and executes are data access)'),
         transitive: z.boolean().optional().default(false).describe('Follow transitive reverse edges (default false)'),
         maxDepth: z.number().int().min(1).max(10).optional().default(5).describe('Max BFS depth for transitive mode (default 5)'),

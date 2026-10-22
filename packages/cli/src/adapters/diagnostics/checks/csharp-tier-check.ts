@@ -39,7 +39,11 @@ export function evaluateCSharpTier(i: CSharpTierInputs): CheckResult {
     return { id, title, status: 'pass', message: 'syntax tier (@ctxo/lang-csharp not installed)' };
   }
 
-  if (i.restore === null || i.restore.ok) {
+  // Null means the restore was not probed, so the message claims no restore.
+  if (i.restore === null) {
+    return { id, title, status: 'pass', message: `full tier (.NET SDK ${i.sdkVersion})` };
+  }
+  if (i.restore.ok) {
     return { id, title, status: 'pass', message: `full tier (.NET SDK ${i.sdkVersion}, Roslyn helper restores)` };
   }
 
@@ -57,26 +61,45 @@ function separatorVariants(path: string): string[] {
   return [...new Set([path, path.replace(/\//g, '\\'), path.replace(/\\/g, '/')])];
 }
 
+/** A Windows path: a drive letter or a UNC prefix. Windows paths compare without case. */
+function isWindowsPath(path: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(path) || path.startsWith('\\\\');
+}
+
+/** Every occurrence of `search` in `text` replaced by `replacement`; ignoring case when `ignoreCase` is set. */
+function replaceAll(text: string, search: string, replacement: string, ignoreCase: boolean): string {
+  if (!ignoreCase) return text.split(search).join(replacement);
+  const pattern = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+  return text.replace(pattern, () => replacement);
+}
+
 /**
  * Replaces the helper project's absolute path with `ctxo-roslyn.csproj`, then
  * its directory with `ctxo-roslyn`, so the restore message keeps the error,
- * not a long node_modules path.
+ * not a long node_modules path. A Windows path matches in any letter case,
+ * since MSBuild may print the drive letter or a folder in another case.
  */
 function withoutHelperPath(text: string, helperProject: string): string {
+  const ignoreCase = isWindowsPath(helperProject);
   let out = text;
-  for (const variant of separatorVariants(helperProject)) out = out.split(variant).join('ctxo-roslyn.csproj');
+  for (const variant of separatorVariants(helperProject)) out = replaceAll(out, variant, 'ctxo-roslyn.csproj', ignoreCase);
   const helperDir = helperProject.replace(/[\\/][^\\/]*$/, '');
   if (helperDir && helperDir !== helperProject) {
-    for (const variant of separatorVariants(helperDir)) out = out.split(variant).join('ctxo-roslyn');
+    for (const variant of separatorVariants(helperDir)) out = replaceAll(out, variant, 'ctxo-roslyn', ignoreCase);
   }
   return out;
 }
 
+/** An MSBuild or NuGet error line: an `error NU1101`-style code or ` : error `, matched with case. */
+const ERROR_LINE = /\berror [A-Z]+\d+\b| : error /;
+
 /**
- * Why `dotnet restore` failed: the first output line (stdout, then stderr) that
- * contains "error", trimmed and capped at 200 characters; `exit code <n>` when
- * no line does, and `timed out` on a timeout. The helper's absolute path is
- * dropped from the output first.
+ * Why `dotnet restore` failed, trimmed and capped at 200 characters: the first
+ * output line (stdout, then stderr) with an MSBuild error shape (`error NU1101`,
+ * ` : error `), else the first line that contains "error" in any case;
+ * `exit code <n>` when no line does, and `timed out` on a timeout. A warning
+ * such as `warning NU1900: Error occurred ...` is therefore never picked over a
+ * real error. The helper's absolute path is dropped from the output first.
  */
 export function restoreFailureMessage(r: {
   stdout: string;
@@ -89,7 +112,7 @@ export function restoreFailureMessage(r: {
   if (r.timedOut) return 'timed out';
   const strip = (text: string): string => (r.helperProject ? withoutHelperPath(text, r.helperProject) : text);
   const lines = [...strip(r.stdout).split(/\r?\n/), ...strip(r.stderr).split(/\r?\n/)];
-  const line = lines.find((l) => /error/i.test(l));
+  const line = lines.find((l) => ERROR_LINE.test(l)) ?? lines.find((l) => /error/i.test(l));
   if (line !== undefined) return line.trim().slice(0, MAX_MESSAGE_LENGTH);
   return `exit code ${r.status}`;
 }

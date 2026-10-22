@@ -398,7 +398,7 @@ Usage:
   ctxo update --json       Machine-readable output
   ctxo update --pm <pm>    Override package manager (npm|pnpm|yarn|bun)
   ctxo update --force      Bypass CI lockfile guard
-  ctxo blast-radius <symbolId>   Blast radius for one symbol (--json for machine output)
+  ctxo blast-radius <symbolId>   Blast radius for one symbol (--json for machine output; name::kind for a SQL object)
   ctxo contexts             Candidate contexts from dependency and co-change clusters (table)
   ctxo contexts --json      Same, full contexts-view.json to stdout
   ctxo gate --preview            Preview which symbols the safe-edit guard would block

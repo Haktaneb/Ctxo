@@ -1,3 +1,4 @@
+import { DATA_EDGE_KINDS } from '../data-coupling/data-kinds.js';
 import type { SymbolGraph } from '../graph/symbol-graph.js';
 import type { SymbolKind } from '../types.js';
 
@@ -104,7 +105,9 @@ export class DeadCodeDetector {
       const incomingFromCandidates = reverseEdges.filter((e) => candidateIds.has(e.from) && e.from !== node.symbolId);
 
       if (incomingFromCandidates.length === 0) {
-        const hasOutgoing = forwardEdges.some((e) => candidateIds.has(e.to));
+        // Data edges count too: their targets (SQL objects) are never candidates, but a method that reads,
+        // writes or executes one is as much in use as a method that calls another.
+        const hasOutgoing = forwardEdges.some((e) => candidateIds.has(e.to) || DATA_EDGE_KINDS.has(e.kind));
         if (hasOutgoing || reverseEdges.length > 0) {
           entryPoints.add(node.symbolId);
         }

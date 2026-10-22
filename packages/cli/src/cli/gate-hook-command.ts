@@ -13,6 +13,7 @@ import { PageRankCalculator } from '../core/importance/pagerank-calculator.js';
 import { percentileCutoff } from '../core/gate/percentile.js';
 import { shouldBlock, formatBlockReason } from '../core/gate/gate-decision.js';
 import { createLogger } from '../core/logger.js';
+import { readSourceText } from './read-source.js';
 
 const log = createLogger('ctxo:gate-hook');
 
@@ -56,7 +57,8 @@ export class GateHookCommand {
       if (!fileIndex) return { block: false };
 
       if (!existsSync(filePath)) return { block: false };
-      const source = readFileSync(filePath, 'utf-8');
+      // The same decoder the index uses, so a UTF-16 script (SSMS) gives the lines its symbols were indexed at.
+      const source = readSourceText(filePath);
       const line = lineOfSnippet(source, oldString);
       if (line === null) return { block: false };
 
