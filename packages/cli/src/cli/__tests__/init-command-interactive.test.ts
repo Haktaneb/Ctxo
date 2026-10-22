@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -9,14 +9,17 @@ import { tmpdir } from 'node:os';
 const prompts = vi.hoisted(() => ({
   messages: [] as string[],
   tools: [] as string[],
+  /** Answer no to the safe-edit guard question. */
+  declineGuard: false,
 }));
 
 vi.mock('@clack/prompts', () => ({
   text: vi.fn(async () => '.ctxo/index'),
   multiselect: vi.fn(async () => prompts.tools),
   confirm: vi.fn(async (options: { message: string }) => {
-    prompts.messages.push(String(options.message).replace(/\u001b\[[0-9;]*m/g, ''));
-    return true;
+    const message = String(options.message).replace(/\u001b\[[0-9;]*m/g, '');
+    prompts.messages.push(message);
+    return !(prompts.declineGuard && /safe-edit guard/.test(message));
   }),
   isCancel: vi.fn(() => false),
   cancel: vi.fn(),
@@ -24,8 +27,11 @@ vi.mock('@clack/prompts', () => ({
 }));
 
 import { InitCommand } from '../init-command.js';
-import { blockTier, scanRulesBlocks } from '../../core/agent-rules/rules-block.js';
+import { LEGACY_RULE_BODY, blockTier, renderRulesBlock, scanRulesBlocks } from '../../core/agent-rules/rules-block.js';
 import { isolateGitEnv, type IsolatedGitEnv } from './git-test-env.js';
+
+/** A CLAUDE.md written by a ctxo version before the tiers: an unversioned marked block. */
+const PRE_TIER_CLAUDE_MD = '# P\n\n<!-- ctxo-rules-start -->\n' + LEGACY_RULE_BODY + '\n<!-- ctxo-rules-end -->\n';
 
 const tempDirs: string[] = [];
 let gitEnv: IsolatedGitEnv;
@@ -35,6 +41,7 @@ beforeEach(() => {
   gitEnv = isolateGitEnv();
   prompts.messages.length = 0;
   prompts.tools = [];
+  prompts.declineGuard = false;
   errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
@@ -93,5 +100,19 @@ describe('InitCommand - interactive steps follow the selected parts', () => {
     const blocks = scanRulesBlocks(readFileSync(join(dir, 'CLAUDE.md'), 'utf-8')).blocks;
     expect(blocks).toHaveLength(1);
     expect(blockTier(blocks[0]!.body)).toBe('full');
+  });
+
+  it('declining the guard is an opt-out: a pre-tier CLAUDE.md gets the full block, not a hold', async () => {
+    const dir = makeTempProject();
+    writeFileSync(join(dir, 'CLAUDE.md'), PRE_TIER_CLAUDE_MD, 'utf-8');
+    prompts.tools = ['claude-code'];
+    prompts.declineGuard = true;
+
+    await new InitCommand(dir).run({ noInstall: true });
+
+    expect(asked(/safe-edit guard/)).toHaveLength(1);
+    expect(existsSync(join(dir, '.claude', 'settings.json'))).toBe(false);
+    expect(existsSync(join(dir, '.claude', 'skills', 'ctxo-safe-edit', 'SKILL.md'))).toBe(true);
+    expect(readFileSync(join(dir, 'CLAUDE.md'), 'utf-8')).toBe('# P\n\n' + renderRulesBlock('full') + '\n');
   });
 });

@@ -2,14 +2,29 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, statSync, chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { delimiter, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { InitCommand, type InitOptions } from '../init-command.js';
-import { blockTier, ruleBody, scanRulesBlocks } from '../../core/agent-rules/rules-block.js';
+import {
+  LEGACY_CURSOR_FRONTMATTER,
+  LEGACY_RULE_BODY,
+  blockTier,
+  renderRulesBlock,
+  ruleBody,
+  scanRulesBlocks,
+} from '../../core/agent-rules/rules-block.js';
 import { isolateGitEnv, type IsolatedGitEnv } from './git-test-env.js';
 
 const tempDirs: string[] = [];
 let gitEnv: IsolatedGitEnv;
+
+/** A CLAUDE.md written by a ctxo version before the tiers: an unversioned marked block. */
+const PRE_TIER_CLAUDE_MD = '# P\n\n<!-- ctxo-rules-start -->\n' + LEGACY_RULE_BODY + '\n<!-- ctxo-rules-end -->\n';
+
+/** The warning init prints for a rules file that `rulesHold` keeps back. */
+function heldWarning(file: string): string {
+  return `[ctxo] ⚠ ${file}: left unchanged until the guard and skills are installed; run "ctxo init --only rules,skills,guard" or "ctxo doctor --fix"`;
+}
 
 // Hook tests resolve `git rev-parse --git-path hooks` in temp repos; they must never see the
 // owner's GIT_DIR or global/system git config (see git-test-env.ts).
@@ -687,18 +702,105 @@ describe('InitCommand - selected parts and tiered rules (#159)', () => {
     expect(blockTier(rulesBody(join(dir, 'CLAUDE.md')))).toBe('full');
   });
 
-  it('a corrupt settings.json is reported, left unchanged, and Claude Code gets the full block', async () => {
+  it('init keeps the Claude Code block when settings.json is unreadable', async () => {
+    // Inverts the Task 6 test: a full block here would read as an opt-out of the guard (D5).
     const dir = makeTempProject();
     const corrupt = '{ "hooks": { "PreToolUse": [ \n';
     mkdirSync(join(dir, '.claude'), { recursive: true });
     writeFileSync(join(dir, '.claude', 'settings.json'), corrupt, 'utf-8');
+    writeFileSync(join(dir, 'CLAUDE.md'), PRE_TIER_CLAUDE_MD, 'utf-8');
 
     await new InitCommand(dir).run({ tools: ['claude-code'], yes: true, noInstall: true });
 
     expect(readFileSync(join(dir, '.claude', 'settings.json'), 'utf-8')).toBe(corrupt);
     expect(stderr()).toContain('[ctxo] ⚠ .claude/settings.json is not valid JSON');
     expect(stderr()).not.toContain('.claude/settings.json (unchanged)');
+    expect(readFileSync(join(dir, 'CLAUDE.md'), 'utf-8')).toBe(PRE_TIER_CLAUDE_MD);
+    expect(stderr().split('\n')).toContain(heldWarning('CLAUDE.md'));
+    expect(stderr()).not.toContain('CLAUDE.md (updated)');
+    for (const file of SKILL_FILES) expect(existsSync(join(dir, file)), file).toBe(true);
+  });
+
+  it('init --only rules keeps a pre-tier CLAUDE.md block when the guard and skills are missing', async () => {
+    const dir = makeTempProject();
+    writeFileSync(join(dir, 'CLAUDE.md'), PRE_TIER_CLAUDE_MD, 'utf-8');
+
+    await new InitCommand(dir).run({ tools: ['claude-code'], yes: true, only: ['rules'] });
+
+    expect(readFileSync(join(dir, 'CLAUDE.md'), 'utf-8')).toBe(PRE_TIER_CLAUDE_MD);
+    expect(stderr().split('\n')).toContain(heldWarning('CLAUDE.md'));
+
+    // The command the warning names installs the pieces and then renders the compact tier.
+    errorSpy.mockClear();
+    await new InitCommand(dir).run({ tools: ['claude-code'], yes: true, only: ['rules', 'skills', 'guard'] });
+
+    expect(readFileSync(join(dir, 'CLAUDE.md'), 'utf-8')).toBe('# P\n\n' + renderRulesBlock('compact') + '\n');
+    expect(stderr()).toContain('[ctxo] ✓ CLAUDE.md (updated)');
+  });
+
+  it('--rules keeps a pre-tier CLAUDE.md block when the guard is missing', async () => {
+    const dir = makeTempProject();
+    writeFileSync(join(dir, 'CLAUDE.md'), PRE_TIER_CLAUDE_MD, 'utf-8');
+
+    await new InitCommand(dir).run({ tools: ['claude-code'], rulesOnly: true, noInstall: true });
+
+    // --rules installs the skills but skips the guard; skipping is not declining (Review Focus 3).
+    for (const file of SKILL_FILES) expect(existsSync(join(dir, file)), file).toBe(true);
+    expect(existsSync(join(dir, '.claude', 'settings.json'))).toBe(false);
+    expect(readFileSync(join(dir, 'CLAUDE.md'), 'utf-8')).toBe(PRE_TIER_CLAUDE_MD);
+    expect(stderr().split('\n')).toContain(heldWarning('CLAUDE.md'));
+  });
+
+  it('the Cursor rules block is held the same way', async () => {
+    const dir = makeTempProject();
+    const cursorFile = join(dir, '.cursor', 'rules', 'ctxo.mdc');
+    const preTier = LEGACY_CURSOR_FRONTMATTER + LEGACY_RULE_BODY + '\n';
+    mkdirSync(dirname(cursorFile), { recursive: true });
+    writeFileSync(cursorFile, preTier, 'utf-8');
+
+    await new InitCommand(dir).run({ tools: ['cursor'], yes: true, only: ['rules'] });
+
+    expect(readFileSync(cursorFile, 'utf-8')).toBe(preTier);
+    expect(stderr().split('\n')).toContain(heldWarning('.cursor/rules/ctxo.mdc'));
+
+    errorSpy.mockClear();
+    await new InitCommand(dir).run({ tools: ['cursor'], yes: true, only: ['rules', 'skills'] });
+
+    expect(existsSync(join(dir, '.cursor', 'rules', 'ctxo-safe-edit.mdc'))).toBe(true);
+    expect(blockTier(rulesBody(cursorFile))).toBe('full');
+    expect(readFileSync(cursorFile, 'utf-8')).toContain(renderRulesBlock('full'));
+  });
+
+  it('--no-guard still writes the full block', async () => {
+    const dir = makeTempProject();
+    writeFileSync(join(dir, 'CLAUDE.md'), PRE_TIER_CLAUDE_MD, 'utf-8');
+
+    await new InitCommand(dir).run({ tools: ['claude-code'], yes: true, noInstall: true, noGuard: true });
+
+    expect(existsSync(join(dir, '.claude', 'settings.json'))).toBe(false);
+    expect(readFileSync(join(dir, 'CLAUDE.md'), 'utf-8')).toBe('# P\n\n' + renderRulesBlock('full') + '\n');
+    expect(stderr()).not.toContain('left unchanged until');
+  });
+
+  it('--skip skills with the guard installed writes the full block', async () => {
+    const dir = makeTempProject();
+    writeFileSync(join(dir, 'CLAUDE.md'), PRE_TIER_CLAUDE_MD, 'utf-8');
+
+    await new InitCommand(dir).run({ tools: ['claude-code'], yes: true, noInstall: true, skip: ['skills'] });
+
+    expect(readFileSync(join(dir, '.claude', 'settings.json'), 'utf-8')).toContain('ctxo gate-hook');
+    expect(readFileSync(join(dir, 'CLAUDE.md'), 'utf-8')).toBe('# P\n\n' + renderRulesBlock('full') + '\n');
+  });
+
+  it('a corrupt settings.json with no ctxo block in CLAUDE.md keeps today\'s full block', async () => {
+    const dir = makeTempProject();
+    mkdirSync(join(dir, '.claude'), { recursive: true });
+    writeFileSync(join(dir, '.claude', 'settings.json'), 'not json{{{', 'utf-8');
+
+    await new InitCommand(dir).run({ tools: ['claude-code'], yes: true, noInstall: true });
+
     expect(blockTier(rulesBody(join(dir, 'CLAUDE.md')))).toBe('full');
+    expect(stderr()).not.toContain('left unchanged until');
   });
 
   it('re-running init reports CLAUDE.md unchanged and keeps one block', async () => {
@@ -874,6 +976,26 @@ describe('InitCommand - the dry run lists every file init would touch (#159)', (
     expect(out).toMatch(/^ {2}\.git\/hooks\/post-commit \(git hook\) +would create$/m);
     expect(out).not.toMatch(/skipped/i);
     expect(out).not.toContain(String.fromCharCode(0x2014));
+  });
+
+  it('the dry run reports a held block', async () => {
+    const dir = makeTempProject();
+    writeFileSync(join(dir, 'CLAUDE.md'), PRE_TIER_CLAUDE_MD, 'utf-8');
+    const before = snapshot(dir);
+
+    await new InitCommand(dir).run({ dryRun: true, tools: ['claude-code'], only: ['rules'] });
+
+    expect(stderr()).toMatch(/^ {2}CLAUDE\.md +unchanged \(held\)$/m);
+    expect(stderr()).not.toContain('would update');
+    expect(snapshot(dir)).toEqual(before);
+
+    // A dry run that would install the guard and the skills counts them as on disk: no hold.
+    errorSpy.mockClear();
+    await new InitCommand(dir).run({ dryRun: true, tools: ['claude-code'], only: ['rules', 'skills', 'guard'] });
+
+    expect(stderr()).toMatch(/^ {2}CLAUDE\.md +would update$/m);
+    expect(stderr()).not.toContain('(held)');
+    expect(snapshot(dir)).toEqual(before);
   });
 
   it('--dry-run writes nothing', async () => {

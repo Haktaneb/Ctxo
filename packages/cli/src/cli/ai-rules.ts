@@ -187,6 +187,83 @@ export function skillsExpected(projectRoot: string, platformId: string): boolean
   );
 }
 
+/** What a run declined, for `rulesHold`. Config opt-outs (`gate.enabled: false`) are read from disk. */
+export interface RulesHoldOptions {
+  /** `--no-guard`, or the guard question answered no: the guard is not waited for. */
+  readonly noGuard?: boolean;
+  /** `--skip skills`: the skills are not waited for. */
+  readonly skipSkills?: boolean;
+  /** A dry run: the guard and this platform's skills that the run would install count as on disk. */
+  readonly planned?: { readonly guard?: boolean; readonly skills?: boolean };
+}
+
+/** What a held rules file waits for; see `rulesHold`. */
+export interface RulesHoldReasons {
+  /** The guard is expected and not registered; `unreadable`: `.claude/settings.json` cannot be read safely. */
+  readonly guard?: 'absent' | 'unreadable';
+  /** The expected skills that are not on disk. */
+  readonly missingSkills?: readonly string[];
+  /** The bundled skills cannot be read, so the installed ones cannot be checked; they count as not on disk. */
+  readonly skillsError?: string;
+}
+
+/**
+ * Why a platform's rules block must be left unchanged, or undefined when it may be written; see
+ * `rulesHold`. Throws only when the rules file itself cannot be read.
+ */
+export function rulesHoldReasons(
+  projectRoot: string,
+  platformId: string,
+  options: RulesHoldOptions = {},
+): RulesHoldReasons | undefined {
+  if (!(SKILL_PLATFORMS as readonly string[]).includes(platformId)) return undefined;
+  if (!guardAndSkillsExpected(firstRulesBlock(projectRoot, platformId))) return undefined;
+
+  let guard: RulesHoldReasons['guard'];
+  if (platformId === 'claude-code' && !options.noGuard && options.planned?.guard !== true && gateEnabled(projectRoot)) {
+    const state = readClaudeGuardState(projectRoot);
+    if (state !== 'present') guard = state;
+  }
+  let missingSkills: string[] | undefined;
+  let skillsError: string | undefined;
+  if (!options.skipSkills && options.planned?.skills !== true) {
+    try {
+      const missing = skillStates(projectRoot, platformId).filter((s) => s.state === 'missing').map((s) => s.skill);
+      if (missing.length > 0) missingSkills = missing;
+    } catch (err) {
+      skillsError = (err as Error).message;
+    }
+  }
+
+  if (guard === undefined && missingSkills === undefined && skillsError === undefined) return undefined;
+  return {
+    ...(guard !== undefined ? { guard } : {}),
+    ...(missingSkills !== undefined ? { missingSkills } : {}),
+    ...(skillsError !== undefined ? { skillsError } : {}),
+  };
+}
+
+/**
+ * The one rule against a silent opt-out (D5): whether the writers must leave this platform's rules
+ * block unchanged. A versioned full block records that the user declined the guard and the skills,
+ * so writing one where nobody declined them would hide the missing pieces for good. True for Claude
+ * Code and Cursor (the platforms with skills) when all of these hold:
+ *
+ * 1. the rules file has a ctxo block that expects the guard and the skills: pre-tier (unversioned or
+ *    legacy) or compact;
+ * 2. the user has not declined them: the guard counts unless `noGuard` or `gate.enabled: false`, the
+ *    skills unless `skipSkills` (Cursor has no guard);
+ * 3. what counts is still not on disk, read after the run's skills and guard steps (`planned` stands
+ *    in for them in a dry run). An unreadable `.claude/settings.json` is not on disk, and neither are
+ *    skills that cannot be checked.
+ *
+ * A file without a ctxo block is never held. Used by init (the real run and the dry run, so also by
+ * `--only rules` and `--rules`) and by `doctor --fix`.
+ */
+export function rulesHold(projectRoot: string, platformId: string, options: RulesHoldOptions = {}): boolean {
+  return rulesHoldReasons(projectRoot, platformId, options) !== undefined;
+}
+
 /**
  * Registers the safe-edit guard under `hooks.PreToolUse` in `.claude/settings.json`. A guard already
  * registered there or in `.claude/settings.local.json` is `skipped`. An unreadable settings file is

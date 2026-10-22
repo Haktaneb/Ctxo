@@ -4,7 +4,12 @@ import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { DoctorReport } from '../../core/diagnostics/types.js';
-import { LEGACY_RULE_BODY, RULES_TEMPLATE_VERSION, renderRulesBlock } from '../../core/agent-rules/rules-block.js';
+import {
+  LEGACY_CURSOR_FRONTMATTER,
+  LEGACY_RULE_BODY,
+  RULES_TEMPLATE_VERSION,
+  renderRulesBlock,
+} from '../../core/agent-rules/rules-block.js';
 import { HealthChecker } from '../../adapters/diagnostics/health-checker.js';
 import {
   AiRulesCheck,
@@ -18,8 +23,11 @@ import { applyFixes, formatFixReport, type FixAttempt, type FixReport } from '..
 import { InitCommand, type InitOptions } from '../init-command.js';
 import { isolateGitEnv, type IsolatedGitEnv } from './git-test-env.js';
 
-/** Set by a test to make the guard write fail as it does on a read-only `.claude/`. */
-const faults = vi.hoisted(() => ({ guardWrite: false }));
+/**
+ * Set by a test to make the guard write fail as it does on a read-only `.claude/`, or the skills
+ * install fail for the platforms listed in `skills`, before anything is written.
+ */
+const faults = vi.hoisted(() => ({ guardWrite: false, skills: [] as string[] }));
 
 vi.mock('../ai-rules.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../ai-rules.js')>();
@@ -30,6 +38,12 @@ vi.mock('../ai-rules.js', async (importOriginal) => {
         throw Object.assign(new Error("EACCES: permission denied, open '.claude/settings.json'"), { code: 'EACCES' });
       }
       return actual.ensureClaudeHook(...args);
+    },
+    installSkills: (...args: Parameters<typeof actual.installSkills>) => {
+      if (faults.skills.includes(args[1]) && args[2]?.dryRun !== true) {
+        throw Object.assign(new Error(`EACCES: permission denied, mkdir '${args[1]} skills'`), { code: 'EACCES' });
+      }
+      return actual.installSkills(...args);
     },
   };
 });
@@ -65,6 +79,7 @@ describe('applyFixes', () => {
 
   afterEach(() => {
     faults.guardWrite = false;
+    faults.skills = [];
     rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     if (savedCI === undefined) delete process.env['CI'];
     else process.env['CI'] = savedCI;
@@ -496,6 +511,31 @@ describe('applyFixes', () => {
       expect(after.checks.find((c) => c.id === 'ai_rules')?.message).toContain('CLAUDE.md: rules present, guard missing');
     });
 
+    it('--fix holds the Cursor rules block until its skills are in place', async () => {
+      const cursorFile = '.cursor/rules/ctxo.mdc';
+      const preTier = LEGACY_CURSOR_FRONTMATTER + LEGACY_RULE_BODY + '\n';
+      write(cursorFile, preTier);
+      faults.skills = ['cursor'];
+      const doctor = await runAgentChecks();
+      expect(statuses(doctor)).toEqual({ ai_rules: 'warn', skills: 'warn', claude_guard_hook: 'pass' });
+
+      const r = await fix(doctor);
+
+      expect(attempt(r, 'Skills')?.status).toBe('failed');
+      const rules = attempt(r, 'AI rules');
+      expect(rules?.status).toBe('skipped');
+      expect(rules?.error).toBe(
+        '.cursor/rules/ctxo.mdc left unchanged while ctxo skills are missing (ctxo-understand, ctxo-safe-edit, ctxo-review-pr)',
+      );
+      expect(text(cursorFile)).toBe(preTier);
+
+      faults.skills = [];
+      const second = await fix(await runAgentChecks());
+      expect(outcomes(second)).toEqual([['Skills', 'success'], ['AI rules', 'success']]);
+      expect(text(cursorFile)).toContain(renderRulesBlock('full'));
+      expect(statuses(await runAgentChecks())).toEqual(ALL_PASS);
+    });
+
     it('--fix --dry-run plans the agent steps and changes nothing on disk', async () => {
       write('CLAUDE.md', PRE_TIER_CLAUDE_MD);
       const claudeMd = bytes('CLAUDE.md');
@@ -520,7 +560,9 @@ describe('applyFixes', () => {
     });
 
     it('--fix keeps the unterminated-marker warning for a held CLAUDE.md', async () => {
-      write('CLAUDE.md', '# P\n\n' + renderRulesBlock('full').replace('\n<!-- ctxo-rules-end -->', '') + '\n');
+      // The pre-tier block expects the guard, so CLAUDE.md is held; the start marker after it has no end marker.
+      // (An unterminated block alone expects nothing, so it is not held: an opt-out holds nothing.)
+      write('CLAUDE.md', PRE_TIER_CLAUDE_MD + '\n' + renderRulesBlock('full').replace('\n<!-- ctxo-rules-end -->', '') + '\n');
       write(SETTINGS, 'not json{{{');
       const claudeMd = bytes('CLAUDE.md');
 

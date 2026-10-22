@@ -13,7 +13,9 @@ import {
   installSkills,
   ensureClaudeHook,
   resolveRulesTier,
+  rulesHold,
   type InstallResult,
+  type RulesHoldOptions,
 } from './ai-rules.js';
 import type { RulesTier } from '../core/agent-rules/rules-block.js';
 import {
@@ -170,6 +172,22 @@ const TOOL_PARTS: readonly InitPart[] = ['rules', 'skills', 'guard', 'mcp'];
 /** Where each skill platform keeps its skills; names the folder when the bundled skills cannot be read. */
 const SKILLS_DIR: Readonly<Record<string, string>> = { 'claude-code': '.claude/skills/', cursor: '.cursor/rules/' };
 
+/** One row of init output: a file and what happened to it. */
+interface InitResult extends InstallResult {
+  /** A rules file that `rulesHold` kept back: `skipped`, with `heldWarning` as its warning. */
+  readonly held?: boolean;
+}
+
+/** Why a held rules file was left unchanged, and the commands that let it be written. */
+function heldWarning(file: string): string {
+  return `${file}: left unchanged until the guard and skills are installed; run "ctxo init --only rules,skills,guard" or "ctxo doctor --fix"`;
+}
+
+/** What these options decline in this run, for `rulesHold`: `--no-guard` and `--skip skills` (Review Focus 3). */
+function declinedBy(options: InitOptions): { noGuard: boolean; skipSkills: boolean } {
+  return { noGuard: options.noGuard === true, skipSkills: options.skip?.includes('skills') === true };
+}
+
 /** `skipped` reads `unchanged` in init output (D16). */
 function actionLabel(action: InstallResult['action']): string {
   return action === 'skipped' ? 'unchanged' : action;
@@ -200,9 +218,11 @@ const PLAN_ACTION: Readonly<Record<InstallResult['action'], string>> = {
 
 /**
  * One dry-run line: `  <file> <would create|would update|unchanged>`, the file padded to 44 columns,
- * or the warning sign and the text for a result with a warning. A git hook's file reads `<path> (git hook)`.
+ * or the warning sign and the text for a result with a warning. A git hook's file reads `<path> (git hook)`,
+ * and a held rules file `unchanged (held)`.
  */
-function formatPlanLine(result: InstallResult, gitHook: boolean): string {
+function formatPlanLine(result: InitResult, gitHook: boolean): string {
+  if (result.held) return `  ${result.file.padEnd(44)} unchanged (held)`;
   if (result.warning !== undefined) return `  \u26a0 ${result.warning}`;
   const file = gitHook ? `${result.file} (git hook)` : result.file;
   return `  ${file.padEnd(44)} ${PLAN_ACTION[result.action]}`;
@@ -268,8 +288,8 @@ export class InitCommand {
    * What init would do with these options, one row per file, writing nothing: the same pipeline as a
    * real run over the parts the flags select. Without `tools` it previews every platform (D16).
    */
-  plan(options: InitOptions = {}): InstallResult[] {
-    return this.applyParts(resolveInitParts(options), options.tools ?? PLATFORMS.map((p) => p.id), true);
+  plan(options: InitOptions = {}): InitResult[] {
+    return this.applyParts(resolveInitParts(options), options.tools ?? PLATFORMS.map((p) => p.id), true, declinedBy(options));
   }
 
   async run(options: InitOptions = {}): Promise<void> {
@@ -299,25 +319,32 @@ export class InitCommand {
   /**
    * Installs the selected parts in one fixed order: config, skills, guard, rules, MCP, git hooks.
    * Skills and the guard go first so each platform's rules tier is resolved from what is on disk after
-   * them. A part not in the set adds no row. Bundled skills that cannot be read become a warning row,
-   * and the other parts still run. `dryRun` gives the same rows and writes nothing; the rules tier
-   * then counts the skills and guard it would install as present.
+   * them, and so `rulesHold` can see whether a block that expects them must wait. A part not in the
+   * set adds no row. Bundled skills that cannot be read become a warning row, and the other parts
+   * still run. `dryRun` gives the same rows and writes nothing; the rules tier and the hold then count
+   * the skills and guard it would install as present. `declined` is what the user declined in this run.
    */
-  private applyParts(parts: ReadonlySet<InitPart>, toolIds: readonly string[], dryRun: boolean): InstallResult[] {
+  private applyParts(
+    parts: ReadonlySet<InitPart>,
+    toolIds: readonly string[],
+    dryRun: boolean,
+    declined: Pick<RulesHoldOptions, 'noGuard' | 'skipSkills'>,
+  ): InitResult[] {
     const root = this.projectRoot;
     const write = { dryRun };
-    const results: InstallResult[] = [];
+    const results: InitResult[] = [];
 
     if (parts.has('config')) {
       results.push(ensureIndexDir(root, write), ensureConfig(root, write), ensureGitignore(root, write));
     }
 
-    let claudeSkills = false;
+    /** The platforms whose skills step ran without an error. */
+    const skillsDone = new Set<string>();
     if (parts.has('skills')) {
       for (const id of toolIds) {
         try {
           results.push(...installSkills(root, id, write));
-          if (id === 'claude-code') claudeSkills = true;
+          skillsDone.add(id);
         } catch (err) {
           results.push({
             file: SKILLS_DIR[id] ?? id,
@@ -336,8 +363,13 @@ export class InitCommand {
     }
 
     if (parts.has('rules')) {
+      const planned = { guard, skills: skillsDone.has('claude-code') };
       for (const id of toolIds) {
-        results.push(installRules(root, id, { tier: this.rulesTier(id, { guard, skills: claudeSkills }), dryRun }));
+        const hold = rulesHold(root, id, {
+          ...declined,
+          ...(dryRun ? { planned: { guard, skills: skillsDone.has(id) } } : {}),
+        });
+        results.push(...(hold ? this.heldRows(id) : [installRules(root, id, { tier: this.rulesTier(id, planned), dryRun })]));
       }
     }
 
@@ -355,6 +387,17 @@ export class InitCommand {
     }
 
     return results;
+  }
+
+  /**
+   * The rows for a rules file that `rulesHold` keeps back: the held row, then the warning a write
+   * would have given (a damaged block or one from a newer ctxo, read by a dry run that writes nothing).
+   */
+  private heldRows(platformId: string): InitResult[] {
+    const file = PLATFORMS.find((p) => p.id === platformId)?.file ?? platformId;
+    const probe = installRules(this.projectRoot, platformId, { dryRun: true });
+    const held: InitResult = { file, action: 'skipped', warning: heldWarning(file), held: true };
+    return probe.warning !== undefined ? [held, probe] : [held];
   }
 
   /** The platform's rules tier; `full` when it cannot be resolved (the bundled skills cannot be read). */
@@ -492,21 +535,25 @@ export class InitCommand {
       console.error('');
     }
 
-    // ── Guard question (Claude Code only) ──
+    // ── Guard question (Claude Code only); answering no declines the guard, as --no-guard does ──
+    const declined = declinedBy(options);
     if (parts.has('guard') && toolIds.includes('claude-code') && !options.noGuard) {
       const guard = await clack.confirm({
         message: pc.cyan('Install the safe-edit guard? Blocks edits to high-impact symbols until blast radius is checked.'),
         initialValue: true,
       });
       if (clack.isCancel(guard)) { clack.cancel('Setup cancelled.'); process.exit(0); }
-      if (!guard) parts.delete('guard');
+      if (!guard) {
+        parts.delete('guard');
+        declined.noGuard = true;
+      }
     }
 
     // ── Execute with spinner ──
     const s = clack.spinner();
     s.start(pc.dim('Configuring...'));
 
-    const rows = this.applyParts(parts, toolIds, false).map((result) => summaryRow(result, pc));
+    const rows = this.applyParts(parts, toolIds, false, declined).map((result) => summaryRow(result, pc));
 
     if (pluginsToInstall.length > 0) {
       s.stop(pc.dim('Installing language plugins...'));
@@ -548,7 +595,7 @@ export class InitCommand {
     const toolIds = options.tools ?? [];
     exitOnUnknownTools(toolIds);
 
-    for (const result of this.applyParts(parts, toolIds, false)) console.error(formatResultLine(result));
+    for (const result of this.applyParts(parts, toolIds, false, declinedBy(options))) console.error(formatResultLine(result));
 
     // Language detection + plugin install (not a part: skipped by --only, --rules and --no-install)
     if (pluginStepEnabled(options)) {

@@ -21,8 +21,9 @@ import {
   readClaudeGuardState,
   readRulesStates,
   resolveRulesTier,
-  skillStates,
+  rulesHoldReasons,
   skillsExpected,
+  type RulesHoldReasons,
 } from './ai-rules.js';
 import { InstallCommand } from './install-command.js';
 import { InitCommand } from './init-command.js';
@@ -69,8 +70,9 @@ export interface FixReport {
  * Steps 3 to 5 never install what the user declined (D5): a versioned full block in CLAUDE.md is
  * an opt-out of the guard and the skills, and `gate.enabled: false` an opt-out of the guard only.
  * An unreadable `.claude/settings.json` is never written; its step fails with the warning. Step 5
- * holds CLAUDE.md while, after steps 3 and 4, its block still expects a guard or skills that are not
- * in place (whatever stopped them), and reports the hold as a warning.
+ * holds a rules file (CLAUDE.md, or Cursor's) while, after steps 3 and 4, its block still expects a
+ * guard or skills that are not in place (whatever stopped them), by the same `rulesHold` rule as
+ * `ctxo init`, and reports the hold as a warning.
  *
  * Error handling (D4.6 "dependency-aware continue"):
  *   - Config failure -> skip all dependent steps
@@ -316,9 +318,9 @@ async function fixClaudeGuardHook(projectRoot: string): Promise<void | FixSkippe
  * and guard installed earlier in the run. A block from a newer ctxo is left alone (D2). A file with an
  * unterminated start marker is passed on too, so its warning fails the attempt instead of being lost.
  *
- * The Claude Code file is held while `claudeRulesHold` finds a reason, and the hold is reported: as
- * the skip reason when nothing else rendered, otherwise as a warning line under the success line. A
- * held file still reports a damaged block (from a dry run, which writes nothing).
+ * A file is held while `rulesHoldReasons` (the rule `ctxo init` uses too) finds a reason, and the hold
+ * is reported: as the skip reason when nothing else rendered, otherwise as a warning line under the
+ * success line. A held file still reports a damaged block (from a dry run, which writes nothing).
  */
 async function fixAiRules(projectRoot: string): Promise<void | FixSkipped | FixWarned> {
   const warnings: string[] = [];
@@ -328,9 +330,9 @@ async function fixAiRules(projectRoot: string): Promise<void | FixSkipped | FixW
     const first = state.scan.blocks[0];
     const renderable = first ? classifyRulesBlock(first).state !== 'newer' : state.scan.unterminated;
     if (!renderable) continue;
-    const hold = state.platformId === 'claude-code' ? claudeRulesHold(projectRoot, state.file) : undefined;
-    if (hold) {
-      holds.push(hold);
+    const reasons = rulesHoldReasons(projectRoot, state.platformId);
+    if (reasons) {
+      holds.push(holdMessage(state.file, reasons));
       const probe = installRules(projectRoot, state.platformId, { dryRun: true });
       if (probe.warning) warnings.push(probe.warning);
       continue;
@@ -345,22 +347,16 @@ async function fixAiRules(projectRoot: string): Promise<void | FixSkipped | FixW
 }
 
 /**
- * Why the Claude Code rules file must wait, read from disk after the Skills and Claude guard hook
- * steps: `.claude/settings.json` is unreadable, or the block expects the guard or the skills (D5) and
- * they are still not in place, whatever stopped them (a failed write, a partial install, an error).
- * Rendering now would resolve to the full tier, and a versioned full block reads as an opt-out the
- * user never made, which would hide the missing pieces for good. Undefined when the file can render.
+ * The hold line for a rules file `rulesHoldReasons` keeps back, read from disk after the Skills and
+ * Claude guard hook steps, whatever stopped them (a failed write, a partial install, an error).
  */
-function claudeRulesHold(projectRoot: string, file: string): string | undefined {
-  const reasons: string[] = [];
-  const guard = readClaudeGuardState(projectRoot);
-  if (guard === 'unreadable') reasons.push('.claude/settings.json is unreadable');
-  else if (guard === 'absent' && guardExpected(projectRoot)) reasons.push('the safe-edit guard is not registered');
-  if (skillsExpected(projectRoot, 'claude-code')) {
-    const missing = skillStates(projectRoot, 'claude-code').filter((s) => s.state === 'missing').map((s) => s.skill);
-    if (missing.length > 0) reasons.push(`ctxo skills are missing (${missing.join(', ')})`);
-  }
-  return reasons.length > 0 ? `${file} left unchanged while ${reasons.join(' and ')}` : undefined;
+function holdMessage(file: string, reasons: RulesHoldReasons): string {
+  const why: string[] = [];
+  if (reasons.guard === 'unreadable') why.push('.claude/settings.json is unreadable');
+  if (reasons.guard === 'absent') why.push('the safe-edit guard is not registered');
+  if (reasons.missingSkills) why.push(`ctxo skills are missing (${reasons.missingSkills.join(', ')})`);
+  if (reasons.skillsError !== undefined) why.push(`the ctxo skills cannot be checked (${reasons.skillsError})`);
+  return `${file} left unchanged while ${why.join(' and ')}`;
 }
 
 function hasMissingPlugins(projectRoot: string): boolean {
