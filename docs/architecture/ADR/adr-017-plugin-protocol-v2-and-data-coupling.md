@@ -150,9 +150,9 @@ NoSQL and messaging are not implemented here; the design leaves room for them.
 - **Older CLIs.** An older CLI reading a v2 index drops the new kinds and edges with a warning.
 - **Core requirement.** `@ctxo/lang-sql` needs a v2 core and declares `^0.8.0 || ^0.9.0` as its plugin-api peer.
 - **Constants only.** SQL held in variables, built dynamically or kept in `static readonly` fields is missed. ORMs and query builders are not covered.
-- **Roslyn fallback (K39).** The Roslyn helper gains a ScriptDom NuGet reference, restored for every C# user. If the restore or build fails (for example a private or offline feed that does not carry the package), `@ctxo/lang-csharp` falls back to the tree-sitter path. Symbols are kept; annotations from the Roslyn tier and SQL edges are lost. `ctxo doctor` warns about the fallback.
+- **Roslyn fallback (K39).** The Roslyn helper gains a ScriptDom NuGet reference, restored for every C# user. If the restore or build fails (for example a private or offline feed that does not carry the package), `@ctxo/lang-csharp` falls back to the tree-sitter path. Symbols are kept, and the tree-sitter tier still emits attribute annotations. Only the Roslyn-tier details (the resolved `named.type`) and the SQL call-site edges are lost. `ctxo index` reports the syntax tier, and the `csharp_tier` doctor check probes `dotnet restore` of the helper and warns with the first error line and a fix hint.
 - **Resolution ambiguity.** Kind-agnostic matching with first-path-wins can pick the wrong file when two files define the same name. The choice is deterministic, and the cost is accepted.
-- **Runtime target.** The helper targets `net8.0` without `RollForward`; a machine with only a newer runtime may fail to launch it. To be verified before relying on it.
+- **Runtime target (verified).** The helper targets `net8.0` and declares `<RollForward>Major</RollForward>`. It keeps using an installed 8.x runtime and rolls forward to the lowest newer major only when no 8.x is installed. The built helper was observed running on .NET 8, 9 and 10, with identical output.
 
 ---
 

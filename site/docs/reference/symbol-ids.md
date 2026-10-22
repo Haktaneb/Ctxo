@@ -16,8 +16,8 @@ Every symbol in the Ctxo index has a deterministic identifier with the shape `<r
 | Segment | Description |
 | --- | --- |
 | `relativeFile` | Repo-relative path, **forward slashes**, no leading `./`. |
-| `name` | Source-level identifier of the symbol. |
-| `kind` | One of the six canonical [symbol kinds](#valid-kinds). |
+| `name` | Source-level identifier of the symbol (for SQL objects, the canonical `schema.name`). |
+| `kind` | One of the nine canonical [symbol kinds](#valid-kinds). |
 
 The separator is a literal double colon (`::`). IDs are validated by a zod schema that splits on `::`, requires exactly three non-empty parts, and asserts the kind is in the allowed enum.
 
@@ -31,8 +31,11 @@ The separator is a literal double colon (`::`). IDs are validated by a zod schem
 | `method` | member of a class or interface |
 | `variable` | top-level const/let/var or package-level var |
 | `type` | type alias / type declaration |
+| `table` | SQL table (`CREATE TABLE`), protocol v2 |
+| `view` | SQL view (`CREATE VIEW`), protocol v2 |
+| `procedure` | SQL stored procedure (`CREATE PROCEDURE`), protocol v2 |
 
-These six kinds are the full enum. Language plugins map their native AST nodes onto this set at extraction time.
+These nine kinds are the full enum (`SYMBOL_KINDS` in `@ctxo/plugin-api`). Language plugins map their native AST nodes onto this set at extraction time; SQL functions map to `function`. `table` and `view` are the data resource kinds (`DATA_RESOURCE_KINDS`).
 
 ## Path normalisation
 
@@ -65,7 +68,17 @@ These six kinds are the full enum. Language plugins map their native AST nodes o
 
 // Type alias
 "packages/cli/src/core/types.ts::SymbolKind::type"
+
+// SQL table and procedure (the name part is the canonical schema.name)
+"db/lending.sql::dbo.loans::table"
+"db/lending.sql::dbo.usp_closeloan::procedure"
 ```
+
+## SQL names and 2-part data references
+
+For SQL objects the `name` segment is the canonical two-part name: lowercase (ASCII `A` to `Z` only), `[...]` and `"..."` delimiters removed, default schema `dbo`. `[dbo].[Loans]`, `dbo.Loans` and `Loans` all give `dbo.loans`. The symbol's `name` field keeps the declared spelling.
+
+Edge targets may be a 2-part **name reference**, `<name>::<kind>`, when the emitting plugin does not know the defining file. Data edges always use one: `dbo.loans::table` for `reads` and `writes`, `dbo.usp_closeloan::procedure` for `executes`. The graph resolves a table reference to any `table` or `view` with that name (a C# call site cannot know which one it is) and a procedure reference to a `procedure`. When several files define the object, the first file in sorted path order wins. Only edge targets take this form; a symbol's own ID always has three parts.
 
 ## Why deterministic
 

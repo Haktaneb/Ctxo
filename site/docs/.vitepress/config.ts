@@ -195,6 +195,7 @@ export default defineConfig({
             { text: 'Go', link: '/languages/go' },
             { text: 'C#', link: '/languages/csharp' },
             { text: 'Java', link: '/languages/java' },
+            { text: 'SQL', link: '/languages/sql' },
             { text: 'Writing a Plugin', link: '/languages/writing-a-plugin' },
           ],
         },

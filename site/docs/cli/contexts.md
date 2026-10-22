@@ -34,13 +34,35 @@ The table goes to stderr, like the other human-readable commands, so stdout
 stays clean for `--json`. Paths below are synthetic.
 
 ```
-[ctxo] Contexts view at 857052d: 3 candidates cover 118/124 files (95%), 2 hubs, 6 unclustered, 1 collisions
+[ctxo] Contexts view at 857052d: 3 candidates cover 118/124 files (95%), 2 hubs, 6 unclustered, 1 collisions, 0 shared tables
 #1  52 files  cohesion 0.81  src/billing  terms: invoice, payment, ledger
 #2  41 files  cohesion 0.74  src/accounts  terms: customer, account, address
 #3  25 files  cohesion 0.69  src/shared  terms: config, retry, clock
 hub src/shared/db-factory.ts (fan-in, god-node, 48 dependents) -> #3
 hub src/shared/logger.ts (fan-in, 31 dependents) -> #3
 ```
+
+### Shared tables
+
+With [`@ctxo/lang-sql`](/languages/sql) installed, the view also reports data
+coupling: tables and views that files of two or more candidates read or write,
+directly or through a stored procedure they execute. A candidate line with
+shared tables ends with their count, and each shared resource gets a `shared`
+line with its kind (`table`, `view` or `external` when no indexed `.sql` file
+defines it), the access modes per candidate and its writers: `owner #<id>` when
+one candidate writes it, `several writers`, or `read only`.
+
+```
+[ctxo] Contexts view at 4be19c2: 2 candidates cover 64/66 files (97%), 1 hubs, 2 unclustered, 0 collisions, 2 shared tables
+#1  38 files  cohesion 0.78  src/Lending  terms: loan, renewal, due  shared tables: 2
+#2  26 files  cohesion 0.72  src/Members  terms: member, card, fine  shared tables: 2
+hub src/Shared/Db.cs (fan-in, 22 dependents) -> #1
+shared table dbo.loans  #1 reads+writes, #2 reads  owner #1
+shared table dbo.members  #1 reads, #2 reads+writes  owner #2
+```
+
+`ctxo index` reports the same count at the end of its contexts line
+(`, 2 shared tables`) when there is any.
 
 ## JSON output shape
 
@@ -51,7 +73,7 @@ the full member lists (the MCP tool caps these).
 {
   "version": 1,
   "commitSha": "857052d",
-  "settings": { "weights": { "dependency": 1, "coChange": 1 }, "resolution": 1, "minCandidateFiles": 3 },
+  "settings": { "weights": { "dependency": 1, "coChange": 1, "data": 0 }, "resolution": 1, "minCandidateFiles": 3 },
   "coverage": { "files": 124, "covered": 118, "ratio": 0.952 },
   "candidates": [
     {
@@ -65,7 +87,8 @@ the full member lists (the MCP tool caps these).
       "crossEdges": [{ "candidate": 3, "total": 17, "byKind": { "imports": 12, "calls": 5 } }],
       "coChangePairs": [
         { "file": "src/billing/invoice.ts", "otherFile": "src/accounts/customer.ts", "otherCandidate": 2, "frequency": 0.4, "sharedCommits": 6 }
-      ]
+      ],
+      "sharedTables": []
     }
   ],
   "hubs": [
@@ -81,12 +104,47 @@ the full member lists (the MCP tool caps these).
         { "candidate": 2, "file": "src/accounts/customer.ts", "symbolId": "src/accounts/customer.ts::Customer::class", "members": ["id", "email", "status"] }
       ]
     }
-  ]
+  ],
+  "dataResources": []
 }
 ```
 
 The example is abbreviated (`settings` also holds `exclude`, `hubs` and
-`technicalTerms`). The settings are described under
+`technicalTerms`). With data coupling, `dataResources` lists every table or
+view a candidate file (members and assigned hubs) reads or writes, and each
+candidate's `sharedTables` lists the ones it shares with another candidate:
+
+```json
+{
+  "dataResources": [
+    {
+      "name": "dbo.loanevents",
+      "external": true,
+      "accesses": [{ "candidate": 1, "modes": ["writes"] }],
+      "writers": [1],
+      "owner": 1
+    },
+    {
+      "name": "dbo.loans",
+      "kind": "table",
+      "external": false,
+      "accesses": [
+        { "candidate": 1, "modes": ["reads", "writes"] },
+        { "candidate": 2, "modes": ["reads"] }
+      ],
+      "writers": [1],
+      "owner": 1
+    }
+  ]
+}
+```
+
+`kind` is absent and `external` is `true` when no indexed `.sql` file defines
+the resource; `owner` is set only when exactly one candidate writes it. The
+artifact keeps the full lists. A table shared by k candidates appears under
+each of them with all k accesses, so the file grows with k² for widely shared
+tables; the MCP tool caps what it returns (see
+[`get_architectural_overlay`](/mcp-tools/get-architectural-overlay#data-coupling)). The settings are described under
 [`contextsView` in the config reference](/reference/config-schema#contextsview).
 `fingerprint` is a hash of the sorted members, so it stays the same when
 candidates are renumbered. The file has no timestamp: the same index, config and

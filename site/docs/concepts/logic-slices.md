@@ -37,7 +37,7 @@ on B"):
 ```
 root (symbolId)
   |
-  +-- forward edge (imports | calls | extends | implements | uses)
+  +-- forward edge (imports | calls | extends | implements | uses | reads | writes | executes)
   |     |
   |     +-- dep node -> enqueue its forward edges
   |

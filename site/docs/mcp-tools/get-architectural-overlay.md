@@ -156,14 +156,18 @@ Every candidate is listed in brief, so the whole map fits in one response. Paths
   "collisions": [{ "name": "Customer", "minJaccard": 0.1, "candidates": [1, 2], "occurrenceCount": 2 }],
   "collisionsTotal": 1,
   "unclustered": { "count": 6 },
+  "dataResourcesTotal": 0,
+  "sharedResourcesTotal": 0,
+  "externalResourcesTotal": 0,
   "hint": "Pass candidate: <id> for one candidate in full; run ctxo contexts --json for the whole view.",
-  "_meta": { "totalItems": 1, "returnedItems": 1, "truncated": false, "totalBytes": 910 }
+  "_meta": { "totalItems": 1, "returnedItems": 1, "truncated": false, "totalBytes": 990 }
 }
 ```
 
 - `candidates` lists every candidate with its top 5 terms. It is the only truncatable array in this response.
 - `hubs` and `collisions` are capped at 50 entries each, with `hubsTotal` and `collisionsTotal` giving the real counts. The envelope never truncates them.
 - `unclustered` carries only the count, and there is no settings block in the MCP response.
+- Data coupling appears as counts only; see [Data coupling](#data-coupling).
 
 ### One candidate (`candidate: <id>`)
 
@@ -181,7 +185,9 @@ Every candidate is listed in brief, so the whole map fits in one response. Paths
     "crossEdges": [{ "candidate": 3, "total": 17, "byKind": { "imports": 12, "calls": 5 } }],
     "coChangePairs": [
       { "file": "src/billing/invoice.ts", "otherFile": "src/accounts/customer.ts", "otherCandidate": 2, "frequency": 0.4, "sharedCommits": 6 }
-    ]
+    ],
+    "sharedTables": [],
+    "sharedTableCount": 0
   },
   "hubs": [{ "file": "src/shared/db-factory.ts", "reasons": ["fan-in", "god-node"], "dependents": 48, "damping": 0.172 }],
   "hubsTotal": 1,
@@ -197,8 +203,10 @@ Every candidate is listed in brief, so the whole map fits in one response. Paths
     }
   ],
   "collisionsTotal": 1,
+  "dataResources": [],
+  "dataResourcesTotal": 0,
   "hint": "Run ctxo contexts --json for full member sets.",
-  "_meta": { "totalItems": 0, "returnedItems": 0, "truncated": false, "totalBytes": 1480 }
+  "_meta": { "totalItems": 0, "returnedItems": 0, "truncated": false, "totalBytes": 1560 }
 }
 ```
 
@@ -207,6 +215,67 @@ Every candidate is listed in brief, so the whole map fits in one response. Paths
 - `collisions` are the collisions this candidate takes part in (at most 10, with `collisionsTotal`). Each lists only **this candidate's own** occurrences (at most 5), each with its `symbolId`, the first 5 members and `memberCount`; the other candidates are named in `candidates`.
 - An unknown `candidate` id, or a repo with no contexts view, returns `{ "found": false, "hint": "..." }`. Run `ctxo index` to generate the view.
 - For the full member sets of every candidate, use `ctxo contexts --json`.
+
+### Data coupling
+
+With [`@ctxo/lang-sql`](/languages/sql) installed, the view knows which candidate reads or writes which table or view, directly or through a stored procedure it executes. Two services that never import each other but both write `dbo.loans` show up here.
+
+**Summary** (counts only):
+
+| Field | Meaning |
+| :--- | :--- |
+| `candidates[].sharedTableCount` | Shared tables of this candidate. Present only when it has any. |
+| `dataResourcesTotal` | Tables and views that any candidate reads or writes. |
+| `sharedResourcesTotal` | Resources that two or more candidates access. |
+| `externalResourcesTotal` | Resources that no indexed `.sql` file defines. |
+
+**Detail** (`candidate: <id>`), with synthetic names:
+
+```json
+{
+  "candidate": {
+    "id": 1,
+    "label": "src/Lending",
+    "sharedTables": [
+      {
+        "name": "dbo.loans",
+        "kind": "table",
+        "external": false,
+        "accesses": [
+          { "candidate": 1, "modes": ["reads", "writes"] },
+          { "candidate": 2, "modes": ["reads"] }
+        ],
+        "owner": 1,
+        "accessCount": 2
+      },
+      {
+        "name": "dbo.members",
+        "kind": "table",
+        "external": false,
+        "accesses": [
+          { "candidate": 1, "modes": ["reads"] },
+          { "candidate": 2, "modes": ["reads", "writes"] }
+        ],
+        "owner": 2,
+        "accessCount": 2
+      }
+    ],
+    "sharedTableCount": 2
+  },
+  "dataResources": [
+    { "name": "dbo.loanevents", "external": true, "modes": ["writes"], "owner": 1, "writerCount": 1 },
+    { "name": "dbo.loans", "kind": "table", "external": false, "modes": ["reads", "writes"], "owner": 1, "writerCount": 1 },
+    { "name": "dbo.members", "kind": "table", "external": false, "modes": ["reads"], "owner": 2, "writerCount": 1 }
+  ],
+  "dataResourcesTotal": 3
+}
+```
+
+- `candidate.sharedTables`: the resources this candidate shares with at least one other candidate, the first 15 by name. Each keeps up to 10 `accesses` (this candidate's own access is always kept) with the real count in `accessCount`. `owner` is set when exactly one candidate writes the resource. `sharedTableCount` is the full count.
+- `dataResources`: the resources this candidate reads or writes, the first 15 by name, each with this candidate's `modes`, the `owner` and the number of writing candidates (`writerCount`). `kind` is absent and `external` is `true` when no indexed `.sql` file defines the resource. `dataResourcesTotal` is the full count.
+- **Response budget.** If the detail is still larger than the response limit (`CTXO_RESPONSE_LIMIT`, default 8192 bytes), trailing entries are dropped, by name order, from the longer of the two lists (`dataResources` on a tie) until it fits. `sharedTableCount` and `dataResourcesTotal` keep the totals.
+- Neither list is a truncatable field of the [envelope](/reference/response-envelope). `ctxo contexts --json` has the full lists, including every resource's `writers`.
+- Shared tables are a boundary finding, not a clustering weight: `contextsView.weights.data` defaults to `0`. Data edges never appear in `crossEdges`.
 
 ### Field reference
 
@@ -219,7 +288,7 @@ Every candidate is listed in brief, so the whole map fits in one response. Paths
 | `candidates[].cohesion` | Internal weight over internal plus boundary weight (hub edges excluded). Higher means a tighter group. |
 | `candidates[].topTerms` | Dominant type-name words by number of files, technical words (`Service`, `Dto`, ...) dropped. |
 | `hubs[].reasons` | `fan-in`, `god-node` or `configured`. Hubs are damped, not clustered, and assigned to the candidate of their strongest remaining edge. |
-| `collisions[]` | The same type name in two candidates with different member shapes (Jaccard below 0.5): input for a glossary session, not a definition. |
+| `collisions[]` | The same type or table name in two candidates with different member shapes (Jaccard below 0.5; a table's members are its columns): input for a glossary session, not a definition. |
 | `unclustered` | Files with no edge to any candidate. |
 
 ## Killer example: regex lies, communities don't

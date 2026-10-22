@@ -2,6 +2,11 @@
 
 Zero-dependency T-SQL tokenizer and data-access recognizers shared by Ctxo language plugins.
 
-This is a library, not a plugin. It has no runtime dependencies. `@ctxo/lang-sql` builds on it, and so do the other language hosts that recognize embedded SQL.
+This is a library, not a plugin. It has no runtime dependencies and is never discovered by the Ctxo CLI. [`@ctxo/lang-sql`](../lang-sql) builds on it, and so do the other language hosts that recognize embedded SQL. It is the one package a Ctxo language plugin may depend on besides `@ctxo/plugin-api` ([ADR-017](../../docs/architecture/ADR/adr-017-plugin-protocol-v2-and-data-coupling.md)).
 
-It exposes two functions (added alongside the recognizers): one that extracts the table and procedure accesses from a SQL text, and one that extracts the definitions (tables, views, procedures, functions) a SQL file declares. Names are canonicalized as `schema.name`, with the `dbo` default and a fold of ASCII A-Z only.
+It exposes two functions:
+
+- `extractSqlAccesses(text)`: the `reads`, `writes` and `executes` accesses of a SQL text, as canonical names.
+- `extractSqlDefinitions(source)`: the tables, views, procedures and functions a SQL file defines, with table columns and the accesses of each body.
+
+Names are canonicalized as `schema.name`: delimiters removed, ASCII A-Z folded to lowercase (every other character kept), default schema `dbo` (`DEFAULT_SQL_SCHEMA`). The dialect is T-SQL (`SQL_DIALECT`). The conformance corpus in [`corpus/`](corpus) pins the rules, and the C# plugin's ScriptDom parser runs the same cases.

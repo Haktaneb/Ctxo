@@ -21,7 +21,17 @@ See [the mandatory sequence](/mcp-tools/tool-selection-guide#modifying-existing-
 
 ### Confidence tiers
 
-Results are grouped into 3 confidence tiers — see [Blast Radius tiers](/concepts/blast-radius#confidence-tiers).
+Results are grouped into 3 confidence tiers by the strongest edge that reaches each dependent: `confirmed` (`calls`, `extends`, `implements` and the data edges `reads`, `writes`, `executes`), `likely` (`uses`, or co-changed) and `potential` (`imports`). The traversal follows every reverse edge, so transitive dependents appear at their depth with a lower `riskScore`. See [Blast Radius tiers](/concepts/blast-radius#confidence-tiers).
+
+### Tables, views and procedures
+
+The target can be any symbol, including a SQL `table`, `view` or `procedure` from [`@ctxo/lang-sql`](/languages/sql). Its readers and writers (SQL views, procedures and functions, and C# methods with constant SQL at known call sites) are `confirmed` dependents:
+
+```json
+{ "symbolId": "db/lending.sql::dbo.loans::table", "confidence": "confirmed" }
+```
+
+Because the safe-edit guard counts `confirmed + likely` dependents, a table that many methods write is guarded like any other high-impact symbol.
 
 ## Example
 
