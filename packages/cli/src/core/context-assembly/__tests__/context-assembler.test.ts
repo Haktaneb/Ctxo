@@ -125,6 +125,18 @@ describe('ContextAssembler — assembleForTask', () => {
     expect(result.warnings).toHaveLength(1);
   });
 
+  it('get_context_for_task omits annotations from the target', () => {
+    const CLOSE = 'src/LoanService.cs::Lending.LoanService.Close::method';
+    const graph = new SymbolGraph();
+    const annotated = { ...makeNode(CLOSE), annotations: [{ name: 'HttpPost', args: ['close'] }] };
+    graph.addNode(annotated);
+
+    const result = assembler.assembleForTask(graph, CLOSE, 'understand', [])!;
+    expect(result.target).toEqual(makeNode(CLOSE));
+    expect('annotations' in result.target).toBe(false);
+    expect(graph.getNode(CLOSE)?.annotations).toEqual([{ name: 'HttpPost', args: ['close'] }]);
+  });
+
   it('includes warnings for anti-patterns in target file', () => {
     const graph = buildTestGraph();
     // D has anti-patterns in its file

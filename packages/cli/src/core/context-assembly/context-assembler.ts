@@ -2,6 +2,7 @@ import type { SymbolGraph } from '../graph/symbol-graph.js';
 import { SYMBOL_KINDS, type SymbolNode, type SymbolKind, type FileIndex, type CoChangeEntry } from '../types.js';
 import { LogicSliceQuery } from '../logic-slice/logic-slice-query.js';
 import { BlastRadiusCalculator, type ImpactConfidence } from '../blast-radius/blast-radius-calculator.js';
+import { withoutAnnotations } from '../detail-levels/detail-formatter.js';
 import { type TaskType, type ScoringWeights, getWeightsForTask } from './task-context-strategy.js';
 
 export interface ContextEntry {
@@ -148,7 +149,8 @@ export class ContextAssembler {
       warnings.push(`⚠ Target symbol has ${targetIndex.antiPatterns.length} anti-pattern(s) in file history`);
     }
 
-    return { target, taskType, context, totalTokens, tokenBudget, warnings };
+    // The target leaves its annotations out, as logic slices below L4 do (see withoutAnnotations).
+    return { target: withoutAnnotations(target), taskType, context, totalTokens, tokenBudget, warnings };
   }
 
   assembleRanked(

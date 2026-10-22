@@ -156,11 +156,11 @@ function registerTools(
   server.registerTool(
     'get_logic_slice',
     {
-      description: 'Retrieve a symbol and all its transitive dependencies as a Logic-Slice. Use this when you need to UNDERSTAND what a symbol depends on (downstream view). L1=signature only, L2=direct deps, L3=full closure, L4=with token budget. Use `intent` to filter dependencies by keyword (e.g., "core", "adapter"). All responses include `_meta` with item counts and truncation info. For impact analysis (what BREAKS if this changes), use get_blast_radius instead. For task-specific context, use get_context_for_task.',
+      description: 'Retrieve a symbol and all its transitive dependencies as a Logic-Slice. Use this when you need to UNDERSTAND what a symbol depends on (downstream view). L1=signature only, L2=direct deps, L3=full closure, L4=with token budget and symbol annotations (attributes, columns; only L4 includes them). Use `intent` to filter dependencies by keyword (e.g., "core", "adapter"). All responses include `_meta` with item counts and truncation info. For impact analysis (what BREAKS if this changes), use get_blast_radius instead. For task-specific context, use get_context_for_task.',
       inputSchema: {
         symbolId: z.string().optional().describe('Single symbol ID (format: file::name::kind)'),
         symbolIds: z.array(z.string()).optional().describe('Batch: array of symbol IDs'),
-        level: z.number().min(1).max(4).optional().default(3).describe('Detail level (L1=signature, L2=direct deps, L3=full closure, L4=with token budget)'),
+        level: z.number().min(1).max(4).optional().default(3).describe('Detail level (L1=signature, L2=direct deps, L3=full closure, L4=with token budget and annotations)'),
         intent: z.string().optional().describe('Filter dependencies by intent keywords (e.g., "core", "adapter")'),
       },
       annotations: toolAnnotations,
