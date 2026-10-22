@@ -75,13 +75,18 @@ function kindOf(id: string): string {
 /**
  * Data coupling between candidates (spec 8.6): which candidate reads or writes which table or view.
  *
- * - A `reads` or `writes` edge from a symbol in a candidate file records that candidate and mode for its target.
+ * - A `reads` or `writes` edge from a symbol in a candidate file records that candidate and mode for its
+ *   target, unless the symbol is a procedure: procedure bodies count through `executes` instead, so the
+ *   candidate that holds a procedure script does not read and write every table its procedures touch.
  * - An `executes` edge to a resolved procedure adds that procedure's reads and writes, following further
  *   `executes` edges transitively with a visited set; an unresolved procedure adds nothing.
+ * - A procedure in a candidate file that no candidate-attributed symbol executes, directly or through a
+ *   chain, credits its own file's candidate as if that candidate executed it. Procedures that only execute
+ *   each other, with nothing outside the cycle executing them, each credit their own candidate this way.
  * - Reading a view does not expand to its tables.
  * - A target that no indexed table or view defines is external and has no kind. Resources are keyed by
- *   canonical name; when several definitions share a name, the smallest symbol ID gives the kind, as
- *   SymbolGraph resolves 2-part references.
+ *   canonical name; when several definitions share a name, the kind is that of the definition SymbolGraph
+ *   resolves the 2-part reference to.
  *
  * Pure and deterministic: the result does not depend on the order of the graph or the map.
  */
@@ -89,16 +94,13 @@ export function computeDataCoupling(input: DataCouplingInput): DataCoupling {
   const { graph, fileCandidate } = input;
 
   const nodes = new Map<string, SymbolNode>();
-  const definitions = new Map<string, { readonly symbolId: string; readonly kind: DataResourceKind }>();
-  for (const node of graph.allNodes()) {
-    nodes.set(node.symbolId, node);
-    if (!isDataResourceKind(node.kind)) continue;
-    const name = nameOf(node.symbolId)!;
-    const known = definitions.get(name);
-    if (!known || compareCodepoint(node.symbolId, known.symbolId) < 0) {
-      definitions.set(name, { symbolId: node.symbolId, kind: node.kind });
-    }
-  }
+  for (const node of graph.allNodes()) nodes.set(node.symbolId, node);
+
+  /** The kind of the definition a 2-part reference to `name` resolves to, or undefined when none defines it. */
+  const definitionKind = (name: string): DataResourceKind | undefined => {
+    const node = graph.getNode(`${name}::table`);
+    return node && isDataResourceKind(node.kind) ? node.kind : undefined;
+  };
 
   /** The resource name of an edge target, or undefined when the target is no table or view. */
   const resourceOf = (target: string): string | undefined => {
@@ -107,6 +109,25 @@ export function computeDataCoupling(input: DataCouplingInput): DataCoupling {
     return isDataResourceKind(kindOf(target)) ? nameOf(target) : undefined;
   };
   const isProcedure = (target: string): boolean => nodes.get(target)?.kind === 'procedure';
+
+  /** The resolved procedures one procedure executes. */
+  const executedBy = (procedure: string): string[] =>
+    graph
+      .getForwardEdges(procedure)
+      .filter((edge) => edge.kind === 'executes' && isProcedure(edge.to))
+      .map((edge) => edge.to);
+  /** The procedures reachable from `starts` through `executes` edges, `starts` included. */
+  const closure = (starts: Iterable<string>): Set<string> => {
+    const visited = new Set<string>();
+    const stack = [...starts];
+    while (stack.length > 0) {
+      const procedure = stack.pop()!;
+      if (visited.has(procedure)) continue;
+      visited.add(procedure);
+      for (const next of executedBy(procedure)) if (!visited.has(next)) stack.push(next);
+    }
+    return visited;
+  };
 
   const usage = new Map<string, Map<number, Set<DataAccessMode>>>();
   const record = (candidate: number, target: string, mode: DataAccessMode): void => {
@@ -119,35 +140,53 @@ export function computeDataCoupling(input: DataCouplingInput): DataCoupling {
     usage.set(name, byCandidate);
   };
 
+  /** Per candidate, the procedures whose bodies it takes on (with everything they execute). */
   const executed = new Map<number, string[]>();
+  const execute = (candidate: number, procedure: string): void => {
+    const list = executed.get(candidate);
+    if (list) list.push(procedure);
+    else executed.set(candidate, [procedure]);
+  };
+
   for (const edge of graph.allEdges()) {
-    if (!DATA_EDGE_KINDS.has(edge.kind)) continue;
+    if (!DATA_EDGE_KINDS.has(edge.kind) || isProcedure(edge.from)) continue;
     const candidate = fileCandidate.get(fileOf(edge.from));
     if (candidate === undefined) continue;
     if (edge.kind === 'executes') {
-      if (!isProcedure(edge.to)) continue;
-      const list = executed.get(candidate);
-      if (list) list.push(edge.to);
-      else executed.set(candidate, [edge.to]);
+      if (isProcedure(edge.to)) execute(candidate, edge.to);
       continue;
     }
     record(candidate, edge.to, edge.kind === 'writes' ? 'writes' : 'reads');
   }
 
+  // The procedures of candidate files that no non-procedure symbol of a candidate file reaches. One that
+  // another of them reaches, without reaching that one back, is executed through that chain and counts there;
+  // the rest credit their own candidate. A cycle with no way in from outside credits each member's candidate.
+  const reached = closure([...executed.values()].flat());
+  const unexecuted = [...nodes.values()]
+    .filter((node) => node.kind === 'procedure' && !reached.has(node.symbolId) && fileCandidate.has(fileOf(node.symbolId)))
+    .map((node) => node.symbolId);
+  const reaches = new Map(unexecuted.map((procedure) => [procedure, closure(executedBy(procedure))]));
+  const reachedFrom = new Map<string, string[]>();
+  for (const [from, targets] of reaches) {
+    for (const target of targets) {
+      if (target === from) continue;
+      const list = reachedFrom.get(target);
+      if (list) list.push(from);
+      else reachedFrom.set(target, [from]);
+    }
+  }
+  for (const procedure of unexecuted) {
+    const own = reaches.get(procedure)!;
+    const throughChain = (reachedFrom.get(procedure) ?? []).some((other) => !own.has(other));
+    if (!throughChain) execute(fileCandidate.get(fileOf(procedure))!, procedure);
+  }
+
   // One walk per candidate over the procedures it executes, directly or through other procedures.
   for (const [candidate, starts] of executed) {
-    const visited = new Set<string>();
-    const stack = [...starts];
-    while (stack.length > 0) {
-      const procedure = stack.pop()!;
-      if (visited.has(procedure)) continue;
-      visited.add(procedure);
+    for (const procedure of closure(starts)) {
       for (const edge of graph.getForwardEdges(procedure)) {
-        if (edge.kind === 'executes') {
-          if (isProcedure(edge.to) && !visited.has(edge.to)) stack.push(edge.to);
-        } else if (edge.kind === 'reads' || edge.kind === 'writes') {
-          record(candidate, edge.to, edge.kind);
-        }
+        if (edge.kind === 'reads' || edge.kind === 'writes') record(candidate, edge.to, edge.kind);
       }
     }
   }
@@ -159,11 +198,11 @@ export function computeDataCoupling(input: DataCouplingInput): DataCoupling {
         .sort(([x], [y]) => x - y)
         .map(([candidate, modes]): CandidateDataAccess => ({ candidate, modes: MODES.filter((mode) => modes.has(mode)) }));
       const writers = accesses.filter((access) => access.modes.includes('writes')).map((access) => access.candidate);
-      const definition = definitions.get(name);
+      const kind = definitionKind(name);
       return {
         name,
-        ...(definition ? { kind: definition.kind } : {}),
-        external: definition === undefined,
+        ...(kind !== undefined ? { kind } : {}),
+        external: kind === undefined,
         accesses,
         writers,
         ...(writers.length === 1 ? { owner: writers[0]! } : {}),

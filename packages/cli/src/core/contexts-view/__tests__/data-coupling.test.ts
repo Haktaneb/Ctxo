@@ -94,18 +94,132 @@ describe('computeDataCoupling', () => {
     );
 
     expect(result.resources).toEqual([
+      { name: 'dbo.loans', kind: 'table', external: false, accesses: [{ candidate: 1, modes: ['writes'] }], writers: [1], owner: 1 },
+    ]);
+    expect(result.sharedTables.size).toBe(0);
+  });
+
+  it('a procedure\'s accesses count for the candidates that execute it, not for the candidate holding its script', () => {
+    const result = coupling(
+      [
+        LOANS_SQL,
+        MEMBERS_SQL,
+        sql(
+          'db/close.sql',
+          [['dbo.usp_close', 'procedure']],
+          [
+            ['dbo.usp_close', 'dbo.loans::table', 'writes'],
+            ['dbo.usp_close', 'dbo.members::table', 'reads'],
+          ],
+        ),
+        cs('src/billing/Close.cs', [['dbo.usp_close::procedure', 'executes']]),
+        cs('src/shipping/Parcel.cs', [['dbo.members::table', 'reads']]),
+      ],
+      [
+        ['src/billing/Close.cs', 1],
+        ['db/close.sql', 2],
+        ['db/loans.sql', 2],
+        ['src/shipping/Parcel.cs', 2],
+      ],
+    );
+
+    expect(result.resources).toEqual([
+      { name: 'dbo.loans', kind: 'table', external: false, accesses: [{ candidate: 1, modes: ['writes'] }], writers: [1], owner: 1 },
+      {
+        name: 'dbo.members',
+        kind: 'table',
+        external: false,
+        accesses: [
+          { candidate: 1, modes: ['reads'] },
+          { candidate: 2, modes: ['reads'] },
+        ],
+        writers: [],
+      },
+    ]);
+    expect(result.sharedTables.get(1)!.map((table) => table.name)).toEqual(['dbo.members']);
+    expect(result.sharedTables.get(2)!.map((table) => table.name)).toEqual(['dbo.members']);
+  });
+
+  it('a procedure nobody executes still credits its own candidate', () => {
+    const result = coupling(
+      [
+        LOANS_SQL,
+        MEMBERS_SQL,
+        sql('db/purge.sql', [['dbo.usp_purge', 'procedure']], [
+          ['dbo.usp_purge', 'dbo.loans::table', 'writes'],
+          ['dbo.usp_purge', 'dbo.usp_log::procedure', 'executes'],
+        ]),
+        // Executed through usp_purge, so it counts for usp_purge's candidate, not for its own.
+        sql('db/log.sql', [['dbo.usp_log', 'procedure']], [['dbo.usp_log', 'dbo.members::table', 'writes']]),
+        cs('src/billing/Invoice.cs', [['dbo.loans::table', 'reads']]),
+      ],
+      [
+        ['src/billing/Invoice.cs', 1],
+        ['db/purge.sql', 2],
+        ['db/log.sql', 3],
+      ],
+    );
+
+    expect(result.resources).toEqual([
       {
         name: 'dbo.loans',
         kind: 'table',
         external: false,
         accesses: [
-          { candidate: 1, modes: ['writes'] },
+          { candidate: 1, modes: ['reads'] },
           { candidate: 2, modes: ['writes'] },
         ],
-        writers: [1, 2],
+        writers: [2],
+        owner: 2,
       },
+      { name: 'dbo.members', kind: 'table', external: false, accesses: [{ candidate: 2, modes: ['writes'] }], writers: [2], owner: 2 },
     ]);
-    expect(result.sharedTables.get(1)!.map((table) => table.name)).toEqual(['dbo.loans']);
+  });
+
+  it('procedures that only execute each other credit their own candidates', () => {
+    const result = coupling(
+      [
+        LOANS_SQL,
+        MEMBERS_SQL,
+        sql('db/a.sql', [['dbo.usp_a', 'procedure']], [
+          ['dbo.usp_a', 'dbo.usp_b::procedure', 'executes'],
+          ['dbo.usp_a', 'dbo.loans::table', 'writes'],
+        ]),
+        sql('db/b.sql', [['dbo.usp_b', 'procedure']], [
+          ['dbo.usp_b', 'dbo.usp_a::procedure', 'executes'],
+          ['dbo.usp_b', 'dbo.members::table', 'reads'],
+        ]),
+      ],
+      [
+        ['db/a.sql', 1],
+        ['db/b.sql', 2],
+      ],
+    );
+
+    // Nothing outside the cycle executes it, so both keep crediting their own candidate, as before.
+    const both = (mode: 'reads' | 'writes') => [
+      { candidate: 1, modes: [mode] },
+      { candidate: 2, modes: [mode] },
+    ];
+    expect(result.resources).toEqual([
+      { name: 'dbo.loans', kind: 'table', external: false, accesses: both('writes'), writers: [1, 2] },
+      { name: 'dbo.members', kind: 'table', external: false, accesses: both('reads'), writers: [] },
+    ]);
+  });
+
+  it('the resource kind comes from the definition SymbolGraph resolves to', () => {
+    const result = coupling(
+      [
+        sql('docs/db/schema.sql', [['dbo.loans', 'view']]),
+        sql('src/db/schema.sql', [['dbo.loans', 'table']]),
+        cs('src/billing/Invoice.cs', [['dbo.loans::table', 'reads']]),
+      ],
+      [['src/billing/Invoice.cs', 1]],
+    );
+
+    expect(result.resources).toEqual([
+      { name: 'dbo.loans', kind: 'table', external: false, accesses: [{ candidate: 1, modes: ['reads'] }], writers: [] },
+    ]);
   });
 
   it('procedure chains are followed and cycles terminate', () => {
