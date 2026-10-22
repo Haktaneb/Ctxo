@@ -53,11 +53,32 @@ export interface RoslynBatchResult {
   projectGraph: RoslynProjectGraph | null;
   totalFiles: number;
   elapsed: string;
+  /** False when the helper exited non-zero, was killed (timeout) or could not be spawned. */
+  ok: boolean;
+  /** Why the run failed (ok false only): the tail of the error output, at most 500 characters. */
+  error?: string;
+}
+
+/** Longest `RoslynBatchResult.error`. */
+const MAX_ERROR_LENGTH = 500;
+/** Build error lines kept from stdout; only the tail of the error output is reported. */
+const MAX_BUILD_ERROR_LINES = 20;
+
+/**
+ * The failure text of a batch run: the build errors `dotnet run` printed on stdout (restore and
+ * compile errors go there, starting at the word "error"), then stderr. Only the tail is kept.
+ */
+function failureText(buildErrors: readonly string[], stderr: string, fallback: string): string {
+  const text = [...buildErrors, stderr.trim()].filter(Boolean).join('\n');
+  if (!text) return fallback;
+  return text.length > MAX_ERROR_LENGTH ? text.slice(-MAX_ERROR_LENGTH) : text;
 }
 
 /**
  * Run ctxo-roslyn in one-shot batch mode.
  * Spawns `dotnet run`, reads JSONL from stdout, returns parsed results.
+ * Never rejects: a failed run (restore or build error, timeout, missing dotnet) resolves with
+ * `ok: false`, no files and the reason in `error`.
  */
 export async function runBatchIndex(
   projectDir: string,
@@ -75,6 +96,16 @@ export async function runBatchIndex(
     let totalFiles = 0;
     let elapsed = '';
     let stderr = '';
+    const buildErrors: string[] = [];
+    let settled = false;
+
+    const fail = (reason: string): void => {
+      if (settled) return;
+      settled = true;
+      const error = failureText(buildErrors, stderr, reason);
+      log.error(`ctxo-roslyn failed (${reason}): ${error}`);
+      resolve({ files: [], projectGraph: null, totalFiles: 0, elapsed: '', ok: false, error });
+    };
 
     let buffer = '';
     proc.stdout.on('data', (chunk: Buffer) => {
@@ -84,6 +115,17 @@ export async function runBatchIndex(
         const line = buffer.slice(0, newlineIdx).trim();
         buffer = buffer.slice(newlineIdx + 1);
         if (!line) continue;
+
+        // dotnet run prints the build output (restore and compile errors) before the helper's JSONL.
+        if (!line.startsWith('{')) {
+          const errorAt = line.search(/\berror\b/i);
+          if (errorAt !== -1) {
+            buildErrors.push(line.slice(errorAt));
+            if (buildErrors.length > MAX_BUILD_ERROR_LINES) buildErrors.shift();
+          }
+          log.debug(`ctxo-roslyn build output: ${line.slice(0, 200)}`);
+          continue;
+        }
 
         try {
           const obj = JSON.parse(line);
@@ -112,18 +154,21 @@ export async function runBatchIndex(
       stderr += chunk.toString();
     });
 
-    proc.on('close', (code) => {
+    proc.on('close', (code, signal) => {
+      // A null code means the process was killed, by the timeout or otherwise.
       if (code !== 0) {
-        log.error(`ctxo-roslyn exited with code ${code}: ${stderr.trim()}`);
-        resolve({ files: [], projectGraph: null, totalFiles: 0, elapsed: '' });
+        fail(code === null ? `killed by ${signal ?? 'a signal'}` : `exit code ${code}`);
         return;
       }
-      resolve({ files, projectGraph, totalFiles, elapsed });
+      if (settled) return;
+      settled = true;
+      resolve({ files, projectGraph, totalFiles, elapsed, ok: true });
     });
 
     proc.on('error', (err) => {
-      log.error(`ctxo-roslyn spawn error: ${err.message}`);
-      resolve({ files: [], projectGraph: null, totalFiles: 0, elapsed: '' });
+      // The spawn error is the reason; the output, if any, comes first.
+      stderr += `${stderr ? '\n' : ''}${err.message}`;
+      fail(`spawn error: ${err.message}`);
     });
   });
 }
@@ -147,8 +192,19 @@ export class RoslynKeepAlive {
     this.timeoutMs = timeoutMs;
   }
 
+  /**
+   * Resolves true once the helper reports `ready`, and false when it fails to spawn or exits
+   * before that (a restore or build failure), so `ctxo watch` never hangs at start.
+   */
   async start(): Promise<boolean> {
     return new Promise((resolve) => {
+      let settled = false;
+      const settle = (started: boolean): void => {
+        if (settled) return;
+        settled = true;
+        resolve(started);
+      };
+
       this.proc = spawn('dotnet', ['run', '--project', this.projectDir, '--', this.solutionPath, '--keep-alive'], {
         stdio: ['pipe', 'pipe', 'pipe'],
       });
@@ -165,7 +221,7 @@ export class RoslynKeepAlive {
             const obj = JSON.parse(line);
             if (obj.type === 'ready') {
               log.info(`Roslyn keep-alive ready: ${obj.projectCount} projects, ${obj.fileCount} files`);
-              resolve(true);
+              settle(true);
             } else if (obj.type === 'file') {
               const result = obj as RoslynFileResult;
               const callback = this.pending.get(result.file);
@@ -189,14 +245,18 @@ export class RoslynKeepAlive {
       this.proc.on('close', (code) => {
         log.info(`Roslyn keep-alive exited (code ${code})`);
         this.proc = null;
+        if (this.inactivityTimer) clearTimeout(this.inactivityTimer);
+        this.inactivityTimer = null;
         // Reject any pending requests
         for (const callback of this.pending.values()) callback(null);
         this.pending.clear();
+        // Exited before `ready`: the helper could not restore, build or load the solution.
+        settle(false);
       });
 
       this.proc.on('error', (err) => {
         log.error(`Roslyn keep-alive error: ${err.message}`);
-        resolve(false);
+        settle(false);
       });
 
       this.resetInactivityTimer();

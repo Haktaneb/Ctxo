@@ -36,13 +36,23 @@ export class RoslynAdapter implements ILanguageAdapter {
   private cache = new Map<string, RoslynFileResult>();
   private keepAlive: RoslynKeepAlive | null = null;
   private initialized = false;
+  private failure: string | null = null;
 
   isSupported(filePath: string): boolean {
     return filePath.endsWith('.cs');
   }
 
+  /** False before initialize() finds the SDK, the helper and a solution, and once the helper failed. */
   isReady(): boolean {
-    return this.initialized && this.roslynProjectDir !== null && this.solutionPath !== null;
+    return this.failure === null && this.initialized && this.roslynProjectDir !== null && this.solutionPath !== null;
+  }
+
+  /**
+   * Why the helper failed, or null while it has not: set when batchIndex() gets a failed run
+   * (restore, build, timeout) or startKeepAlive() cannot start the keep-alive process.
+   */
+  getFailure(): string | null {
+    return this.failure;
   }
 
   async initialize(rootDir: string): Promise<void> {
@@ -75,11 +85,17 @@ export class RoslynAdapter implements ILanguageAdapter {
   /**
    * Run batch analysis for all .cs files in the solution.
    * Call this once before extractSymbols/extractEdges for best performance.
+   * A failed run (`ok: false`) records the reason in getFailure() and leaves the cache empty.
    */
   async batchIndex(): Promise<RoslynBatchResult | null> {
     if (!this.isReady()) return null;
 
     const result = await runBatchIndex(this.roslynProjectDir!, this.solutionPath!);
+    if (!result.ok) {
+      this.failure = result.error || 'the batch run failed';
+      this.cache.clear();
+      return result;
+    }
 
     // Build path mapping: solution-relative -> project-root-relative for ALL files
     // .NET outputs "CFTCoreService/Base.cs" (relative to solution dir)
@@ -143,7 +159,9 @@ export class RoslynAdapter implements ILanguageAdapter {
     if (!this.isReady()) return false;
 
     this.keepAlive = new RoslynKeepAlive(this.roslynProjectDir!, this.solutionPath!);
-    return await this.keepAlive.start();
+    const started = await this.keepAlive.start();
+    if (!started) this.failure = 'the keep-alive helper did not start';
+    return started;
   }
 
   /**
