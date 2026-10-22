@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { PLATFORMS, generateRules, installRules, detectPlatforms, ensureGitignore, ensureConfig, getMcpConfigTargets, ensureMcpConfig, installSkills, skillStates, SKILLS, SKILL_PLATFORMS, ensureClaudeHook } from '../ai-rules.js';
+import { PLATFORMS, generateRules, installRules, detectPlatforms, ensureGitignore, ensureConfig, getMcpConfigTargets, ensureMcpConfig, installSkills, skillStates, SKILLS, SKILL_PLATFORMS, ensureClaudeHook, readClaudeGuardState, resolveRulesTier, gateEnabled } from '../ai-rules.js';
 import {
   LEGACY_CURSOR_FRONTMATTER,
   LEGACY_RULE_BODY,
@@ -36,6 +36,20 @@ function normalised(text: string): string {
 
 function bundledSkill(skill: string): string {
   return normalised(readFileSync(join(BUNDLED_SKILLS_DIR, skill, 'SKILL.md'), 'utf-8'));
+}
+
+/** The guard entry ctxo registers under hooks.PreToolUse. */
+const CTXO_GUARD_ENTRY = { matcher: 'Edit', hooks: [{ type: 'command', command: 'ctxo gate-hook' }] };
+
+const UNREADABLE_SETTINGS_WARNING =
+  '.claude/settings.json is not valid JSON or not a settings object; left unchanged. Fix it, then run "ctxo init --only guard".';
+
+/** Writes `.claude/<name>` under root and returns its absolute path. */
+function writeClaudeSettings(root: string, name: string, text: string): string {
+  const file = join(root, '.claude', name);
+  mkdirSync(join(root, '.claude'), { recursive: true });
+  writeFileSync(file, text, 'utf-8');
+  return file;
 }
 
 describe('PLATFORMS', () => {
@@ -867,5 +881,162 @@ describe('ensureClaudeHook', () => {
     ensureClaudeHook(root);
     const cfg = JSON.parse(readFileSync(join(root, '.claude', 'settings.json'), 'utf-8'));
     expect(cfg.hooks.PreToolUse.length).toBe(1);
+  });
+
+  it('leaves a corrupt settings.json unchanged and warns', () => {
+    const root = makeTempDir();
+    const file = writeClaudeSettings(root, 'settings.json', 'not json{{{');
+    const before = readFileSync(file);
+
+    const result = ensureClaudeHook(root);
+
+    expect(result.action).toBe('skipped');
+    expect(result.warning).toMatch(/not valid JSON/);
+    expect(result.warning).toBe(UNREADABLE_SETTINGS_WARNING);
+    expect(readFileSync(file).equals(before)).toBe(true);
+  });
+
+  it.each([
+    'null',
+    '[]',
+    '"text"',
+    '{"hooks":[]}',
+    '{"hooks":{"PreToolUse":{}}}',
+    '{\n  // comment\n}',
+    '{"hooks":{"PreToolUse":[null]}}',
+    '{"hooks":{"PreToolUse":[{"hooks":"x"}]}}',
+  ])('treats valid JSON with an unexpected shape like corrupt JSON (%j)', (text) => {
+    const root = makeTempDir();
+    const file = writeClaudeSettings(root, 'settings.json', text);
+    const before = readFileSync(file);
+
+    let result: ReturnType<typeof ensureClaudeHook> | undefined;
+    expect(() => { result = ensureClaudeHook(root); }).not.toThrow();
+
+    expect(result?.action).toBe('skipped');
+    expect(result?.warning).toBe(UNREADABLE_SETTINGS_WARNING);
+    expect(readFileSync(file).equals(before)).toBe(true);
+    expect(readClaudeGuardState(root)).toBe('unreadable');
+  });
+
+  it('keeps other settings and hooks when it adds the guard', () => {
+    const root = makeTempDir();
+    const writeEntry = { matcher: 'Write', hooks: [{ type: 'command', command: 'echo write' }] };
+    const postEntry = { matcher: 'Edit', hooks: [{ type: 'command', command: 'echo edited' }] };
+    const settings = {
+      permissions: { allow: ['Bash(pnpm test)'], deny: ['Read(.env)'] },
+      hooks: { PreToolUse: [writeEntry], PostToolUse: [postEntry] },
+    };
+    writeClaudeSettings(root, 'settings.json', JSON.stringify(settings, null, 2) + '\n');
+
+    const result = ensureClaudeHook(root);
+
+    expect(result).toEqual({ file: '.claude/settings.json', action: 'updated' });
+    const cfg = JSON.parse(readFileSync(join(root, '.claude', 'settings.json'), 'utf-8'));
+    expect(cfg).toEqual({
+      permissions: settings.permissions,
+      hooks: { PreToolUse: [writeEntry, CTXO_GUARD_ENTRY], PostToolUse: [postEntry] },
+    });
+    expect(Object.keys(cfg)).toEqual(['permissions', 'hooks']);
+    expect(ensureClaudeHook(root).action).toBe('skipped');
+  });
+
+  it('does not duplicate a guard registered in settings.local.json', () => {
+    const root = makeTempDir();
+    const local = writeClaudeSettings(root, 'settings.local.json', JSON.stringify({ hooks: { PreToolUse: [CTXO_GUARD_ENTRY] } }));
+    const before = readFileSync(local);
+
+    const result = ensureClaudeHook(root);
+
+    expect(result).toEqual({ file: '.claude/settings.json', action: 'skipped' });
+    expect(existsSync(join(root, '.claude', 'settings.json'))).toBe(false);
+    expect(readFileSync(local).equals(before)).toBe(true);
+  });
+
+  it('dryRun writes nothing', () => {
+    const empty = makeTempDir();
+    expect(ensureClaudeHook(empty, { dryRun: true })).toEqual({ file: '.claude/settings.json', action: 'created' });
+    expect(existsSync(join(empty, '.claude'))).toBe(false);
+
+    const root = makeTempDir();
+    const file = writeClaudeSettings(root, 'settings.json', '{"permissions":{}}\n');
+    expect(ensureClaudeHook(root, { dryRun: true })).toEqual({ file: '.claude/settings.json', action: 'updated' });
+    expect(readFileSync(file, 'utf-8')).toBe('{"permissions":{}}\n');
+
+    const corrupt = makeTempDir();
+    const corruptFile = writeClaudeSettings(corrupt, 'settings.json', 'not json{{{');
+    expect(ensureClaudeHook(corrupt, { dryRun: true })).toEqual({
+      file: '.claude/settings.json',
+      action: 'skipped',
+      warning: UNREADABLE_SETTINGS_WARNING,
+    });
+    expect(readFileSync(corruptFile, 'utf-8')).toBe('not json{{{');
+  });
+});
+
+describe('readClaudeGuardState', () => {
+  it('reports present, absent and unreadable', () => {
+    const root = makeTempDir();
+    expect(readClaudeGuardState(root)).toBe('absent');
+
+    writeClaudeSettings(root, 'settings.json', '{"permissions":{}}');
+    expect(readClaudeGuardState(root)).toBe('absent');
+
+    ensureClaudeHook(root);
+    expect(readClaudeGuardState(root)).toBe('present');
+
+    writeClaudeSettings(root, 'settings.json', 'not json{{{');
+    expect(readClaudeGuardState(root)).toBe('unreadable');
+
+    writeClaudeSettings(root, 'settings.local.json', JSON.stringify({ hooks: { PreToolUse: [CTXO_GUARD_ENTRY] } }));
+    expect(readClaudeGuardState(root)).toBe('present');
+
+    const localOnly = makeTempDir();
+    writeClaudeSettings(localOnly, 'settings.local.json', JSON.stringify({ hooks: { PreToolUse: [CTXO_GUARD_ENTRY] } }));
+    expect(readClaudeGuardState(localOnly)).toBe('present');
+
+    const corruptLocal = makeTempDir();
+    writeClaudeSettings(corruptLocal, 'settings.local.json', 'not json{{{');
+    expect(readClaudeGuardState(corruptLocal)).toBe('absent');
+  });
+});
+
+describe('resolveRulesTier', () => {
+  it('is compact only with the guard, every skill and an enabled gate on disk', () => {
+    const root = makeTempDir();
+    expect(resolveRulesTier(root, 'claude-code')).toBe('full');
+
+    ensureClaudeHook(root);
+    installSkills(root, 'claude-code');
+    expect(resolveRulesTier(root, 'claude-code')).toBe('compact');
+    expect(resolveRulesTier(root, 'cursor')).toBe('full');
+
+    mkdirSync(join(root, '.ctxo'), { recursive: true });
+    writeFileSync(join(root, '.ctxo', 'config.yaml'), 'gate:\n  enabled: false\n', 'utf-8');
+    expect(gateEnabled(root)).toBe(false);
+    expect(resolveRulesTier(root, 'claude-code')).toBe('full');
+
+    rmSync(join(root, '.ctxo', 'config.yaml'));
+    expect(gateEnabled(root)).toBe(true);
+    expect(resolveRulesTier(root, 'claude-code')).toBe('compact');
+
+    const skill = join(root, '.claude', 'skills', 'ctxo-review-pr', 'SKILL.md');
+    const skillText = readFileSync(skill);
+    rmSync(skill);
+    expect(resolveRulesTier(root, 'claude-code')).toBe('full');
+
+    writeFileSync(skill, skillText);
+    rmSync(join(root, '.claude', 'settings.json'));
+    expect(resolveRulesTier(root, 'claude-code')).toBe('full');
+  });
+
+  it('counts planned guard and skills', () => {
+    const root = makeTempDir();
+
+    expect(resolveRulesTier(root, 'claude-code', { guard: true, skills: true })).toBe('compact');
+    expect(resolveRulesTier(root, 'claude-code', { guard: true })).toBe('full');
+    expect(resolveRulesTier(root, 'claude-code', { skills: true })).toBe('full');
+    expect(resolveRulesTier(root, 'cursor', { guard: true, skills: true })).toBe('full');
+    expect(existsSync(join(root, '.claude'))).toBe(false);
   });
 });

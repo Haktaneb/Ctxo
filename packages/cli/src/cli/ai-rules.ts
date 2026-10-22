@@ -9,47 +9,131 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname, relative, sep } from 'node:path';
 import {
   LEGACY_CURSOR_FRONTMATTER,
+  expectedRulesTier,
   renderRulesBlock,
   textShape,
   upsertRulesBlock,
   type RulesTier,
 } from '../core/agent-rules/rules-block.js';
+import { loadConfig } from '../core/config/load-config.js';
 
 /* ------------------------------------------------------------------ */
 /*  Claude Code safe-edit gate hook                                    */
 /* ------------------------------------------------------------------ */
 
 const CTXO_HOOK_COMMAND = 'ctxo gate-hook';
+const CLAUDE_SETTINGS_FILE = '.claude/settings.json';
+const UNREADABLE_SETTINGS_WARNING =
+  `${CLAUDE_SETTINGS_FILE} is not valid JSON or not a settings object; left unchanged. Fix it, then run "ctxo init --only guard".`;
 
-export function ensureClaudeHook(projectRoot: string): InstallResult {
+/** Whether the safe-edit guard is registered: `unreadable` means `.claude/settings.json` cannot be read safely. */
+export type ClaudeGuardState = 'present' | 'absent' | 'unreadable';
+
+type SettingsRead =
+  | { readonly kind: 'missing' }
+  | { readonly kind: 'unreadable' }
+  | { readonly kind: 'ok'; readonly json: Record<string, unknown>; readonly hasHook: boolean };
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Reads a Claude Code settings file. `unreadable` covers text that fails `JSON.parse` (JSONC comments
+ * included) and JSON that is not a plain object, has a `hooks` that is not a plain object, a
+ * `hooks.PreToolUse` that is not an array, or a `PreToolUse` entry that is not a plain object with a
+ * `hooks` array.
+ */
+function readSettings(path: string): SettingsRead {
+  if (!existsSync(path)) return { kind: 'missing' };
+  let json: unknown;
+  try {
+    json = JSON.parse(readFileSync(path, 'utf-8'));
+  } catch {
+    return { kind: 'unreadable' };
+  }
+  if (!isPlainObject(json)) return { kind: 'unreadable' };
+  if (json.hooks === undefined) return { kind: 'ok', json, hasHook: false };
+  if (!isPlainObject(json.hooks)) return { kind: 'unreadable' };
+  const pre = json.hooks.PreToolUse;
+  if (pre === undefined) return { kind: 'ok', json, hasHook: false };
+  if (!Array.isArray(pre)) return { kind: 'unreadable' };
+  let hasHook = false;
+  for (const entry of pre as unknown[]) {
+    if (!isPlainObject(entry) || !Array.isArray(entry.hooks)) return { kind: 'unreadable' };
+    if ((entry.hooks as unknown[]).some((h) => isPlainObject(h) && h.command === CTXO_HOOK_COMMAND)) hasHook = true;
+  }
+  return { kind: 'ok', json, hasHook };
+}
+
+/** The shared settings file and whether the guard is registered there or in the local one (read only, D11). */
+function guardRegistration(projectRoot: string): { readonly shared: SettingsRead; readonly state: ClaudeGuardState } {
+  const shared = readSettings(join(projectRoot, '.claude', 'settings.json'));
+  const local = readSettings(join(projectRoot, '.claude', 'settings.local.json'));
+  if ((shared.kind === 'ok' && shared.hasHook) || (local.kind === 'ok' && local.hasHook)) {
+    return { shared, state: 'present' };
+  }
+  return { shared, state: shared.kind === 'unreadable' ? 'unreadable' : 'absent' };
+}
+
+/**
+ * Whether the safe-edit guard hook is registered in `.claude/settings.json` or
+ * `.claude/settings.local.json`. `unreadable`: the shared file exists but cannot be read safely and
+ * the local file does not register the guard.
+ */
+export function readClaudeGuardState(projectRoot: string): ClaudeGuardState {
+  return guardRegistration(projectRoot).state;
+}
+
+/**
+ * Registers the safe-edit guard under `hooks.PreToolUse` in `.claude/settings.json`. A guard already
+ * registered there or in `.claude/settings.local.json` is `skipped`. An unreadable settings file is
+ * never overwritten: `skipped` with a warning. Every other setting and hook is kept, and the entry
+ * goes last. `dryRun` computes the same action and writes nothing, not even a directory.
+ */
+export function ensureClaudeHook(projectRoot: string, options: { readonly dryRun?: boolean } = {}): InstallResult {
   const filePath = join(projectRoot, '.claude', 'settings.json');
-  const dir = dirname(filePath);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-
   const ctxoEntry = { matcher: 'Edit', hooks: [{ type: 'command', command: CTXO_HOOK_COMMAND }] };
+  const { shared, state } = guardRegistration(projectRoot);
 
-  if (!existsSync(filePath)) {
-    writeFileSync(filePath, JSON.stringify({ hooks: { PreToolUse: [ctxoEntry] } }, null, 2) + '\n', 'utf-8');
-    return { file: '.claude/settings.json', action: 'created' };
+  if (state === 'present') return { file: CLAUDE_SETTINGS_FILE, action: 'skipped' };
+  if (shared.kind === 'unreadable') {
+    return { file: CLAUDE_SETTINGS_FILE, action: 'skipped', warning: UNREADABLE_SETTINGS_WARNING };
   }
 
-  let existing: Record<string, unknown>;
-  try { existing = JSON.parse(readFileSync(filePath, 'utf-8')); }
-  catch {
-    writeFileSync(filePath, JSON.stringify({ hooks: { PreToolUse: [ctxoEntry] } }, null, 2) + '\n', 'utf-8');
-    return { file: '.claude/settings.json', action: 'updated' };
+  if (shared.kind === 'missing') {
+    if (!options.dryRun) {
+      mkdirSync(dirname(filePath), { recursive: true });
+      writeFileSync(filePath, JSON.stringify({ hooks: { PreToolUse: [ctxoEntry] } }, null, 2) + '\n', 'utf-8');
+    }
+    return { file: CLAUDE_SETTINGS_FILE, action: 'created' };
   }
 
-  const hooks = (existing.hooks ?? {}) as Record<string, unknown>;
-  const pre = (hooks.PreToolUse ?? []) as Array<{ hooks?: Array<{ command?: string }> }>;
-  if (pre.some((e) => e.hooks?.some((h) => h.command === CTXO_HOOK_COMMAND))) {
-    return { file: '.claude/settings.json', action: 'skipped' };
-  }
-  pre.push(ctxoEntry);
-  hooks.PreToolUse = pre;
-  existing.hooks = hooks;
-  writeFileSync(filePath, JSON.stringify(existing, null, 2) + '\n', 'utf-8');
-  return { file: '.claude/settings.json', action: 'updated' };
+  const hooks = isPlainObject(shared.json.hooks) ? shared.json.hooks : {};
+  const pre = Array.isArray(hooks.PreToolUse) ? (hooks.PreToolUse as unknown[]) : [];
+  const updated = { ...shared.json, hooks: { ...hooks, PreToolUse: [...pre, ctxoEntry] } };
+  if (!options.dryRun) writeFileSync(filePath, JSON.stringify(updated, null, 2) + '\n', 'utf-8');
+  return { file: CLAUDE_SETTINGS_FILE, action: 'updated' };
+}
+
+/** `gate.enabled` from `.ctxo/config.yaml`; a missing or invalid config counts as enabled. */
+export function gateEnabled(projectRoot: string): boolean {
+  return loadConfig(join(projectRoot, '.ctxo')).config.gate?.enabled !== false;
+}
+
+/**
+ * The rules tier for a platform from what is on disk. `planned` counts a guard or skills that the
+ * caller is about to install (or would install in a dry run) as present.
+ */
+export function resolveRulesTier(
+  projectRoot: string,
+  platformId: string,
+  planned: { readonly guard?: boolean; readonly skills?: boolean } = {},
+): RulesTier {
+  const guardPresent = planned.guard === true || readClaudeGuardState(projectRoot) === 'present';
+  const skillsComplete =
+    planned.skills === true || skillStates(projectRoot, 'claude-code').every((s) => s.state !== 'missing');
+  return expectedRulesTier(platformId, { guardPresent, skillsComplete, gateEnabled: gateEnabled(projectRoot) });
 }
 
 export interface Platform {
