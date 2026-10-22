@@ -46,7 +46,8 @@ you need stderr logging.
 The matching rules file is `GEMINI.md`. `ctxo init` writes a marked block
 between `<!-- ctxo-rules-start v<version> -->` / `<!-- ctxo-rules-end -->` so
 subsequent re-runs replace just that block without touching the rest of your
-file. Gemini CLI gets the full rules block.
+file. Gemini CLI gets the full rules block, and so does a `GEMINI.md` that is
+a link to `CLAUDE.md` (ctxo treats the two names as one file).
 
 ## Verify
 

@@ -44,18 +44,18 @@ ctxo init [options]
 | `git-hooks` | `post-commit` and `post-merge` in the hooks directory git resolves |
 
 `--only` and `--skip` take a comma-separated list of these names
-(`--only guard,skills` or `--only=guard,skills`); repeating the flag merges
+(`--only rules,skills,guard` or `--only=rules,skills,guard`); repeating the flag merges
 the lists.
 
 ## Flags
 
 | Flag | Short | Default | Description |
 | --- | --- | --- | --- |
-| `--yes` | `-y` | `false` | Non-interactive: no prompts. Combine with `--tools` to pick the AI tools; without it no AI tool is selected |
+| `--yes` | `-y` | `false` | Non-interactive: no prompts. Combine with `--tools` to pick the AI tools; without `--tools` it sets up all nine tools, the same set the dry run previews |
 | `--tools <list>` | | | Comma-separated list of AI tool ids (for example `claude-code,cursor`). Implies non-interactive |
 | `--only <parts>` | | | Install only these parts. Also skips the plugin step. Cannot be combined with `--skip` or `--rules` |
 | `--skip <parts>` | | | Install every part except these. The plugin step still runs (subject to `--no-install`) |
-| `--no-guard` | | `false` | Never install the safe-edit guard and never ask about it. Combines with `--only` and `--skip`. Without a guard on disk, Claude Code gets the full rules block |
+| `--no-guard` | | `false` | Does not install the safe-edit guard and never asks about it. Combines with `--only` and `--skip`. Without a guard on disk, Claude Code gets the full rules block |
 | `--rules` | | `false` | Deprecated: the same as `--skip git-hooks,guard`, and it still skips the plugin step. Prints a deprecation notice; use `--only` or `--skip` instead |
 | `--no-install` | | `false` | Skip the language-plugin detection prompt (and the implicit install under `--yes`) |
 | `--dry-run` | | `false` | Lists every file init would create or change, and writes nothing. See [Dry run](#dry-run) |
@@ -90,21 +90,41 @@ Each file is reported as `created`, `updated` or `unchanged`; a file init left a
 
 ### The rules block
 
-- **Versioned markers.** Every rules file gets one block between `<!-- ctxo-rules-start v<version> -->` and `<!-- ctxo-rules-end -->`. The version is the rules template version (currently `0.13`): the ctxo minor in which the rules text last changed, not the ctxo version you run.
+- **Versioned markers.** Every rules file gets one block between `<!-- ctxo-rules-start v<version> -->` and `<!-- ctxo-rules-end -->`. The version is the rules template version: the ctxo minor in which the rules text last changed, not the ctxo version you run.
 - **Your content is kept.** A missing file is created. An existing file keeps every byte outside the block, including its line endings and UTF-8 BOM, and gets the block appended when it has none. This holds for every tool: `.cursor/rules/ctxo.mdc`, `AGENTS.md` and the other files that older ctxo versions overwrote whole now keep what you wrote.
-- **Replaced in place.** Re-running init replaces the block where it is. It also finds an unversioned `<!-- ctxo-rules-start -->` block and the unmarked body older versions wrote, replaces it, and collapses duplicate blocks into one. The old unmarked body is recognised only word for word: if a formatter rewrote it, init appends a new block and you can delete the old text.
-- **Left alone with a warning.** A block written by a newer ctxo (a teammate upgraded first), and a start marker without an end marker. Upgrade ctxo, or repair the markers, and run init again.
-- **Tier.** Claude Code gets a compact block (4 lines that point at the skills and the guard) when the guard hook is registered, all three skills are in `.claude/skills/`, and `gate.enabled` is not `false` in `.ctxo/config.yaml`. Every other tool, and Claude Code without one of those, gets the full block with the complete tool guide. The tier follows what is on disk after the skills and guard steps: `--no-guard` and `--skip skills` give Claude Code the full block unless the guard and skills are already installed, and they remove nothing.
+- **Replaced in place.** Re-running init replaces the block where it is. It also finds an unversioned `<!-- ctxo-rules-start -->` block and the unmarked body older versions wrote, replaces it, and collapses duplicate blocks into one. The old unmarked body is found even after a formatter reshaped it.
+- **Formatter stable.** The blocks are written in the layout Prettier prints: a blank line around each marker and after each heading, and a padded table. Init and doctor compare blocks with formatting ignored: line endings, a BOM, trailing whitespace, blank lines and table padding. A block that a formatter (Prettier, markdownlint `--fix`, an editor) reshaped is still current, init reports it `unchanged` and leaves it as it is, and doctor reports no drift. Any other change to the text is an edit, and init replaces the block.
+- **Left alone with a warning.** A block written by a newer ctxo (a teammate upgraded first), a start marker without an end marker, and an end marker without a start marker (its start line was deleted). Upgrade ctxo, or repair the markers by hand, and run init again.
+- **Tier.** Claude Code gets a compact block when the guard hook is registered, all three skills are in `.claude/skills/`, and `gate.enabled` is not `false` in `.ctxo/config.yaml`. The compact block is at most 8 non-blank lines including both markers; today it has 6: the markers, the `## ctxo` heading and three lines that point at the skills and the guard. Every other tool, and Claude Code without one of those, gets the full block with the complete tool guide. The tier follows what is on disk after the skills and guard steps: `--no-guard` and `--skip skills` give Claude Code the full block unless the guard and skills are already installed, and they remove nothing.
+- **Linked rules files.** A rules file that is also another tool's rules file (an `AGENTS.md` or `GEMINI.md` that is a hard link or a symlink to `CLAUDE.md`) gets the full block, because it serves several clients. Init writes it once, doctor reports it once under its first name, and both expect the full tier, so one run settles it.
+
+### Held blocks
+
+A versioned full block in `CLAUDE.md` records that you declined the guard and the skills (see [`ctxo doctor`](./doctor.md)). So init never turns a block that expects them into a full block behind your back. It leaves the rules file unchanged when all of these hold:
+
+1. The file is `CLAUDE.md` or `.cursor/rules/ctxo.mdc`, and its ctxo block expects the guard and the skills: a block from a ctxo before the tiers (unversioned or unmarked), or a compact block.
+2. You did not decline them: no `--no-guard` (or a "no" to the guard question) and no `gate.enabled: false` for the guard, no `--skip skills` for the skills. Cursor has no guard, so only its skills count. `--only rules`, `--rules` and `--skip guard` leave a part out of this run; they do not decline it.
+3. After this run's skills and guard steps, what you did not decline is still not on disk. An unreadable `.claude/settings.json` counts as no guard.
+
+Init then prints:
+
+```text
+[ctxo] ⚠ CLAUDE.md: left unchanged until the guard and skills are installed; run "ctxo init --only rules,skills,guard" or "ctxo doctor --fix"
+```
+
+A rules file linked to a held one is held too (an `AGENTS.md` that is `CLAUDE.md` under another name), so no write reaches the held block through the link. A file without a ctxo block is never held and gets its block as before. The same rule holds the file in the dry run (`unchanged (held)`) and in `ctxo doctor --fix`.
 
 ### Skills
 
-A skill that differs from the bundled copy (other than in line endings or a BOM) is replaced by `ctxo init` and by `ctxo doctor --fix`. To customise a skill, copy it under another name.
+- **Version markers.** Each bundled skill ends with a line such as `<!-- ctxo-skill v0.13 -->`: the skills template version, the ctxo minor in which the skills last changed.
+- **Newer skills are left alone.** A skill whose marker is newer than the one this ctxo bundles (a teammate upgraded first) is left unchanged with a warning, and doctor does not call it outdated.
+- **Older skills are replaced.** A skill with no marker, an older marker, or text that differs from the bundled copy is replaced by `ctxo init` and by `ctxo doctor --fix`. Differences in formatting only (line endings, a BOM, trailing whitespace, blank lines, table padding) do not count. To customise a skill, copy it under another name.
 
 ## Safe-edit guard prompt
 
 Interactive `ctxo init` asks whether to install the safe-edit guard only when Claude Code is among the selected tools. Answering yes writes the hook entry to `.claude/settings.json`; the skills are a separate part and are copied either way. `--no-guard` skips both the question and the guard. A non-interactive run (`--yes` or `--tools`) installs the guard for Claude Code unless you pass `--no-guard`. Cursor gets the skills and the full rules block, but no guard question and no hook: Cursor has no blocking pre-edit hook.
 
-A `.claude/settings.json` that is not valid JSON (JSONC comments included) or not a settings object is never overwritten. Init leaves it unchanged, prints a warning, and writes the full rules block. Repair the file, then run `ctxo init --only guard,rules --tools claude-code --yes`.
+A `.claude/settings.json` that is not valid JSON (JSONC comments included) or not a settings object is never overwritten. Init leaves it unchanged and prints a warning. A `CLAUDE.md` block that expects the guard is then [held](#held-blocks) as well; a `CLAUDE.md` without a ctxo block gets the full block. Repair the file, then run `ctxo init --only rules,skills,guard` (the command the warning names) or `ctxo doctor --fix`.
 
 The guard is enabled by default at `balanced` sensitivity; tune it via `gate:` in `.ctxo/config.yaml`:
 
@@ -148,7 +168,8 @@ in a repository with a `.gitignore` and a `CLAUDE.md`:
   .git/hooks/post-merge (git hook)             would create
 ```
 
-- Each row reads `would create`, `would update` or `unchanged`.
+- Each row reads `would create`, `would update` or `unchanged`. A rules file
+  init would [hold](#held-blocks) reads `unchanged (held)`.
 - `--only`, `--skip`, `--no-guard` and `--rules` select the parts as they would
   for a real run. Without `--tools`, the dry run previews every tool.
 - The `CLAUDE.md` row uses the tier init would write, counting the skills and
@@ -192,8 +213,8 @@ ctxo init --tools claude-code,cursor --yes
 ```
 
 ```shell [guard and skills]
-# Add the safe-edit guard and the skills to an existing setup; nothing else.
-ctxo init --only guard,skills --tools claude-code -y
+# Add the safe-edit guard and the skills to an existing setup; the rules block follows.
+ctxo init --only rules,skills,guard --tools claude-code -y
 ```
 
 ```shell [no git hooks]
@@ -201,8 +222,15 @@ ctxo init --only guard,skills --tools claude-code -y
 ctxo init --skip git-hooks
 ```
 
+```shell [after an upgrade]
+# Refresh the rules, skills and guard after a ctxo upgrade. Don't touch plugins or hooks.
+ctxo init --only rules,skills,guard
+# Or let doctor find and repair what drifted.
+ctxo doctor --fix
+```
+
 ```shell [rules only]
-# Refresh AI tool rules after a ctxo upgrade. Don't touch plugins or hooks.
+# Only the rules blocks. A block that expects the guard and skills waits until they are installed.
 ctxo init --only rules
 ```
 

@@ -35,8 +35,8 @@ ctxo doctor [options]
 | Git binary | `git` is on `PATH` |
 | Git repo | cwd is inside a git working tree |
 | Git hooks | The `post-commit` hook has exactly one current ctxo block (v2). Warns when it is missing, outdated (v1) or duplicated. In a shared global or system `core.hooksPath` directory, which ctxo will not write to, the warning says so and the fix is to add the block by hand; a current block added by hand passes. Passes outside a git repository |
-| AI rules (`ai_rules`) | Each AI rules file that exists (`CLAUDE.md`, `AGENTS.md`, `.cursor/rules/ctxo.mdc` and the rest) has one current ctxo block. Warns on an outdated block (unversioned, an older template version, or the current version with an edited body), on a `CLAUDE.md` block that expects the safe-edit guard while it is missing, on a current block in the wrong tier, on several ctxo blocks in one file, and on a start marker without an end marker. A block written by a newer ctxo passes |
-| Agent skills (`skills`) | The three ctxo skills are installed and match the bundled copies, for Claude Code (`.claude/skills/`) and Cursor (`.cursor/rules/`). Checked only where the skills are expected: one ctxo skill is already installed, or the tool's rules block is pre-tier or compact. Warns on missing or outdated skills; a copy that differs only in line endings or a BOM is current |
+| AI rules (`ai_rules`) | Each AI rules file that exists (`CLAUDE.md`, `AGENTS.md`, `.cursor/rules/ctxo.mdc` and the rest) has no ctxo block, or one current block. Warns on an outdated block (unversioned, an older template version, or the current version with an edited body), on a `CLAUDE.md` block that expects the safe-edit guard while it is missing, on a current block in the wrong tier, on several ctxo blocks in one file, on a start marker without an end marker, and on an end marker without a start marker. A block written by a newer ctxo passes. A block that differs only in formatting (line endings, a BOM, trailing whitespace, blank lines, table padding) is current. Files linked to each other (an `AGENTS.md` that is a hard link or a symlink to `CLAUDE.md`) are one file, reported once under its first name and expected in the full tier |
+| Agent skills (`skills`) | The three ctxo skills are installed and match the bundled copies, for Claude Code (`.claude/skills/`) and Cursor (`.cursor/rules/`). Checked only where the skills are expected: one ctxo skill is already installed, or the tool's rules block is pre-tier or compact. Warns on missing or outdated skills (no `<!-- ctxo-skill v<version> -->` marker, an older one, or changed text). A copy that differs only in formatting is current, and a skill from a newer ctxo (a newer marker) is not reported |
 | Claude guard hook (`claude_guard_hook`) | The safe-edit guard (`ctxo gate-hook`) is registered in `.claude/settings.json` or `.claude/settings.local.json`. Warns when `.claude/settings.json` cannot be read safely (invalid JSON, JSONC comments, or an unexpected shape; repair it by hand, ctxo never overwrites it), and when the guard is missing while the `CLAUDE.md` block expects it (pre-tier or compact) and the gate is enabled |
 | Index directory | `.ctxo/index/` exists and is readable |
 | Index freshness | JSON index matches source hashes |
@@ -62,9 +62,9 @@ earlier one fails:
 
 1. **Config** - write a default `.ctxo/config.yaml` if missing or invalid.
 2. **Git hooks** - install or upgrade the `post-commit` and `post-merge` hooks in place (an outdated v1 post-commit block becomes v2, duplicate blocks are collapsed). A shared global or system `core.hooksPath` is skipped, not failed: the hook files are left untouched and the blocks to add by hand are printed.
-3. **Skills** - install missing or outdated ctxo skills for each tool that expects them. An edited copy of a ctxo skill is replaced with the bundled one; to customise a skill, copy it under another name.
-4. **Claude guard hook** - register `ctxo gate-hook` in `.claude/settings.json` when the `CLAUDE.md` block expects it and the gate is enabled. A `.claude/settings.json` that cannot be read safely is never written: the step fails with a message to repair it.
-5. **AI rules** - re-render each ctxo rules block in the tier the disk now supports. Runs whenever any of the AI rules, Agent skills or Claude guard hook checks warned, after steps 3 and 4, so the tier follows what this run installed. A block from a newer ctxo is left alone.
+3. **Skills** - install missing or outdated ctxo skills for each tool that expects them. An edited copy of a ctxo skill is replaced with the bundled one; to customise a skill, copy it under another name. A skill from a newer ctxo is left alone and reported as a warning line. A tool that fails does not stop the next one; the step then fails, naming each failure, including a skill path ctxo cannot write (such as a directory).
+4. **Claude guard hook** - register `ctxo gate-hook` in `.claude/settings.json` when the `CLAUDE.md` block expects it and the gate is enabled. A `.claude/settings.json` that cannot be read safely is never written: the step fails with a message to repair it. When no guard is expected (an opt-out, `gate.enabled: false`, or no ctxo block), the step is skipped, readable file or not.
+5. **AI rules** - re-render each ctxo rules block in the tier the disk now supports. Runs whenever any of the AI rules, Agent skills or Claude guard hook checks warned, after steps 3 and 4, so the tier follows what this run installed. A block from a newer ctxo is left alone. A damaged block (a start marker without an end marker, or an end marker without a start marker) is left unchanged and fails the step with the reason; repair it by hand.
 6. **Language coverage** - run [`ctxo install`](./install.md) for missing plugins.
 7. **Index** - run [`ctxo index`](./index.md) (requires step 6 to have succeeded).
 8. **SQLite cache** - run [`ctxo sync`](./sync.md).
@@ -76,12 +76,14 @@ Steps 3 to 5 never install what you declined. A versioned full rules block in
 `--no-guard`) records that you opted out of the guard and the skills, and
 `gate.enabled: false` that you opted out of the guard.
 
-Step 5 holds the `CLAUDE.md` block unchanged while the guard or the skills it
-expects are still not in place, whatever stopped them: an unreadable
-`.claude/settings.json`, or a failed install. Rendering it then would write a
-full block, which reads as an opt-out you never made. The step reports the
+Step 5 holds the `CLAUDE.md` block (and Cursor's, for its skills) unchanged
+while the guard or the skills it expects are still not in place, whatever
+stopped them: an unreadable `.claude/settings.json`, or a failed install.
+Rendering it then would write a full block, which reads as an opt-out you never
+made. A rules file linked to a held one is held with it. The step reports the
 hold, and `ctxo doctor` keeps reporting the missing pieces until they are
-fixed; the next `--fix` after the repair renders the block.
+fixed; the next `--fix` after the repair renders the block. `ctxo init` holds
+blocks by the same rule (see [Held blocks](./init.md#held-blocks)).
 
 Every attempt is appended to `.ctxo/doctor-fix.log` for forensics.
 
