@@ -246,5 +246,57 @@ describe('SymbolGraph', () => {
       graph.addEdge(makeEdge('src/a.ts::run::function', 'Bar::class', 'uses'));
       expect(graph.getForwardEdges('src/a.ts::run::function')[0]!.to).toBe('Bar::class');
     });
+
+    /** Resolves `reference` from a graph holding the nodes in the given order, through an edge and through getNode. */
+    function resolveData(nodeIds: readonly string[], reference: string, kind: GraphEdge['kind'] = 'reads') {
+      const graph = new SymbolGraph();
+      graph.addNode(makeNode('src/a.ts::run::function'));
+      for (const id of nodeIds) graph.addNode(makeNode(id));
+      graph.addEdge(makeEdge('src/a.ts::run::function', reference, kind));
+      return {
+        edge: graph.getForwardEdges('src/a.ts::run::function')[0]!.to,
+        node: graph.getNode(reference)?.symbolId,
+        has: graph.hasNode(reference),
+      };
+    }
+
+    it('a data reference prefers a production definition over a test-project copy', () => {
+      const ids = ['src/Lending.Tests/schema.sql::dbo.loans::table', 'src/Lending/db/schema.sql::dbo.loans::table'];
+      const expected = { edge: ids[1], node: ids[1], has: true };
+      expect(resolveData(ids, 'dbo.loans::table')).toEqual(expected);
+      expect(resolveData([...ids].reverse(), 'dbo.loans::table')).toEqual(expected);
+    });
+
+    it('a data reference prefers a production definition over a docs copy', () => {
+      const ids = ['docs/db/schema.sql::dbo.loans::table', 'src/db/schema.sql::dbo.loans::table'];
+      const expected = { edge: ids[1], node: ids[1], has: true };
+      expect(resolveData(ids, 'dbo.loans::table')).toEqual(expected);
+      expect(resolveData([...ids].reverse(), 'dbo.loans::table')).toEqual(expected);
+    });
+
+    it('a procedure defined only in a docs file still resolves', () => {
+      const id = 'docs/db/procs.sql::dbo.usp_renew::procedure';
+      expect(resolveData([id], 'dbo.usp_renew::procedure', 'executes')).toEqual({ edge: id, node: id, has: true });
+    });
+
+    it('the codepoint-smallest production path still wins among production copies', () => {
+      const ids = [
+        'Docs/a.sql::dbo.loans::table',
+        'src/db/b.sql::dbo.loans::table',
+        'src/Lending.Tests/a.sql::dbo.loans::table',
+        'src/db/a.sql::dbo.loans::view',
+        'documentation/a.sql::dbo.loans::table',
+      ];
+      const expected = { edge: 'src/db/a.sql::dbo.loans::view', node: 'src/db/a.sql::dbo.loans::view', has: true };
+      expect(resolveData(ids, 'dbo.loans::table')).toEqual(expected);
+      expect(resolveData([...ids].reverse(), 'dbo.loans::table')).toEqual(expected);
+    });
+
+    it('a docs copy wins over a test-project copy when no production copy exists', () => {
+      const ids = ['src/doc/procs.sql::dbo.sp::procedure', 'src/Lending.Tests/procs.sql::dbo.sp::procedure'];
+      const expected = { edge: ids[0], node: ids[0], has: true };
+      expect(resolveData(ids, 'dbo.sp::procedure', 'executes')).toEqual(expected);
+      expect(resolveData([...ids].reverse(), 'dbo.sp::procedure', 'executes')).toEqual(expected);
+    });
   });
 });

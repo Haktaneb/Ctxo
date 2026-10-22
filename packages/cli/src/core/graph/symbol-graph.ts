@@ -1,7 +1,37 @@
 import { DATA_RESOURCE_KINDS } from '@ctxo/plugin-api';
 import { compareCodepoint } from '../compare-codepoint.js';
 import { isDataResourceKind } from '../data-coupling/data-kinds.js';
+import { createTestFileClassifier } from '../test-files/test-file-classifier.js';
 import type { SymbolNode, GraphEdge } from '../types.js';
+
+/**
+ * Test files by `DEFAULT_TEST_GLOBS` only. The graph has no config, so `index.tests` extras do not count
+ * here: a copy in a test folder that only those extras name ranks as production.
+ */
+const isDefaultTestFile = createTestFileClassifier();
+
+const DOCUMENTATION_FOLDERS: ReadonlySet<string> = new Set(['docs', 'doc', 'documentation']);
+
+/** ASCII A-Z lowercased, with no locale or Unicode folding. */
+function asciiLower(text: string): string {
+  return text.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
+}
+
+/** True when a folder of the path is `docs`, `doc` or `documentation`, compared after ASCII lowercasing. */
+function isUnderDocumentationFolder(file: string): boolean {
+  const folders = file.replace(/\\/g, '/').split('/').slice(0, -1);
+  return folders.some((folder) => DOCUMENTATION_FOLDERS.has(asciiLower(folder)));
+}
+
+/**
+ * The rank of a data definition among several of the same name, smaller first: not in a test file comes
+ * first, then not under a documentation folder. A definition is never dropped; the rank only orders them.
+ */
+function definitionRank(symbolId: string): number {
+  const at = symbolId.indexOf('::');
+  const file = at < 0 ? symbolId : symbolId.slice(0, at);
+  return (isDefaultTestFile(file) ? 2 : 0) + (isUnderDocumentationFolder(file) ? 1 : 0);
+}
 
 export class SymbolGraph {
   private readonly nodes = new Map<string, SymbolNode>();
@@ -9,6 +39,7 @@ export class SymbolGraph {
   private readonly nodesByNameAndKind = new Map<string, SymbolNode[]>();
   private readonly forwardEdges = new Map<string, GraphEdge[]>();
   private readonly reverseEdges = new Map<string, GraphEdge[]>();
+  private readonly definitionRanks = new Map<string, number>();
   private edgeSet = new Set<string>();
 
   addNode(node: SymbolNode): void {
@@ -113,7 +144,9 @@ export class SymbolGraph {
   /**
    * Resolves a 2-part data reference (`dbo.loans::table`). A table or view reference is kind-agnostic
    * across data resource kinds, a procedure reference matches procedures only. Several definitions
-   * resolve to the codepoint-smallest symbolId, which is the first file in sorted path order.
+   * resolve by `definitionRank` (a production copy before a documentation copy before a test copy), then
+   * to the codepoint-smallest symbolId, which is the first file in sorted path order. The result does
+   * not depend on insertion order.
    */
   private resolveDataReference(segs: string[]): SymbolNode | undefined {
     if (segs.length !== 2) return undefined;
@@ -123,12 +156,27 @@ export class SymbolGraph {
     else if (kind === 'procedure') kinds = ['procedure'];
     else return undefined;
     let best: SymbolNode | undefined;
+    let bestRank = 0;
     for (const k of kinds) {
       for (const node of this.nodesByNameAndKind.get(`${name}::${k}`) ?? []) {
-        if (!best || compareCodepoint(node.symbolId, best.symbolId) < 0) best = node;
+        const rank = this.definitionRankOf(node.symbolId);
+        if (!best || rank < bestRank || (rank === bestRank && compareCodepoint(node.symbolId, best.symbolId) < 0)) {
+          best = node;
+          bestRank = rank;
+        }
       }
     }
     return best;
+  }
+
+  /** `definitionRank`, cached per symbolId (the glob match runs once per definition). */
+  private definitionRankOf(symbolId: string): number {
+    let rank = this.definitionRanks.get(symbolId);
+    if (rank === undefined) {
+      rank = definitionRank(symbolId);
+      this.definitionRanks.set(symbolId, rank);
+    }
+    return rank;
   }
 
   /**
