@@ -1,6 +1,5 @@
-import { DATA_RESOURCE_KINDS } from '@ctxo/plugin-api';
 import { compareCodepoint } from '../compare-codepoint.js';
-import { isDataResourceKind } from '../data-coupling/data-kinds.js';
+import { dataReferenceKinds } from '../data-coupling/data-kinds.js';
 import { createTestFileClassifier } from '../test-files/test-file-classifier.js';
 import type { SymbolNode, GraphEdge } from '../types.js';
 
@@ -33,6 +32,28 @@ function definitionRank(symbolId: string): number {
   return (isDefaultTestFile(file) ? 2 : 0) + (isUnderDocumentationFolder(file) ? 1 : 0);
 }
 
+/** A table, view or procedure as one resource across every definition of its canonical name. */
+export interface DataResourceIdentity {
+  /** `<name>::<kind>` with the winner's kind, for example `dbo.loans::table`. */
+  readonly canonicalId: string;
+  /** The definition every data reference to the name resolves to (the `definitionRank` tie-break). */
+  readonly winner: SymbolNode;
+  /** Every definition of the name, once each, in tie-break order: the winner comes first. */
+  readonly definitions: readonly SymbolNode[];
+}
+
+/**
+ * The symbol graph of an index.
+ *
+ * Add all nodes before any edge: `addEdge` resolves each endpoint against the nodes present at that moment,
+ * and an endpoint it cannot resolve keeps its raw id for good.
+ *
+ * A table, view or procedure is one resource per canonical name, whatever the number of files that define
+ * it (`dataResourceIdentity`). Every data reference resolves to the same definition, the winner, so only the
+ * winner has incoming edges. The impact tools read dependents through `getDependentEdges`, which gives every
+ * definition those edges, and forward edges stay on each definition: a procedure body in a later migration
+ * keeps its own accesses.
+ */
 export class SymbolGraph {
   private readonly nodes = new Map<string, SymbolNode>();
   private readonly nodesByFileAndName = new Map<string, SymbolNode>();
@@ -100,9 +121,10 @@ export class SymbolGraph {
       }
     }
 
-    // Final fallback: name-reference targets (e.g. Java "Bar::class" or
-    // "pkg.Bar::helper::method") carry name+kind but not the file path. Resolve
-    // by name+kind ONLY when unambiguous (exactly one node matches).
+    // Final fallback: name-reference targets (e.g. Java "Bar::class", "pkg.Bar::helper::method" or SQL
+    // "dbo.loans::table") carry name+kind but not the file path. A data reference resolves even when
+    // several definitions share the name, by the tie-break in resolveDataReference; any other reference
+    // resolves by name+kind ONLY when unambiguous (exactly one node matches).
     const dataMatch = this.resolveDataReference(segs);
     if (dataMatch) return dataMatch.symbolId;
     const nameKind = this.extractNameKind(segs);
@@ -129,7 +151,8 @@ export class SymbolGraph {
       }
     }
 
-    // Final fallback: name-reference targets — resolve by name+kind only when unambiguous.
+    // Final fallback, as in resolveNodeId: a data reference by its tie-break, anything else by name+kind
+    // only when unambiguous.
     const dataMatch = this.resolveDataReference(segs);
     if (dataMatch) return dataMatch;
     const nameKind = this.extractNameKind(segs);
@@ -151,22 +174,46 @@ export class SymbolGraph {
   private resolveDataReference(segs: string[]): SymbolNode | undefined {
     if (segs.length !== 2) return undefined;
     const [name, kind] = segs as [string, string];
-    let kinds: readonly string[];
-    if (isDataResourceKind(kind)) kinds = DATA_RESOURCE_KINDS;
-    else if (kind === 'procedure') kinds = ['procedure'];
-    else return undefined;
+    const kinds = dataReferenceKinds(kind);
+    if (!kinds) return undefined;
     let best: SymbolNode | undefined;
-    let bestRank = 0;
     for (const k of kinds) {
       for (const node of this.nodesByNameAndKind.get(`${name}::${k}`) ?? []) {
-        const rank = this.definitionRankOf(node.symbolId);
-        if (!best || rank < bestRank || (rank === bestRank && compareCodepoint(node.symbolId, best.symbolId) < 0)) {
-          best = node;
-          bestRank = rank;
-        }
+        if (!best || this.compareDefinitions(node, best) < 0) best = node;
       }
     }
     return best;
+  }
+
+  /** The tie-break order of same-name definitions: `definitionRank`, then the codepoint-smaller symbolId. */
+  private readonly compareDefinitions = (a: SymbolNode, b: SymbolNode): number =>
+    this.definitionRankOf(a.symbolId) - this.definitionRankOf(b.symbolId) || compareCodepoint(a.symbolId, b.symbolId);
+
+  /**
+   * The identity of the table, view or procedure that `id` names: a full id of any of its definitions, or a
+   * 2-part reference such as `dbo.loans::table`. Undefined when `id` names no node, or a node of another
+   * kind. A table or view identity spans both kinds, as a 2-part `::table` reference does.
+   */
+  dataResourceIdentity(id: string): DataResourceIdentity | undefined {
+    const node = this.getNode(id);
+    return node ? this.identityOf(node) : undefined;
+  }
+
+  private identityOf(node: SymbolNode): DataResourceIdentity | undefined {
+    const segs = node.symbolId.split('::');
+    if (segs.length !== 3) return undefined;
+    const [, name, kind] = segs as [string, string, string];
+    const kinds = dataReferenceKinds(kind);
+    if (!kinds) return undefined;
+    const byId = new Map<string, SymbolNode>();
+    for (const k of kinds) {
+      for (const definition of this.nodesByNameAndKind.get(`${name}::${k}`) ?? []) {
+        byId.set(definition.symbolId, this.nodes.get(definition.symbolId) ?? definition);
+      }
+    }
+    const definitions = [...byId.values()].sort(this.compareDefinitions);
+    const winner = definitions[0] ?? node;
+    return { canonicalId: `${name}::${winner.kind}`, winner, definitions };
   }
 
   /** `definitionRank`, cached per symbolId (the glob match runs once per definition). */
@@ -197,6 +244,19 @@ export class SymbolGraph {
 
   getReverseEdges(symbolId: string): GraphEdge[] {
     return this.reverseEdges.get(symbolId) ?? [];
+  }
+
+  /**
+   * The dependents of a resolved symbolId, as the impact tools read them. For a definition of a table, view
+   * or procedure these are the incoming edges of every same-name definition, which in practice are the
+   * winner's: any copy then reports the dependents of the resource. For every other id they are its own
+   * incoming edges, as `getReverseEdges` gives them.
+   */
+  getDependentEdges(symbolId: string): GraphEdge[] {
+    const node = this.nodes.get(symbolId);
+    const definitions = node ? this.identityOf(node)?.definitions : undefined;
+    if (!definitions || definitions.length < 2) return this.getReverseEdges(symbolId);
+    return definitions.flatMap((definition) => this.getReverseEdges(definition.symbolId));
   }
 
   hasNode(symbolId: string): boolean {

@@ -299,4 +299,65 @@ describe('SymbolGraph', () => {
       expect(resolveData([...ids].reverse(), 'dbo.sp::procedure', 'executes')).toEqual(expected);
     });
   });
+
+  describe('data resource identity', () => {
+    const V1 = 'db/migrations/V1__init.sql::dbo.usp_close::procedure';
+    const V7 = 'db/migrations/V7__close_fix.sql::dbo.usp_close::procedure';
+    const DOCS = 'docs/db/procs.sql::dbo.usp_close::procedure';
+    const CLOSE = 'src/LoanService.cs::Lending.LoanService.Close::method';
+
+    function migrationGraph(order: readonly string[] = [DOCS, V7, V1]): SymbolGraph {
+      const graph = new SymbolGraph();
+      graph.addNode(makeNode(CLOSE));
+      for (const id of order) graph.addNode(makeNode(id));
+      graph.addEdge(makeEdge(CLOSE, 'dbo.usp_close::procedure', 'executes'));
+      return graph;
+    }
+
+    it('any id of a procedure gives its canonical id, the winner and every definition', () => {
+      const graph = migrationGraph();
+      for (const id of [V1, V7, DOCS, 'dbo.usp_close::procedure']) {
+        const identity = graph.dataResourceIdentity(id)!;
+        expect(identity.canonicalId).toBe('dbo.usp_close::procedure');
+        expect(identity.winner.symbolId).toBe(V1);
+        expect(identity.definitions.map((node) => node.symbolId)).toEqual([V1, V7, DOCS]);
+      }
+      expect(migrationGraph([V1, V7, DOCS]).dataResourceIdentity(V7)).toEqual(graph.dataResourceIdentity(V7));
+    });
+
+    it('a table identity spans the views of its name, and the canonical kind is the winner\'s', () => {
+      const graph = new SymbolGraph();
+      graph.addNode(makeNode('docs/db/schema.sql::dbo.loans::table'));
+      graph.addNode(makeNode('src/db/schema.sql::dbo.loans::view'));
+      graph.addNode(makeNode('src/db/schema.sql::dbo.usp_loans::procedure'));
+      const identity = graph.dataResourceIdentity('docs/db/schema.sql::dbo.loans::table')!;
+      expect(identity.canonicalId).toBe('dbo.loans::view');
+      expect(identity.definitions.map((node) => node.symbolId)).toEqual([
+        'src/db/schema.sql::dbo.loans::view',
+        'docs/db/schema.sql::dbo.loans::table',
+      ]);
+      expect(graph.dataResourceIdentity('dbo.loans::table')).toEqual(identity);
+    });
+
+    it('code symbols and unknown ids have no data resource identity', () => {
+      const graph = migrationGraph();
+      expect(graph.dataResourceIdentity(CLOSE)).toBeUndefined();
+      expect(graph.dataResourceIdentity('dbo.usp_missing::procedure')).toBeUndefined();
+      expect(graph.dataResourceIdentity('db/none.sql::dbo.loans::table')).toBeUndefined();
+    });
+
+    it('every copy has the incoming edges of every definition as its dependents, and forward edges stay per copy', () => {
+      const graph = migrationGraph();
+      graph.addEdge(makeEdge(V7, 'dbo.audit::table', 'writes'));
+      const executes = [{ from: CLOSE, to: V1, kind: 'executes' }];
+      expect(graph.getDependentEdges(V1)).toEqual(executes);
+      expect(graph.getDependentEdges(V7)).toEqual(executes);
+      expect(graph.getDependentEdges(DOCS)).toEqual(executes);
+      // Raw lookups are unchanged: the edge points at the winner only, and the body edge stays on its copy.
+      expect(graph.getReverseEdges(V7)).toEqual([]);
+      expect(graph.getForwardEdges(V7).map((edge) => edge.to)).toEqual(['dbo.audit::table']);
+      expect(graph.getForwardEdges(V1)).toEqual([]);
+      expect(graph.getDependentEdges(CLOSE)).toEqual([]);
+    });
+  });
 });

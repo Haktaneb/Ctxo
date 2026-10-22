@@ -65,14 +65,16 @@ export class ContextAssembler {
     tokenBudget = DEFAULT_TOKEN_BUDGET,
     coChangeMap?: Map<string, CoChangeEntry[]>,
   ): TaskContextResult | undefined {
+    // Resolve the id once: a 2-part data id names its winning definition.
     const target = graph.getNode(symbolId);
     if (!target) return undefined;
+    const targetId = target.symbolId;
 
     const weights = getWeightsForTask(taskType);
 
     // Gather forward deps + reverse deps
-    const slice = this.logicSlice.getLogicSlice(graph, symbolId);
-    const blastResult = this.blastRadius.calculate(graph, symbolId, coChangeMap);
+    const slice = this.logicSlice.getLogicSlice(graph, targetId);
+    const blastResult = this.blastRadius.calculate(graph, targetId, coChangeMap);
 
     // Build candidate pool (deduplicated)
     const candidateMap = new Map<string, { node: SymbolNode; signals: Signals }>();
@@ -140,7 +142,7 @@ export class ContextAssembler {
 
     // Warnings
     const warnings: string[] = [];
-    const targetFile = symbolId.split('::')[0] ?? '';
+    const targetFile = targetId.split('::')[0] ?? '';
     const targetIndex = fileIndexMap.get(targetFile);
     if (targetIndex && targetIndex.antiPatterns.length > 0) {
       warnings.push(`⚠ Target symbol has ${targetIndex.antiPatterns.length} anti-pattern(s) in file history`);

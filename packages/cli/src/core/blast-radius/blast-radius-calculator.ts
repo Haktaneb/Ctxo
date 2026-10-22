@@ -45,23 +45,32 @@ function edgeKindToConfidence(kind: string): ImpactConfidence {
 }
 
 export class BlastRadiusCalculator {
+  /**
+   * `symbolId` may be any id `SymbolGraph.getNode` resolves, a 2-part data id included. The root is the
+   * node it names, and the root's own file is the one co-change is matched against. Dependents come from
+   * `getDependentEdges`, so every copy of a table, view or procedure, and its 2-part id, has the dependents
+   * of the resource, and no definition of the resource counts as a dependent of another.
+   */
   calculate(graph: SymbolGraph, symbolId: string, coChangeMap?: Map<string, CoChangeEntry[]>): BlastRadiusResult {
-    if (!graph.hasNode(symbolId)) {
+    const root = graph.getNode(symbolId);
+    if (!root) {
       return { impactedSymbols: [], directDependentsCount: 0, confirmedCount: 0, likelyCount: 0, potentialCount: 0, overallRiskScore: 0 };
     }
 
-    const sourceFile = symbolId.split('::')[0]!;
+    const rootId = root.symbolId;
+    const sourceFile = rootId.split('::')[0]!;
+    const definitions = graph.dataResourceIdentity(rootId)?.definitions.map((definition) => definition.symbolId) ?? [];
 
-    const visited = new Set<string>([symbolId]);
+    const visited = new Set<string>([rootId, ...definitions]);
     const rawEntries: Array<{ symbolId: string; depth: number; riskScore: number; confidence: ImpactConfidence; edgeKinds: string[]; coChangeFrequency?: number }> = [];
 
     // BFS via reverse edges (who depends on this symbol?)
-    const queue: Array<{ id: string; depth: number }> = [{ id: symbolId, depth: 0 }];
+    const queue: Array<{ id: string; depth: number }> = [{ id: rootId, depth: 0 }];
 
     while (queue.length > 0) {
       const current = queue.shift()!;
 
-      const reverseEdges = graph.getReverseEdges(current.id);
+      const reverseEdges = graph.getDependentEdges(current.id);
 
       // Group edges by source node, pick strongest confidence per node
       // confirmed > likely > potential — collect all edge kinds
@@ -124,12 +133,11 @@ export class BlastRadiusCalculator {
     }
 
     // GAP-30 FIX: compute dependentCount as blast-scope in-degree (not global)
-    const blastSet = new Set(rawEntries.map((e) => e.symbolId));
-    blastSet.add(symbolId);
+    const blastSet = new Set([rootId, ...definitions, ...rawEntries.map((e) => e.symbolId)]);
 
     const entries: BlastRadiusEntry[] = rawEntries.map((e) => ({
       ...e,
-      dependentCount: graph.getReverseEdges(e.symbolId).filter((re) => blastSet.has(re.from)).length,
+      dependentCount: graph.getDependentEdges(e.symbolId).filter((re) => blastSet.has(re.from)).length,
     }));
 
     // Sort by depth ascending

@@ -107,6 +107,24 @@ describe('ContextAssembler — assembleForTask', () => {
     expect(result).toBeUndefined();
   });
 
+  it('a 2-part procedure id gives the winning copy\'s dependencies, dependents and file warnings', () => {
+    const V1 = 'db/migrations/V1__init.sql::dbo.usp_close::procedure';
+    const V7 = 'db/migrations/V7__close_fix.sql::dbo.usp_close::procedure';
+    const CLOSE = 'src/LoanService.cs::Lending.LoanService.Close::method';
+    const graph = new SymbolGraph();
+    for (const id of [V7, V1, 'db/loans.sql::dbo.loans::table', CLOSE]) graph.addNode(makeNode(id));
+    graph.addEdge({ from: V1, to: 'dbo.loans::table', kind: 'writes' });
+    graph.addEdge({ from: CLOSE, to: 'dbo.usp_close::procedure', kind: 'executes' });
+    const indices: FileIndex[] = [
+      { file: 'db/migrations/V1__init.sql', lastModified: 1, symbols: [], edges: [], intent: [], antiPatterns: [{ hash: 'abc', message: 'Revert "close loans"', date: '2024-01-01' }] },
+    ];
+
+    const result = assembler.assembleForTask(graph, 'dbo.usp_close::procedure', 'refactor', indices)!;
+    expect(result.target.symbolId).toBe(V1);
+    expect(result.context.map((c) => c.symbolId).sort()).toEqual(['db/loans.sql::dbo.loans::table', CLOSE]);
+    expect(result.warnings).toHaveLength(1);
+  });
+
   it('includes warnings for anti-patterns in target file', () => {
     const graph = buildTestGraph();
     // D has anti-patterns in its file
