@@ -22,11 +22,26 @@ function targetOf(access: SqlDefinition['accesses'][number]): string {
 
 const NO_DEFINITIONS: SqlFileExtraction = { definitions: [] };
 
+const MIB = 1024 * 1024;
+
+/**
+ * Largest `.sql` source the adapter extracts, in UTF-8 bytes of the decoded text (5 MiB). The
+ * extraction holds every token of a file at once and grows the heap by about 30 times the file size,
+ * which can exhaust it on seed scripts and schema dumps; a larger file is skipped with a warning.
+ */
+export const MAX_SQL_SOURCE_BYTES = 5 * MIB;
+
+/** Mebibytes rounded up to one decimal, so a file just over the limit never reads as 5.0. */
+function mebibytes(bytes: number): string {
+  return (Math.ceil((bytes * 10) / MIB) / 10).toFixed(1);
+}
+
 /**
  * Syntax-tier adapter for `.sql` files. Definitions become table, view,
  * procedure and function symbols; the body of a view, procedure or function
  * becomes reads, writes and executes edges. SQL objects have no complexity
- * metrics, and calls to SQL functions are not edges.
+ * metrics, and calls to SQL functions are not edges. A source over
+ * MAX_SQL_SOURCE_BYTES gives nothing and one warning.
  */
 export class SqlAdapter implements ILanguageAdapter {
   readonly extensions = ['.sql'] as const;
@@ -87,6 +102,13 @@ export class SqlAdapter implements ILanguageAdapter {
   private extract(filePath: string, source: string): SqlFileExtraction {
     const cached = this.extractions.get(filePath);
     if (cached !== undefined && cached.source === source) return cached.extraction;
+    const bytes = Buffer.byteLength(source, 'utf8');
+    if (bytes > MAX_SQL_SOURCE_BYTES) {
+      // Cached like a failure: the file and source warn once and yield no symbols or edges.
+      log.warn(`skipped ${filePath}: ${mebibytes(bytes)} MiB is over the ${MAX_SQL_SOURCE_BYTES / MIB} MiB SQL size limit`);
+      this.extractions.set(filePath, { source, extraction: NO_DEFINITIONS });
+      return NO_DEFINITIONS;
+    }
     try {
       const extraction = extractSqlDefinitions(source);
       this.extractions.set(filePath, { source, extraction });

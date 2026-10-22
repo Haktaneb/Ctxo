@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { extractSqlDefinitions } from '@ctxo/sql-extract';
-import { SqlAdapter } from '../sql-adapter.js';
+import { MAX_SQL_SOURCE_BYTES, SqlAdapter } from '../sql-adapter.js';
 
 // Wraps the real extractor in a spy that calls through, so tests can count extractions.
 vi.mock('@ctxo/sql-extract', async (importOriginal) => {
@@ -363,5 +363,84 @@ describe('SqlAdapter - contract', () => {
 
     // A changed source is a new attempt and succeeds.
     expect(await adapter.extractSymbols('db/broken.sql', `${BODIES_SQL}\n`)).not.toEqual([]);
+  });
+});
+
+describe('SqlAdapter - size limit', () => {
+  /** A table definition padded with a line comment to exactly `bytes` UTF-8 bytes. */
+  function sourceOfBytes(bytes: number, comment = 'x'): string {
+    const head = 'CREATE TABLE dbo.Loans (Id INT NOT NULL)\n-- ';
+    const padding = comment.repeat(Math.ceil((bytes - head.length) / Buffer.byteLength(comment)));
+    const source = head + padding;
+    // Trim back to the exact size when a multi-byte comment overshoots.
+    return Buffer.from(source, 'utf8').subarray(0, bytes).toString('utf8');
+  }
+
+  function warnings(stderr: ReturnType<typeof vi.spyOn>): string[] {
+    return stderr.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('SQL size limit'));
+  }
+
+  it('the limit is 5 MiB', () => {
+    expect(MAX_SQL_SOURCE_BYTES).toBe(5 * 1024 * 1024);
+  });
+
+  it('a .sql file over the size limit is skipped with one warning', async () => {
+    const adapter = new SqlAdapter();
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    extractSpy.mockClear();
+    const source = sourceOfBytes(6 * 1024 * 1024);
+
+    expect(await adapter.extractSymbols('db/seed.sql', source)).toEqual([]);
+    expect(await adapter.extractEdges('db/seed.sql', source)).toEqual([]);
+    expect(await adapter.extractComplexity('db/seed.sql', source)).toEqual([]);
+
+    expect(extractSpy).not.toHaveBeenCalled();
+    expect(warnings(stderr)).toEqual([
+      '[ctxo:lang-sql] skipped db/seed.sql: 6.0 MiB is over the 5 MiB SQL size limit\n',
+    ]);
+  });
+
+  it('a source of exactly 5 MiB is indexed and one byte more is skipped', async () => {
+    const adapter = new SqlAdapter();
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    const atLimit = sourceOfBytes(MAX_SQL_SOURCE_BYTES);
+    expect(Buffer.byteLength(atLimit, 'utf8')).toBe(MAX_SQL_SOURCE_BYTES);
+    expect((await adapter.extractSymbols('db/at-limit.sql', atLimit)).map((s) => s.symbolId)).toEqual([
+      'db/at-limit.sql::dbo.loans::table',
+    ]);
+
+    const overLimit = `${atLimit}x`;
+    expect(await adapter.extractSymbols('db/over-limit.sql', overLimit)).toEqual([]);
+    expect(warnings(stderr)).toEqual([
+      '[ctxo:lang-sql] skipped db/over-limit.sql: 5.1 MiB is over the 5 MiB SQL size limit\n',
+    ]);
+  });
+
+  it('the limit counts UTF-8 bytes of the decoded text, not characters', async () => {
+    const adapter = new SqlAdapter();
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    extractSpy.mockClear();
+    // 'Ödünç' is 5 characters and 8 UTF-8 bytes: under 5 Mi characters, over 5 MiB.
+    const source = sourceOfBytes(MAX_SQL_SOURCE_BYTES + 2, 'Ödünç');
+    expect(source.length).toBeLessThan(MAX_SQL_SOURCE_BYTES);
+
+    expect(await adapter.extractSymbols('db/ödünç.sql', source)).toEqual([]);
+    expect(extractSpy).not.toHaveBeenCalled();
+    expect(warnings(stderr)).toHaveLength(1);
+  });
+
+  it('every changed oversized source warns again, once', async () => {
+    const adapter = new SqlAdapter();
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const first = sourceOfBytes(6 * 1024 * 1024);
+    const second = `${first}y`;
+
+    await adapter.extractSymbols('db/seed.sql', first);
+    await adapter.extractEdges('db/seed.sql', first);
+    await adapter.extractSymbols('db/seed.sql', second);
+    await adapter.extractEdges('db/seed.sql', second);
+
+    expect(warnings(stderr)).toHaveLength(2);
   });
 });
