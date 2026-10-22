@@ -6,7 +6,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, relative, sep } from 'node:path';
 import {
   LEGACY_CURSOR_FRONTMATTER,
   renderRulesBlock,
@@ -188,10 +188,20 @@ export function installRules(
 export const SKILLS = ['ctxo-understand', 'ctxo-safe-edit', 'ctxo-review-pr'] as const;
 
 /** Platforms with a markdown skill/rule directory we can drop skills into. */
-const SKILL_TARGET_DIR: Partial<Record<string, (root: string, skill: string) => string>> = {
+export const SKILL_PLATFORMS = ['claude-code', 'cursor'] as const;
+
+type SkillPlatform = (typeof SKILL_PLATFORMS)[number];
+
+const SKILL_TARGET_DIR: Record<SkillPlatform, (root: string, skill: string) => string> = {
   'claude-code': (root, skill) => join(root, '.claude', 'skills', skill, 'SKILL.md'),
   cursor: (root, skill) => join(root, '.cursor', 'rules', `${skill}.mdc`),
 };
+
+function skillTarget(platformId: string): ((root: string, skill: string) => string) | undefined {
+  return (SKILL_PLATFORMS as readonly string[]).includes(platformId)
+    ? SKILL_TARGET_DIR[platformId as SkillPlatform]
+    : undefined;
+}
 
 function skillsSourceDir(): string {
   let dir = import.meta.dirname;
@@ -205,20 +215,57 @@ function skillsSourceDir(): string {
   throw new Error('Could not locate ctxo skills/ directory.');
 }
 
-export function installSkills(projectRoot: string, platformId: string): InstallResult[] {
-  const target = SKILL_TARGET_DIR[platformId];
+export interface SkillState {
+  readonly skill: (typeof SKILLS)[number];
+  /** Project-relative, forward slashes */
+  readonly file: string;
+  /** `current` also covers a copy that differs only in line endings or a UTF-8 BOM. */
+  readonly state: 'current' | 'missing' | 'outdated';
+}
+
+interface SkillPlanEntry extends SkillState {
+  /** The bundled file's content and the absolute path the skill is installed at. */
+  readonly bundled: string;
+  readonly to: string;
+}
+
+function skillPlan(projectRoot: string, platformId: string): SkillPlanEntry[] {
+  const target = skillTarget(platformId);
   if (!target) return [];
   const src = skillsSourceDir();
-  const out: InstallResult[] = [];
-  for (const skill of SKILLS) {
-    const from = join(src, skill, 'SKILL.md');
+  return SKILLS.map((skill) => {
+    const bundled = readFileSync(join(src, skill, 'SKILL.md'), 'utf-8');
     const to = target(projectRoot, skill);
-    mkdirSync(dirname(to), { recursive: true });
-    const existed = existsSync(to);
-    writeFileSync(to, readFileSync(from, 'utf-8'), 'utf-8');
-    out.push({ file: to, action: existed ? 'updated' : 'created' });
-  }
-  return out;
+    const file = relative(projectRoot, to).split(sep).join('/');
+    if (!existsSync(to)) return { skill, file, state: 'missing', bundled, to };
+    const same = textShape(readFileSync(to, 'utf-8')).text === textShape(bundled).text;
+    return { skill, file, state: same ? 'current' : 'outdated', bundled, to };
+  });
+}
+
+/** Where each of the platform's skills stands against the bundled copy. `[]` for a platform without skills. */
+export function skillStates(projectRoot: string, platformId: string): SkillState[] {
+  return skillPlan(projectRoot, platformId).map(({ skill, file, state }) => ({ skill, file, state }));
+}
+
+/**
+ * Copies the bundled skills into the platform's skill folder. A skill equal to the bundled one
+ * (BOM and line endings ignored) is `skipped` and not rewritten; a missing one is `created`, a
+ * different one `updated`. `dryRun` computes the same actions and writes nothing, not even a directory.
+ */
+export function installSkills(
+  projectRoot: string,
+  platformId: string,
+  options: { readonly dryRun?: boolean } = {},
+): InstallResult[] {
+  return skillPlan(projectRoot, platformId).map(({ file, state, bundled, to }): InstallResult => {
+    if (state === 'current') return { file, action: 'skipped' };
+    if (!options.dryRun) {
+      mkdirSync(dirname(to), { recursive: true });
+      writeFileSync(to, bundled, 'utf-8');
+    }
+    return { file, action: state === 'missing' ? 'created' : 'updated' };
+  });
 }
 
 /* ------------------------------------------------------------------ */

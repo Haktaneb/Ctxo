@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { PLATFORMS, generateRules, installRules, detectPlatforms, ensureGitignore, ensureConfig, getMcpConfigTargets, ensureMcpConfig, installSkills, SKILLS, ensureClaudeHook } from '../ai-rules.js';
+import { PLATFORMS, generateRules, installRules, detectPlatforms, ensureGitignore, ensureConfig, getMcpConfigTargets, ensureMcpConfig, installSkills, skillStates, SKILLS, SKILL_PLATFORMS, ensureClaudeHook } from '../ai-rules.js';
 import {
   LEGACY_CURSOR_FRONTMATTER,
   LEGACY_RULE_BODY,
@@ -24,6 +24,18 @@ function makeTempDir(prefix = 'ctxo-rules-'): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   tempDirs.push(dir);
   return dir;
+}
+
+/** packages/cli/skills, the folder `installSkills` copies from. */
+const BUNDLED_SKILLS_DIR = join(import.meta.dirname, '..', '..', '..', 'skills');
+
+/** LF text without a BOM, so a CRLF checkout (core.autocrlf) and an LF one compare equal. */
+function normalised(text: string): string {
+  return (text.startsWith(BOM) ? text.slice(1) : text).replace(/\r\n/g, '\n');
+}
+
+function bundledSkill(skill: string): string {
+  return normalised(readFileSync(join(BUNDLED_SKILLS_DIR, skill, 'SKILL.md'), 'utf-8'));
 }
 
 describe('PLATFORMS', () => {
@@ -665,6 +677,176 @@ describe('installSkills', () => {
   it('returns an empty list for a platform without skill support', () => {
     const root = makeTempDir();
     expect(installSkills(root, 'amazonq')).toEqual([]);
+  });
+
+  it('skips a skill that differs only in line endings', () => {
+    const root = makeTempDir();
+    const files = SKILLS.map(skill => join(root, '.claude', 'skills', skill, 'SKILL.md'));
+    SKILLS.forEach((skill, i) => {
+      mkdirSync(join(root, '.claude', 'skills', skill), { recursive: true });
+      writeFileSync(files[i], bundledSkill(skill).replace(/\n/g, '\r\n'), 'utf-8');
+    });
+    const before = files.map(f => readFileSync(f));
+
+    const results = installSkills(root, 'claude-code');
+
+    expect(results.map(r => r.action)).toEqual(SKILLS.map(() => 'skipped'));
+    files.forEach((f, i) => expect(readFileSync(f).equals(before[i])).toBe(true));
+  });
+
+  it('skips a skill that differs only in a UTF-8 BOM', () => {
+    const root = makeTempDir();
+    const files = SKILLS.map(skill => join(root, '.cursor', 'rules', `${skill}.mdc`));
+    mkdirSync(join(root, '.cursor', 'rules'), { recursive: true });
+    SKILLS.forEach((skill, i) => writeFileSync(files[i], BOM + bundledSkill(skill), 'utf-8'));
+    const before = files.map(f => readFileSync(f));
+
+    const results = installSkills(root, 'cursor');
+
+    expect(results.map(r => r.action)).toEqual(SKILLS.map(() => 'skipped'));
+    files.forEach((f, i) => expect(readFileSync(f).equals(before[i])).toBe(true));
+  });
+
+  it('rewrites an edited skill and reports updated', () => {
+    const root = makeTempDir();
+    installSkills(root, 'claude-code');
+    const edited = join(root, '.claude', 'skills', 'ctxo-safe-edit', 'SKILL.md');
+    writeFileSync(edited, readFileSync(edited, 'utf-8') + '\nA local edit.\n', 'utf-8');
+
+    const results = installSkills(root, 'claude-code');
+
+    expect(results.map(r => [r.file, r.action])).toEqual([
+      ['.claude/skills/ctxo-understand/SKILL.md', 'skipped'],
+      ['.claude/skills/ctxo-safe-edit/SKILL.md', 'updated'],
+      ['.claude/skills/ctxo-review-pr/SKILL.md', 'skipped'],
+    ]);
+    expect(normalised(readFileSync(edited, 'utf-8'))).toBe(bundledSkill('ctxo-safe-edit'));
+  });
+
+  it('returns project-relative paths and writes nothing in dryRun', () => {
+    const root = makeTempDir();
+
+    const claude = installSkills(root, 'claude-code', { dryRun: true });
+    const cursor = installSkills(root, 'cursor', { dryRun: true });
+
+    expect(claude.find(r => r.file === '.claude/skills/ctxo-safe-edit/SKILL.md')?.action).toBe('created');
+    expect(cursor.find(r => r.file === '.cursor/rules/ctxo-safe-edit.mdc')?.action).toBe('created');
+    expect(existsSync(join(root, '.claude'))).toBe(false);
+    expect(existsSync(join(root, '.cursor'))).toBe(false);
+  });
+
+  it('reports updated in dryRun for an edited skill without rewriting it', () => {
+    const root = makeTempDir();
+    installSkills(root, 'claude-code');
+    const edited = join(root, '.claude', 'skills', 'ctxo-review-pr', 'SKILL.md');
+    writeFileSync(edited, 'edited\n', 'utf-8');
+
+    const results = installSkills(root, 'claude-code', { dryRun: true });
+
+    expect(results.find(r => r.file.endsWith('ctxo-review-pr/SKILL.md'))?.action).toBe('updated');
+    expect(readFileSync(edited, 'utf-8')).toBe('edited\n');
+  });
+
+  it('writes the skill files as bundled on a first install', () => {
+    const root = makeTempDir();
+    installSkills(root, 'claude-code');
+    for (const skill of SKILLS) {
+      const file = join(root, '.claude', 'skills', skill, 'SKILL.md');
+      expect(normalised(readFileSync(file, 'utf-8'))).toBe(bundledSkill(skill));
+    }
+  });
+});
+
+describe('SKILL_PLATFORMS', () => {
+  it('lists the platforms that get skills', () => {
+    expect([...SKILL_PLATFORMS]).toEqual(['claude-code', 'cursor']);
+  });
+});
+
+describe('skillStates', () => {
+  it('reports missing, outdated and current skills', () => {
+    const root = makeTempDir();
+    expect(skillStates(root, 'claude-code').map(s => s.state)).toEqual(['missing', 'missing', 'missing']);
+
+    installSkills(root, 'claude-code');
+    expect(skillStates(root, 'claude-code').map(s => s.state)).toEqual(['current', 'current', 'current']);
+
+    writeFileSync(join(root, '.claude', 'skills', 'ctxo-understand', 'SKILL.md'), 'edited\n', 'utf-8');
+    rmSync(join(root, '.claude', 'skills', 'ctxo-review-pr', 'SKILL.md'));
+
+    expect(skillStates(root, 'claude-code')).toEqual([
+      { skill: 'ctxo-understand', file: '.claude/skills/ctxo-understand/SKILL.md', state: 'outdated' },
+      { skill: 'ctxo-safe-edit', file: '.claude/skills/ctxo-safe-edit/SKILL.md', state: 'current' },
+      { skill: 'ctxo-review-pr', file: '.claude/skills/ctxo-review-pr/SKILL.md', state: 'missing' },
+    ]);
+  });
+
+  it('reports a copy that differs only in line endings or a BOM as current', () => {
+    const root = makeTempDir();
+    installSkills(root, 'claude-code');
+    const crlf = join(root, '.claude', 'skills', 'ctxo-understand', 'SKILL.md');
+    const bom = join(root, '.claude', 'skills', 'ctxo-safe-edit', 'SKILL.md');
+    writeFileSync(crlf, bundledSkill('ctxo-understand').replace(/\n/g, '\r\n'), 'utf-8');
+    writeFileSync(bom, BOM + bundledSkill('ctxo-safe-edit'), 'utf-8');
+
+    expect(skillStates(root, 'claude-code').map(s => s.state)).toEqual(['current', 'current', 'current']);
+  });
+
+  it('uses the cursor file names for cursor', () => {
+    const root = makeTempDir();
+    expect(skillStates(root, 'cursor').map(s => s.file)).toEqual(SKILLS.map(skill => `.cursor/rules/${skill}.mdc`));
+  });
+
+  it('returns an empty list for a platform without skill support', () => {
+    expect(skillStates(makeTempDir(), 'amazonq')).toEqual([]);
+  });
+
+  it('does not treat an Object.prototype name as a skill platform', () => {
+    const root = makeTempDir();
+    expect(skillStates(root, 'constructor')).toEqual([]);
+    expect(installSkills(root, 'toString')).toEqual([]);
+  });
+});
+
+describe('bundled skills', () => {
+  const GUIDE_TOOLS = [
+    'get_logic_slice',
+    'get_blast_radius',
+    'get_architectural_overlay',
+    'get_why_context',
+    'get_change_intelligence',
+    'find_dead_code',
+    'get_context_for_task',
+    'get_ranked_context',
+    'search_symbols',
+    'get_changed_symbols',
+    'find_importers',
+    'get_class_hierarchy',
+    'get_symbol_importance',
+    'get_pr_impact',
+  ];
+
+  it('ctxo-understand carries the tool selection guide for all 14 tools', () => {
+    const text = bundledSkill('ctxo-understand');
+    expect(text).toContain('## Which tool for which question');
+    for (const tool of GUIDE_TOOLS) expect(text, tool).toContain(`\`${tool}`);
+    expect(GUIDE_TOOLS).toHaveLength(14);
+  });
+
+  it('ctxo-understand matches the narrowed rules wording', () => {
+    const text = bundledSkill('ctxo-understand');
+    expect(text).not.toContain('before reading source files');
+    expect(text).toContain('Reading a file to see its contents needs no index call.');
+  });
+
+  it('no bundled skill contains an em dash', () => {
+    for (const skill of SKILLS) expect(bundledSkill(skill), skill).not.toContain(EM_DASH);
+  });
+
+  it('no bundled skill starts with a BOM', () => {
+    for (const skill of SKILLS) {
+      expect(readFileSync(join(BUNDLED_SKILLS_DIR, skill, 'SKILL.md'), 'utf-8').startsWith(BOM), skill).toBe(false);
+    }
   });
 });
 
