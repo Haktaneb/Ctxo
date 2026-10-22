@@ -9,11 +9,14 @@ import { existsSync, readFileSync, realpathSync, writeFileSync, mkdirSync, statS
 import { join, dirname, relative, sep } from 'node:path';
 import {
   LEGACY_CURSOR_FRONTMATTER,
+  SKILLS_TEMPLATE_VERSION,
+  compareTemplateVersions,
   expectedRulesTier,
   guardAndSkillsExpected,
   normaliseMarkdown,
   renderRulesBlock,
   scanRulesBlocks,
+  skillTemplateVersion,
   textShape,
   upsertRulesBlock,
   type RulesBlockSpan,
@@ -410,15 +413,19 @@ export interface SkillState {
   readonly file: string;
   /**
    * `current` also covers a copy that differs only in formatting: line endings, a UTF-8 BOM, trailing
-   * whitespace, blank lines or table padding (`normaliseMarkdown`).
+   * whitespace, blank lines or table padding (`normaliseMarkdown`). `newer`: the copy's
+   * `<!-- ctxo-skill -->` marker is above SKILLS_TEMPLATE_VERSION (a newer ctxo wrote it); it is left
+   * alone and is not outdated. A copy with no marker or an older one is `outdated`.
    */
-  readonly state: 'current' | 'missing' | 'outdated';
+  readonly state: 'current' | 'missing' | 'outdated' | 'newer';
 }
 
 interface SkillPlanEntry extends SkillState {
   /** The bundled file's content and the absolute path the skill is installed at. */
   readonly bundled: string;
   readonly to: string;
+  /** The installed copy's marker version; set for `newer`. */
+  readonly version?: string;
 }
 
 function skillPlan(projectRoot: string, platformId: string): SkillPlanEntry[] {
@@ -430,7 +437,13 @@ function skillPlan(projectRoot: string, platformId: string): SkillPlanEntry[] {
     const to = target(projectRoot, skill);
     const file = relative(projectRoot, to).split(sep).join('/');
     if (!existsSync(to)) return { skill, file, state: 'missing', bundled, to };
-    const same = normaliseMarkdown(readFileSync(to, 'utf-8')) === normaliseMarkdown(bundled);
+    const installed = readFileSync(to, 'utf-8');
+    const version = skillTemplateVersion(installed);
+    if (version !== undefined && compareTemplateVersions(version, SKILLS_TEMPLATE_VERSION) > 0) {
+      return { skill, file, state: 'newer', bundled, to, version };
+    }
+    // The bundled copy carries the current marker, so a copy without one or with an older one differs.
+    const same = normaliseMarkdown(installed) === normaliseMarkdown(bundled);
     return { skill, file, state: same ? 'current' : 'outdated', bundled, to };
   });
 }
@@ -443,15 +456,19 @@ export function skillStates(projectRoot: string, platformId: string): SkillState
 /**
  * Copies the bundled skills into the platform's skill folder. A skill equal to the bundled one
  * (formatting ignored, see `SkillState`) is `skipped` and not rewritten; a missing one is `created`, a
- * different one `updated`. `dryRun` computes the same actions and writes nothing, not even a directory.
+ * different one `updated`. A skill from a newer ctxo is `skipped` with a warning and left unchanged.
+ * `dryRun` computes the same actions and writes nothing, not even a directory.
  */
 export function installSkills(
   projectRoot: string,
   platformId: string,
   options: { readonly dryRun?: boolean } = {},
 ): InstallResult[] {
-  return skillPlan(projectRoot, platformId).map(({ file, state, bundled, to }): InstallResult => {
+  return skillPlan(projectRoot, platformId).map(({ file, state, bundled, to, version }): InstallResult => {
     if (state === 'current') return { file, action: 'skipped' };
+    if (state === 'newer') {
+      return { file, action: 'skipped', warning: `${file}: skill v${version ?? ''} comes from a newer ctxo; left unchanged` };
+    }
     if (!options.dryRun) {
       mkdirSync(dirname(to), { recursive: true });
       writeFileSync(to, bundled, 'utf-8');

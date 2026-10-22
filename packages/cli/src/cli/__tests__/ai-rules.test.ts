@@ -5,13 +5,15 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PLATFORMS, generateRules, installRules, detectPlatforms, ensureGitignore, ensureConfig, ensureIndexDir, getMcpConfigTargets, ensureMcpConfig, installSkills, skillStates, SKILLS, SKILL_PLATFORMS, ensureClaudeHook, readClaudeGuardState, resolveRulesTier, gateEnabled, linkedRulesPlatforms, readRulesStates } from '../ai-rules.js';
 import { InitCommand } from '../init-command.js';
-import { AiRulesCheck } from '../../adapters/diagnostics/checks/agent-setup-check.js';
+import { AiRulesCheck, SkillsCheck } from '../../adapters/diagnostics/checks/agent-setup-check.js';
 import { isolateGitEnv, type IsolatedGitEnv } from './git-test-env.js';
 import {
   LEGACY_CURSOR_FRONTMATTER,
   LEGACY_RULE_BODY,
   RULES_TEMPLATE_VERSION,
+  SKILLS_TEMPLATE_VERSION,
   renderRulesBlock,
+  skillTemplateVersion,
 } from '../../core/agent-rules/rules-block.js';
 
 const EM_DASH = String.fromCharCode(0x2014);
@@ -829,6 +831,58 @@ describe('installSkills', () => {
       expect(normalised(readFileSync(file, 'utf-8'))).toBe(bundledSkill(skill));
     }
   });
+
+  it('installSkills leaves a skill from a newer ctxo alone with a warning', () => {
+    const root = makeTempDir();
+    installSkills(root, 'claude-code');
+    const newer = join(root, '.claude', 'skills', 'ctxo-safe-edit', 'SKILL.md');
+    writeFileSync(newer, '# Safe edit, as a newer ctxo writes it\n\n<!-- ctxo-skill v99.0 -->\n', 'utf-8');
+    const before = readFileSync(newer);
+
+    const results = installSkills(root, 'claude-code');
+
+    expect(results).toEqual([
+      { file: '.claude/skills/ctxo-understand/SKILL.md', action: 'skipped' },
+      {
+        file: '.claude/skills/ctxo-safe-edit/SKILL.md',
+        action: 'skipped',
+        warning: '.claude/skills/ctxo-safe-edit/SKILL.md: skill v99.0 comes from a newer ctxo; left unchanged',
+      },
+      { file: '.claude/skills/ctxo-review-pr/SKILL.md', action: 'skipped' },
+    ]);
+    expect(readFileSync(newer).equals(before)).toBe(true);
+    expect(installSkills(root, 'claude-code', { dryRun: true })[1]).toEqual(results[1]);
+    expect(skillStates(root, 'claude-code').map((s) => s.state)).toEqual(['current', 'newer', 'current']);
+  });
+
+  it('a skill without a version marker or with an older one is outdated and rewritten', () => {
+    const root = makeTempDir();
+    installSkills(root, 'claude-code');
+    const unversioned = join(root, '.claude', 'skills', 'ctxo-understand', 'SKILL.md');
+    const older = join(root, '.claude', 'skills', 'ctxo-review-pr', 'SKILL.md');
+    const marker = `<!-- ctxo-skill v${SKILLS_TEMPLATE_VERSION} -->`;
+    writeFileSync(unversioned, bundledSkill('ctxo-understand').replace(marker, ''), 'utf-8');
+    writeFileSync(older, bundledSkill('ctxo-review-pr').replace(marker, '<!-- ctxo-skill v0.1 -->'), 'utf-8');
+
+    expect(skillStates(root, 'claude-code').map((s) => s.state)).toEqual(['outdated', 'current', 'outdated']);
+    expect(installSkills(root, 'claude-code').map((r) => r.action)).toEqual(['updated', 'skipped', 'updated']);
+    expect(normalised(readFileSync(unversioned, 'utf-8'))).toBe(bundledSkill('ctxo-understand'));
+    expect(normalised(readFileSync(older, 'utf-8'))).toBe(bundledSkill('ctxo-review-pr'));
+  });
+
+  it('skills does not report a skill from a newer ctxo', async () => {
+    const root = makeTempDir();
+    writeFileSync(join(root, 'CLAUDE.md'), renderRulesBlock('compact') + '\n', 'utf-8');
+    installSkills(root, 'claude-code');
+    for (const skill of SKILLS) {
+      writeFileSync(join(root, '.claude', 'skills', skill, 'SKILL.md'), `# ${skill} v99\n\n<!-- ctxo-skill v99.0 -->\n`, 'utf-8');
+    }
+
+    const result = await new SkillsCheck().run({ projectRoot: root, ctxoRoot: join(root, '.ctxo') });
+
+    expect(result.status).toBe('pass');
+    expect(result.message).not.toContain('outdated');
+  });
 });
 
 describe('SKILL_PLATFORMS', () => {
@@ -920,6 +974,15 @@ describe('bundled skills', () => {
   it('no bundled skill starts with a BOM', () => {
     for (const skill of SKILLS) {
       expect(readFileSync(join(BUNDLED_SKILLS_DIR, skill, 'SKILL.md'), 'utf-8').startsWith(BOM), skill).toBe(false);
+    }
+  });
+
+  it('every bundled skill ends with the skills template version marker', () => {
+    expect(SKILLS_TEMPLATE_VERSION).toMatch(/^\d+\.\d+$/);
+    for (const skill of SKILLS) {
+      const text = bundledSkill(skill);
+      expect(text.endsWith(`\n\n<!-- ctxo-skill v${SKILLS_TEMPLATE_VERSION} -->\n`), skill).toBe(true);
+      expect(skillTemplateVersion(text), skill).toBe(SKILLS_TEMPLATE_VERSION);
     }
   });
 });

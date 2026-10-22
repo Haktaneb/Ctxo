@@ -4,6 +4,7 @@ import {
   LEGACY_CURSOR_FRONTMATTER,
   LEGACY_RULE_BODY,
   RULES_TEMPLATE_VERSION,
+  SKILLS_TEMPLATE_VERSION,
   blockTier,
   classifyRulesBlock,
   compareTemplateVersions,
@@ -13,6 +14,7 @@ import {
   renderRulesBlock,
   ruleBody,
   scanRulesBlocks,
+  skillTemplateVersion,
   textShape,
   upsertRulesBlock,
 } from '../rules-block.js';
@@ -355,6 +357,15 @@ describe('block classification and tier policy', () => {
     expect(guardAndSkillsExpected(marked('0.1', ruleBody({ tier: 'compact' })))).toBe(true);
     expect(guardAndSkillsExpected(current('full'))).toBe(false);
     expect(guardAndSkillsExpected(undefined)).toBe(false);
+  });
+
+  it('skillTemplateVersion reads the skill marker line', () => {
+    expect(SKILLS_TEMPLATE_VERSION).toMatch(/^\d+\.\d+$/);
+    expect(skillTemplateVersion('# S\n\n<!-- ctxo-skill v0.13 -->\n')).toBe('0.13');
+    expect(skillTemplateVersion(String.fromCharCode(0xfeff) + '# S\r\n\r\n<!-- ctxo-skill v1.2 -->  \r\n')).toBe('1.2');
+    expect(skillTemplateVersion('# S\n')).toBeUndefined();
+    expect(skillTemplateVersion('# S\n<!-- ctxo-skill vnext -->\n')).toBeUndefined();
+    expect(skillTemplateVersion('see `<!-- ctxo-skill v0.13 -->` here\n')).toBeUndefined();
   });
 
   it('compareTemplateVersions compares numerically', () => {

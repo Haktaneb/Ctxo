@@ -20,6 +20,13 @@ export type RulesTier = 'compact' | 'full';
  */
 export const RULES_TEMPLATE_VERSION: string = '0.13';
 
+/**
+ * The CLI minor in which the bundled skills last changed (hand-set, like RULES_TEMPLATE_VERSION). Each
+ * bundled SKILL.md ends with it as `<!-- ctxo-skill v<M.m> -->`, so an older ctxo leaves a skill
+ * written by a newer one alone instead of downgrading it.
+ */
+export const SKILLS_TEMPLATE_VERSION: string = '0.13';
+
 const START_MARKER_RE = /^<!-- ctxo-rules-start(?: v(\S+))? -->[ \t]*$/gm;
 const END_MARKER_RE = /^<!-- ctxo-rules-end -->[ \t]*$/gm;
 const VERSION_RE = /^\d+\.\d+$/;
@@ -422,6 +429,13 @@ export function compareTemplateVersions(a: string, b: string): number {
 function versionParts(version: string): [number, number] {
   const [major = '', minor = ''] = version.split('.');
   return [Number(major) || 0, Number(minor) || 0];
+}
+
+const SKILL_MARKER_RE = /^<!-- ctxo-skill v(\d+\.\d+) -->[ \t]*$/m;
+
+/** The 'M.m' version from a skill's own `<!-- ctxo-skill v<M.m> -->` line; undefined without one. */
+export function skillTemplateVersion(content: string): string | undefined {
+  return SKILL_MARKER_RE.exec(textShape(content).text)?.[1];
 }
 
 /**

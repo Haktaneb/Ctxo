@@ -33,3 +33,5 @@ Then read the files ctxo points you to. Reading a file to see its contents needs
 | Find code for a natural-language question       | `get_ranked_context`                                                                               |
 | Layer map of the project                        | `get_architectural_overlay`                                                                        |
 | Most central symbols                            | `get_symbol_importance`                                                                            |
+
+<!-- ctxo-skill v0.13 -->
