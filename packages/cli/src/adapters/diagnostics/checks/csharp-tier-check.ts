@@ -52,19 +52,43 @@ export function evaluateCSharpTier(i: CSharpTierInputs): CheckResult {
   };
 }
 
+/** `path` written with backslashes and with forward slashes (MSBuild may print either). */
+function separatorVariants(path: string): string[] {
+  return [...new Set([path, path.replace(/\//g, '\\'), path.replace(/\\/g, '/')])];
+}
+
+/**
+ * Replaces the helper project's absolute path with `ctxo-roslyn.csproj`, then
+ * its directory with `ctxo-roslyn`, so the restore message keeps the error,
+ * not a long node_modules path.
+ */
+function withoutHelperPath(text: string, helperProject: string): string {
+  let out = text;
+  for (const variant of separatorVariants(helperProject)) out = out.split(variant).join('ctxo-roslyn.csproj');
+  const helperDir = helperProject.replace(/[\\/][^\\/]*$/, '');
+  if (helperDir && helperDir !== helperProject) {
+    for (const variant of separatorVariants(helperDir)) out = out.split(variant).join('ctxo-roslyn');
+  }
+  return out;
+}
+
 /**
  * Why `dotnet restore` failed: the first output line (stdout, then stderr) that
  * contains "error", trimmed and capped at 200 characters; `exit code <n>` when
- * no line does, and `timed out` on a timeout.
+ * no line does, and `timed out` on a timeout. The helper's absolute path is
+ * dropped from the output first.
  */
 export function restoreFailureMessage(r: {
   stdout: string;
   stderr: string;
   status: number | null;
   timedOut: boolean;
+  /** Absolute path of the ctxo-roslyn.csproj that was restored. */
+  helperProject?: string;
 }): string {
   if (r.timedOut) return 'timed out';
-  const lines = [...r.stdout.split(/\r?\n/), ...r.stderr.split(/\r?\n/)];
+  const strip = (text: string): string => (r.helperProject ? withoutHelperPath(text, r.helperProject) : text);
+  const lines = [...strip(r.stdout).split(/\r?\n/), ...strip(r.stderr).split(/\r?\n/)];
   const line = lines.find((l) => /error/i.test(l));
   if (line !== undefined) return line.trim().slice(0, MAX_MESSAGE_LENGTH);
   return `exit code ${r.status}`;
@@ -111,6 +135,7 @@ function probeRestore(helperProject: string): { ok: boolean; message?: string } 
       stderr: `${r.stderr ?? ''}${r.error && !timedOut ? `\nerror: ${r.error.message}` : ''}`,
       status: r.status,
       timedOut,
+      helperProject,
     }),
   };
 }

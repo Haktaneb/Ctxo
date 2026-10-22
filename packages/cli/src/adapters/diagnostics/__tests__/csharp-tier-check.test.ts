@@ -85,6 +85,31 @@ describe('restoreFailureMessage', () => {
       .toBe('error: the feed is offline');
   });
 
+  it("the restore message drops the helper's absolute path", () => {
+    const helperProject = 'C:\\x\\node_modules\\@ctxo\\lang-csharp\\tools\\ctxo-roslyn\\ctxo-roslyn.csproj';
+    const stdout = [
+      'C:/x/node_modules/@ctxo/lang-csharp/tools/ctxo-roslyn/obj/project.assets.json : warning NU1603: holds resolved late',
+      `${helperProject} : error NU1101: Unable to find package Microsoft.SqlServer.TransactSql.ScriptDom. No packages exist with this id in source(s): lending-mirror`,
+      '',
+    ].join('\r\n');
+
+    const message = restoreFailureMessage({ stdout, stderr: '', status: 1, timedOut: false, helperProject });
+
+    expect(message.startsWith('ctxo-roslyn.csproj : error NU1101')).toBe(true);
+    expect(message).toContain('Microsoft.SqlServer.TransactSql.ScriptDom');
+    expect(message).not.toContain('node_modules');
+
+    // The directory goes too, in either separator style.
+    const dirOnly = restoreFailureMessage({
+      stdout: 'C:/x/node_modules/@ctxo/lang-csharp/tools/ctxo-roslyn/obj/project.assets.json : error NU1105: loans project unreadable\n',
+      stderr: '',
+      status: 1,
+      timedOut: false,
+      helperProject,
+    });
+    expect(dirOnly).toBe('ctxo-roslyn/obj/project.assets.json : error NU1105: loans project unreadable');
+  });
+
   it('falls back to the exit code, and reports a timeout', () => {
     expect(restoreFailureMessage({ stdout: 'loans restored\n', stderr: '', status: 3, timedOut: false })).toBe('exit code 3');
     expect(restoreFailureMessage({ stdout: 'error: partial\n', stderr: '', status: null, timedOut: true })).toBe('timed out');
