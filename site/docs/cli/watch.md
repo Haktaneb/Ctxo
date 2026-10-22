@@ -13,8 +13,8 @@ For C# projects on the full tier, `ctxo watch` starts a Roslyn keep-alive
 server so each re-index round-trips in under 100 ms instead of paying the
 full batch-index cost. The keep-alive shuts itself down after a period without
 requests; the next re-index restarts it once, and if that fails the file is
-re-indexed with tree-sitter rather than written with zero symbols. Java full tier also supports incremental keep-alive
-re-index, though very large projects may degrade to tree-sitter on timeout
+re-indexed with tree-sitter rather than written with zero symbols. Java full
+tier also supports incremental keep-alive re-index, though very large projects may degrade to tree-sitter on timeout
 (see the [Java language page](/languages/java) for details).
 
 ## Synopsis

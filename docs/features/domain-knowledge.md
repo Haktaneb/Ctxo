@@ -176,7 +176,7 @@ With `@ctxo/lang-sql` installed (`capabilities.sqlCallSites`) and the C# plugin 
 | EF Core `FromSqlRaw` | argument `sql` | never |
 | EF Core `ExecuteSqlRaw`, `ExecuteSqlRawAsync`, `SqlQueryRaw` | argument `sql` | never |
 
-- **Constants only.** The text counts when the compiler knows it: string literals, `const` fields, constant concatenation, verbatim and raw strings. SQL built at runtime, interpolation with holes, parameters and `static readonly` fields are non-constant and produce no edges. Nothing is guessed.
+- **Constants only.** The text counts when the compiler knows it: string literals, `const` fields, constant concatenation, verbatim and raw strings. SQL built at runtime, interpolation with non-constant holes, parameters and `static readonly` fields are non-constant and produce no edges. Nothing is guessed.
 - **Make SQL visible.** Declare it as a `const string`, not `static readonly string`:
 
   ```csharp

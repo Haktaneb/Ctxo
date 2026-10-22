@@ -223,9 +223,9 @@ argument, so the definition's constructor is the call site: the edge belongs to
 the method that constructs it.
 
 - **Constants only.** Literals, `const` fields, constant concatenation, verbatim
-  and raw strings count. SQL built at runtime, interpolation with holes,
-  parameters and `static readonly` fields do not. To make SQL visible, declare
-  it `const string`, not `static readonly string`.
+  and raw strings count. SQL built at runtime, interpolation with non-constant
+  holes, parameters and `static readonly` fields do not. To make SQL visible,
+  declare it `const string`, not `static readonly string`.
 - **EF placeholders.** EF Core `{0}` placeholders are rewritten to parameters
   (`@p0`) before parsing.
 - **Dapper lists.** `IN @ids` is read as `IN (@ids)`.
