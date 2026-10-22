@@ -100,8 +100,29 @@ const MAX_ERROR_LENGTH = 500;
 const MAX_BUILD_ERROR_LINES = 20;
 
 /**
+ * An MSBuild or NuGet error line: an `error NU1101`-style code or ` : error `, matched with case, as the
+ * doctor's restore check matches it. A warning such as `warning NU1900: Error occurred ...` has neither.
+ */
+const BUILD_ERROR_SHAPE = /\berror [A-Z]+\d+\b| : error /;
+
+/** Where the error text of an MSBuild error line starts (at "error"), or -1 when the line has no error shape. */
+function buildErrorStart(line: string): number {
+  const match = BUILD_ERROR_SHAPE.exec(line);
+  if (!match) return -1;
+  return match[0].startsWith(' : ') ? match.index + 3 : match.index;
+}
+
+/** Appends `line` and keeps only the last `MAX_BUILD_ERROR_LINES`. */
+function keepTail(lines: string[], line: string): void {
+  lines.push(line);
+  if (lines.length > MAX_BUILD_ERROR_LINES) lines.shift();
+}
+
+/**
  * The failure text of a batch run: the build errors `dotnet run` printed on stdout (restore and
- * compile errors go there, starting at the word "error"), then stderr. Only the tail is kept.
+ * compile errors go there), then stderr. The build errors are the lines with an MSBuild error shape
+ * when there are any, else the lines with the word "error" in any case; each starts at "error". Only
+ * the tail is kept.
  */
 function failureText(buildErrors: readonly string[], stderr: string, fallback: string): string {
   const text = [...buildErrors, stderr.trim()].filter(Boolean).join('\n');
@@ -128,13 +149,16 @@ export async function runBatchIndex(
     let elapsed = '';
     let sql: RoslynSqlStats | undefined;
     let stderr = '';
-    const buildErrors: string[] = [];
+    // Lines with an MSBuild error shape, and the looser fallback: other lines with the word "error".
+    const shapedErrors: string[] = [];
+    const otherErrors: string[] = [];
     let settled = false;
 
     const fail = (reason: string): void => {
       if (settled) return;
       settled = true;
       log.error(`ctxo-roslyn failed (${reason})`);
+      const buildErrors = shapedErrors.length > 0 ? shapedErrors : otherErrors;
       resolve({ files: [], projectGraph: null, totalFiles: 0, elapsed: '', ok: false, error: failureText(buildErrors, stderr, reason) });
     };
 
@@ -161,11 +185,9 @@ export async function runBatchIndex(
 
         // dotnet run prints the build output (restore and compile errors) before the helper's JSONL.
         if (!line.startsWith('{')) {
-          const errorAt = line.search(/\berror\b/i);
-          if (errorAt !== -1) {
-            buildErrors.push(line.slice(errorAt));
-            if (buildErrors.length > MAX_BUILD_ERROR_LINES) buildErrors.shift();
-          }
+          const shapedAt = buildErrorStart(line);
+          const errorAt = shapedAt !== -1 ? shapedAt : line.search(/\berror\b/i);
+          if (errorAt !== -1) keepTail(shapedAt !== -1 ? shapedErrors : otherErrors, line.slice(errorAt));
           log.debug(`ctxo-roslyn build output: ${line.slice(0, 200)}`);
           continue;
         }

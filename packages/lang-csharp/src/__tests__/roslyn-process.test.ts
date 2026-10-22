@@ -84,6 +84,35 @@ describe('runBatchIndex', () => {
     expect(result.projectGraph).toBeNull();
   });
 
+  it('a warning that mentions Error is not taken for a build error', async () => {
+    const proc = nextProcess();
+    const pending = runBatchIndex(HELPER_DIR, SOLUTION);
+
+    proc.stdout.emit(
+      'data',
+      Buffer.from(
+        `${HELPER_DIR}/ctxo-roslyn.csproj : warning NU1900: Error occurred while getting package vulnerability data: loans feed offline\n` +
+          `${HELPER_DIR}/ctxo-roslyn.csproj : error NU1101: Unable to find package Lending.Feed.\n`,
+      ),
+    );
+    proc.emit('close', 1);
+
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe('error NU1101: Unable to find package Lending.Feed.');
+  });
+
+  it('with no MSBuild error line, a line that mentions error in any case still counts', async () => {
+    const proc = nextProcess();
+    const pending = runBatchIndex(HELPER_DIR, SOLUTION);
+
+    proc.stdout.emit('data', Buffer.from('Restoring the loans project...\nUnhandled Error: the members catalog could not be loaded\n'));
+    proc.emit('close', 1);
+
+    const result = await pending;
+    expect(result.error).toBe('Error: the members catalog could not be loaded');
+  });
+
   it('runBatchIndex reports success on exit 0', async () => {
     const proc = nextProcess();
     const pending = runBatchIndex(HELPER_DIR, SOLUTION);
