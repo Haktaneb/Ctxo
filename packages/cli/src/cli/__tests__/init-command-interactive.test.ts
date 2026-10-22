@@ -102,6 +102,31 @@ describe('InitCommand - interactive steps follow the selected parts', () => {
     expect(blockTier(blocks[0]!.body)).toBe('full');
   });
 
+  it('the step counter counts only the steps shown', async () => {
+    /** The `n/total Title` of every step header printed so far, ANSI codes stripped. */
+    const steps = (): string[] =>
+      errorSpy.mock.calls
+        .map((call) => String(call[0]).replace(/\u001b\[[0-9;]*m/g, ''))
+        .flatMap((text) => [...text.matchAll(/(\d+\/\d+) (Index Directory|AI Tools|Language Plugins|Git Hooks)/g)])
+        .map((match) => `${match[1]} ${match[2]}`);
+    prompts.tools = ['cursor'];
+
+    await new InitCommand(makeTempProject()).run({ noInstall: true });
+    expect(steps()).toEqual(['1/3 Index Directory', '2/3 AI Tools', '3/3 Git Hooks']);
+
+    errorSpy.mockClear();
+    await new InitCommand(makeTempProject()).run({ skip: ['git-hooks'], noInstall: true });
+    expect(steps()).toEqual(['1/2 Index Directory', '2/2 AI Tools']);
+
+    errorSpy.mockClear();
+    await new InitCommand(makeTempProject()).run({ only: ['rules'] });
+    expect(steps()).toEqual(['1/1 AI Tools']);
+
+    errorSpy.mockClear();
+    await new InitCommand(makeTempProject()).run({ only: ['git-hooks', 'config'] });
+    expect(steps()).toEqual(['1/2 Index Directory', '2/2 Git Hooks']);
+  });
+
   it('declining the guard is an opt-out: a pre-tier CLAUDE.md gets the full block, not a hold', async () => {
     const dir = makeTempProject();
     writeFileSync(join(dir, 'CLAUDE.md'), PRE_TIER_CLAUDE_MD, 'utf-8');

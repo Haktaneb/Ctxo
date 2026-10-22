@@ -617,16 +617,59 @@ describe('cli-router init parts flags', () => {
     expect(initConstructed).toBe(0);
   });
 
+  it.each(['--only', '--skip'])('%s followed by a flag token such as -y has no value', async (flag) => {
+    const message = `[ctxo] ${flag} requires a comma-separated list of parts: rules, skills, guard, mcp, git-hooks, config`;
+
+    await route(flag, '-y');
+    expect(errorSpy).toHaveBeenLastCalledWith(message);
+    expect(printed()).not.toContain('Unknown init part');
+
+    await route('--tools', 'claude-code', flag, '-y', 'rules');
+    expect(errorSpy).toHaveBeenLastCalledWith(message);
+
+    expect(exitSpy).toHaveBeenCalledTimes(2);
+    expect(initConstructed).toBe(0);
+  });
+
+  it('handles the = spelling edges: an empty value, a comma-only value and an attached dash', async () => {
+    const missing = (flag: string): string =>
+      `[ctxo] ${flag} requires a comma-separated list of parts: rules, skills, guard, mcp, git-hooks, config`;
+
+    await route('--only=');
+    expect(errorSpy).toHaveBeenLastCalledWith(missing('--only'));
+    await route('--skip=');
+    expect(errorSpy).toHaveBeenLastCalledWith(missing('--skip'));
+    await route('--only=-y');
+    expect(errorSpy).toHaveBeenLastCalledWith('[ctxo] Unknown init part: -y. Valid parts: rules, skills, guard, mcp, git-hooks, config');
+    expect(exitSpy).toHaveBeenCalledTimes(3);
+    expect(initConstructed).toBe(0);
+
+    await route('--only=,');
+    await route('--only=rules', '--only', 'skills,rules');
+    expect(exitSpy).toHaveBeenCalledTimes(3);
+    expect(initRuns).toEqual([expect.objectContaining({ only: [] }), expect.objectContaining({ only: ['rules', 'skills'] })]);
+  });
+
   it('help lists --only, --skip and --no-guard and marks --rules deprecated', async () => {
     await route('--help');
 
     const help = printed();
     expect(help).toContain('ctxo init --only <parts>  Install only these parts: rules,skills,guard,mcp,git-hooks,config');
     expect(help).toContain('ctxo init --skip <parts>  Install everything except these parts');
-    expect(help).toContain('ctxo init --no-guard      No Claude Code safe-edit guard (rules use the full block)');
+    expect(help).toContain('ctxo init --no-guard      Does not install the Claude Code safe-edit guard');
+    expect(help).not.toContain('rules use the full block');
     expect(help).toContain('ctxo init --rules         Deprecated: same as --skip git-hooks,guard');
     expect(help).toContain('ctxo init --dry-run       List every file init would create or change');
     expect(initConstructed).toBe(0);
+  });
+
+  it('help names the agent-setup remediation on the doctor --fix line', async () => {
+    await route('--help');
+
+    expect(printed()).toContain(
+      'ctxo doctor --fix         Apply fixes in dependency order: config, git hooks, skills, the safe-edit guard, rules blocks, plugins, index (--dry-run, --yes)',
+    );
+    expect(printed()).toContain('ctxo init --tools a,b -y  Non-interactive (claude-code,cursor,...); -y without --tools selects every tool');
   });
 
   it('help keeps the post-commit hook wording on the ctxo init line', async () => {

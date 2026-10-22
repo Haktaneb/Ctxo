@@ -64,6 +64,16 @@ describe('init-parts', () => {
     expect(viaAlias).toEqual(new Set(['rules', 'skills', 'mcp', 'config']));
   });
 
+  it('resolveInitParts gives only precedence over skip and rulesOnly', () => {
+    // The router rejects these combinations (D10); resolveInitParts itself lets only win.
+    expect(resolveInitParts({ only: ['guard', 'git-hooks'], skip: ['guard'] })).toEqual(new Set(['guard', 'git-hooks']));
+    expect(resolveInitParts({ only: ['guard', 'git-hooks'], rulesOnly: true })).toEqual(new Set(['guard', 'git-hooks']));
+  });
+
+  it('resolveInitParts with only guard and noGuard selects nothing', () => {
+    expect(resolveInitParts({ only: ['guard'], noGuard: true })).toEqual(new Set());
+  });
+
   it('skip, rulesOnly and noGuard combine by union', () => {
     expect(resolveInitParts({ skip: ['skills'], rulesOnly: true, noGuard: true })).toEqual(
       new Set(['rules', 'mcp', 'config']),

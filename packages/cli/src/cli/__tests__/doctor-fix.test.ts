@@ -536,6 +536,57 @@ describe('applyFixes', () => {
       expect(statuses(await runAgentChecks())).toEqual(ALL_PASS);
     });
 
+    it.each<[string, () => void]>([
+      ['an older versioned full block', () => write('CLAUDE.md', '# P\n\n' + renderRulesBlock('full').replace(`v${RULES_TEMPLATE_VERSION}`, 'v0.1') + '\n')],
+      ['gate.enabled false', () => {
+        write('CLAUDE.md', PRE_TIER_CLAUDE_MD);
+        write('.ctxo/config.yaml', 'gate:\n  enabled: false\n');
+      }],
+      ['no ctxo block', () => write('CLAUDE.md', '# P\n')],
+    ])('--fix neither fails the guard step nor holds CLAUDE.md over an unreadable settings.json when no guard is expected: %s', async (_case, seed) => {
+      seed();
+      write(SETTINGS, 'not json{{{');
+
+      const r = await fix(report([{ id: 'skills' }, { id: 'claude_guard_hook' }, { id: 'ai_rules' }]));
+
+      const guard = attempt(r, 'Claude guard hook');
+      expect(guard?.status).toBe('skipped');
+      expect(guard?.error).toMatch(/^not expected/);
+      expect(text(SETTINGS)).toBe('not json{{{');
+      const rules = attempt(r, 'AI rules');
+      expect(rules?.status).not.toBe('failed');
+      expect(rules?.error ?? '').not.toContain('left unchanged while');
+      expect(rules?.warnings).toBeUndefined();
+      if (_case !== 'no ctxo block') expect(text('CLAUDE.md')).toBe('# P\n\n' + renderRulesBlock('full') + '\n');
+    });
+
+    it('--fix installs the skills of every platform and reports each failure', async () => {
+      write('CLAUDE.md', PRE_TIER_CLAUDE_MD);
+      write('.cursor/rules/ctxo.mdc', LEGACY_CURSOR_FRONTMATTER + LEGACY_RULE_BODY + '\n');
+      faults.skills = ['claude-code'];
+
+      const r = await fix(await runAgentChecks());
+
+      const skills = attempt(r, 'Skills');
+      expect(skills?.status).toBe('failed');
+      expect(skills?.error).toBe("claude-code: EACCES: permission denied, mkdir 'claude-code skills'");
+      // Cursor still got its skills, so its block renders; CLAUDE.md waits for its skills.
+      expect(existsSync(join(tmp, '.cursor', 'rules', 'ctxo-safe-edit.mdc'))).toBe(true);
+      expect(text('.cursor/rules/ctxo.mdc')).toContain(renderRulesBlock('full'));
+      const rules = attempt(r, 'AI rules');
+      expect(rules?.status).toBe('success');
+      expect(rules?.warnings).toEqual([
+        'CLAUDE.md left unchanged while ctxo skills are missing (ctxo-understand, ctxo-safe-edit, ctxo-review-pr)',
+      ]);
+      expect(text('CLAUDE.md')).toBe(PRE_TIER_CLAUDE_MD);
+
+      faults.skills = ['claude-code', 'cursor'];
+      const both = await fix(report([{ id: 'skills' }]));
+      expect(attempt(both, 'Skills')?.error).toBe(
+        "claude-code: EACCES: permission denied, mkdir 'claude-code skills'; cursor: EACCES: permission denied, mkdir 'cursor skills'",
+      );
+    });
+
     it('--fix --dry-run plans the agent steps and changes nothing on disk', async () => {
       write('CLAUDE.md', PRE_TIER_CLAUDE_MD);
       const claudeMd = bytes('CLAUDE.md');

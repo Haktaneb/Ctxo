@@ -69,7 +69,8 @@ export interface FixReport {
  *
  * Steps 3 to 5 never install what the user declined (D5): a versioned full block in CLAUDE.md is
  * an opt-out of the guard and the skills, and `gate.enabled: false` an opt-out of the guard only.
- * An unreadable `.claude/settings.json` is never written; its step fails with the warning. Step 5
+ * An unreadable `.claude/settings.json` is never written; when the guard is expected, its step fails
+ * with the warning, otherwise it is skipped like any opt-out. Step 5
  * holds a rules file (CLAUDE.md, or Cursor's) while, after steps 3 and 4, its block still expects a
  * guard or skills that are not in place (whatever stopped them), by the same `rulesHold` rule as
  * `ctxo init`, and reports the hold as a warning.
@@ -283,12 +284,21 @@ async function fixHooks(projectRoot: string): Promise<void | FixSkipped> {
 
 /**
  * Installs the bundled skills on every skill platform that expects them: one ctxo skill is already
- * there, or the platform's rules block is pre-tier or compact. A deliberate opt-out expects none.
+ * there, or the platform's rules block is pre-tier or compact. A deliberate opt-out expects none. A
+ * platform that fails does not stop the next one; the attempt then fails with each `<platform>: <error>`.
  */
 async function fixSkills(projectRoot: string): Promise<void | FixSkipped> {
   const platforms = SKILL_PLATFORMS.filter((id) => skillsExpected(projectRoot, id));
   if (platforms.length === 0) return { skipped: 'no platform expects the ctxo skills' };
-  for (const id of platforms) installSkills(projectRoot, id);
+  const errors: string[] = [];
+  for (const id of platforms) {
+    try {
+      installSkills(projectRoot, id);
+    } catch (err) {
+      errors.push(`${id}: ${(err as Error).message}`);
+    }
+  }
+  if (errors.length > 0) throw new Error(errors.join('; '));
 }
 
 /**
@@ -300,15 +310,16 @@ const UNREADABLE_SETTINGS_FAILURE =
 
 /**
  * Registers the safe-edit guard when CLAUDE.md expects it and the gate is enabled. An unreadable
- * `.claude/settings.json` fails the attempt and is never written.
+ * `.claude/settings.json` is never written; it fails the attempt only when the guard is expected, since
+ * a user who opted out expects nothing there (final review M4).
  */
 async function fixClaudeGuardHook(projectRoot: string): Promise<void | FixSkipped> {
   const state = readClaudeGuardState(projectRoot);
-  if (state === 'unreadable') throw new Error(UNREADABLE_SETTINGS_FAILURE);
   if (state === 'present') return { skipped: 'already registered' };
   if (!guardExpected(projectRoot)) {
     return { skipped: 'not expected: CLAUDE.md records an opt-out or has no ctxo block, or gate.enabled is false' };
   }
+  if (state === 'unreadable') throw new Error(UNREADABLE_SETTINGS_FAILURE);
   const result = ensureClaudeHook(projectRoot);
   if (result.warning) throw new Error(result.warning);
 }

@@ -66,11 +66,18 @@ export interface HooksInstallResult {
   readonly hooksDir: string;
   /** Set when `core.hooksPath` comes from the global or system git config, so ctxo left it alone. */
   readonly sharedScope?: SharedHooksScope;
-  /** One row per hook (`post-commit`, then `post-merge`); empty for a shared hooks directory. */
+  /**
+   * One row per hook (`post-commit`, then `post-merge`); empty for a shared hooks directory. Unlike
+   * other rows, a hook row's `file` is absolute when the hooks directory is outside the project.
+   */
   readonly results: InstallResult[];
 }
 
 export interface InitOptions {
+  /**
+   * `--tools`: the AI tools to set up; a repeated id counts once. Without it, the interactive run asks,
+   * and a `--yes` run and a dry run take every tool (D16; final review M2).
+   */
   tools?: string[];
   yes?: boolean;
   /** `--rules`: deprecated alias for `skip: ['git-hooks', 'guard']`; it also skips the plugin step. */
@@ -82,7 +89,7 @@ export interface InitOptions {
   only?: InitPart[];
   /** `--skip`: install everything except these parts. */
   skip?: InitPart[];
-  /** `--no-guard`: no safe-edit guard, and the rules use the full block. */
+  /** `--no-guard`: does not install the safe-edit guard. */
   noGuard?: boolean;
 }
 
@@ -169,13 +176,20 @@ const SHARED_HOOKS_SKIPPED = 'git hooks skipped - shared hooks directory (see wa
 /** The parts the AI Tools step serves: without any of them, no tool list is asked for. */
 const TOOL_PARTS: readonly InitPart[] = ['rules', 'skills', 'guard', 'mcp'];
 
-/** Where each skill platform keeps its skills; names the folder when the bundled skills cannot be read. */
-const SKILLS_DIR: Readonly<Record<string, string>> = { 'claude-code': '.claude/skills/', cursor: '.cursor/rules/' };
-
 /** One row of init output: a file and what happened to it. */
 interface InitResult extends InstallResult {
   /** A rules file that `rulesHold` kept back: `skipped`, with `heldWarning` as its warning. */
   readonly held?: boolean;
+  /** A git hook row from `installHooks`; the dry run prints its file as `<path> (git hook)`. */
+  readonly gitHook?: boolean;
+}
+
+/**
+ * The tool ids a run sets up: `--tools` with each id once, or every platform without it. The dry run
+ * and a `--yes` run take the same default, so the dry run previews what `--yes` writes (final review M2).
+ */
+function selectedTools(options: InitOptions): string[] {
+  return options.tools ? [...new Set(options.tools)] : PLATFORMS.map((p) => p.id);
 }
 
 /** Why a held rules file was left unchanged, and the commands that let it be written. */
@@ -221,10 +235,10 @@ const PLAN_ACTION: Readonly<Record<InstallResult['action'], string>> = {
  * or the warning sign and the text for a result with a warning. A git hook's file reads `<path> (git hook)`,
  * and a held rules file `unchanged (held)`.
  */
-function formatPlanLine(result: InitResult, gitHook: boolean): string {
+function formatPlanLine(result: InitResult): string {
   if (result.held) return `  ${result.file.padEnd(44)} unchanged (held)`;
   if (result.warning !== undefined) return `  \u26a0 ${result.warning}`;
-  const file = gitHook ? `${result.file} (git hook)` : result.file;
+  const file = result.gitHook ? `${result.file} (git hook)` : result.file;
   return `  ${file.padEnd(44)} ${PLAN_ACTION[result.action]}`;
 }
 
@@ -289,7 +303,7 @@ export class InitCommand {
    * real run over the parts the flags select. Without `tools` it previews every platform (D16).
    */
   plan(options: InitOptions = {}): InitResult[] {
-    return this.applyParts(resolveInitParts(options), options.tools ?? PLATFORMS.map((p) => p.id), true, declinedBy(options));
+    return this.applyParts(resolveInitParts(options), selectedTools(options), true, declinedBy(options));
   }
 
   async run(options: InitOptions = {}): Promise<void> {
@@ -346,11 +360,8 @@ export class InitCommand {
           results.push(...installSkills(root, id, write));
           skillsDone.add(id);
         } catch (err) {
-          results.push({
-            file: SKILLS_DIR[id] ?? id,
-            action: 'skipped',
-            warning: `skills for ${id} not installed: ${(err as Error).message}`,
-          });
+          // Only the warning is printed; the platform id stands in for the skill files it names.
+          results.push({ file: id, action: 'skipped', warning: `skills for ${id} not installed: ${(err as Error).message}` });
         }
       }
     }
@@ -379,7 +390,7 @@ export class InitCommand {
 
     if (parts.has('git-hooks')) {
       const hooks = this.installHooks(write);
-      results.push(...hooks.results);
+      results.push(...hooks.results.map((result): InitResult => ({ ...result, gitHook: true })));
       if (!hooks.installed) {
         // installHooks printed the full warning; this row keeps the skip in the summary.
         results.push({ file: displayPath(root, hooks.hooksDir), action: 'skipped', warning: SHARED_HOOKS_SKIPPED });
@@ -592,7 +603,7 @@ export class InitCommand {
   /* ---------------------------------------------------------------- */
 
   private async runNonInteractive(options: InitOptions, parts: ReadonlySet<InitPart>): Promise<void> {
-    const toolIds = options.tools ?? [];
+    const toolIds = selectedTools(options);
     exitOnUnknownTools(toolIds);
 
     for (const result of this.applyParts(parts, toolIds, false, declinedBy(options))) console.error(formatResultLine(result));
@@ -619,16 +630,14 @@ export class InitCommand {
 
   /**
    * Prints `plan(options)`: the header, then one row per file and one line per warning. A shared
-   * hooks directory prints installHooks' warning and no hook rows, as a real run does.
+   * hooks directory prints installHooks' warning and no hook rows, as a real run does. The hook rows
+   * come marked from the pipeline, so the hooks directory is looked up only when git-hooks is selected.
    */
   private dryRun(options: InitOptions): void {
-    if (options.tools) exitOnUnknownTools(options.tools);
-
-    const hooksDir = resolveHooksDir(this.projectRoot);
-    const hookFiles = new Set(GIT_HOOKS.map(({ name }) => displayPath(this.projectRoot, join(hooksDir, name))));
+    exitOnUnknownTools(selectedTools(options));
 
     console.error(DRY_RUN_HEADER);
-    for (const result of this.plan(options)) console.error(formatPlanLine(result, hookFiles.has(result.file)));
+    for (const result of this.plan(options)) console.error(formatPlanLine(result));
   }
 
   /* ---------------------------------------------------------------- */

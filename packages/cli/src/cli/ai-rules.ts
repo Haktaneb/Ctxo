@@ -787,6 +787,11 @@ export function ensureMcpConfig(
     return { file: target.file, action: 'skipped' };
   }
 
-  write({ ...existing, [target.serverKey]: { ...servers, ctxo: entry } });
+  // The merge as it shipped before the dry run (D12), applied to the parsed copy, so a dry run and a
+  // real run agree: an array root takes no key and is written back as it was, and a string server
+  // entry cannot take one, so the assignment throws and the file is left alone.
+  servers['ctxo'] = entry;
+  existing[target.serverKey] = servers;
+  write(existing);
   return { file: target.file, action: 'updated' };
 }

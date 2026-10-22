@@ -727,6 +727,27 @@ describe('ensureMcpConfig', () => {
     expect(config.mcpServers.ctxo).toBeDefined();
   });
 
+  // D12 keeps ensureMcpConfig's merge as it shipped before the tiers: the entry is set on whatever
+  // the server key holds. An array root takes no key, so it is written back as it was; a string
+  // cannot take one, so the call throws and the file is left alone. A real run and a dry run agree.
+  it('ensureMcpConfig keeps the shipped merge for an array root and a string mcpServers (D12)', () => {
+    const target = getMcpConfigTargets(['claude-code'])[0]!;
+
+    const arrayRoot = makeTempDir();
+    writeFileSync(join(arrayRoot, '.mcp.json'), '[ ]', 'utf-8');
+    expect(ensureMcpConfig(arrayRoot, target, { dryRun: true })).toEqual({ file: '.mcp.json', action: 'updated' });
+    expect(readFileSync(join(arrayRoot, '.mcp.json'), 'utf-8')).toBe('[ ]');
+    expect(ensureMcpConfig(arrayRoot, target)).toEqual({ file: '.mcp.json', action: 'updated' });
+    expect(readFileSync(join(arrayRoot, '.mcp.json'), 'utf-8')).toBe('[]\n');
+
+    const stringServers = makeTempDir();
+    const original = '{ "mcpServers": "elsewhere" }';
+    writeFileSync(join(stringServers, '.mcp.json'), original, 'utf-8');
+    expect(() => ensureMcpConfig(stringServers, target, { dryRun: true })).toThrow(TypeError);
+    expect(() => ensureMcpConfig(stringServers, target)).toThrow(TypeError);
+    expect(readFileSync(join(stringServers, '.mcp.json'), 'utf-8')).toBe(original);
+  });
+
   it('creates .gemini/settings.json with mcpServers.ctxo', () => {
     const dir = makeTempDir();
     const target = getMcpConfigTargets(['gemini-cli'])[0];

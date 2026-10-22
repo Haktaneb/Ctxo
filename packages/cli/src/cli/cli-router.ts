@@ -35,7 +35,9 @@ interface InitPartsFlag {
 
 /**
  * Read `--only` or `--skip` from `ctxo init` arguments: `--only a,b`, `--only=a,b`, repeated as often as
- * the user likes (the parts are merged). The value must be present and must not itself be a `--flag`.
+ * the user likes (the parts are merged). The value must be present. In the two-token spelling a next
+ * token that starts with `-` is a flag (`--dry-run`, `-y`), which ends the list before it began; in the
+ * `=` spelling the value is taken as written, so `--only=-y` names an unknown part.
  */
 function readInitPartsFlag(args: readonly string[], flag: '--only' | '--skip'): InitPartsFlag {
   const validParts = INIT_PARTS.join(', ');
@@ -45,9 +47,11 @@ function readInitPartsFlag(args: readonly string[], flag: '--only' | '--skip'): 
   for (let i = 1; i < args.length; i++) {
     const arg = args[i]!;
     let value: string | undefined;
+    let flagToken = false;
     if (arg === flag) {
       present = true;
       value = args[i + 1];
+      flagToken = value?.startsWith('-') === true;
       i += 1;
     } else if (arg.startsWith(`${flag}=`)) {
       present = true;
@@ -55,7 +59,7 @@ function readInitPartsFlag(args: readonly string[], flag: '--only' | '--skip'): 
     } else {
       continue;
     }
-    if (!value || value.startsWith('--')) return { present, parts: [], error: missing };
+    if (!value || flagToken) return { present, parts: [], error: missing };
     values.push(value);
   }
   const { parts, unknown } = parseInitParts(values.join(','));
@@ -433,15 +437,15 @@ Usage:
   ctxo verify-index         CI gate: fail if index is stale
   ctxo status               Show index manifest
   ctxo init                 Interactive setup (rules, skills, guard, MCP, git hooks, config); the post-commit hook runs ctxo index --commit HEAD
-  ctxo init --tools a,b -y  Non-interactive (claude-code,cursor,...)
+  ctxo init --tools a,b -y  Non-interactive (claude-code,cursor,...); -y without --tools selects every tool
   ctxo init --only <parts>  Install only these parts: rules,skills,guard,mcp,git-hooks,config
   ctxo init --skip <parts>  Install everything except these parts
-  ctxo init --no-guard      No Claude Code safe-edit guard (rules use the full block)
+  ctxo init --no-guard      Does not install the Claude Code safe-edit guard
   ctxo init --rules         Deprecated: same as --skip git-hooks,guard
   ctxo init --dry-run       List every file init would create or change
   ctxo stats                Show usage statistics (--json, --days N, --clear)
   ctxo doctor               Health check all subsystems (--json, --quiet)
-  ctxo doctor --fix         Apply fixes in dependency order, such as upgrading the post-commit hook (--dry-run, --yes)
+  ctxo doctor --fix         Apply fixes in dependency order: config, git hooks, skills, the safe-edit guard, rules blocks, plugins, index (--dry-run, --yes)
   ctxo visualize            Generate interactive dependency graph HTML
   ctxo visualize --max-nodes N   Limit to top N symbols by PageRank
   ctxo visualize --output PATH   Write HTML to custom path

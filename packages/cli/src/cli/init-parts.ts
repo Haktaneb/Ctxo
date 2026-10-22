@@ -2,6 +2,10 @@
  * The parts `ctxo init` can install, and how the `--only`, `--skip`, `--no-guard` and `--rules` flags
  * select them. Pure: no file system, no process state (the router prints errors, InitCommand acts).
  *
+ * Part boundaries (D9): `config` covers `.ctxo/config.yaml`, the `.gitignore` entry and `.ctxo/index/`.
+ * The language-plugin install is not a part: `--only` skips it, `--skip` keeps it (subject to
+ * `--no-install`), and `--rules` keeps skipping it (see `pluginStepEnabled`).
+ *
  * `domain` joins the list in PR 2B.
  */
 
@@ -38,7 +42,7 @@ export interface InitPartFlags {
   readonly only?: readonly InitPart[];
   /** `--skip`: install everything except these parts. */
   readonly skip?: readonly InitPart[];
-  /** `--no-guard`: never the safe-edit guard, whatever else is selected. */
+  /** `--no-guard`: does not install the safe-edit guard, whatever else is selected. */
   readonly noGuard?: boolean;
   /** `--rules`, deprecated: the same as `--skip git-hooks,guard`. */
   readonly rulesOnly?: boolean;

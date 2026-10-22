@@ -5,6 +5,8 @@ import { createHash } from 'node:crypto';
 import { delimiter, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { InitCommand, type InitOptions } from '../init-command.js';
+import { PLATFORMS } from '../ai-rules.js';
+import * as gitHooks from '../git-hooks.js';
 import {
   LEGACY_CURSOR_FRONTMATTER,
   LEGACY_RULE_BODY,
@@ -480,7 +482,9 @@ describe('InitCommand - shared hooks directory (global or system core.hooksPath)
     expect(existsSync(join(dir, '.ctxo', 'index'))).toBe(true);
     expect(readdirSync(shared)).toEqual([]);
     expect(stderr()).toMatch(/shared by every repo/);
-    expect(stderr()).not.toContain('Git hooks installed');
+    // No hook row is reported as written: the summary keeps only the skip.
+    expect(stderr()).not.toMatch(/post-(commit|merge) \((created|updated|unchanged)\)/);
+    expect(stderr()).toContain('git hooks skipped - shared hooks directory (see warning above)');
   });
 
   it('--dry-run says the hooks would be skipped for a shared hooks directory', async () => {
@@ -493,6 +497,17 @@ describe('InitCommand - shared hooks directory (global or system core.hooksPath)
     expect(stderr()).toContain(shared.replace(/\\/g, '/'));
     expect(stderr()).toMatch(/skipped/i);
     expect(readdirSync(shared)).toEqual([]);
+  });
+
+  it('--dry-run gives no would-create hook rows for a refused shared hooks directory', async () => {
+    const dir = makeTempProject();
+    gitEnv.setGlobalHooksPath(makeSharedHooksDir());
+
+    await new InitCommand(dir).run({ tools: ['windsurf'], dryRun: true });
+
+    expect(stderr()).not.toContain('(git hook)');
+    expect(stderr()).not.toMatch(/post-(commit|merge).*would (create|update)/);
+    expect(stderr()).toContain('  ⚠ git hooks skipped - shared hooks directory (see warning above)');
   });
 
   it('--dry-run keeps a space before (git hook) when the hooks path is long', async () => {
@@ -792,6 +807,28 @@ describe('InitCommand - selected parts and tiered rules (#159)', () => {
     expect(readFileSync(join(dir, 'CLAUDE.md'), 'utf-8')).toBe('# P\n\n' + renderRulesBlock('full') + '\n');
   });
 
+  it('-y without --tools writes every platform, the same set the dry run previews', async () => {
+    const dir = makeTempProject();
+    const planned = new InitCommand(dir).plan({ yes: true, only: ['rules'] }).map((result) => result.file);
+
+    await new InitCommand(dir).run({ yes: true, only: ['rules'] });
+
+    expect(planned).toEqual(PLATFORMS.map((platform) => platform.file));
+    for (const platform of PLATFORMS) expect(existsSync(join(dir, platform.file)), platform.file).toBe(true);
+  });
+
+  it('a tool named twice in --tools is applied once', async () => {
+    const dir = makeTempProject();
+
+    await new InitCommand(dir).run({ tools: ['cursor', 'cursor'], dryRun: true, only: ['rules', 'skills'] });
+    expect(stderr().match(/\.cursor\/rules\/ctxo\.mdc/g)).toHaveLength(1);
+    expect(stderr().match(/ctxo-safe-edit\.mdc/g)).toHaveLength(1);
+
+    errorSpy.mockClear();
+    await new InitCommand(dir).run({ tools: ['cursor', 'cursor'], yes: true, only: ['rules'] });
+    expect(stderr().match(/\.cursor\/rules\/ctxo\.mdc/g)).toHaveLength(1);
+  });
+
   it('a corrupt settings.json with no ctxo block in CLAUDE.md keeps today\'s full block', async () => {
     const dir = makeTempProject();
     mkdirSync(join(dir, '.claude'), { recursive: true });
@@ -885,7 +922,9 @@ describe('InitCommand - selected parts and tiered rules (#159)', () => {
     vi.doMock('../ai-rules.js', async (importOriginal) => {
       const actual = await importOriginal<typeof import('../ai-rules.js')>();
       const missing = (): never => { throw new Error('Could not locate ctxo skills/ directory.'); };
-      return { ...actual, installSkills: missing, skillStates: missing };
+      // resolveRulesTier reads the skills through ai-rules' own skillStates, which this mock cannot
+      // reach, so it is stubbed too: the rules step must take init's fallback to the full tier.
+      return { ...actual, installSkills: missing, skillStates: missing, resolveRulesTier: missing };
     });
     try {
       const { InitCommand: InitWithoutSkills } = await import('../init-command.js');
@@ -998,11 +1037,23 @@ describe('InitCommand - the dry run lists every file init would touch (#159)', (
     expect(snapshot(dir)).toEqual(before);
   });
 
+  // POSIX only by nature: Windows has no exec bit, so there is nothing for a dry run to leave alone.
+  it.skipIf(process.platform === 'win32')('--dry-run does not restore a hook exec bit', async () => {
+    const dir = makeTempProject();
+    new InitCommand(dir).installHooks();
+    chmodSync(hookPath(dir, 'post-merge'), 0o644);
+    const before = snapshot(dir);
+
+    await new InitCommand(dir).run({ dryRun: true });
+
+    expect(statSync(hookPath(dir, 'post-merge')).mode & 0o111).toBe(0);
+    expect(snapshot(dir)).toEqual(before);
+  });
+
   it('--dry-run writes nothing', async () => {
     const dir = makeTempProject();
-    // A project a real run would change everywhere: files to update, folders to create, an exec bit to restore.
+    // A project a real run would change everywhere: files to update, folders to create.
     new InitCommand(dir).installHooks();
-    if (process.platform !== 'win32') chmodSync(hookPath(dir, 'post-merge'), 0o644);
     writeFileSync(hookPath(dir), `#!/bin/sh\n${V1_POST_COMMIT_BLOCK}\n`, 'utf-8');
     writeFileSync(join(dir, '.gitignore'), 'node_modules/\n', 'utf-8');
     writeFileSync(join(dir, 'CLAUDE.md'), '# Project\n', 'utf-8');
@@ -1041,25 +1092,46 @@ describe('InitCommand - the dry run lists every file init would touch (#159)', (
     expect(stderr()).not.toContain('post-commit');
   });
 
-  it('plan lists exactly the files a real run then creates or changes', async () => {
+  it('plan gives each file the action a real run then takes', async () => {
     const dir = makeTempProject();
     writeFileSync(join(dir, '.gitignore'), '.ctxo/.cache/\n', 'utf-8');
     writeFileSync(join(dir, '.mcp.json'), '{"mcpServers":{"other":{"command":"node"}}}', 'utf-8');
+    writeFileSync(join(dir, 'CLAUDE.md'), '# Project\n', 'utf-8');
 
-    const planned = new InitCommand(dir)
-      .plan({ tools: TOOLS })
-      .filter((result) => result.action !== 'skipped' && !result.file.endsWith('/'))
-      .map((result) => result.file);
+    const plan = new InitCommand(dir).plan({ tools: TOOLS }).filter((result) => !result.file.endsWith('/'));
+    const planned = Object.fromEntries(plan.map((result) => [result.file, result.action]));
     const before = fileHashes(dir);
     await new InitCommand(dir).run({ tools: TOOLS, yes: true, noInstall: true });
     const after = fileHashes(dir);
 
+    /** What the real run did to a file, in the plan's words. */
+    const actual = (file: string): string =>
+      before[file] === undefined ? 'created' : before[file] !== after[file] ? 'updated' : 'skipped';
     const changed = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((file) => before[file] !== after[file]);
-    expect(new Set(planned).size).toBe(planned.length);
-    expect(new Set(planned)).toEqual(new Set(changed));
-    expect(planned).toContain('.mcp.json');
-    expect(planned).toContain('.git/hooks/post-commit');
-    expect(planned).not.toContain('.gitignore');
+
+    expect(Object.keys(planned)).toHaveLength(plan.length);
+    expect(Object.fromEntries(Object.keys(planned).map((file) => [file, actual(file)]))).toEqual(planned);
+    expect(changed.every((file) => planned[file] !== undefined && planned[file] !== 'skipped')).toBe(true);
+    expect(planned['.mcp.json']).toBe('updated');
+    expect(planned['CLAUDE.md']).toBe('updated');
+    expect(planned['.git/hooks/post-commit']).toBe('created');
+    expect(planned['.gitignore']).toBe('skipped');
+  });
+
+  it('--dry-run without the git-hooks part does not look up the hooks directory', async () => {
+    const dir = makeTempProject();
+    const lookup = vi.spyOn(gitHooks, 'resolveHooksDir');
+
+    try {
+      await new InitCommand(dir).run({ dryRun: true, tools: ['windsurf'], skip: ['git-hooks'] });
+      expect(lookup).not.toHaveBeenCalled();
+
+      await new InitCommand(dir).run({ dryRun: true, tools: ['windsurf'] });
+      expect(lookup).toHaveBeenCalledTimes(1);
+    } finally {
+      lookup.mockRestore();
+    }
+    expect(stderr()).toMatch(/^ {2}\.git\/hooks\/post-commit \(git hook\) +would create$/m);
   });
 
   it('installHooks dryRun returns both hooks and writes nothing', () => {

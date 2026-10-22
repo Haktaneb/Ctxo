@@ -30,12 +30,28 @@ vi.mock('../../../cli/ai-rules.js', async (importOriginal) => {
 });
 
 const RULES_FIX = 'Run "ctxo doctor --fix" or "ctxo init" to re-render the ctxo rules blocks';
-const SKILLS_FIX = 'Run "ctxo doctor --fix" or "ctxo init --only skills"';
-const GUARD_FIX = 'Run "ctxo doctor --fix" or "ctxo init --only guard"';
+// One command installs the pieces and lets the rules tier follow (final review M3).
+const SKILLS_FIX = 'Run "ctxo doctor --fix" or "ctxo init --only rules,skills,guard"';
+const GUARD_FIX = 'Run "ctxo doctor --fix" or "ctxo init --only rules,skills,guard"';
+const UNTERMINATED_FIX =
+  'Fix the file by hand (add the missing "<!-- ctxo-rules-end -->" line, or delete the start marker without one), then run "ctxo doctor"';
+const NEWER_BLOCKS_FIX = 'Delete the older ctxo rules block by hand, or run "ctxo doctor --fix" with the newer ctxo';
+const CHECK_ERROR_FIX =
+  'Fix the cause named in the message (a file ctxo cannot read, or a ctxo install without its bundled skills: reinstall @ctxo/cli), then run "ctxo doctor"';
 const TEMPLATE = `template v${RULES_TEMPLATE_VERSION}`;
 
 /** A CLAUDE.md written by a ctxo version before the tiers: an unversioned marked block. */
 const PRE_TIER_CLAUDE_MD = '# P\n\n<!-- ctxo-rules-start -->\n' + LEGACY_RULE_BODY + '\n<!-- ctxo-rules-end -->\n';
+
+const BOM = String.fromCharCode(0xfeff);
+
+/** The text with every line break as CRLF and a UTF-8 BOM, as a Windows editor may save it. */
+function windowsShape(text: string): string {
+  return BOM + text.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
+}
+
+/** A `.claude/settings.local.json` that registers the safe-edit guard (D11: read, never written). */
+const LOCAL_GUARD = { hooks: { PreToolUse: [{ matcher: 'Edit', hooks: [{ type: 'command', command: 'ctxo gate-hook' }] }] } };
 
 const tempDirs: string[] = [];
 
@@ -192,6 +208,34 @@ describe('AiRulesCheck', () => {
 
     expect(result.status).toBe('warn');
     expect(result.message).toBe('CLAUDE.md: 2 ctxo rules blocks; AGENTS.md: start marker without end marker');
+    // --fix and init leave an unterminated block alone, so the first step is by hand.
+    expect(result.fix).toBe(UNTERMINATED_FIX);
+  });
+
+  it('ai_rules gives a duplicate block a fix that ctxo doctor --fix can carry out', async () => {
+    const { root, ctx } = makeProject();
+    const block = renderRulesBlock('full');
+    write(root, 'CLAUDE.md', `${block}\n\nkept text\n\n${block}\n`);
+
+    expect(await check.run(ctx)).toMatchObject({ status: 'warn', fix: RULES_FIX });
+  });
+
+  it('ai_rules gives a newer block next to other blocks a warning this ctxo can clear', async () => {
+    const { root, ctx } = makeProject();
+    const newer = renderRulesBlock('full').replace(`v${RULES_TEMPLATE_VERSION}`, 'v99.0');
+    write(root, 'CLAUDE.md', `${PRE_TIER_CLAUDE_MD}\n${newer}\n`);
+    write(root, 'AGENTS.md', `${newer}\n\n${renderRulesBlock('full')}\n`);
+
+    const result = await check.run(ctx);
+
+    // This ctxo leaves both files unchanged (D2), so "re-render" would never clear the warning.
+    expect(result.status).toBe('warn');
+    expect(result.message).toBe(
+      'CLAUDE.md: 2 ctxo rules blocks, one from a newer ctxo (v99.0); this ctxo leaves the file unchanged; ' +
+        'CLAUDE.md: rules present, guard missing; ' +
+        'AGENTS.md: 2 ctxo rules blocks, one from a newer ctxo (v99.0); this ctxo leaves the file unchanged',
+    );
+    expect(result.fix).toBe(NEWER_BLOCKS_FIX);
   });
 
   it('ai_rules warns instead of crashing when the bundled skills are missing', async () => {
@@ -203,6 +247,50 @@ describe('AiRulesCheck', () => {
 
     expect(result.status).toBe('warn');
     expect(result.message).toContain('Could not locate ctxo skills/ directory.');
+    expect(result.fix).toBe(CHECK_ERROR_FIX);
+  });
+
+  it('ai_rules keeps the findings of the other files when the bundled skills are missing', async () => {
+    const { root, ctx } = makeProject();
+    write(root, 'CLAUDE.md', renderRulesBlock('full') + '\n');
+    write(root, '.windsurfrules', LEGACY_RULE_BODY + '\n');
+    bundle.missing = true;
+
+    const result = await check.run(ctx);
+
+    expect(result.status).toBe('warn');
+    expect(result.message).toBe(
+      'CLAUDE.md: rules tier could not be checked (Could not locate ctxo skills/ directory.); ' +
+        `.windsurfrules: rules template outdated (unversioned block, ${TEMPLATE})`,
+    );
+    expect(result.fix).toBe(CHECK_ERROR_FIX);
+  });
+
+  it('ai_rules reads a CLAUDE.md with a UTF-8 BOM and CRLF line endings like any other', async () => {
+    const preTier = makeProject();
+    write(preTier.root, 'CLAUDE.md', windowsShape(PRE_TIER_CLAUDE_MD));
+    expect(await check.run(preTier.ctx)).toMatchObject({
+      status: 'warn',
+      message: `CLAUDE.md: rules template outdated (unversioned block, ${TEMPLATE}); CLAUDE.md: rules present, guard missing`,
+    });
+
+    const compact = makeProject();
+    ensureClaudeHook(compact.root);
+    installSkills(compact.root, 'claude-code');
+    write(compact.root, 'CLAUDE.md', windowsShape('# P\n\n' + renderRulesBlock('compact') + '\n'));
+    expect(await check.run(compact.ctx)).toMatchObject({
+      status: 'pass',
+      message: `CLAUDE.md v${RULES_TEMPLATE_VERSION} compact`,
+    });
+  });
+
+  it('ai_rules counts a guard registered only in settings.local.json', async () => {
+    const { root, ctx } = makeProject();
+    installSkills(root, 'claude-code');
+    write(root, 'CLAUDE.md', renderRulesBlock('compact') + '\n');
+    write(root, '.claude/settings.local.json', JSON.stringify(LOCAL_GUARD, null, 2) + '\n');
+
+    expect(await check.run(ctx)).toMatchObject({ status: 'pass', message: `CLAUDE.md v${RULES_TEMPLATE_VERSION} compact` });
   });
 });
 
@@ -251,8 +339,13 @@ describe('SkillsCheck', () => {
     installSkills(root, 'claude-code');
     for (const skill of ['ctxo-understand', 'ctxo-safe-edit', 'ctxo-review-pr']) {
       const file = join(root, '.claude', 'skills', skill, 'SKILL.md');
-      const lf = readFileSync(file, 'utf-8').replace(/\r\n/g, '\n');
-      writeFileSync(file, lf.replace(/\n/g, '\r\n'), 'utf-8');
+      // installSkills copied the bundled bytes, which are CRLF on a core.autocrlf checkout. Give the
+      // copy the other line ending, so the test compares two endings on every checkout.
+      const bundled = readFileSync(file, 'utf-8');
+      const lf = bundled.replace(/\r\n/g, '\n');
+      const flipped = bundled.includes('\r\n') ? lf : lf.replace(/\n/g, '\r\n');
+      expect(flipped).not.toBe(bundled);
+      writeFileSync(file, flipped, 'utf-8');
     }
 
     expect(await check.run(ctx)).toMatchObject({ status: 'pass' });
@@ -275,6 +368,7 @@ describe('SkillsCheck', () => {
 
     expect(result.status).toBe('warn');
     expect(result.message).toContain('Could not locate ctxo skills/ directory.');
+    expect(result.fix).toBe(CHECK_ERROR_FIX);
   });
 });
 
@@ -321,6 +415,14 @@ describe('ClaudeGuardHookCheck', () => {
     const optedOut = makeProject();
     write(optedOut.root, 'CLAUDE.md', renderRulesBlock('full') + '\n');
     expect(await check.run(optedOut.ctx)).toMatchObject({ status: 'pass', message: 'not installed' });
+  });
+
+  it('claude_guard_hook passes for a pre-tier block when the guard is only in settings.local.json', async () => {
+    const { root, ctx } = makeProject();
+    write(root, 'CLAUDE.md', windowsShape(PRE_TIER_CLAUDE_MD));
+    write(root, '.claude/settings.local.json', JSON.stringify(LOCAL_GUARD, null, 2) + '\n');
+
+    expect(await check.run(ctx)).toMatchObject({ status: 'pass', message: 'installed' });
   });
 
   it('claude_guard_hook passes without a ctxo block', async () => {
