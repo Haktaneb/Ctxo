@@ -66,8 +66,8 @@ first three outcomes below do not apply. It has five outcomes:
 The warning's fix hint: make `Microsoft.SqlServer.TransactSql.ScriptDom` and the
 `Microsoft.CodeAnalysis` packages reachable from your NuGet sources (nuget.org
 or a mirror), then run `ctxo index`. Until then the C# plugin falls back to
-tree-sitter: symbols and attribute annotations are kept, the SQL call-site
-edges are lost. The language coverage check already reports a missing plugin,
+tree-sitter: symbols and attribute annotations (literal arguments only) are
+kept, the Roslyn-only annotation details and the SQL call-site edges are lost. The language coverage check already reports a missing plugin,
 so the third row passes.
 
 ## Remediation order (`--fix`)

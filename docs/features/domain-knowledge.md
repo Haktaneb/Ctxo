@@ -181,10 +181,14 @@ With `@ctxo/lang-sql` installed (`capabilities.sqlCallSites`) and the C# plugin 
 `@ctxo/lang-csharp` reports the attributes written on each symbol as annotations, in both tiers:
 
 - `name` is the attribute name as written, without namespace and without the `Attribute` suffix (`Fact`, `Trait`, `HttpGet`).
-- Values: numbers in invariant culture, `true` and `false`, enum constants as `Type.Member`, `typeof(T)` as the type's display string, array arguments flattened, nulls skipped.
+- Values in the Roslyn tier: numbers in invariant culture, `true` and `false`, enum constants as `Type.Member`, `typeof(T)` as the type's display string, array arguments flattened, nulls skipped.
 - In the Roslyn tier, `named.type` carries the attribute class's fully qualified name when it resolves.
 
-Tier differences: in the Roslyn semantic path, an argument written with a parameter name (`name: "x"`) arrives in `args`, while the tree-sitter tier puts it in `named`. Roslyn also formats real-number exponents its own way. Consumers should not depend on which of the two holds such an argument.
+Tier differences:
+
+- Tree-sitter keeps literal arguments only (strings, numbers, booleans). Enum constants, `typeof(T)`, array arguments and other expressions are dropped there.
+- In the Roslyn semantic path, an argument written with a parameter name (`name: "x"`) arrives in `args`, while the tree-sitter tier puts it in `named`. Consumers should not depend on which of the two holds such an argument.
+- Roslyn formats real-number exponents its own way.
 
 The first `ctxo index` after upgrading rewrites the committed index JSON of C# files once, because annotations are always on.
 
@@ -262,8 +266,8 @@ contextsView:
 
 | Missing | Behaviour |
 |---|---|
-| .NET SDK 8+ | No Roslyn annotations and no SQL call-site edges; the tree-sitter tier still emits attribute annotations. `ctxo doctor` (`csharp_tier`) passes at the syntax tier with a hint |
-| The Roslyn helper cannot restore or build (for example a private or offline NuGet feed without ScriptDom) | The C# plugin falls back to tree-sitter: symbols are kept, Roslyn-tier details (resolved `named.type`) and SQL call-site edges are lost. `ctxo index` reports `C#: N files (syntax tier - the Roslyn helper failed, run "ctxo doctor")` and `ctxo doctor` warns (`csharp_tier`) |
+| .NET SDK 8+ | No Roslyn annotations and no SQL call-site edges; the tree-sitter tier still emits attribute annotations, with literal arguments only. `ctxo doctor` (`csharp_tier`) passes at the syntax tier with a hint |
+| The Roslyn helper cannot restore or build (for example a private or offline NuGet feed without ScriptDom) | The C# plugin falls back to tree-sitter: symbols and literal-only annotations are kept; Roslyn-tier details (resolved `named.type`, non-literal argument values) and SQL call-site edges are lost. `ctxo index` reports `C#: N files (syntax tier - the Roslyn helper failed, run "ctxo doctor")` and `ctxo doctor` warns (`csharp_tier`) |
 | `@ctxo/lang-sql` not installed | No SQL call-site edges in any language; no `table`, `view` or `procedure` symbols |
 | No annotations in the index | Test files are recognised by globs alone, as before |
 | An older CLI | Skips `@ctxo/lang-sql` with a warning and drops the new kinds from a newer index with a warning |
@@ -273,7 +277,7 @@ contextsView:
 - **One-time C# index change.** The first re-index rewrites the committed JSON of C# files (annotations).
 - **UTF-16 sources.** `ctxo index`, `--check` and `ctxo watch` now decode UTF-16 LE and BE files that start with a byte order mark. Their content hash changes once, so the first `ctxo index --check` after upgrading reports them stale until the next `ctxo index`. UTF-8 decoding is unchanged.
 - **ScriptDom restore.** The Roslyn helper now restores `Microsoft.SqlServer.TransactSql.ScriptDom` from NuGet for every C# user, with or without `@ctxo/lang-sql`. If your feed cannot serve it, the plugin falls back to tree-sitter (see above); make the package reachable from your NuGet sources to keep the Roslyn tier.
-- **.NET roll forward.** The helper targets `net8.0` with `RollForward` `Major`: it keeps using an installed 8.x runtime and rolls forward to a newer major runtime (observed on .NET 9 and 10) when no 8.x is installed.
+- **.NET roll forward.** The helper targets `net8.0` with `RollForward` `Major`: the .NET host keeps using an installed 8.x runtime and rolls forward to a newer major runtime when no 8.x is installed. The built helper has been run with `dotnet exec --fx-version` on .NET 8, 9 and 10, and an integration test checks the `rollForward` setting and runs the helper on the newest installed runtime.
 - **Lone `.csproj`.** A C# repository with one `.csproj` and no solution file now indexes in the Roslyn tier.
 
 ## The conformance corpus

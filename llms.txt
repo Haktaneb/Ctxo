@@ -74,7 +74,7 @@ Language adapters ship as separate npm packages and are discovered by scanning t
 - **SQL at C# call sites** - with lang-sql installed and the .NET SDK 8+, constant SQL at ADO.NET, Dapper, `SqlBulkCopy` and EF Core raw SQL call sites becomes data edges (ScriptDom). Use `const string`; `static readonly` SQL is invisible. The C# plugin also reports attribute annotations.
 - **Data coupling** - data edges are `confirmed` blast-radius dependents (the gate guards heavily used tables) and stay out of symbol-level communities; `.sql` symbols are never dead code. The contexts view adds `dataResources` and per-candidate `sharedTables` (ownership, external resources); `contextsView.weights.data` defaults to 0. Overlay summary: `sharedTableCount`, `dataResourcesTotal`, `sharedResourcesTotal`, `externalResourcesTotal`; `candidate: <id>` detail: up to 15 `sharedTables` and 15 `dataResources`, fewer when the response limit requires.
 - **Test files by annotation** - `Fact`, `Theory`, `SkippableFact`, `SkippableTheory`, `Test`, `TestCase`, `TestCaseSource`, `TestFixture`, `TestMethod`, `DataTestMethod`, `TestClass` mark test files; name-only `*Test.cs` / `*Tests.cs` matches need one once C# annotations exist.
-- **`csharp_tier` doctor check** - warns when the Roslyn helper cannot restore its NuGet packages (ScriptDom); the C# plugin then falls back to tree-sitter. The helper rolls forward to newer .NET runtimes.
+- **`csharp_tier` doctor check** - warns when the Roslyn helper cannot restore its NuGet packages (ScriptDom); the C# plugin then falls back to tree-sitter. The helper declares `RollForward` `Major`, so it can run on a newer .NET runtime when no .NET 8 runtime is installed.
 
 ## New in v0.8
 

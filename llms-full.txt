@@ -406,7 +406,7 @@ With lang-sql installed and the Roslyn tier (.NET SDK 8+), the C# helper parses 
 
 ### C# annotations and test files
 
-- The C# plugin reports attributes in both tiers. In the Roslyn semantic path a `name:` argument arrives in `args`; tree-sitter puts it in `named`. Roslyn formats real-number exponents its own way.
+- The C# plugin reports attributes in both tiers. Roslyn keeps constant arguments (numbers in invariant culture, booleans, enum constants as `Type.Member`, `typeof(T)` as a display string, arrays flattened, nulls skipped); tree-sitter keeps literal arguments only (strings, numbers, booleans). In the Roslyn semantic path a `name:` argument arrives in `args`; tree-sitter puts it in `named`. Roslyn formats real-number exponents its own way.
 - Test files (contexts view): a test glob match, or any symbol carrying `Fact`, `Theory`, `SkippableFact`, `SkippableTheory`, `Test`, `TestCase`, `TestCaseSource`, `TestFixture`, `TestMethod`, `DataTestMethod` or `TestClass`. Once C# annotations exist in the index, a file matched only by `**/*Test.cs` or `**/*Tests.cs` needs a test annotation. Missed: test classes with only other attributes (FsCheck `[Property]`) and unannotated `*Tests.cs` in a bare capital `Tests/` or `Test/` folder; fix with an `index.tests` glob.
 
 ### Data coupling in core and the contexts view
@@ -426,7 +426,7 @@ Five outcomes:
 4. `dotnet restore` of the helper succeeds: pass, "full tier (.NET SDK <version>, Roslyn helper restores)".
 5. The restore fails or times out (120 s): warn, "syntax tier: the Roslyn helper could not restore (<first error line>)". Fix: make `Microsoft.SqlServer.TransactSql.ScriptDom` and the `Microsoft.CodeAnalysis` packages reachable from your NuGet sources (nuget.org or a mirror), then run `ctxo index`.
 
-When the helper cannot restore or build during `ctxo index`, the C# plugin falls back to tree-sitter (symbols and attribute annotations kept, SQL edges lost) and the summary reads `C#: N files (syntax tier - the Roslyn helper failed, run "ctxo doctor")`. The helper targets `net8.0` with `RollForward` `Major` (runs on .NET 9 and 10 when no 8.x runtime is installed). A lone `.csproj` without a solution now indexes in the Roslyn tier.
+When the helper cannot restore or build during `ctxo index`, the C# plugin falls back to tree-sitter (symbols and attribute annotations with literal arguments kept; `named.type`, non-literal argument values and SQL edges lost) and the summary reads `C#: N files (syntax tier - the Roslyn helper failed, run "ctxo doctor")`. The helper targets `net8.0` with `RollForward` `Major`, so the .NET host can roll forward to a newer major runtime when no 8.x is installed; the built helper has been run with `dotnet exec --fx-version` on .NET 8, 9 and 10. A lone `.csproj` without a solution now indexes in the Roslyn tier.
 
 ### Upgrade notes
 

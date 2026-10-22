@@ -106,9 +106,11 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo with five packages. Per-packag
   `writes` and `executes` edges to canonical `schema.name` targets (default schema `dbo`).
   `ctxo install sql` (alias `tsql`) installs it, and language detection, `ctxo doctor` and
   `ctxo index --install-missing` suggest it when the repository has `.sql` files.
-- C# attribute annotations: `@ctxo/lang-csharp` reports the attributes written on each symbol, with
-  constant arguments, in both the Roslyn and the tree-sitter tier (20 per symbol, 10 positional and 10
-  named entries, 200 characters per value).
+- C# attribute annotations: `@ctxo/lang-csharp` reports the attributes written on each symbol in both
+  the Roslyn and the tree-sitter tier (20 per symbol, 10 positional and 10 named entries, 200
+  characters per value). The Roslyn tier keeps constant arguments, including enum constants,
+  `typeof(T)` and arrays; the tree-sitter tier keeps literal arguments only (strings, numbers,
+  booleans).
 - SQL edges at C# call sites: with `@ctxo/lang-sql` installed, the Roslyn helper parses constant SQL at
   known ADO.NET (`SqlCommand`, `CommandText`, `CommandType.StoredProcedure`), Dapper, `SqlBulkCopy` and
   EF Core raw SQL call sites with ScriptDom and adds `reads`, `writes` and `executes` edges from the
@@ -166,11 +168,12 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo with five packages. Per-packag
   stale until the next `ctxo index`; UTF-8 files are unchanged (#156).
 - The Roslyn helper now restores `Microsoft.SqlServer.TransactSql.ScriptDom` from NuGet for every C#
   user. When the restore or build fails (for example a private or offline feed without the package),
-  `@ctxo/lang-csharp` falls back to the tree-sitter tier: symbols and attribute annotations are kept,
-  Roslyn-tier details and SQL call-site edges are lost, `ctxo index` reports the syntax tier and
-  `ctxo doctor` warns (#156).
-- The Roslyn helper rolls forward to a newer major .NET runtime when no .NET 8 runtime is installed
-  (`RollForward` `Major`; observed on .NET 9 and 10) (#156).
+  `@ctxo/lang-csharp` falls back to the tree-sitter tier: symbols and attribute annotations (literal
+  arguments only) are kept, Roslyn-tier details and SQL call-site edges are lost, `ctxo index`
+  reports the syntax tier and `ctxo doctor` warns (#156).
+- The Roslyn helper declares `RollForward` `Major`, so it can roll forward to a newer major .NET
+  runtime when no .NET 8 runtime is installed. The built helper has been run with
+  `dotnet exec --fx-version` on .NET 8, 9 and 10 (#156).
 - The MCP descriptions of `get_blast_radius` (tiers by edge kind, every symbol kind), `find_dead_code`
   (`.sql` symbols) and `get_architectural_overlay` (data lists) match what the tools do (#156).
 

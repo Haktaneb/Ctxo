@@ -26,7 +26,8 @@ differs.
 
 The plugin also falls back to tree-sitter when the helper itself cannot
 restore its NuGet packages or build (for example on a private or offline
-feed). Symbols and attribute annotations are kept; the Roslyn-tier details and
+feed). Symbols and attribute annotations are kept (with literal arguments only,
+see [tier differences](#attribute-annotations)); the Roslyn-tier details and
 the [SQL call-site edges](#sql-at-call-sites) are lost. `ctxo index` then
 reports `C#: N files (syntax tier - the Roslyn helper failed, run "ctxo doctor")`,
 and the [`csharp_tier` doctor check](/cli/doctor#c-analysis-tier) says why.
@@ -56,9 +57,10 @@ lives inside the installed plugin and is restored on first use: Roslyn
 (`Microsoft.CodeAnalysis`) and `Microsoft.SqlServer.TransactSql.ScriptDom` come
 from your NuGet sources, so they must be reachable (nuget.org or a mirror).
 
-The helper targets `net8.0` with `RollForward` set to `Major`: it keeps using an
-installed .NET 8 runtime, and on a machine with only a newer runtime it rolls
-forward to it (verified on .NET 9 and 10).
+The helper targets `net8.0` with `RollForward` set to `Major`: the .NET host
+keeps using an installed .NET 8 runtime, and on a machine with only a newer
+runtime it rolls forward to that one. The built helper has been run with
+`dotnet exec --fx-version` on .NET 8, 9 and 10.
 
 ## Roslyn vs tree-sitter
 
@@ -122,17 +124,21 @@ tiers. They are always on and live in the JSON index only.
 
 - `name` is the attribute name as written, without namespace and without the
   `Attribute` suffix.
-- Only constant arguments are kept: numbers in invariant culture, `true` and
-  `false`, enum constants as `Type.Member`, `typeof(T)` as the type's display
-  string, array arguments flattened, nulls skipped. `args` and `named` are
-  omitted when empty.
+- Only constant arguments are kept. In the Roslyn tier: numbers in invariant
+  culture, `true` and `false`, enum constants as `Type.Member`, `typeof(T)` as
+  the type's display string, array arguments flattened, nulls skipped. `args`
+  and `named` are omitted when empty.
 - Caps: 20 attributes per symbol, 10 positional and 10 named entries each, 200
   characters per value.
 - `named.type` is the attribute class's fully qualified name. Only the Roslyn
   tier knows it, when the class resolves.
-- **Tier differences.** In the Roslyn semantic path an argument written with a
-  parameter name (`name: "x"`) arrives in `args`; tree-sitter puts it in
-  `named`. Roslyn also formats real-number exponents its own way.
+- **Tier differences.**
+  - Tree-sitter keeps literal arguments only (strings, numbers, booleans).
+    Enum constants, `typeof(T)`, array arguments and other expressions are
+    dropped there.
+  - In the Roslyn semantic path an argument written with a parameter name
+    (`name: "x"`) arrives in `args`; tree-sitter puts it in `named`.
+  - Roslyn formats real-number exponents its own way.
 
 The first `ctxo index` after upgrading to a version with annotations rewrites
 the committed index JSON of every C# file once.
