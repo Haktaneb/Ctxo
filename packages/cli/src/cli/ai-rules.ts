@@ -415,19 +415,28 @@ export function installSkills(
 
 const GITIGNORE_ENTRY = '.ctxo/.cache/';
 
-/** Creates `.ctxo/index/`, where `ctxo index` writes the committed index. An existing directory is `skipped`. */
-export function ensureIndexDir(projectRoot: string): InstallResult {
+/**
+ * Creates `.ctxo/index/`, where `ctxo index` writes the committed index. An existing directory is
+ * `skipped`. `dryRun` computes the same action and creates nothing.
+ */
+export function ensureIndexDir(projectRoot: string, options: { readonly dryRun?: boolean } = {}): InstallResult {
   const dir = join(projectRoot, '.ctxo', 'index');
   if (existsSync(dir)) return { file: '.ctxo/index/', action: 'skipped' };
-  mkdirSync(dir, { recursive: true });
+  if (!options.dryRun) mkdirSync(dir, { recursive: true });
   return { file: '.ctxo/index/', action: 'created' };
 }
 
-export function ensureGitignore(projectRoot: string): InstallResult {
+/**
+ * Adds the `.ctxo/.cache/` entry to `.gitignore`, creating the file when it is missing. A file that
+ * already has the entry is `skipped`. `dryRun` computes the same action and writes nothing.
+ */
+export function ensureGitignore(projectRoot: string, options: { readonly dryRun?: boolean } = {}): InstallResult {
   const filePath = join(projectRoot, '.gitignore');
 
   if (!existsSync(filePath)) {
-    writeFileSync(filePath, `# Ctxo local cache (auto-rebuilt, never committed)\n${GITIGNORE_ENTRY}\n`, 'utf-8');
+    if (!options.dryRun) {
+      writeFileSync(filePath, `# Ctxo local cache (auto-rebuilt, never committed)\n${GITIGNORE_ENTRY}\n`, 'utf-8');
+    }
     return { file: '.gitignore', action: 'created' };
   }
 
@@ -438,7 +447,7 @@ export function ensureGitignore(projectRoot: string): InstallResult {
 
   const separator = existing.endsWith('\n') ? '\n' : '\n\n';
   const updated = existing + `${separator}# Ctxo local cache (auto-rebuilt, never committed)\n${GITIGNORE_ENTRY}\n`;
-  writeFileSync(filePath, updated, 'utf-8');
+  if (!options.dryRun) writeFileSync(filePath, updated, 'utf-8');
   return { file: '.gitignore', action: 'updated' };
 }
 
@@ -476,17 +485,21 @@ gate:
 #   exclude: []             # indexed files to leave out (picomatch globs)
 `;
 
-export function ensureConfig(projectRoot: string): InstallResult {
+/**
+ * Writes the default `.ctxo/config.yaml`; an existing config is `skipped` and never touched. `dryRun`
+ * computes the same action and writes nothing, not even the `.ctxo/` directory.
+ */
+export function ensureConfig(projectRoot: string, options: { readonly dryRun?: boolean } = {}): InstallResult {
   const filePath = join(projectRoot, '.ctxo', 'config.yaml');
-  const dir = dirname(filePath);
-
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
   if (existsSync(filePath)) {
     return { file: '.ctxo/config.yaml', action: 'skipped' };
   }
 
-  writeFileSync(filePath, DEFAULT_CONFIG, 'utf-8');
+  if (!options.dryRun) {
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, DEFAULT_CONFIG, 'utf-8');
+  }
   return { file: '.ctxo/config.yaml', action: 'created' };
 }
 
@@ -541,18 +554,29 @@ export function getMcpConfigTargets(selectedPlatformIds: string[]): McpConfigTar
   return [...targets.values()];
 }
 
-export function ensureMcpConfig(projectRoot: string, target: McpConfigTarget): InstallResult {
+/**
+ * Registers the ctxo server in one MCP config file: a missing file is `created`, an existing one gets
+ * the entry merged in (`updated`, or `skipped` when ctxo is already there), and corrupt JSON is
+ * overwritten (`updated`, D12). `dryRun` computes the same action and writes nothing, not even a directory.
+ */
+export function ensureMcpConfig(
+  projectRoot: string,
+  target: McpConfigTarget,
+  options: { readonly dryRun?: boolean } = {},
+): InstallResult {
   const filePath = join(projectRoot, target.file);
-  const dir = dirname(filePath);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const write = (config: Record<string, unknown>): void => {
+    if (options.dryRun) return;
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+  };
 
   const entry = target.extraFields
     ? { ...target.extraFields, ...CTXO_MCP_ENTRY }
     : { ...CTXO_MCP_ENTRY };
 
   if (!existsSync(filePath)) {
-    const config = { [target.serverKey]: { ctxo: entry } };
-    writeFileSync(filePath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+    write({ [target.serverKey]: { ctxo: entry } });
     return { file: target.file, action: 'created' };
   }
 
@@ -561,9 +585,8 @@ export function ensureMcpConfig(projectRoot: string, target: McpConfigTarget): I
   try {
     existing = JSON.parse(readFileSync(filePath, 'utf-8'));
   } catch {
-    // Corrupt JSON — overwrite
-    const config = { [target.serverKey]: { ctxo: entry } };
-    writeFileSync(filePath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+    // Corrupt JSON: overwrite
+    write({ [target.serverKey]: { ctxo: entry } });
     return { file: target.file, action: 'updated' };
   }
 
@@ -572,8 +595,6 @@ export function ensureMcpConfig(projectRoot: string, target: McpConfigTarget): I
     return { file: target.file, action: 'skipped' };
   }
 
-  servers['ctxo'] = entry;
-  existing[target.serverKey] = servers;
-  writeFileSync(filePath, JSON.stringify(existing, null, 2) + '\n', 'utf-8');
+  write({ ...existing, [target.serverKey]: { ...servers, ctxo: entry } });
   return { file: target.file, action: 'updated' };
 }

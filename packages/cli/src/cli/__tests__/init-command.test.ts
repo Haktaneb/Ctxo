@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, statSync, chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { delimiter, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { InitCommand, type InitOptions } from '../init-command.js';
@@ -799,5 +800,167 @@ describe('InitCommand - selected parts and tiered rules (#159)', () => {
     expect(existsSync(join(dir, '.cursor', 'rules', 'ctxo.mdc'))).toBe(true);
     expect(existsSync(join(dir, '.mcp.json'))).toBe(true);
     expect(existsSync(hookPath(dir))).toBe(true);
+  });
+});
+
+describe('InitCommand - the dry run lists every file init would touch (#159)', () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    errorSpy.mockRestore();
+  });
+
+  function stderr(): string {
+    return errorSpy.mock.calls.map((call) => String(call[0])).join('\n');
+  }
+
+  const TOOLS = ['claude-code', 'cursor', 'github-copilot'];
+
+  /** Every path under root, `.git` included (directories end in `/`), mapped by `describeEntry`. */
+  function walk(root: string, describeEntry: (path: string, isDir: boolean) => string, sub = ''): Record<string, string> {
+    const entries: Record<string, string> = {};
+    for (const entry of readdirSync(join(root, sub), { withFileTypes: true })) {
+      const rel = sub === '' ? entry.name : `${sub}/${entry.name}`;
+      const isDir = entry.isDirectory();
+      entries[isDir ? `${rel}/` : rel] = describeEntry(join(root, rel), isDir);
+      if (isDir) Object.assign(entries, walk(root, describeEntry, rel));
+    }
+    return entries;
+  }
+
+  const sha1 = (path: string): string => createHash('sha1').update(readFileSync(path)).digest('hex');
+
+  /** Content hash, mtime and mode of every file and directory: a dry run must change none of them. */
+  function snapshot(root: string): Record<string, string> {
+    return walk(root, (path, isDir) => {
+      const stat = statSync(path);
+      return `${isDir ? 'dir' : sha1(path)} ${stat.mtimeMs} ${stat.mode}`;
+    });
+  }
+
+  /** The SHA-1 of every file (directories left out). */
+  function fileHashes(root: string): Record<string, string> {
+    return Object.fromEntries(Object.entries(walk(root, (path, isDir) => (isDir ? '' : sha1(path)))).filter(([path]) => !path.endsWith('/')));
+  }
+
+  it('--dry-run lists config, .gitignore, rules, skills for both platforms, the guard, MCP configs and git hooks', async () => {
+    const dir = makeTempProject();
+    writeFileSync(join(dir, '.gitignore'), '.ctxo/.cache/\n', 'utf-8');
+
+    await new InitCommand(dir).run({ tools: TOOLS, dryRun: true });
+
+    const out = stderr();
+    expect(out).toContain('[ctxo] Dry run: nothing is written. Files init would touch:');
+    for (const file of [
+      '.ctxo/config.yaml',
+      '.gitignore',
+      'CLAUDE.md',
+      '.claude/skills/ctxo-safe-edit/SKILL.md',
+      '.cursor/rules/ctxo-understand.mdc',
+      '.claude/settings.json',
+      '.mcp.json',
+      '.vscode/mcp.json',
+      'post-commit',
+      'post-merge',
+    ]) {
+      expect(out, file).toContain(file);
+    }
+    expect(out).toMatch(/^ {2}CLAUDE\.md +would create$/m);
+    expect(out).toMatch(/^ {2}\.gitignore +unchanged$/m);
+    expect(out).toMatch(/^ {2}\.git\/hooks\/post-commit \(git hook\) +would create$/m);
+    expect(out).not.toMatch(/skipped/i);
+    expect(out).not.toContain(String.fromCharCode(0x2014));
+  });
+
+  it('--dry-run writes nothing', async () => {
+    const dir = makeTempProject();
+    // A project a real run would change everywhere: files to update, folders to create, an exec bit to restore.
+    new InitCommand(dir).installHooks();
+    if (process.platform !== 'win32') chmodSync(hookPath(dir, 'post-merge'), 0o644);
+    writeFileSync(hookPath(dir), `#!/bin/sh\n${V1_POST_COMMIT_BLOCK}\n`, 'utf-8');
+    writeFileSync(join(dir, '.gitignore'), 'node_modules/\n', 'utf-8');
+    writeFileSync(join(dir, 'CLAUDE.md'), '# Project\n', 'utf-8');
+    writeFileSync(join(dir, '.mcp.json'), '{"mcpServers":{"other":{"command":"node"}}}', 'utf-8');
+    mkdirSync(join(dir, '.claude'));
+    writeFileSync(join(dir, '.claude', 'settings.json'), '{"permissions":{}}\n', 'utf-8');
+    const before = snapshot(dir);
+
+    await new InitCommand(dir).run({ dryRun: true });
+
+    expect(stderr()).toContain('would update');
+    expect(snapshot(dir)).toEqual(before);
+  });
+
+  it('--dry-run follows --only and --skip', async () => {
+    const dir = makeTempProject();
+
+    await new InitCommand(dir).run({ dryRun: true, only: ['rules'] });
+    expect(stderr()).toContain('CLAUDE.md');
+    expect(stderr()).not.toContain('.claude/settings.json');
+    expect(stderr()).not.toContain('post-commit');
+    expect(stderr()).not.toContain('.ctxo/config.yaml');
+    expect(stderr()).not.toContain('.mcp.json');
+
+    errorSpy.mockClear();
+    await new InitCommand(dir).run({ dryRun: true, tools: ['claude-code'], skip: ['git-hooks'], noGuard: true });
+    expect(stderr()).toContain('.ctxo/config.yaml');
+    expect(stderr()).toContain('.claude/skills/ctxo-safe-edit/SKILL.md');
+    expect(stderr()).not.toContain('.claude/settings.json');
+    expect(stderr()).not.toContain('post-commit');
+
+    errorSpy.mockClear();
+    await new InitCommand(dir).run({ dryRun: true, tools: ['claude-code'], rulesOnly: true });
+    expect(stderr()).toContain('.mcp.json');
+    expect(stderr()).not.toContain('.claude/settings.json');
+    expect(stderr()).not.toContain('post-commit');
+  });
+
+  it('plan lists exactly the files a real run then creates or changes', async () => {
+    const dir = makeTempProject();
+    writeFileSync(join(dir, '.gitignore'), '.ctxo/.cache/\n', 'utf-8');
+    writeFileSync(join(dir, '.mcp.json'), '{"mcpServers":{"other":{"command":"node"}}}', 'utf-8');
+
+    const planned = new InitCommand(dir)
+      .plan({ tools: TOOLS })
+      .filter((result) => result.action !== 'skipped' && !result.file.endsWith('/'))
+      .map((result) => result.file);
+    const before = fileHashes(dir);
+    await new InitCommand(dir).run({ tools: TOOLS, yes: true, noInstall: true });
+    const after = fileHashes(dir);
+
+    const changed = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((file) => before[file] !== after[file]);
+    expect(new Set(planned).size).toBe(planned.length);
+    expect(new Set(planned)).toEqual(new Set(changed));
+    expect(planned).toContain('.mcp.json');
+    expect(planned).toContain('.git/hooks/post-commit');
+    expect(planned).not.toContain('.gitignore');
+  });
+
+  it('installHooks dryRun returns both hooks and writes nothing', () => {
+    const dir = makeTempProject();
+    execFileSync('git', ['config', 'core.hooksPath', '.githooks'], { cwd: dir });
+
+    const fresh = new InitCommand(dir).installHooks({ dryRun: true });
+
+    expect(fresh.installed).toBe(true);
+    expect(fresh.results).toEqual([
+      { file: '.githooks/post-commit', action: 'created' },
+      { file: '.githooks/post-merge', action: 'created' },
+    ]);
+    expect(existsSync(join(dir, '.githooks'))).toBe(false);
+
+    execFileSync('git', ['config', '--unset', 'core.hooksPath'], { cwd: dir });
+    const v1 = `#!/bin/sh\n${V1_POST_COMMIT_BLOCK}\n`;
+    writeFileSync(hookPath(dir), v1, 'utf-8');
+
+    const upgrade = new InitCommand(dir).installHooks({ dryRun: true });
+
+    expect(upgrade.results.map((result) => result.action)).toEqual(['updated', 'created']);
+    expect(readFileSync(hookPath(dir), 'utf-8')).toBe(v1);
+    expect(existsSync(hookPath(dir, 'post-merge'))).toBe(false);
   });
 });

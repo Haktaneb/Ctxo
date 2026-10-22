@@ -189,6 +189,41 @@ function summaryRow(result: InstallResult, pc: PC): string {
     : `${pc.green('\u2713')} ${pc.bold(result.file)}  ${pc.dim(actionLabel(result.action))}`;
 }
 
+const DRY_RUN_HEADER = '[ctxo] Dry run: nothing is written. Files init would touch:';
+
+/** A dry-run row's action word; `skipped` reads `unchanged` (D16). */
+const PLAN_ACTION: Readonly<Record<InstallResult['action'], string>> = {
+  created: 'would create',
+  updated: 'would update',
+  skipped: 'unchanged',
+};
+
+/**
+ * One dry-run line: `  <file> <would create|would update|unchanged>`, the file padded to 44 columns,
+ * or the warning sign and the text for a result with a warning. A git hook's file reads `<path> (git hook)`.
+ */
+function formatPlanLine(result: InstallResult, gitHook: boolean): string {
+  if (result.warning !== undefined) return `  \u26a0 ${result.warning}`;
+  const file = gitHook ? `${result.file} (git hook)` : result.file;
+  return `  ${file.padEnd(44)} ${PLAN_ACTION[result.action]}`;
+}
+
+/** Exits 1 on the first tool id that is not a platform, naming the valid ones. */
+function exitOnUnknownTools(toolIds: readonly string[]): void {
+  for (const id of toolIds) {
+    if (!PLATFORMS.find(p => p.id === id)) {
+      console.error(`[ctxo] Unknown tool: "${id}". Valid: ${PLATFORMS.map(p => p.id).join(', ')}`);
+      process.exit(1);
+    }
+  }
+}
+
+/** The git hooks init installs, in install order. */
+const GIT_HOOKS = [
+  { name: 'post-commit', content: POST_COMMIT_CONTENT },
+  { name: 'post-merge', content: POST_MERGE_CONTENT },
+] as const;
+
 /** A path for human output: project-relative with forward slashes inside the project, absolute otherwise. */
 function displayPath(projectRoot: string, path: string): string {
   const rel = forwardSlashes(relative(projectRoot, path));
@@ -212,9 +247,11 @@ export class InitCommand {
    * git uses, one result row per hook. A `core.hooksPath` from the global or system git config points
    * at a directory shared by every repository on the machine: nothing is written there, a warning
    * with the blocks to add by hand goes to stderr, and the result has `installed: false` and no rows.
-   * A local `core.hooksPath` is honoured.
+   * A local `core.hooksPath` is honoured. `dryRun` gives the same result and warning but writes
+   * nothing: no directory, no hook file, no exec bit.
    */
-  installHooks(): HooksInstallResult {
+  installHooks(options: { readonly dryRun?: boolean } = {}): HooksInstallResult {
+    const dryRun = options.dryRun === true;
     const hooksDir = resolveHooksDir(this.projectRoot);
     const sharedScope = sharedHooksScope(this.projectRoot);
     if (sharedScope) {
@@ -222,12 +259,17 @@ export class InitCommand {
       return { installed: false, hooksDir, sharedScope, results: [] };
     }
 
-    mkdirSync(hooksDir, { recursive: true });
-    const results = [
-      this.installHook(hooksDir, 'post-commit', POST_COMMIT_CONTENT),
-      this.installHook(hooksDir, 'post-merge', POST_MERGE_CONTENT),
-    ];
+    if (!dryRun) mkdirSync(hooksDir, { recursive: true });
+    const results = GIT_HOOKS.map(({ name, content }) => this.installHook(hooksDir, name, content, dryRun));
     return { installed: true, hooksDir, results };
+  }
+
+  /**
+   * What init would do with these options, one row per file, writing nothing: the same pipeline as a
+   * real run over the parts the flags select. Without `tools` it previews every platform (D16).
+   */
+  plan(options: InitOptions = {}): InstallResult[] {
+    return this.applyParts(resolveInitParts(options), options.tools ?? PLATFORMS.map((p) => p.id), true);
   }
 
   async run(options: InitOptions = {}): Promise<void> {
@@ -258,21 +300,23 @@ export class InitCommand {
    * Installs the selected parts in one fixed order: config, skills, guard, rules, MCP, git hooks.
    * Skills and the guard go first so each platform's rules tier is resolved from what is on disk after
    * them. A part not in the set adds no row. Bundled skills that cannot be read become a warning row,
-   * and the other parts still run.
+   * and the other parts still run. `dryRun` gives the same rows and writes nothing; the rules tier
+   * then counts the skills and guard it would install as present.
    */
-  private applyParts(parts: ReadonlySet<InitPart>, toolIds: readonly string[]): InstallResult[] {
+  private applyParts(parts: ReadonlySet<InitPart>, toolIds: readonly string[], dryRun: boolean): InstallResult[] {
     const root = this.projectRoot;
+    const write = { dryRun };
     const results: InstallResult[] = [];
 
     if (parts.has('config')) {
-      results.push(ensureIndexDir(root), ensureConfig(root), ensureGitignore(root));
+      results.push(ensureIndexDir(root, write), ensureConfig(root, write), ensureGitignore(root, write));
     }
 
     let claudeSkills = false;
     if (parts.has('skills')) {
       for (const id of toolIds) {
         try {
-          results.push(...installSkills(root, id));
+          results.push(...installSkills(root, id, write));
           if (id === 'claude-code') claudeSkills = true;
         } catch (err) {
           results.push({
@@ -286,23 +330,23 @@ export class InitCommand {
 
     let guard = false;
     if (parts.has('guard') && toolIds.includes('claude-code')) {
-      const result = ensureClaudeHook(root);
+      const result = ensureClaudeHook(root, write);
       results.push(result);
       guard = result.warning === undefined;
     }
 
     if (parts.has('rules')) {
       for (const id of toolIds) {
-        results.push(installRules(root, id, { tier: this.rulesTier(id, { guard, skills: claudeSkills }) }));
+        results.push(installRules(root, id, { tier: this.rulesTier(id, { guard, skills: claudeSkills }), dryRun }));
       }
     }
 
     if (parts.has('mcp')) {
-      for (const target of getMcpConfigTargets([...toolIds])) results.push(ensureMcpConfig(root, target));
+      for (const target of getMcpConfigTargets([...toolIds])) results.push(ensureMcpConfig(root, target, write));
     }
 
     if (parts.has('git-hooks')) {
-      const hooks = this.installHooks();
+      const hooks = this.installHooks(write);
       results.push(...hooks.results);
       if (!hooks.installed) {
         // installHooks printed the full warning; this row keeps the skip in the summary.
@@ -462,7 +506,7 @@ export class InitCommand {
     const s = clack.spinner();
     s.start(pc.dim('Configuring...'));
 
-    const rows = this.applyParts(parts, toolIds).map((result) => summaryRow(result, pc));
+    const rows = this.applyParts(parts, toolIds, false).map((result) => summaryRow(result, pc));
 
     if (pluginsToInstall.length > 0) {
       s.stop(pc.dim('Installing language plugins...'));
@@ -502,15 +546,9 @@ export class InitCommand {
 
   private async runNonInteractive(options: InitOptions, parts: ReadonlySet<InitPart>): Promise<void> {
     const toolIds = options.tools ?? [];
+    exitOnUnknownTools(toolIds);
 
-    for (const id of toolIds) {
-      if (!PLATFORMS.find(p => p.id === id)) {
-        console.error(`[ctxo] Unknown tool: "${id}". Valid: ${PLATFORMS.map(p => p.id).join(', ')}`);
-        process.exit(1);
-      }
-    }
-
-    for (const result of this.applyParts(parts, toolIds)) console.error(formatResultLine(result));
+    for (const result of this.applyParts(parts, toolIds, false)) console.error(formatResultLine(result));
 
     // Language detection + plugin install (not a part: skipped by --only, --rules and --no-install)
     if (pluginStepEnabled(options)) {
@@ -532,35 +570,18 @@ export class InitCommand {
   /*  Dry run                                                          */
   /* ---------------------------------------------------------------- */
 
+  /**
+   * Prints `plan(options)`: the header, then one row per file and one line per warning. A shared
+   * hooks directory prints installHooks' warning and no hook rows, as a real run does.
+   */
   private dryRun(options: InitOptions): void {
-    const toolIds = options.tools ?? PLATFORMS.map(p => p.id);
+    if (options.tools) exitOnUnknownTools(options.tools);
 
-    console.error('[ctxo] Dry run: the following files would be created/updated:\n');
+    const hooksDir = resolveHooksDir(this.projectRoot);
+    const hookFiles = new Set(GIT_HOOKS.map(({ name }) => displayPath(this.projectRoot, join(hooksDir, name))));
 
-    if (!options.rulesOnly) {
-      console.error('  .ctxo/index/              (index directory)');
-    }
-
-    for (const id of toolIds) {
-      const platform = PLATFORMS.find(p => p.id === id);
-      if (platform) {
-        const action = installRules(this.projectRoot, id, { dryRun: true }).action;
-        console.error(`  ${platform.file.padEnd(42)} (${action})`);
-      }
-    }
-
-    if (!options.rulesOnly) {
-      const hooksDir = this.displayHooksDir();
-      const note = sharedHooksScope(this.projectRoot) ? ' - skipped: shared hooks directory' : '';
-      // padEnd(25) plus one space: a path of 25+ characters still gets a separator.
-      console.error(`  ${`${hooksDir}/post-commit`.padEnd(25)} (git hook)${note}`);
-      console.error(`  ${`${hooksDir}/post-merge`.padEnd(25)} (git hook)${note}`);
-    }
-
-    if (!options.rulesOnly && toolIds.includes('claude-code')) {
-      console.error('  .claude/settings.json     (safe-edit guard hook)');
-      console.error('  .claude/skills/ctxo-*/SKILL.md (skills)');
-    }
+    console.error(DRY_RUN_HEADER);
+    for (const result of this.plan(options)) console.error(formatPlanLine(result, hookFiles.has(result.file)));
   }
 
   /* ---------------------------------------------------------------- */
@@ -581,16 +602,12 @@ export class InitCommand {
     }
   }
 
-  /** The hooks directory for human output: project-relative when it sits inside the project, absolute otherwise. */
-  private displayHooksDir(): string {
-    return displayPath(this.projectRoot, resolveHooksDir(this.projectRoot));
-  }
-
   /**
    * Upserts one hook's ctxo block. The action compares the old and the new text: a missing file is
-   * `created`, a changed one `updated`, an equal one `skipped` and not rewritten.
+   * `created`, a changed one `updated`, an equal one `skipped` and not rewritten. `dryRun` computes
+   * the same action and touches nothing, not even the exec bit.
    */
-  private installHook(hooksDir: string, hookName: string, hookContent: string): InstallResult {
+  private installHook(hooksDir: string, hookName: string, hookContent: string, dryRun: boolean): InstallResult {
     const hookPath = join(hooksDir, hookName);
     const file = displayPath(this.projectRoot, hookPath);
 
@@ -599,17 +616,21 @@ export class InitCommand {
     const updated = upsertCtxoBlock(existing, hookContent);
 
     if (!hookExists || updated !== existing) {
-      writeFileSync(hookPath, updated, 'utf-8');
-      chmodSync(hookPath, 0o755);
+      if (!dryRun) {
+        writeFileSync(hookPath, updated, 'utf-8');
+        chmodSync(hookPath, 0o755);
+      }
       return { file, action: hookExists ? 'updated' : 'created' };
     }
 
     // Content is already current. A hook that lost its exec bit (copied, restored from a backup)
     // would silently stop firing, so restore it; failing init over a file we cannot chmod would not help.
-    try {
-      chmodSync(hookPath, 0o755);
-    } catch {
-      // best effort
+    if (!dryRun) {
+      try {
+        chmodSync(hookPath, 0o755);
+      } catch {
+        // best effort
+      }
     }
     return { file, action: 'skipped' };
   }

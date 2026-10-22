@@ -1,8 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { PLATFORMS, generateRules, installRules, detectPlatforms, ensureGitignore, ensureConfig, getMcpConfigTargets, ensureMcpConfig, installSkills, skillStates, SKILLS, SKILL_PLATFORMS, ensureClaudeHook, readClaudeGuardState, resolveRulesTier, gateEnabled } from '../ai-rules.js';
+import { PLATFORMS, generateRules, installRules, detectPlatforms, ensureGitignore, ensureConfig, ensureIndexDir, getMcpConfigTargets, ensureMcpConfig, installSkills, skillStates, SKILLS, SKILL_PLATFORMS, ensureClaudeHook, readClaudeGuardState, resolveRulesTier, gateEnabled } from '../ai-rules.js';
 import {
   LEGACY_CURSOR_FRONTMATTER,
   LEGACY_RULE_BODY,
@@ -668,6 +668,61 @@ describe('ensureMcpConfig', () => {
     const config = JSON.parse(readFileSync(join(dir, '.continue', 'mcpServers', 'ctxo.json'), 'utf-8'));
     expect(config.mcpServers.ctxo.command).toBe('npx');
     expect(config.mcpServers.ctxo.args).toContain('@ctxo/cli');
+  });
+});
+
+describe('scaffolding writers in dryRun', () => {
+  /** Every path under root (directories end in `/`) with its file content, so a test can prove nothing changed. */
+  function tree(root: string, sub = ''): Record<string, string> {
+    const entries: Record<string, string> = {};
+    for (const entry of readdirSync(join(root, sub), { withFileTypes: true })) {
+      const rel = sub === '' ? entry.name : `${sub}/${entry.name}`;
+      if (entry.isDirectory()) {
+        entries[`${rel}/`] = '';
+        Object.assign(entries, tree(root, rel));
+      } else {
+        entries[rel] = readFileSync(join(root, rel), 'utf-8');
+      }
+    }
+    return entries;
+  }
+
+  const mcp = (platformId: string) => getMcpConfigTargets([platformId])[0]!;
+
+  it('ensureGitignore, ensureConfig, ensureIndexDir and ensureMcpConfig write nothing in dryRun', () => {
+    const empty = makeTempDir();
+    expect(ensureIndexDir(empty, { dryRun: true })).toEqual({ file: '.ctxo/index/', action: 'created' });
+    expect(ensureConfig(empty, { dryRun: true })).toEqual({ file: '.ctxo/config.yaml', action: 'created' });
+    expect(ensureGitignore(empty, { dryRun: true })).toEqual({ file: '.gitignore', action: 'created' });
+    expect(ensureMcpConfig(empty, mcp('claude-code'), { dryRun: true })).toEqual({ file: '.mcp.json', action: 'created' });
+    expect(ensureMcpConfig(empty, mcp('github-copilot'), { dryRun: true })).toEqual({ file: '.vscode/mcp.json', action: 'created' });
+    expect(ensureMcpConfig(empty, mcp('continue'), { dryRun: true })).toEqual({ file: '.continue/mcpServers/ctxo.json', action: 'created' });
+    expect(tree(empty)).toEqual({});
+
+    const existing = makeTempDir();
+    writeFileSync(join(existing, '.gitignore'), 'node_modules/\n', 'utf-8');
+    writeFileSync(join(existing, '.mcp.json'), '{"mcpServers":{"other":{"command":"node"}}}', 'utf-8');
+    mkdirSync(join(existing, '.vscode'));
+    writeFileSync(join(existing, '.vscode', 'mcp.json'), 'not json{{{', 'utf-8');
+    const before = tree(existing);
+    expect(ensureIndexDir(existing, { dryRun: true }).action).toBe('created');
+    expect(ensureConfig(existing, { dryRun: true }).action).toBe('created');
+    expect(ensureGitignore(existing, { dryRun: true })).toEqual({ file: '.gitignore', action: 'updated' });
+    expect(ensureMcpConfig(existing, mcp('claude-code'), { dryRun: true })).toEqual({ file: '.mcp.json', action: 'updated' });
+    expect(ensureMcpConfig(existing, mcp('github-copilot'), { dryRun: true })).toEqual({ file: '.vscode/mcp.json', action: 'updated' });
+    expect(tree(existing)).toEqual(before);
+
+    const current = makeTempDir();
+    ensureIndexDir(current);
+    ensureConfig(current);
+    ensureGitignore(current);
+    ensureMcpConfig(current, mcp('claude-code'));
+    const written = tree(current);
+    expect(ensureIndexDir(current, { dryRun: true }).action).toBe('skipped');
+    expect(ensureConfig(current, { dryRun: true }).action).toBe('skipped');
+    expect(ensureGitignore(current, { dryRun: true }).action).toBe('skipped');
+    expect(ensureMcpConfig(current, mcp('claude-code'), { dryRun: true }).action).toBe('skipped');
+    expect(tree(current)).toEqual(written);
   });
 });
 
