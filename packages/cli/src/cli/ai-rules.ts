@@ -365,6 +365,14 @@ export function installSkills(
 
 const GITIGNORE_ENTRY = '.ctxo/.cache/';
 
+/** Creates `.ctxo/index/`, where `ctxo index` writes the committed index. An existing directory is `skipped`. */
+export function ensureIndexDir(projectRoot: string): InstallResult {
+  const dir = join(projectRoot, '.ctxo', 'index');
+  if (existsSync(dir)) return { file: '.ctxo/index/', action: 'skipped' };
+  mkdirSync(dir, { recursive: true });
+  return { file: '.ctxo/index/', action: 'created' };
+}
+
 export function ensureGitignore(projectRoot: string): InstallResult {
   const filePath = join(projectRoot, '.gitignore');
 
@@ -389,7 +397,7 @@ const DEFAULT_CONFIG = `# ctxo project configuration
 version: "1.0"
 
 # Exclude files and workspaces from indexing.
-# Uncomment and edit to activate — both fields accept picomatch globs
+# Uncomment and edit to activate; both fields accept picomatch globs
 # (forward-slash paths relative to repo root).
 index:
   # Per-file filter applied after \`git ls-files\`.
@@ -397,7 +405,7 @@ index:
   # - "packages/**/fixtures/**"
   # - "tools/legacy-*/**"
 
-  # Workspace filter — matching workspaces are skipped entirely
+  # Workspace filter: matching workspaces are skipped entirely
   # (no plugin load, no file enumeration).
   ignoreProjects: []
   # - "packages/experimental-*"

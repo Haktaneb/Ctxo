@@ -3,7 +3,8 @@ import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, statSync, c
 import { execFileSync } from 'node:child_process';
 import { delimiter, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { InitCommand } from '../init-command.js';
+import { InitCommand, type InitOptions } from '../init-command.js';
+import { blockTier, ruleBody, scanRulesBlocks } from '../../core/agent-rules/rules-block.js';
 import { isolateGitEnv, type IsolatedGitEnv } from './git-test-env.js';
 
 const tempDirs: string[] = [];
@@ -587,5 +588,216 @@ describe('InitCommand — cursor: skills + rules, no guard', () => {
     await new InitCommand(dir).run({ tools: ['cursor'], yes: true, noInstall: true });
 
     expect(existsSync(join(dir, '.claude', 'settings.json'))).toBe(false);
+  });
+});
+
+describe('InitCommand - selected parts and tiered rules (#159)', () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    errorSpy.mockRestore();
+  });
+
+  function stderr(): string {
+    return errorSpy.mock.calls.map((call) => String(call[0])).join('\n');
+  }
+
+  /** Every file name in the hooks directory with its content, so a test can prove nothing changed there. */
+  function hooksSnapshot(dir: string): Record<string, string> {
+    const hooksDir = join(dir, '.git', 'hooks');
+    if (!existsSync(hooksDir)) return {};
+    return Object.fromEntries(readdirSync(hooksDir).sort().map((name) => [name, readFileSync(join(hooksDir, name), 'utf-8')]));
+  }
+
+  /** The body of the one ctxo rules block in a file. */
+  function rulesBody(file: string): string {
+    const scan = scanRulesBlocks(readFileSync(file, 'utf-8'));
+    expect(scan.blocks).toHaveLength(1);
+    return scan.blocks[0]!.body;
+  }
+
+  const SKILL_FILES = ['ctxo-understand', 'ctxo-safe-edit', 'ctxo-review-pr'].map((skill) =>
+    join('.claude', 'skills', skill, 'SKILL.md'),
+  );
+
+  it.each<InitOptions>([{ only: ['guard', 'skills'] }, { skip: ['git-hooks'] }])(
+    'installs the guard and skills without touching git hooks (#159 acceptance)',
+    async (parts) => {
+      const dir = makeTempProject();
+      const before = hooksSnapshot(dir);
+
+      await new InitCommand(dir).run({ tools: ['claude-code'], yes: true, noInstall: true, ...parts });
+
+      expect(hooksSnapshot(dir)).toEqual(before);
+      expect(readFileSync(join(dir, '.claude', 'settings.json'), 'utf-8')).toContain('ctxo gate-hook');
+      for (const file of SKILL_FILES) expect(existsSync(join(dir, file)), file).toBe(true);
+    },
+  );
+
+  it('Claude Code with the guard and skills gets the compact block; other clients get the full block (#159 acceptance)', async () => {
+    const dir = makeTempProject();
+
+    await new InitCommand(dir).run({ tools: ['claude-code', 'cursor', 'windsurf'], yes: true, noInstall: true });
+
+    const claude = rulesBody(join(dir, 'CLAUDE.md'));
+    expect(claude.split('\n').length).toBeLessThanOrEqual(8);
+    expect(blockTier(claude)).toBe('compact');
+    expect(readFileSync(join(dir, '.cursor', 'rules', 'ctxo.mdc'), 'utf-8')).toContain(ruleBody({ tier: 'full' }));
+    expect(readFileSync(join(dir, '.windsurfrules'), 'utf-8')).toContain(ruleBody({ tier: 'full' }));
+  });
+
+  it.each<InitOptions>([{ noGuard: true }, { skip: ['skills'] }])(
+    '--no-guard and --skip skills give Claude Code the full block',
+    async (flags) => {
+      const dir = makeTempProject();
+
+      await new InitCommand(dir).run({ tools: ['claude-code'], yes: true, noInstall: true, ...flags });
+
+      expect(blockTier(rulesBody(join(dir, 'CLAUDE.md')))).toBe('full');
+    },
+  );
+
+  it('gate.enabled false gives Claude Code the full block', async () => {
+    const dir = makeTempProject();
+    mkdirSync(join(dir, '.ctxo'), { recursive: true });
+    writeFileSync(join(dir, '.ctxo', 'config.yaml'), 'gate:\n  enabled: false\n', 'utf-8');
+
+    await new InitCommand(dir).run({ tools: ['claude-code'], yes: true, noInstall: true });
+
+    expect(readFileSync(join(dir, '.claude', 'settings.json'), 'utf-8')).toContain('ctxo gate-hook');
+    expect(blockTier(rulesBody(join(dir, 'CLAUDE.md')))).toBe('full');
+  });
+
+  it('--rules prints the deprecation notice and skips only git hooks and the guard', async () => {
+    const dir = makeTempProject();
+
+    await new InitCommand(dir).run({ tools: ['claude-code'], rulesOnly: true, noInstall: true });
+
+    expect(stderr().match(/deprecated/g) ?? []).toHaveLength(1);
+    expect(stderr()).toContain('[ctxo] --rules is deprecated and now means --skip git-hooks,guard. Use --only or --skip instead.');
+    for (const file of SKILL_FILES) expect(existsSync(join(dir, file)), file).toBe(true);
+    expect(existsSync(join(dir, '.mcp.json'))).toBe(true);
+    expect(existsSync(join(dir, '.claude', 'settings.json'))).toBe(false);
+    expect(existsSync(hookPath(dir))).toBe(false);
+    expect(blockTier(rulesBody(join(dir, 'CLAUDE.md')))).toBe('full');
+  });
+
+  it('a corrupt settings.json is reported, left unchanged, and Claude Code gets the full block', async () => {
+    const dir = makeTempProject();
+    const corrupt = '{ "hooks": { "PreToolUse": [ \n';
+    mkdirSync(join(dir, '.claude'), { recursive: true });
+    writeFileSync(join(dir, '.claude', 'settings.json'), corrupt, 'utf-8');
+
+    await new InitCommand(dir).run({ tools: ['claude-code'], yes: true, noInstall: true });
+
+    expect(readFileSync(join(dir, '.claude', 'settings.json'), 'utf-8')).toBe(corrupt);
+    expect(stderr()).toContain('[ctxo] ⚠ .claude/settings.json is not valid JSON');
+    expect(stderr()).not.toContain('.claude/settings.json (unchanged)');
+    expect(blockTier(rulesBody(join(dir, 'CLAUDE.md')))).toBe('full');
+  });
+
+  it('re-running init reports CLAUDE.md unchanged and keeps one block', async () => {
+    const dir = makeTempProject();
+    await new InitCommand(dir).run({ tools: ['claude-code'], yes: true, noInstall: true });
+    expect(stderr()).toContain('[ctxo] ✓ CLAUDE.md (created)');
+    errorSpy.mockClear();
+
+    await new InitCommand(dir).run({ tools: ['claude-code'], yes: true, noInstall: true });
+
+    expect(stderr()).toContain('[ctxo] ✓ CLAUDE.md (unchanged)');
+    expect(stderr()).not.toContain(String.fromCharCode(0x2014));
+    const content = readFileSync(join(dir, 'CLAUDE.md'), 'utf-8');
+    expect(content.match(/<!-- ctxo-rules-start/g) ?? []).toHaveLength(1);
+  });
+
+  it('installHooks reports created, then skipped on a second run', () => {
+    const dir = makeTempProject();
+
+    const first = new InitCommand(dir).installHooks();
+    const second = new InitCommand(dir).installHooks();
+
+    expect(first.installed).toBe(true);
+    expect(first.results).toHaveLength(2);
+    expect(first.results[0]!.file).toMatch(/post-commit$/);
+    expect(first.results[1]!.file).toMatch(/post-merge$/);
+    expect(first.results.map((r) => r.file)).toEqual(['.git/hooks/post-commit', '.git/hooks/post-merge']);
+    expect(first.results.map((r) => r.action)).toEqual(['created', 'created']);
+    expect(second.results.map((r) => r.action)).toEqual(['skipped', 'skipped']);
+  });
+
+  it('installHooks reports an absolute path for a hooks directory outside the project', () => {
+    const dir = makeTempProject();
+    const outside = mkdtempSync(join(tmpdir(), 'ctxo-outside-hooks-'));
+    tempDirs.push(outside);
+    execFileSync('git', ['config', 'core.hooksPath', outside], { cwd: dir });
+
+    const result = new InitCommand(dir).installHooks();
+
+    expect(result.results.map((r) => r.file)).toEqual(
+      ['post-commit', 'post-merge'].map((name) => `${outside.replace(/\\/g, '/')}/${name}`),
+    );
+  });
+
+  it('installHooks gives no rows for a shared hooks directory', () => {
+    const dir = makeTempProject();
+    const shared = mkdtempSync(join(tmpdir(), 'ctxo-shared-hooks-'));
+    tempDirs.push(shared);
+    gitEnv.setGlobalHooksPath(shared);
+
+    const result = new InitCommand(dir).installHooks();
+
+    expect(result.installed).toBe(false);
+    expect(result.sharedScope).toBe('global');
+    expect(result.results).toEqual([]);
+  });
+
+  it.each<InitOptions>([{ only: ['guard'], noGuard: true }, { only: [] }])(
+    'an empty selection prints a notice and writes nothing',
+    async (flags) => {
+      const dir = makeTempProject();
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => { throw new Error('exit'); });
+      const before = readdirSync(dir).sort();
+      const hooksBefore = hooksSnapshot(dir);
+
+      try {
+        await new InitCommand(dir).run({ tools: ['claude-code'], yes: true, noInstall: true, ...flags });
+        expect(exitSpy).not.toHaveBeenCalled();
+      } finally {
+        exitSpy.mockRestore();
+      }
+
+      expect(stderr()).toContain('[ctxo] Nothing to install: every part is excluded.');
+      expect(readdirSync(dir).sort()).toEqual(before);
+      expect(hooksSnapshot(dir)).toEqual(hooksBefore);
+    },
+  );
+
+  it('a missing skills directory is reported and the other parts still run', async () => {
+    const dir = makeTempProject();
+    vi.resetModules();
+    vi.doMock('../ai-rules.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../ai-rules.js')>();
+      const missing = (): never => { throw new Error('Could not locate ctxo skills/ directory.'); };
+      return { ...actual, installSkills: missing, skillStates: missing };
+    });
+    try {
+      const { InitCommand: InitWithoutSkills } = await import('../init-command.js');
+      await new InitWithoutSkills(dir).run({ tools: ['claude-code', 'cursor'], yes: true, noInstall: true });
+    } finally {
+      vi.doUnmock('../ai-rules.js');
+      vi.resetModules();
+    }
+
+    expect(stderr()).toMatch(/\[ctxo\] ⚠ .*Could not locate ctxo skills\/ directory/);
+    expect(existsSync(join(dir, '.ctxo', 'config.yaml'))).toBe(true);
+    expect(readFileSync(join(dir, '.claude', 'settings.json'), 'utf-8')).toContain('ctxo gate-hook');
+    expect(blockTier(rulesBody(join(dir, 'CLAUDE.md')))).toBe('full');
+    expect(existsSync(join(dir, '.cursor', 'rules', 'ctxo.mdc'))).toBe(true);
+    expect(existsSync(join(dir, '.mcp.json'))).toBe(true);
+    expect(existsSync(hookPath(dir))).toBe(true);
   });
 });

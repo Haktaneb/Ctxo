@@ -1,7 +1,21 @@
 import { isAbsolute, join, relative } from 'node:path';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { PLATFORMS, detectPlatforms, installRules, ensureGitignore, ensureConfig, getMcpConfigTargets, ensureMcpConfig, installSkills, ensureClaudeHook } from './ai-rules.js';
+import {
+  PLATFORMS,
+  detectPlatforms,
+  installRules,
+  ensureGitignore,
+  ensureConfig,
+  ensureIndexDir,
+  getMcpConfigTargets,
+  ensureMcpConfig,
+  installSkills,
+  ensureClaudeHook,
+  resolveRulesTier,
+  type InstallResult,
+} from './ai-rules.js';
+import type { RulesTier } from '../core/agent-rules/rules-block.js';
 import {
   detectLanguages,
   decideNeededLanguages,
@@ -19,7 +33,7 @@ import {
   forwardSlashes,
   type SharedHooksScope,
 } from './git-hooks.js';
-import type { InitPart } from './init-parts.js';
+import { pluginStepEnabled, resolveInitParts, type InitPart } from './init-parts.js';
 
 const requireCjs = createRequire(import.meta.url);
 
@@ -50,6 +64,8 @@ export interface HooksInstallResult {
   readonly hooksDir: string;
   /** Set when `core.hooksPath` comes from the global or system git config, so ctxo left it alone. */
   readonly sharedScope?: SharedHooksScope;
+  /** One row per hook (`post-commit`, then `post-merge`); empty for a shared hooks directory. */
+  readonly results: InstallResult[];
 }
 
 export interface InitOptions {
@@ -140,6 +156,46 @@ function renderBanner(_version: string | undefined, pc: PC): string {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Init output                                                        */
+/* ------------------------------------------------------------------ */
+
+const RULES_DEPRECATION_NOTICE =
+  '[ctxo] --rules is deprecated and now means --skip git-hooks,guard. Use --only or --skip instead.';
+const NOTHING_TO_INSTALL_NOTICE = '[ctxo] Nothing to install: every part is excluded.';
+const SHARED_HOOKS_SKIPPED = 'git hooks skipped - shared hooks directory (see warning above)';
+
+/** The parts the AI Tools step serves: without any of them, no tool list is asked for. */
+const TOOL_PARTS: readonly InitPart[] = ['rules', 'skills', 'guard', 'mcp'];
+
+/** Where each skill platform keeps its skills; names the folder when the bundled skills cannot be read. */
+const SKILLS_DIR: Readonly<Record<string, string>> = { 'claude-code': '.claude/skills/', cursor: '.cursor/rules/' };
+
+/** `skipped` reads `unchanged` in init output (D16). */
+function actionLabel(action: InstallResult['action']): string {
+  return action === 'skipped' ? 'unchanged' : action;
+}
+
+/** `[ctxo] ✓ <file> (<created|updated|unchanged>)`; a result with a warning prints only `[ctxo] ⚠ <warning>` (D16). */
+function formatResultLine(result: InstallResult): string {
+  return result.warning !== undefined
+    ? `[ctxo] \u26a0 ${result.warning}`
+    : `[ctxo] \u2713 ${result.file} (${actionLabel(result.action)})`;
+}
+
+/** The same result as a row of the interactive summary box. */
+function summaryRow(result: InstallResult, pc: PC): string {
+  return result.warning !== undefined
+    ? `${pc.yellow('\u26a0')} ${result.warning}`
+    : `${pc.green('\u2713')} ${pc.bold(result.file)}  ${pc.dim(actionLabel(result.action))}`;
+}
+
+/** A path for human output: project-relative with forward slashes inside the project, absolute otherwise. */
+function displayPath(projectRoot: string, path: string): string {
+  const rel = forwardSlashes(relative(projectRoot, path));
+  return rel === '' || rel.startsWith('..') || isAbsolute(rel) ? forwardSlashes(path) : rel;
+}
+
+/* ------------------------------------------------------------------ */
 /*  InitCommand                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -153,22 +209,25 @@ export class InitCommand {
 
   /**
    * Installs (or upgrades in place) the post-commit and post-merge blocks in the hooks directory
-   * git uses. A `core.hooksPath` from the global or system git config points at a directory shared
-   * by every repository on the machine: nothing is written there, a warning with the blocks to add
-   * by hand goes to stderr, and the result says so. A local `core.hooksPath` is honoured.
+   * git uses, one result row per hook. A `core.hooksPath` from the global or system git config points
+   * at a directory shared by every repository on the machine: nothing is written there, a warning
+   * with the blocks to add by hand goes to stderr, and the result has `installed: false` and no rows.
+   * A local `core.hooksPath` is honoured.
    */
   installHooks(): HooksInstallResult {
     const hooksDir = resolveHooksDir(this.projectRoot);
     const sharedScope = sharedHooksScope(this.projectRoot);
     if (sharedScope) {
       console.error(sharedHooksWarning(hooksDir, sharedScope));
-      return { installed: false, hooksDir, sharedScope };
+      return { installed: false, hooksDir, sharedScope, results: [] };
     }
 
     mkdirSync(hooksDir, { recursive: true });
-    this.installHook(hooksDir, 'post-commit', POST_COMMIT_CONTENT);
-    this.installHook(hooksDir, 'post-merge', POST_MERGE_CONTENT);
-    return { installed: true, hooksDir };
+    const results = [
+      this.installHook(hooksDir, 'post-commit', POST_COMMIT_CONTENT),
+      this.installHook(hooksDir, 'post-merge', POST_MERGE_CONTENT),
+    ];
+    return { installed: true, hooksDir, results };
   }
 
   async run(options: InitOptions = {}): Promise<void> {
@@ -177,112 +236,189 @@ export class InitCommand {
       process.exit(1);
     }
 
+    if (options.rulesOnly) console.error(RULES_DEPRECATION_NOTICE);
+
+    // The plugin step is not a part (D9), so `--skip` of every part can still leave it; a dry run never installs plugins.
+    const parts = resolveInitParts(options);
+    if (parts.size === 0 && (options.dryRun || !pluginStepEnabled(options))) {
+      console.error(NOTHING_TO_INSTALL_NOTICE);
+      return;
+    }
+
     if (options.dryRun) return this.dryRun(options);
-    if (options.yes || options.tools) return await this.runNonInteractive(options);
-    return this.runInteractive(options);
+    if (options.yes || options.tools) return await this.runNonInteractive(options, parts);
+    return this.runInteractive(options, parts);
+  }
+
+  /* ---------------------------------------------------------------- */
+  /*  The parts pipeline                                               */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Installs the selected parts in one fixed order: config, skills, guard, rules, MCP, git hooks.
+   * Skills and the guard go first so each platform's rules tier is resolved from what is on disk after
+   * them. A part not in the set adds no row. Bundled skills that cannot be read become a warning row,
+   * and the other parts still run.
+   */
+  private applyParts(parts: ReadonlySet<InitPart>, toolIds: readonly string[]): InstallResult[] {
+    const root = this.projectRoot;
+    const results: InstallResult[] = [];
+
+    if (parts.has('config')) {
+      results.push(ensureIndexDir(root), ensureConfig(root), ensureGitignore(root));
+    }
+
+    let claudeSkills = false;
+    if (parts.has('skills')) {
+      for (const id of toolIds) {
+        try {
+          results.push(...installSkills(root, id));
+          if (id === 'claude-code') claudeSkills = true;
+        } catch (err) {
+          results.push({
+            file: SKILLS_DIR[id] ?? id,
+            action: 'skipped',
+            warning: `skills for ${id} not installed: ${(err as Error).message}`,
+          });
+        }
+      }
+    }
+
+    let guard = false;
+    if (parts.has('guard') && toolIds.includes('claude-code')) {
+      const result = ensureClaudeHook(root);
+      results.push(result);
+      guard = result.warning === undefined;
+    }
+
+    if (parts.has('rules')) {
+      for (const id of toolIds) {
+        results.push(installRules(root, id, { tier: this.rulesTier(id, { guard, skills: claudeSkills }) }));
+      }
+    }
+
+    if (parts.has('mcp')) {
+      for (const target of getMcpConfigTargets([...toolIds])) results.push(ensureMcpConfig(root, target));
+    }
+
+    if (parts.has('git-hooks')) {
+      const hooks = this.installHooks();
+      results.push(...hooks.results);
+      if (!hooks.installed) {
+        // installHooks printed the full warning; this row keeps the skip in the summary.
+        results.push({ file: displayPath(root, hooks.hooksDir), action: 'skipped', warning: SHARED_HOOKS_SKIPPED });
+      }
+    }
+
+    return results;
+  }
+
+  /** The platform's rules tier; `full` when it cannot be resolved (the bundled skills cannot be read). */
+  private rulesTier(platformId: string, planned: { readonly guard: boolean; readonly skills: boolean }): RulesTier {
+    try {
+      return resolveRulesTier(this.projectRoot, platformId, planned);
+    } catch {
+      return 'full';
+    }
+  }
+
+  /** Detected languages whose official plugin is not installed. */
+  private missingPlugins(): KnownLanguage[] {
+    return resolveInstalledPlugins(decideNeededLanguages(detectLanguages(this.projectRoot))).missing;
   }
 
   /* ---------------------------------------------------------------- */
   /*  Interactive flow                                                 */
   /* ---------------------------------------------------------------- */
 
-  private async runInteractive(options: InitOptions): Promise<void> {
+  private async runInteractive(options: InitOptions, selected: ReadonlySet<InitPart>): Promise<void> {
     const clack = await import('@clack/prompts');
     const pc = (await import('picocolors')).default;
 
     const version = await this.getVersion();
-    const totalSteps = options.rulesOnly ? 1 : 3;
+    const parts = new Set(selected);
+
+    // A step is shown only for a selected part, and the counter counts only the steps shown. The
+    // plugin lookup runs up front so its step can be counted.
+    const missingPlugins = pluginStepEnabled(options) ? this.missingPlugins() : [];
+    const showIndex = parts.has('config');
+    const showTools = TOOL_PARTS.some((part) => parts.has(part));
+    const showPlugins = missingPlugins.length > 0;
+    const showHooks = parts.has('git-hooks');
+    const totalSteps = [showIndex, showTools, showPlugins, showHooks].filter(Boolean).length;
+    let stepNum = 0;
 
     // ── Banner ──
     console.error('');
     console.error(renderBanner(version, pc));
     console.error('');
 
-    // ── Step 1: Index directory ──
-    let stepNum = 0;
-    if (!options.rulesOnly) {
+    // ── Index directory (config) ──
+    if (showIndex) {
       stepNum++;
       console.error(stepHeader(stepNum, totalSteps, 'Index Directory', 'Where ctxo stores the symbol graph and metadata.', pc));
       console.error('');
-
-      const indexDir = await clack.text({
-        message: pc.cyan('Directory path'),
-        placeholder: '.ctxo/index',
-        initialValue: '.ctxo/index',
-        validate: (val) => {
-          if (!val?.trim()) return 'Directory path is required';
-          return undefined;
-        },
-      });
-
-      if (clack.isCancel(indexDir)) { clack.cancel('Setup cancelled.'); process.exit(0); }
-
-      const fullPath = join(this.projectRoot, indexDir as string);
-      if (!existsSync(fullPath)) mkdirSync(fullPath, { recursive: true });
+      console.error(`  ${pc.bold('.ctxo/index/')}  ${pc.dim('fixed location')}`);
       console.error('');
     }
 
-    // ── Step 2: AI tool selection ──
-    stepNum++;
-    const detected = detectPlatforms(this.projectRoot);
-    const detectedCount = detected.size;
-    const detectedHint = detectedCount > 0 ? pc.green(` ${detectedCount} detected`) : '';
+    // ── AI tool selection (rules, skills, guard, mcp) ──
+    let toolIds: string[] = [];
+    if (showTools) {
+      stepNum++;
+      const detected = detectPlatforms(this.projectRoot);
+      const detectedCount = detected.size;
+      const detectedHint = detectedCount > 0 ? pc.green(` ${detectedCount} detected`) : '';
 
-    console.error(stepHeader(stepNum, totalSteps, `AI Tools${detectedHint}`, 'Select your tools. Generates MCP usage rules for each.', pc));
-    console.error('');
+      console.error(stepHeader(stepNum, totalSteps, `AI Tools${detectedHint}`, 'Select your tools. Generates MCP usage rules for each.', pc));
+      console.error('');
 
-    const toolChoices = PLATFORMS.map(p => {
-      const isDetected = detected.has(p.id);
-      const star = p.starred ? pc.yellow(' \u2605') : '';
-      const detect = isDetected ? pc.green(' (detected)') : '';
-      return {
-        value: p.id,
-        label: `${p.name}${star}${detect}`,
-        hint: isDetected ? undefined : pc.dim(p.file),
-      };
-    });
+      const toolChoices = PLATFORMS.map(p => {
+        const isDetected = detected.has(p.id);
+        const star = p.starred ? pc.yellow(' \u2605') : '';
+        const detect = isDetected ? pc.green(' (detected)') : '';
+        return {
+          value: p.id,
+          label: `${p.name}${star}${detect}`,
+          hint: isDetected ? undefined : pc.dim(p.file),
+        };
+      });
 
-    const selectedTools = await clack.multiselect({
-      message: pc.cyan('Select tools'),
-      options: toolChoices,
-      initialValues: [...detected],
-      required: false,
-    });
+      const selectedTools = await clack.multiselect({
+        message: pc.cyan('Select tools'),
+        options: toolChoices,
+        initialValues: [...detected],
+        required: false,
+      });
 
-    if (clack.isCancel(selectedTools)) { clack.cancel('Setup cancelled.'); process.exit(0); }
-    console.error('');
-
-    // ── Step 2.5: Language plugins (skipped in --rules / --no-install) ──
-    let pluginsToInstall: KnownLanguage[] = [];
-    if (!options.rulesOnly && !options.noInstall) {
-      const detection = detectLanguages(this.projectRoot);
-      const needed = decideNeededLanguages(detection);
-      const { missing } = resolveInstalledPlugins(needed);
-      if (missing.length > 0) {
-        console.error(stepHeader(
-          stepNum + 1,
-          totalSteps + 1,
-          `Language Plugins ${pc.yellow('missing')}`,
-          `Detected: ${missing.join(', ')} — ctxo needs a plugin per language to index it.`,
-          pc,
-        ));
-        console.error('');
-        const confirm = await clack.confirm({
-          message: pc.cyan(`Install ${[...new Set(missing.map(officialPluginFor))].join(' ')}?`),
-          initialValue: true,
-        });
-        if (clack.isCancel(confirm)) { clack.cancel('Setup cancelled.'); process.exit(0); }
-        if (confirm) {
-          pluginsToInstall = missing;
-          stepNum++;
-        }
-        console.error('');
-      }
+      if (clack.isCancel(selectedTools)) { clack.cancel('Setup cancelled.'); process.exit(0); }
+      toolIds = selectedTools as string[];
+      console.error('');
     }
 
-    // ── Step 3: Git hooks ──
-    let installGitHooks = false;
-    if (!options.rulesOnly) {
+    // ── Language plugins (not a part; skipped by --only, --rules and --no-install) ──
+    let pluginsToInstall: KnownLanguage[] = [];
+    if (showPlugins) {
+      stepNum++;
+      console.error(stepHeader(
+        stepNum,
+        totalSteps,
+        `Language Plugins ${pc.yellow('missing')}`,
+        `Detected: ${missingPlugins.join(', ')}; ctxo needs a plugin per language to index it.`,
+        pc,
+      ));
+      console.error('');
+      const confirm = await clack.confirm({
+        message: pc.cyan(`Install ${[...new Set(missingPlugins.map(officialPluginFor))].join(' ')}?`),
+        initialValue: true,
+      });
+      if (clack.isCancel(confirm)) { clack.cancel('Setup cancelled.'); process.exit(0); }
+      if (confirm) pluginsToInstall = missingPlugins;
+      console.error('');
+    }
+
+    // ── Git hooks ──
+    if (showHooks) {
       stepNum++;
       console.error(stepHeader(
         stepNum,
@@ -299,9 +435,9 @@ export class InitCommand {
       });
 
       if (clack.isCancel(hooks)) { clack.cancel('Setup cancelled.'); process.exit(0); }
-      installGitHooks = hooks as boolean;
 
-      if (!installGitHooks) {
+      if (!hooks) {
+        parts.delete('git-hooks');
         console.error('');
         console.error(pc.yellow('  ⚠ Drift & boundary-violation signals depend on repeated snapshots.'));
         console.error(pc.dim('    Options without hooks:'));
@@ -312,88 +448,40 @@ export class InitCommand {
       console.error('');
     }
 
-    // ── Guard prompt (claude-code only) ──
-    let installGuard = false;
-    if (!options.rulesOnly && (selectedTools as string[]).includes('claude-code')) {
+    // ── Guard question (Claude Code only) ──
+    if (parts.has('guard') && toolIds.includes('claude-code') && !options.noGuard) {
       const guard = await clack.confirm({
         message: pc.cyan('Install the safe-edit guard? Blocks edits to high-impact symbols until blast radius is checked.'),
         initialValue: true,
       });
       if (clack.isCancel(guard)) { clack.cancel('Setup cancelled.'); process.exit(0); }
-      installGuard = guard as boolean;
+      if (!guard) parts.delete('guard');
     }
 
     // ── Execute with spinner ──
     const s = clack.spinner();
     s.start(pc.dim('Configuring...'));
 
-    const results: string[] = [];
-
-    // Automatic scaffolding (always runs, no prompt needed)
-    const gitignoreResult = ensureGitignore(this.projectRoot);
-    const configResult = ensureConfig(this.projectRoot);
-
-    if (!options.rulesOnly) {
-      results.push(`${pc.green('\u2713')} ${pc.bold('.ctxo/index/')}  ${pc.dim('index directory')}`);
-    }
-
-    if (configResult.action !== 'skipped') {
-      results.push(`${pc.green('\u2713')} ${pc.bold(configResult.file)}  ${pc.dim(configResult.action)}`);
-    }
-
-    if (gitignoreResult.action !== 'skipped') {
-      results.push(`${pc.green('\u2713')} ${pc.bold(gitignoreResult.file)}  ${pc.dim(gitignoreResult.action)}`);
-    }
-
-    for (const toolId of (selectedTools as string[])) {
-      const result = installRules(this.projectRoot, toolId);
-      results.push(`${pc.green('\u2713')} ${pc.bold(result.file)}  ${pc.dim(result.action)}`);
-      for (const sk of installSkills(this.projectRoot, toolId)) {
-        results.push(`${pc.green('\u2713')} ${pc.bold(sk.file)}  ${pc.dim(sk.action + ' \u2014 skill')}`);
-      }
-    }
-
-    // MCP server registration (automatic based on selected tools)
-    const mcpTargets = getMcpConfigTargets(selectedTools as string[]);
-    for (const target of mcpTargets) {
-      const result = ensureMcpConfig(this.projectRoot, target);
-      if (result.action !== 'skipped') {
-        results.push(`${pc.green('\u2713')} ${pc.bold(result.file)}  ${pc.dim(result.action + ' \u2014 MCP server registered')}`);
-      }
-    }
-
-    if (installGitHooks) {
-      const hooks = this.installHooks();
-      results.push(
-        hooks.installed
-          ? `${pc.green('\u2713')} ${pc.bold('post-commit, post-merge')}  ${pc.dim('hooks installed')}`
-          : `${pc.yellow('!')} ${pc.bold('post-commit, post-merge')}  ${pc.dim('skipped - shared hooks directory (see warning above)')}`,
-      );
-    }
-
-    if (installGuard) {
-      const r = ensureClaudeHook(this.projectRoot);
-      if (r.action !== 'skipped') results.push(`${pc.green('\u2713')} ${pc.bold(r.file)}  ${pc.dim(r.action + ' \u2014 safe-edit guard')}`);
-    }
+    const rows = this.applyParts(parts, toolIds).map((result) => summaryRow(result, pc));
 
     if (pluginsToInstall.length > 0) {
       s.stop(pc.dim('Installing language plugins...'));
       const installer = new InstallCommand(this.projectRoot);
       await installer.run({ languages: pluginsToInstall, yes: true });
-      results.push(`${pc.green('\u2713')} ${pc.bold([...new Set(pluginsToInstall.map(officialPluginFor))].join(', '))}  ${pc.dim('language plugins installed')}`);
+      rows.push(`${pc.green('\u2713')} ${pc.bold([...new Set(pluginsToInstall.map(officialPluginFor))].join(', '))}  ${pc.dim('language plugins installed')}`);
       s.start(pc.dim('Finalizing...'));
     }
 
     s.stop(pc.green('Done!'));
 
     // ── Summary box ──
-    if (results.length > 0) {
+    if (rows.length > 0) {
       console.error('');
-      console.error(box(results, { title: pc.green('\u2713 Created'), border: pc.green }, pc));
+      console.error(box(rows, { title: pc.green('\u2713 Summary'), border: pc.green }, pc));
     }
 
     // ── Next steps box ──
-    const hasWork = (selectedTools as string[]).length > 0 || installGitHooks;
+    const hasWork = toolIds.length > 0 || parts.has('git-hooks');
     if (hasWork) {
       const steps = [
         `${pc.cyan('\u25b6')} ctxo index     ${pc.dim('\u2500 build codebase index')}`,
@@ -412,7 +500,7 @@ export class InitCommand {
   /*  Non-interactive flow                                             */
   /* ---------------------------------------------------------------- */
 
-  private async runNonInteractive(options: InitOptions): Promise<void> {
+  private async runNonInteractive(options: InitOptions, parts: ReadonlySet<InitPart>): Promise<void> {
     const toolIds = options.tools ?? [];
 
     for (const id of toolIds) {
@@ -422,54 +510,11 @@ export class InitCommand {
       }
     }
 
-    // Automatic scaffolding
-    const gitignoreResult = ensureGitignore(this.projectRoot);
-    const configResult = ensureConfig(this.projectRoot);
+    for (const result of this.applyParts(parts, toolIds)) console.error(formatResultLine(result));
 
-    if (!options.rulesOnly) {
-      const indexDir = join(this.projectRoot, '.ctxo', 'index');
-      if (!existsSync(indexDir)) mkdirSync(indexDir, { recursive: true });
-      console.error('[ctxo] \u2713 .ctxo/index/ ready');
-    }
-
-    if (configResult.action !== 'skipped') {
-      console.error(`[ctxo] \u2713 ${configResult.file} \u2014 ${configResult.action}`);
-    }
-    if (gitignoreResult.action !== 'skipped') {
-      console.error(`[ctxo] \u2713 ${gitignoreResult.file} \u2014 ${gitignoreResult.action}`);
-    }
-
-    for (const toolId of toolIds) {
-      const result = installRules(this.projectRoot, toolId);
-      console.error(`[ctxo] \u2713 ${result.file} \u2014 ${result.action}`);
-      for (const sk of installSkills(this.projectRoot, toolId)) {
-        console.error(`[ctxo] \u2713 ${sk.file} \u2014 ${sk.action} (skill)`);
-      }
-    }
-
-    // MCP server registration
-    const mcpTargets = getMcpConfigTargets(toolIds);
-    for (const target of mcpTargets) {
-      const result = ensureMcpConfig(this.projectRoot, target);
-      if (result.action !== 'skipped') {
-        console.error(`[ctxo] \u2713 ${result.file} \u2014 ${result.action} (MCP server registered)`);
-      }
-    }
-
-    if (!options.rulesOnly) {
-      if (this.installHooks().installed) console.error('[ctxo] \u2713 Git hooks installed');
-    }
-
-    if (!options.rulesOnly && toolIds.includes('claude-code')) {
-      const r = ensureClaudeHook(this.projectRoot);
-      if (r.action !== 'skipped') console.error(`[ctxo] \u2713 ${r.file} \u2014 ${r.action} (safe-edit guard)`);
-    }
-
-    // Language detection + plugin install (skipped under --no-install or --rules)
-    if (!options.rulesOnly && !options.noInstall) {
-      const detection = detectLanguages(this.projectRoot);
-      const needed = decideNeededLanguages(detection);
-      const { missing } = resolveInstalledPlugins(needed);
+    // Language detection + plugin install (not a part: skipped by --only, --rules and --no-install)
+    if (pluginStepEnabled(options)) {
+      const missing = this.missingPlugins();
       if (missing.length > 0) {
         if (options.yes) {
           console.error(`[ctxo] Installing missing plugins: ${missing.join(', ')}`);
@@ -490,7 +535,7 @@ export class InitCommand {
   private dryRun(options: InitOptions): void {
     const toolIds = options.tools ?? PLATFORMS.map(p => p.id);
 
-    console.error('[ctxo] Dry run \u2014 the following files would be created/updated:\n');
+    console.error('[ctxo] Dry run: the following files would be created/updated:\n');
 
     if (!options.rulesOnly) {
       console.error('  .ctxo/index/              (index directory)');
@@ -538,13 +583,16 @@ export class InitCommand {
 
   /** The hooks directory for human output: project-relative when it sits inside the project, absolute otherwise. */
   private displayHooksDir(): string {
-    const hooksDir = resolveHooksDir(this.projectRoot);
-    const rel = forwardSlashes(relative(this.projectRoot, hooksDir));
-    return rel === '' || rel.startsWith('..') || isAbsolute(rel) ? forwardSlashes(hooksDir) : rel;
+    return displayPath(this.projectRoot, resolveHooksDir(this.projectRoot));
   }
 
-  private installHook(hooksDir: string, hookName: string, hookContent: string): void {
+  /**
+   * Upserts one hook's ctxo block. The action compares the old and the new text: a missing file is
+   * `created`, a changed one `updated`, an equal one `skipped` and not rewritten.
+   */
+  private installHook(hooksDir: string, hookName: string, hookContent: string): InstallResult {
     const hookPath = join(hooksDir, hookName);
+    const file = displayPath(this.projectRoot, hookPath);
 
     const hookExists = existsSync(hookPath);
     const existing = hookExists ? readFileSync(hookPath, 'utf-8') : '#!/bin/sh\n';
@@ -553,7 +601,7 @@ export class InitCommand {
     if (!hookExists || updated !== existing) {
       writeFileSync(hookPath, updated, 'utf-8');
       chmodSync(hookPath, 0o755);
-      return;
+      return { file, action: hookExists ? 'updated' : 'created' };
     }
 
     // Content is already current. A hook that lost its exec bit (copied, restored from a backup)
@@ -563,5 +611,6 @@ export class InitCommand {
     } catch {
       // best effort
     }
+    return { file, action: 'skipped' };
   }
 }
