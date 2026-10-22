@@ -33,7 +33,7 @@ import { loadConfig } from '../core/config/load-config.js';
 const CTXO_HOOK_COMMAND = 'ctxo gate-hook';
 const CLAUDE_SETTINGS_FILE = '.claude/settings.json';
 const UNREADABLE_SETTINGS_WARNING =
-  `${CLAUDE_SETTINGS_FILE} is not valid JSON or not a settings object; left unchanged. Fix it, then run "ctxo init --only guard".`;
+  `${CLAUDE_SETTINGS_FILE} is not valid JSON or not a settings object; left unchanged. Fix it, then run "ctxo init --only rules,skills,guard".`;
 
 /** Whether the safe-edit guard is registered: `unreadable` means `.claude/settings.json` cannot be read safely. */
 export type ClaudeGuardState = 'present' | 'absent' | 'unreadable';
@@ -265,6 +265,25 @@ export function rulesHold(projectRoot: string, platformId: string, options: Rule
 }
 
 /**
+ * `rulesHoldReasons` for a rules file that may be several platforms' file (`linkedRulesPlatforms`):
+ * the platform's own reasons, else those of the first platform linked to it that is held. A write
+ * under any name of the file reaches the held block (an AGENTS.md linked to a held CLAUDE.md would
+ * record the opt-out through the link), so every name waits. `optionsFor` gives each platform's
+ * options, because a dry run plans the skills per platform. Init, the dry run and `doctor --fix` use it.
+ */
+export function rulesFileHoldReasons(
+  projectRoot: string,
+  platformId: string,
+  optionsFor: (platformId: string) => RulesHoldOptions = () => ({}),
+): RulesHoldReasons | undefined {
+  for (const id of [platformId, ...linkedRulesPlatforms(projectRoot, platformId)]) {
+    const reasons = rulesHoldReasons(projectRoot, id, optionsFor(id));
+    if (reasons) return reasons;
+  }
+  return undefined;
+}
+
+/**
  * Registers the safe-edit guard under `hooks.PreToolUse` in `.claude/settings.json`. A guard already
  * registered there or in `.claude/settings.local.json` is `skipped`. An unreadable settings file is
  * never overwritten: `skipped` with a warning. Every other setting and hook is kept, the entry goes
@@ -393,7 +412,10 @@ function replaceLegacyCursorFrontmatter(content: string): string {
 /* ------------------------------------------------------------------ */
 
 export interface InstallResult {
-  /** Project-relative, forward slashes */
+  /**
+   * Project-relative, forward slashes. A git hook row from init is absolute when the hooks directory
+   * is outside the project (a `core.hooksPath` elsewhere, a worktree's common git dir).
+   */
   file: string;
   action: 'created' | 'updated' | 'skipped';
   /** Why a file was left unchanged although it needs attention */
@@ -479,7 +501,7 @@ export function installRules(
   return { file: platform.file, action: 'updated' };
 }
 
-/** The warning for a rules or skill file ctxo could not read (a directory in its place, no permission). */
+/** The warning for a rules, skill or MCP config file ctxo could not read (a directory in its place, no permission). */
 function unreadableWarning(file: string, err: unknown): string {
   const code = (err as NodeJS.ErrnoException | undefined)?.code;
   const reason = code ?? (err instanceof Error ? err.message : String(err));
@@ -748,8 +770,12 @@ export function getMcpConfigTargets(selectedPlatformIds: string[]): McpConfigTar
 
 /**
  * Registers the ctxo server in one MCP config file: a missing file is `created`, an existing one gets
- * the entry merged in (`updated`, or `skipped` when ctxo is already there), and corrupt JSON is
- * overwritten (`updated`, D12). `dryRun` computes the same action and writes nothing, not even a directory.
+ * the entry merged in (`updated`, or `skipped` when ctxo is already there), and corrupt MCP JSON is
+ * overwritten (`updated`, D12). Corrupt covers text that fails `JSON.parse`, a root that is not a plain
+ * object (an array, a string, a number, `null`), and a server map that is neither absent, `null` nor a
+ * plain object (such as a string `mcpServers`), so the call never throws on a file's content. A path
+ * that cannot be read (a directory, no permission) is `skipped` with a warning and left alone. `dryRun`
+ * computes the same action and writes nothing, not even a directory.
  */
 export function ensureMcpConfig(
   projectRoot: string,
@@ -766,32 +792,36 @@ export function ensureMcpConfig(
   const entry = target.extraFields
     ? { ...target.extraFields, ...CTXO_MCP_ENTRY }
     : { ...CTXO_MCP_ENTRY };
+  const fresh = (): Record<string, unknown> => ({ [target.serverKey]: { ctxo: entry } });
 
   if (!existsSync(filePath)) {
-    write({ [target.serverKey]: { ctxo: entry } });
+    write(fresh());
     return { file: target.file, action: 'created' };
   }
 
-  // Merge into existing config
-  let existing: Record<string, unknown>;
+  let text: string;
   try {
-    existing = JSON.parse(readFileSync(filePath, 'utf-8'));
+    text = readFileSync(filePath, 'utf-8');
+  } catch (err) {
+    return { file: target.file, action: 'skipped', warning: unreadableWarning(target.file, err) };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
   } catch {
-    // Corrupt JSON: overwrite
-    write({ [target.serverKey]: { ctxo: entry } });
+    parsed = undefined;
+  }
+  const servers = isPlainObject(parsed) ? (parsed[target.serverKey] ?? {}) : undefined;
+  if (!isPlainObject(parsed) || !isPlainObject(servers)) {
+    // Corrupt MCP JSON: overwrite (D12).
+    write(fresh());
     return { file: target.file, action: 'updated' };
   }
 
-  const servers = (existing[target.serverKey] ?? {}) as Record<string, unknown>;
   if (servers['ctxo']) {
     return { file: target.file, action: 'skipped' };
   }
 
-  // The merge as it shipped before the dry run (D12), applied to the parsed copy, so a dry run and a
-  // real run agree: an array root takes no key and is written back as it was, and a string server
-  // entry cannot take one, so the assignment throws and the file is left alone.
-  servers['ctxo'] = entry;
-  existing[target.serverKey] = servers;
-  write(existing);
+  write({ ...parsed, [target.serverKey]: { ...servers, ctxo: entry } });
   return { file: target.file, action: 'updated' };
 }

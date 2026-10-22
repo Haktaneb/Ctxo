@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PLATFORMS, generateRules, installRules, detectPlatforms, ensureGitignore, ensureConfig, ensureIndexDir, getMcpConfigTargets, ensureMcpConfig, installSkills, skillStates, SKILLS, SKILL_PLATFORMS, ensureClaudeHook, readClaudeGuardState, resolveRulesTier, gateEnabled, linkedRulesPlatforms, readRulesStates } from '../ai-rules.js';
 import { InitCommand } from '../init-command.js';
+import { applyFixes } from '../doctor-fix.js';
 import { AiRulesCheck, SkillsCheck } from '../../adapters/diagnostics/checks/agent-setup-check.js';
 import { isolateGitEnv, type IsolatedGitEnv } from './git-test-env.js';
 import {
@@ -48,7 +49,7 @@ function bundledSkill(skill: string): string {
 const CTXO_GUARD_ENTRY = { matcher: 'Edit', hooks: [{ type: 'command', command: 'ctxo gate-hook' }] };
 
 const UNREADABLE_SETTINGS_WARNING =
-  '.claude/settings.json is not valid JSON or not a settings object; left unchanged. Fix it, then run "ctxo init --only guard".';
+  '.claude/settings.json is not valid JSON or not a settings object; left unchanged. Fix it, then run "ctxo init --only rules,skills,guard".';
 
 /** Writes `.claude/<name>` under root and returns its absolute path. */
 function writeClaudeSettings(root: string, name: string, text: string): string {
@@ -727,25 +728,50 @@ describe('ensureMcpConfig', () => {
     expect(config.mcpServers.ctxo).toBeDefined();
   });
 
-  // D12 keeps ensureMcpConfig's merge as it shipped before the tiers: the entry is set on whatever
-  // the server key holds. An array root takes no key, so it is written back as it was; a string
-  // cannot take one, so the call throws and the file is left alone. A real run and a dry run agree.
-  it('ensureMcpConfig keeps the shipped merge for an array root and a string mcpServers (D12)', () => {
+  // D12: corrupt MCP JSON is overwritten. JSON that parses but has no usable server map counts as
+  // corrupt, so ensureMcpConfig never throws on a file's content. A real run and a dry run agree.
+  it.each([
+    ['an array root', '[ ]'],
+    ['a string root', '"servers"'],
+    ['a number root', '42'],
+    ['a null root', 'null'],
+    ['a string mcpServers', '{ "mcpServers": "elsewhere" }'],
+    ['an array mcpServers', '{ "mcpServers": [] }'],
+    ['a number mcpServers', '{ "mcpServers": 1 }'],
+  ])('ensureMcpConfig overwrites %s like corrupt MCP JSON (D12)', (_shape, original) => {
     const target = getMcpConfigTargets(['claude-code'])[0]!;
+    const dir = makeTempDir();
+    const file = join(dir, '.mcp.json');
+    writeFileSync(file, original, 'utf-8');
 
-    const arrayRoot = makeTempDir();
-    writeFileSync(join(arrayRoot, '.mcp.json'), '[ ]', 'utf-8');
-    expect(ensureMcpConfig(arrayRoot, target, { dryRun: true })).toEqual({ file: '.mcp.json', action: 'updated' });
-    expect(readFileSync(join(arrayRoot, '.mcp.json'), 'utf-8')).toBe('[ ]');
-    expect(ensureMcpConfig(arrayRoot, target)).toEqual({ file: '.mcp.json', action: 'updated' });
-    expect(readFileSync(join(arrayRoot, '.mcp.json'), 'utf-8')).toBe('[]\n');
+    expect(ensureMcpConfig(dir, target, { dryRun: true })).toEqual({ file: '.mcp.json', action: 'updated' });
+    expect(readFileSync(file, 'utf-8')).toBe(original);
+    expect(ensureMcpConfig(dir, target)).toEqual({ file: '.mcp.json', action: 'updated' });
+    expect(readFileSync(file, 'utf-8')).toBe(
+      JSON.stringify({ mcpServers: { ctxo: { command: 'npx', args: ['-y', '@ctxo/cli'] } } }, null, 2) + '\n',
+    );
+  });
 
-    const stringServers = makeTempDir();
-    const original = '{ "mcpServers": "elsewhere" }';
-    writeFileSync(join(stringServers, '.mcp.json'), original, 'utf-8');
-    expect(() => ensureMcpConfig(stringServers, target, { dryRun: true })).toThrow(TypeError);
-    expect(() => ensureMcpConfig(stringServers, target)).toThrow(TypeError);
-    expect(readFileSync(join(stringServers, '.mcp.json'), 'utf-8')).toBe(original);
+  it('ensureMcpConfig merges into a null mcpServers and keeps the other keys in order', () => {
+    const target = getMcpConfigTargets(['claude-code'])[0]!;
+    const dir = makeTempDir();
+    writeFileSync(join(dir, '.mcp.json'), '{ "a": 1, "mcpServers": null, "z": 2 }', 'utf-8');
+
+    expect(ensureMcpConfig(dir, target)).toEqual({ file: '.mcp.json', action: 'updated' });
+    expect(Object.keys(JSON.parse(readFileSync(join(dir, '.mcp.json'), 'utf-8')))).toEqual(['a', 'mcpServers', 'z']);
+    expect(JSON.parse(readFileSync(join(dir, '.mcp.json'), 'utf-8')).mcpServers.ctxo.command).toBe('npx');
+  });
+
+  it('ensureMcpConfig warns instead of throwing when the config path is a directory', () => {
+    const target = getMcpConfigTargets(['claude-code'])[0]!;
+    const dir = makeTempDir();
+    mkdirSync(join(dir, '.mcp.json'));
+
+    for (const dryRun of [true, false]) {
+      const result = ensureMcpConfig(dir, target, { dryRun });
+      expect(result).toMatchObject({ file: '.mcp.json', action: 'skipped' });
+      expect(result.warning).toMatch(/^\.mcp\.json: could not be read \(\w+\); left unchanged$/);
+    }
   });
 
   it('creates .gemini/settings.json with mcpServers.ctxo', () => {
@@ -1446,6 +1472,50 @@ describe('linked rules files', () => {
 
   it.skipIf(!canSymlink)('a symlinked AGENTS.md and CLAUDE.md converge on the full tier in one run', async () => {
     await expectConvergence(linkedProject((existing, newPath) => symlinkSync(existing, newPath, 'file')));
+  });
+
+  it('a hard-linked AGENTS.md is not written while CLAUDE.md is held', async () => {
+    const dir = linkedProject((existing, newPath) => linkSync(existing, newPath));
+    const preTier = '# Project\n\n<!-- ctxo-rules-start -->\n' + LEGACY_RULE_BODY + '\n<!-- ctxo-rules-end -->\n';
+    writeFileSync(join(dir, 'CLAUDE.md'), preTier, 'utf-8');
+    expect(readFileSync(join(dir, 'AGENTS.md'), 'utf-8')).toBe(preTier);
+    const held = (file: string): string =>
+      `${file}: left unchanged until the guard and skills are installed; run "ctxo init --only rules,skills,guard" or "ctxo doctor --fix"`;
+
+    // --only rules installs neither the guard nor the skills; a full block through AGENTS.md would
+    // record an opt-out in CLAUDE.md. Whatever the tool order, and with AGENTS.md alone, nothing is written.
+    for (const tools of [['claude-code', 'antigravity'], ['antigravity', 'claude-code'], ['antigravity']]) {
+      const lines: string[] = [];
+      const spy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+        lines.push(args.map(String).join(' '));
+      });
+      try {
+        await new InitCommand(dir).run({ tools, yes: true, only: ['rules'] });
+      } finally {
+        spy.mockRestore();
+      }
+      expect(lines, tools.join(',')).toContain(`[ctxo] \u26a0 ${held('AGENTS.md')}`);
+      expect(lines.join('\n')).not.toMatch(/(CLAUDE|AGENTS)\.md \((updated|created)\)/);
+      expect(readFileSync(join(dir, 'CLAUDE.md'), 'utf-8')).toBe(preTier);
+    }
+
+    // The dry run holds both names.
+    const plan = new InitCommand(dir).plan({ tools: ['claude-code', 'antigravity'], only: ['rules'] });
+    expect(plan.filter((row) => row.held === true).map((row) => row.file)).toEqual(['CLAUDE.md', 'AGENTS.md']);
+
+    // Doctor agrees: it reads the file once, under CLAUDE.md, and --fix without the guard and skills holds it.
+    expect(readRulesStates(dir).map((s) => s.file)).toEqual(['CLAUDE.md']);
+    const fix = await applyFixes(
+      { checks: [{ id: 'ai_rules', title: 'AI rules', status: 'warn', message: '' }], summary: { pass: 0, warn: 1, fail: 0 }, exitCode: 1 },
+      { projectRoot: dir, ctxoRoot: join(dir, '.ctxo'), yes: true },
+    );
+    expect(fix.attempts.find((a) => a.name === 'AI rules')).toMatchObject({ status: 'skipped' });
+    expect(readFileSync(join(dir, 'CLAUDE.md'), 'utf-8')).toBe(preTier);
+
+    // Once the guard and skills are in, the shared file gets the full tier under both names in one run.
+    await initRules(dir);
+    expect(readFileSync(join(dir, 'CLAUDE.md'), 'utf-8')).toBe('# Project\n\n' + renderRulesBlock('full') + '\n');
+    expect(readFileSync(join(dir, 'AGENTS.md'), 'utf-8')).toBe('# Project\n\n' + renderRulesBlock('full') + '\n');
   });
 
   it('a linked CLAUDE.md resolves and is written in the full tier even when the guard and skills are installed', () => {

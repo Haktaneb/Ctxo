@@ -35,6 +35,8 @@ const SKILLS_FIX = 'Run "ctxo doctor --fix" or "ctxo init --only rules,skills,gu
 const GUARD_FIX = 'Run "ctxo doctor --fix" or "ctxo init --only rules,skills,guard"';
 const UNTERMINATED_FIX =
   'Fix the file by hand (add the missing "<!-- ctxo-rules-end -->" line, or delete the start marker without one), then run "ctxo doctor"';
+const ORPHAN_END_FIX =
+  'Fix the file by hand (delete the "<!-- ctxo-rules-end -->" line that has no start marker, with the old ctxo rules text above it, or add the missing start marker), then run "ctxo doctor"';
 const NEWER_BLOCKS_FIX = 'Delete the older ctxo rules block by hand, or run "ctxo doctor --fix" with the newer ctxo';
 const CHECK_ERROR_FIX =
   'Fix the cause named in the message (a file ctxo cannot read, or a ctxo install without its bundled skills: reinstall @ctxo/cli), then run "ctxo doctor"';
@@ -210,6 +212,25 @@ describe('AiRulesCheck', () => {
     expect(result.message).toBe('CLAUDE.md: 2 ctxo rules blocks; AGENTS.md: start marker without end marker');
     // --fix and init leave an unterminated block alone, so the first step is by hand.
     expect(result.fix).toBe(UNTERMINATED_FIX);
+  });
+
+  it('ai_rules reports an end marker without a start marker with a fix by hand', async () => {
+    const { root, ctx } = makeProject();
+    // The start marker line was deleted: the old body and its end marker stay, and no block is found.
+    const startLine = `<!-- ctxo-rules-start v${RULES_TEMPLATE_VERSION} -->\n`;
+    const block = renderRulesBlock('full');
+    expect(block.startsWith(startLine)).toBe(true);
+    write(root, 'AGENTS.md', '# Agents\n\n' + block.slice(startLine.length) + '\n');
+    write(root, 'CLAUDE.md', `${block}\n\nkept text\n\n${block}\n<!-- ctxo-rules-end -->\n`);
+
+    const result = await check.run(ctx);
+
+    expect(result.status).toBe('warn');
+    expect(result.message).toBe(
+      'CLAUDE.md: 2 ctxo rules blocks; CLAUDE.md: end marker without start marker; AGENTS.md: end marker without start marker',
+    );
+    // init and --fix leave such a file unchanged, so the first step is by hand.
+    expect(result.fix).toBe(ORPHAN_END_FIX);
   });
 
   it('ai_rules gives a duplicate block a fix that ctxo doctor --fix can carry out', async () => {

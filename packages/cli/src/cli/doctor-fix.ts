@@ -21,7 +21,8 @@ import {
   readClaudeGuardState,
   readRulesStates,
   resolveRulesTier,
-  rulesHoldReasons,
+  rulesFileHoldReasons,
+  skillStates,
   skillsExpected,
   type RulesHoldReasons,
 } from './ai-rules.js';
@@ -285,20 +286,32 @@ async function fixHooks(projectRoot: string): Promise<void | FixSkipped> {
 /**
  * Installs the bundled skills on every skill platform that expects them: one ctxo skill is already
  * there, or the platform's rules block is pre-tier or compact. A deliberate opt-out expects none. A
- * platform that fails does not stop the next one; the attempt then fails with each `<platform>: <error>`.
+ * platform that fails does not stop the next one.
+ *
+ * The `installSkills` warnings are reported, not dropped. A skill left in place because a newer ctxo
+ * wrote it is fine, so its warning is a warning line under the success line. Any other warning (a skill
+ * path that cannot be read, such as a directory) leaves the skill missing, so it fails the attempt, as
+ * does an error, `<platform>: <error>`; the failure lists the warning lines too.
  */
-async function fixSkills(projectRoot: string): Promise<void | FixSkipped> {
+async function fixSkills(projectRoot: string): Promise<void | FixSkipped | FixWarned> {
   const platforms = SKILL_PLATFORMS.filter((id) => skillsExpected(projectRoot, id));
   if (platforms.length === 0) return { skipped: 'no platform expects the ctxo skills' };
   const errors: string[] = [];
+  const warnings: string[] = [];
   for (const id of platforms) {
     try {
-      installSkills(projectRoot, id);
+      const results = installSkills(projectRoot, id);
+      const newer = new Set(skillStates(projectRoot, id).filter((s) => s.state === 'newer').map((s) => s.file));
+      for (const result of results) {
+        if (result.warning === undefined) continue;
+        (newer.has(result.file) ? warnings : errors).push(result.warning);
+      }
     } catch (err) {
       errors.push(`${id}: ${(err as Error).message}`);
     }
   }
-  if (errors.length > 0) throw new Error(errors.join('; '));
+  if (errors.length > 0) throw new Error([...errors, ...warnings].join('; '));
+  if (warnings.length > 0) return { warnings };
 }
 
 /**
@@ -326,12 +339,14 @@ async function fixClaudeGuardHook(projectRoot: string): Promise<void | FixSkippe
 
 /**
  * Re-renders each rules file's ctxo block in the tier the disk supports now, so it follows the skills
- * and guard installed earlier in the run. A block from a newer ctxo is left alone (D2). A file with an
- * unterminated start marker is passed on too, so its warning fails the attempt instead of being lost.
+ * and guard installed earlier in the run. A block from a newer ctxo is left alone (D2). A damaged file
+ * (a start marker without an end marker, or an end marker without a start marker) is passed on too,
+ * so the writer's warning fails the attempt instead of being lost; the writer leaves it unchanged (D8).
  *
- * A file is held while `rulesHoldReasons` (the rule `ctxo init` uses too) finds a reason, and the hold
- * is reported: as the skip reason when nothing else rendered, otherwise as a warning line under the
- * success line. A held file still reports a damaged block (from a dry run, which writes nothing).
+ * A file is held while `rulesFileHoldReasons` (the rule `ctxo init` uses too, under every linked name
+ * of the file) finds a reason, and the hold is reported: as the skip reason when nothing else
+ * rendered, otherwise as a warning line under the success line. A held file still reports a damaged
+ * block (from a dry run, which writes nothing).
  */
 async function fixAiRules(projectRoot: string): Promise<void | FixSkipped | FixWarned> {
   const warnings: string[] = [];
@@ -339,9 +354,10 @@ async function fixAiRules(projectRoot: string): Promise<void | FixSkipped | FixW
   let rendered = 0;
   for (const state of readRulesStates(projectRoot)) {
     const first = state.scan.blocks[0];
-    const renderable = first ? classifyRulesBlock(first).state !== 'newer' : state.scan.unterminated;
+    const damaged = state.scan.unterminated || state.scan.orphanEnd;
+    const renderable = first ? classifyRulesBlock(first).state !== 'newer' : damaged;
     if (!renderable) continue;
-    const reasons = rulesHoldReasons(projectRoot, state.platformId);
+    const reasons = rulesFileHoldReasons(projectRoot, state.platformId);
     if (reasons) {
       holds.push(holdMessage(state.file, reasons));
       const probe = installRules(projectRoot, state.platformId, { dryRun: true });

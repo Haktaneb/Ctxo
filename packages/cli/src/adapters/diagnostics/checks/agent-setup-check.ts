@@ -27,13 +27,16 @@ const UNREADABLE_SETTINGS_FIX = 'Repair .claude/settings.json by hand; ctxo neve
 /** Init and --fix leave a file with an unterminated block unchanged (D8), so the first step is by hand. */
 const UNTERMINATED_FIX =
   'Fix the file by hand (add the missing "<!-- ctxo-rules-end -->" line, or delete the start marker without one), then run "ctxo doctor"';
+/** The same for an end marker that closes no block (its start line was deleted): init and --fix leave it unchanged. */
+const ORPHAN_END_FIX =
+  'Fix the file by hand (delete the "<!-- ctxo-rules-end -->" line that has no start marker, with the old ctxo rules text above it, or add the missing start marker), then run "ctxo doctor"';
 /** This ctxo leaves a file with a block from a newer ctxo unchanged (D2), so it cannot collapse the blocks. */
 const NEWER_BLOCKS_FIX = 'Delete the older ctxo rules block by hand, or run "ctxo doctor --fix" with the newer ctxo';
 const CHECK_ERROR_FIX =
   'Fix the cause named in the message (a file ctxo cannot read, or a ctxo install without its bundled skills: reinstall @ctxo/cli), then run "ctxo doctor"';
 
 /** The ai_rules fixes, first step first: when several apply, the check names the one to take first. */
-const RULES_FIX_ORDER = [CHECK_ERROR_FIX, UNTERMINATED_FIX, NEWER_BLOCKS_FIX, RULES_FIX] as const;
+const RULES_FIX_ORDER = [CHECK_ERROR_FIX, UNTERMINATED_FIX, ORPHAN_END_FIX, NEWER_BLOCKS_FIX, RULES_FIX] as const;
 
 type RulesFix = (typeof RULES_FIX_ORDER)[number];
 
@@ -58,8 +61,9 @@ function platformName(platformId: string): string {
 /**
  * Reports, per rules file, a block whose template is outdated (D2: a newer one is fine), a Claude
  * Code block that expects the guard while it is missing, a current block in the wrong tier, several
- * blocks in one file, and a start marker without an end marker. The fix names the first step to
- * take: by hand for an unterminated block or for blocks next to a newer one, which ctxo leaves alone.
+ * blocks in one file, a start marker without an end marker, and an end marker without a start
+ * marker. The fix names the first step to take: by hand for a damaged block or for blocks next to a
+ * newer one, which ctxo leaves alone.
  */
 export class AiRulesCheck implements IHealthCheck {
   readonly id = 'ai_rules';
@@ -136,6 +140,7 @@ function fileProblems(projectRoot: string, state: PlatformRulesState, status: Bl
 
   if (blocks.length > 1 && !newer) problems.push({ text: `${blocks.length} ctxo rules blocks`, fix: RULES_FIX });
   if (state.scan.unterminated) problems.push({ text: 'start marker without end marker', fix: UNTERMINATED_FIX });
+  if (state.scan.orphanEnd) problems.push({ text: 'end marker without start marker', fix: ORPHAN_END_FIX });
   return problems;
 }
 

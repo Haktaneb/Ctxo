@@ -13,7 +13,7 @@ import {
   installSkills,
   ensureClaudeHook,
   resolveRulesTier,
-  rulesHold,
+  rulesFileHoldReasons,
   type InstallResult,
   type RulesHoldOptions,
 } from './ai-rules.js';
@@ -333,7 +333,8 @@ export class InitCommand {
   /**
    * Installs the selected parts in one fixed order: config, skills, guard, rules, MCP, git hooks.
    * Skills and the guard go first so each platform's rules tier is resolved from what is on disk after
-   * them, and so `rulesHold` can see whether a block that expects them must wait. A part not in the
+   * them, and so `rulesHold` can see whether a block that expects them must wait (for a file under
+   * any of its linked names, `rulesFileHoldReasons`). A part not in the
    * set adds no row. Bundled skills that cannot be read become a warning row, and the other parts
    * still run. `dryRun` gives the same rows and writes nothing; the rules tier and the hold then count
    * the skills and guard it would install as present. `declined` is what the user declined in this run.
@@ -375,11 +376,13 @@ export class InitCommand {
 
     if (parts.has('rules')) {
       const planned = { guard, skills: skillsDone.has('claude-code') };
+      const holdOptions = (platformId: string): RulesHoldOptions => ({
+        ...declined,
+        ...(dryRun ? { planned: { guard, skills: skillsDone.has(platformId) } } : {}),
+      });
       for (const id of toolIds) {
-        const hold = rulesHold(root, id, {
-          ...declined,
-          ...(dryRun ? { planned: { guard, skills: skillsDone.has(id) } } : {}),
-        });
+        // A file linked to a held one (an AGENTS.md that is CLAUDE.md) is held too: a write would go through the link.
+        const hold = rulesFileHoldReasons(root, id, holdOptions) !== undefined;
         results.push(...(hold ? this.heldRows(id) : [installRules(root, id, { tier: this.rulesTier(id, planned), dryRun })]));
       }
     }

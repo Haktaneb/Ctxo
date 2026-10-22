@@ -8,6 +8,7 @@ import {
   LEGACY_CURSOR_FRONTMATTER,
   LEGACY_RULE_BODY,
   RULES_TEMPLATE_VERSION,
+  SKILLS_TEMPLATE_VERSION,
   renderRulesBlock,
 } from '../../core/agent-rules/rules-block.js';
 import { HealthChecker } from '../../adapters/diagnostics/health-checker.js';
@@ -18,7 +19,7 @@ import {
 } from '../../adapters/diagnostics/checks/agent-setup-check.js';
 import { JsonIndexWriter } from '../../adapters/storage/json-index-writer.js';
 import { buildFileIndex } from '../../adapters/storage/__tests__/test-fixtures.js';
-import { ensureClaudeHook } from '../ai-rules.js';
+import { ensureClaudeHook, installSkills } from '../ai-rules.js';
 import { applyFixes, formatFixReport, type FixAttempt, type FixReport } from '../doctor-fix.js';
 import { InitCommand, type InitOptions } from '../init-command.js';
 import { isolateGitEnv, type IsolatedGitEnv } from './git-test-env.js';
@@ -706,6 +707,56 @@ describe('applyFixes', () => {
       expect(rules?.status).toBe('failed');
       expect(rules?.error).toContain('AGENTS.md: ctxo rules start marker has no end marker; left unchanged');
       expect(bytes('AGENTS.md')).toEqual(before);
+    });
+
+    it('--fix reports an end marker without a start marker as failed and leaves the file unchanged', async () => {
+      // The start marker line was deleted: no block is found, but the file is still passed to the writer (D8).
+      const startLine = `<!-- ctxo-rules-start v${RULES_TEMPLATE_VERSION} -->\n`;
+      write('AGENTS.md', '# Agents\n\n' + renderRulesBlock('full').slice(startLine.length) + '\n');
+      const before = bytes('AGENTS.md');
+      const doctor = await runAgentChecks();
+      expect(doctor.checks.find((c) => c.id === 'ai_rules')?.message).toBe('AGENTS.md: end marker without start marker');
+
+      const r = await fix(doctor);
+
+      const rules = attempt(r, 'AI rules');
+      expect(rules?.status).toBe('failed');
+      expect(rules?.error).toBe('AGENTS.md: ctxo rules end marker has no start marker; left unchanged');
+      expect(bytes('AGENTS.md')).toEqual(before);
+    });
+
+    it('--fix reports the installSkills warning for a skill path that is a directory', async () => {
+      write('CLAUDE.md', PRE_TIER_CLAUDE_MD);
+      mkdirSync(join(tmp, '.claude', 'skills', 'ctxo-safe-edit', 'SKILL.md'), { recursive: true });
+      const claudeMd = bytes('CLAUDE.md');
+
+      const r = await fix(report([{ id: 'skills' }]));
+
+      // The skill stays missing, so the step fails with the warning instead of reporting success.
+      const skills = attempt(r, 'Skills');
+      expect(skills?.status).toBe('failed');
+      expect(skills?.error).toMatch(/^\.claude\/skills\/ctxo-safe-edit\/SKILL\.md: could not be read \(E\w+\); left unchanged$/);
+      expect(existsSync(join(tmp, '.claude', 'skills', 'ctxo-understand', 'SKILL.md'))).toBe(true);
+      expect(attempt(r, 'AI rules')?.error).toBe('CLAUDE.md left unchanged while the safe-edit guard is not registered and ctxo skills are missing (ctxo-safe-edit)');
+      expect(bytes('CLAUDE.md')).toEqual(claudeMd);
+    });
+
+    it('--fix reports a skill from a newer ctxo as a warning line and installs the missing ones', async () => {
+      write('CLAUDE.md', PRE_TIER_CLAUDE_MD);
+      installSkills(tmp, 'claude-code');
+      const newerFile = '.claude/skills/ctxo-review-pr/SKILL.md';
+      const newer = text(newerFile).replace(`<!-- ctxo-skill v${SKILLS_TEMPLATE_VERSION} -->`, '<!-- ctxo-skill v99.0 -->');
+      expect(newer).toContain('<!-- ctxo-skill v99.0 -->');
+      write(newerFile, newer);
+      rmSync(join(tmp, '.claude', 'skills', 'ctxo-safe-edit'), { recursive: true, force: true });
+
+      const r = await fix(report([{ id: 'skills' }]));
+
+      const skills = attempt(r, 'Skills');
+      expect(skills?.status).toBe('success');
+      expect(skills?.warnings).toEqual([`${newerFile}: skill v99.0 comes from a newer ctxo; left unchanged`]);
+      expect(existsSync(join(tmp, '.claude', 'skills', 'ctxo-safe-edit', 'SKILL.md'))).toBe(true);
+      expect(text(newerFile)).toBe(newer);
     });
 
     it('--fix leaves a rules block from a newer ctxo alone and re-renders the others', async () => {
