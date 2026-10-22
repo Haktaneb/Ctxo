@@ -54,7 +54,7 @@ const sorted = (values: readonly unknown[] | undefined) => [...(values ?? [])].m
 describe('MCP tool registration vs handler schemas', () => {
   let client: Client;
   let cwd: string;
-  let tools: Array<{ name: string; inputSchema: JsonSchema }>;
+  let tools: Array<{ name: string; description?: string; inputSchema: JsonSchema }>;
 
   beforeAll(async () => {
     cwd = mkdtempSync(join(tmpdir(), 'ctxo-registration-'));
@@ -116,5 +116,27 @@ describe('MCP tool registration vs handler schemas', () => {
     expect(ranked['searchMode']).toBeDefined();
     expect(ranked['fuzzy']).toBeUndefined();
     expect(sorted(byName.get('search_symbols')?.properties?.['mode']?.enum)).toEqual(['fts', 'regex']);
+  });
+
+  it('descriptions match the tiers, the dead-code rule for .sql files and the overlay data lists', () => {
+    const description = (name: string) => tools.find((t) => t.name === name)?.description ?? '';
+
+    const blast = description('get_blast_radius');
+    expect(blast).not.toContain('BEFORE modifying any function or class');
+    expect(blast).not.toContain('potential (transitive)');
+    expect(blast).toContain('table, view or procedure');
+    expect(blast).toContain('directly or transitively');
+    expect(blast).toContain('the data edges `reads`, `writes`, `executes`');
+    expect(blast).toContain('likely (co-changed or `uses`)');
+    expect(blast).toContain('potential (`imports`)');
+    expect(blast).toContain('`coChangedFiles` lists up to 10 files');
+
+    expect(description('find_dead_code')).toContain('Symbols in .sql files are never reported.');
+
+    const overlay = description('get_architectural_overlay');
+    expect(overlay).not.toContain('with writers');
+    expect(overlay).toContain('writer count');
+    expect(overlay).toContain('Both lists hold fewer entries when the response limit requires');
+    expect(overlay).toContain('sharedTableCount and dataResourcesTotal');
   });
 });
