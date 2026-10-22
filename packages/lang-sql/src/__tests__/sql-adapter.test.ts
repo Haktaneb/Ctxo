@@ -304,9 +304,25 @@ describe('SqlAdapter - contract', () => {
     await adapter.extractComplexity('db/loans.sql', BODIES_SQL);
     expect(extractSpy).toHaveBeenCalledTimes(1);
 
-    // Another file keeps its own entry; the first file is still cached.
-    await adapter.extractEdges('db/schema.sql', SCHEMA_SQL);
+    // The order of ctxo index: symbols for every file first, then edges for every file.
+    extractSpy.mockClear();
+    await adapter.extractSymbols('db/loans.sql', BODIES_SQL);
+    await adapter.extractSymbols('db/schema.sql', SCHEMA_SQL);
     await adapter.extractEdges('db/loans.sql', BODIES_SQL);
+    await adapter.extractEdges('db/schema.sql', SCHEMA_SQL);
+    expect(extractSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('extractEdges releases the cached extraction of the file', async () => {
+    const adapter = new SqlAdapter();
+    extractSpy.mockClear();
+
+    await adapter.extractSymbols('db/loans.sql', BODIES_SQL);
+    await adapter.extractEdges('db/loans.sql', BODIES_SQL);
+    expect(extractSpy).toHaveBeenCalledTimes(1);
+
+    // The entry is gone: a later call extracts again instead of holding the source.
+    await adapter.extractSymbols('db/loans.sql', BODIES_SQL);
     expect(extractSpy).toHaveBeenCalledTimes(2);
   });
 
@@ -321,24 +337,31 @@ describe('SqlAdapter - contract', () => {
     expect(edges.map((e) => e.to)).toContain('dbo.holds::table');
     expect(edges.map((e) => e.to)).not.toContain('dbo.fines::table');
 
-    await adapter.dispose();
     await adapter.extractSymbols('db/loans.sql', changed);
     expect(extractSpy).toHaveBeenCalledTimes(3);
+    await adapter.dispose();
+    await adapter.extractEdges('db/loans.sql', changed);
+    expect(extractSpy).toHaveBeenCalledTimes(4);
   });
 
-  it('a failing extraction yields no symbols or edges and logs to stderr', async () => {
+  it('a failing extraction yields no symbols or edges and logs to stderr once', async () => {
     const adapter = new SqlAdapter();
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    extractSpy.mockClear();
     extractSpy.mockImplementationOnce(() => {
       throw new Error('tokenizer exploded');
     });
 
     expect(await adapter.extractSymbols('db/broken.sql', BODIES_SQL)).toEqual([]);
-    // The failure is not cached: the next call extracts again and succeeds.
-    expect(await adapter.extractEdges('db/broken.sql', BODIES_SQL)).not.toEqual([]);
+    // The empty result is cached for this file and source: edges neither extract nor log again.
+    expect(await adapter.extractEdges('db/broken.sql', BODIES_SQL)).toEqual([]);
+    expect(extractSpy).toHaveBeenCalledTimes(1);
 
     const written = stderr.mock.calls.map((call) => String(call[0])).join('');
     expect(written).toContain('[ctxo:lang-sql]');
-    expect(written).toContain('tokenizer exploded');
+    expect(written.split('tokenizer exploded')).toHaveLength(2);
+
+    // A changed source is a new attempt and succeeds.
+    expect(await adapter.extractSymbols('db/broken.sql', `${BODIES_SQL}\n`)).not.toEqual([]);
   });
 });

@@ -31,7 +31,11 @@ const NO_DEFINITIONS: SqlFileExtraction = { definitions: [] };
 export class SqlAdapter implements ILanguageAdapter {
   readonly extensions = ['.sql'] as const;
 
-  /** One extraction per file, shared by extractSymbols and extractEdges; replaced when the source changes. */
+  /**
+   * One extraction per file, shared by extractSymbols and extractEdges; replaced when the source changes.
+   * The core runs extractSymbols for every file first and extractEdges for every file second, so
+   * extractEdges releases the entry: a batch index frees entries as it goes and a watch session keeps none.
+   */
   private readonly extractions = new Map<string, { readonly source: string; readonly extraction: SqlFileExtraction }>();
 
   isSupported(filePath: string): boolean {
@@ -58,7 +62,9 @@ export class SqlAdapter implements ILanguageAdapter {
 
   async extractEdges(filePath: string, source: string): Promise<GraphEdge[]> {
     const edges: GraphEdge[] = [];
-    for (const def of this.extract(filePath, source).definitions) {
+    const extraction = this.extract(filePath, source);
+    this.extractions.delete(filePath);
+    for (const def of extraction.definitions) {
       const from = symbolIdOf(filePath, def);
       for (const access of def.accesses) {
         if (access.name === def.name) continue; // a recursive procedure is not coupled to itself
@@ -86,8 +92,9 @@ export class SqlAdapter implements ILanguageAdapter {
       this.extractions.set(filePath, { source, extraction });
       return extraction;
     } catch (err) {
+      // Cache the empty result too, so the failure is logged once per file and source.
       log.error(`SQL extraction failed for ${filePath}: ${(err as Error).message}`);
-      this.extractions.delete(filePath);
+      this.extractions.set(filePath, { source, extraction: NO_DEFINITIONS });
       return NO_DEFINITIONS;
     }
   }

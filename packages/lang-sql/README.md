@@ -12,7 +12,7 @@ It is a protocol v2 plugin (`apiVersion: '2'`), so it needs a Ctxo CLI that unde
 | `CREATE [OR ALTER] VIEW`, `ALTER VIEW` | symbol of kind `view` |
 | `CREATE [OR ALTER] PROC[EDURE]`, `ALTER PROC[EDURE]` | symbol of kind `procedure` |
 | `CREATE [OR ALTER] FUNCTION`, `ALTER FUNCTION` | symbol of kind `function` |
-| table, view and `FROM`/`JOIN`/`APPLY` references in a body | `reads` edge |
+| table and view references after `FROM`, `JOIN`, `APPLY` and `MERGE ... USING` in a body | `reads` edge |
 | `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `TRUNCATE TABLE`, `SELECT ... INTO`, `OUTPUT ... INTO` in a body | `writes` edge |
 | `EXEC` / `EXECUTE` of a procedure in a body | `executes` edge |
 
