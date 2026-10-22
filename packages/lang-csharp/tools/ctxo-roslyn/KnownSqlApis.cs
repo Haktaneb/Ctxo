@@ -20,7 +20,7 @@ enum SqlProcedureWhen
     Never,
     /// <summary>The command's <c>CommandType</c> is set to <c>StoredProcedure</c> in the same method.</summary>
     CommandTypeProperty,
-    /// <summary>The call's <c>commandType</c> argument is <c>CommandType.StoredProcedure</c>.</summary>
+    /// <summary>The call's or constructor's <c>commandType</c> argument is <c>CommandType.StoredProcedure</c>.</summary>
     CommandTypeArgument,
 }
 
@@ -84,6 +84,11 @@ static class KnownSqlApis
             SqlProcedureWhen.CommandTypeProperty, SqlTextForm.Statements),
         new(["Dapper.SqlMapper"], IncludeDerived: false, SqlSite.Method,
             Members: [], MemberPrefixes: ["Query", "Execute"], Parameter: "sql",
+            SqlProcedureWhen.CommandTypeArgument, SqlTextForm.Statements),
+        // The SqlMapper overloads that take a CommandDefinition have no `sql`
+        // parameter, so the struct's constructor is the call site that carries the text.
+        new(["Dapper.CommandDefinition"], IncludeDerived: false, SqlSite.Constructor,
+            Members: [], MemberPrefixes: [], Parameter: "commandText",
             SqlProcedureWhen.CommandTypeArgument, SqlTextForm.Statements),
         new(["Microsoft.Data.SqlClient.SqlBulkCopy", "System.Data.SqlClient.SqlBulkCopy"], IncludeDerived: false, SqlSite.PropertyAssignment,
             Members: ["DestinationTableName"], MemberPrefixes: [], Parameter: null,

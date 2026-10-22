@@ -62,6 +62,12 @@ public sealed class LoanRepository : ILoanRepository
     public void Notify(int memberId) =>
         _db.Execute("[dbo].[usp_NotifyMember]", new { memberId }, commandType: CommandType.StoredProcedure);
 
+    public IEnumerable<Loan> ByDefinition(int id) =>
+        _db.Query<Loan>(new CommandDefinition("SELECT * FROM dbo.Loans WHERE MemberId = @id", new { id }));
+
+    public int ProcByDefinition(int id) =>
+        _db.Execute(new CommandDefinition("dbo.usp_RenewLoan", new { id }, commandType: CommandType.StoredProcedure));
+
     public void BulkLoad(DataTable rows)
     {
         var bulk = new SqlBulkCopy(_connection) { DestinationTableName = "dbo.LoanStaging" };

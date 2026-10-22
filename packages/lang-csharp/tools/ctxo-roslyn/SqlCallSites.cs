@@ -48,7 +48,9 @@ static class SqlCallSites
                 {
                     var api = KnownSqlApis.Find(SqlSite.Constructor, creation.Constructor?.ContainingType, ".ctor");
                     if (api == null || ArgumentFor(creation.Arguments, api.Parameter) is not { } argument) break;
-                    var procedure = api.ProcedureWhen == SqlProcedureWhen.CommandTypeProperty && procedures.IsProcedure(creation);
+                    var procedure = api.ProcedureWhen == SqlProcedureWhen.CommandTypeProperty
+                        ? procedures.IsProcedure(creation)
+                        : CommandTypeArgumentIsProcedure(api, creation.Arguments);
                     Analyze(argument.Value, api.Form, procedure, addEdge, stats);
                     break;
                 }
@@ -57,8 +59,7 @@ static class SqlCallSites
                     var method = invocation.TargetMethod;
                     var api = KnownSqlApis.Find(SqlSite.Method, method.ContainingType, method.Name);
                     if (api == null || ArgumentFor(invocation.Arguments, api.Parameter) is not { } argument) break;
-                    var procedure = api.ProcedureWhen == SqlProcedureWhen.CommandTypeArgument
-                        && KnownSqlApis.IsStoredProcedure(ArgumentFor(invocation.Arguments, "commandType")?.Value);
+                    var procedure = CommandTypeArgumentIsProcedure(api, invocation.Arguments);
                     Analyze(argument.Value, api.Form, procedure, addEdge, stats);
                     break;
                 }
@@ -111,6 +112,14 @@ static class SqlCallSites
         foreach (var name in accesses.Writes) addEdge(name + "::table", Writes);
         foreach (var name in accesses.Executes) addEdge(name + "::procedure", Executes);
     }
+
+    /// <summary>
+    /// True for an API whose text names a procedure when the <c>commandType</c> argument, named or
+    /// positional, is <c>CommandType.StoredProcedure</c> (Dapper's methods and <c>CommandDefinition</c>).
+    /// </summary>
+    static bool CommandTypeArgumentIsProcedure(KnownSqlApi api, IEnumerable<IArgumentOperation> arguments) =>
+        api.ProcedureWhen == SqlProcedureWhen.CommandTypeArgument
+        && KnownSqlApis.IsStoredProcedure(ArgumentFor(arguments, "commandType")?.Value);
 
     /// <summary>The constant string of a value, looking through its conversions; null when it has none.</summary>
     static string? ConstantText(IOperation? value)

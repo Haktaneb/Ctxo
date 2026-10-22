@@ -28,6 +28,8 @@ const CALL_SITE_ROWS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['Close', ['executes dbo.usp_closeloan::procedure']],
   ['Archive', ['reads dbo.loans::table', 'writes dbo.loanarchive::table']],
   ['Notify', ['executes dbo.usp_notifymember::procedure']],
+  ['ByDefinition', ['reads dbo.loans::table']],
+  ['ProcByDefinition', ['executes dbo.usp_renewloan::procedure']],
   ['BulkLoad', ['writes dbo.loanstaging::table']],
   ['RawEf', ['reads dbo.loans::table', 'writes dbo.holds::table']],
   ['Dynamic', []],
@@ -41,12 +43,14 @@ const CALL_SITE_ROWS: ReadonlyArray<readonly [string, readonly string[]]> = [
  */
 const CODE_EDGES: readonly string[] = [
   `calls ${REPOSITORY}.Broken::method -> ${DAPPER}.Execute::method`,
+  `calls ${REPOSITORY}.ByDefinition::method -> ${DAPPER}.Query::method`,
   `calls ${REPOSITORY}.BulkLoad::method -> ${SQL_CLIENT}.SqlBulkCopy.WriteToServer::method`,
   `calls ${REPOSITORY}.Close::method -> ${SQL_CLIENT}.SqlCommand.ExecuteNonQuery::method`,
   `calls ${REPOSITORY}.Dynamic::method -> ${DAPPER}.Query::method`,
   `calls ${REPOSITORY}.GetActive::method -> ${DAPPER}.Query::method`,
   `calls ${REPOSITORY}.GetByIds::method -> ${DAPPER}.Query::method`,
   `calls ${REPOSITORY}.Notify::method -> ${DAPPER}.Execute::method`,
+  `calls ${REPOSITORY}.ProcByDefinition::method -> ${DAPPER}.Execute::method`,
   `calls ${REPOSITORY}.RawEf::method -> ${EF_CORE}.DbContext.Set::method`,
   `calls ${REPOSITORY}.RawEf::method -> ${EF_CORE}.RelationalDatabaseFacadeExtensions.ExecuteSqlRaw::method`,
   `calls ${REPOSITORY}.RawEf::method -> ${EF_CORE}.RelationalQueryableExtensions.FromSqlRaw::method`,
@@ -97,9 +101,9 @@ describe.skipIf(!HAS_DOTNET)('Roslyn SQL call sites with the capability', () => 
     expect(dataEdgesOf(edges, method)).toEqual([...expected].sort());
   });
 
-  it('the batch reports 9 constant, 2 non-constant and 1 unparsable SQL texts', () => {
+  it('the batch reports 11 constant, 2 non-constant and 1 unparsable SQL texts', () => {
     expect(batch?.ok).toBe(true);
-    expect(batch?.sql).toEqual({ constant: 9, nonConstant: 2, unparsable: 1 });
+    expect(batch?.sql).toEqual({ constant: 11, nonConstant: 2, unparsable: 1 });
   });
 
   it('existing calls and implements edges are unchanged', () => {
