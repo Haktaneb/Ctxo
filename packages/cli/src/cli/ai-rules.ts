@@ -5,14 +5,18 @@
  * project-level instructions; ctxo upserts one marked rules block into that file.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
 import { join, dirname, relative, sep } from 'node:path';
 import {
   LEGACY_CURSOR_FRONTMATTER,
   expectedRulesTier,
+  guardAndSkillsExpected,
   renderRulesBlock,
+  scanRulesBlocks,
   textShape,
   upsertRulesBlock,
+  type RulesBlockSpan,
+  type RulesScan,
   type RulesTier,
 } from '../core/agent-rules/rules-block.js';
 import { loadConfig } from '../core/config/load-config.js';
@@ -88,6 +92,52 @@ function guardRegistration(projectRoot: string): { readonly shared: SettingsRead
  */
 export function readClaudeGuardState(projectRoot: string): ClaudeGuardState {
   return guardRegistration(projectRoot).state;
+}
+
+/** A platform's rules file and the ctxo blocks found in it. */
+export interface PlatformRulesState {
+  readonly platformId: string;
+  /** Project-relative, forward slashes */
+  readonly file: string;
+  readonly scan: RulesScan;
+}
+
+function platformRulesState(projectRoot: string, platform: Platform): PlatformRulesState | undefined {
+  const path = join(projectRoot, platform.file);
+  if (statSync(path, { throwIfNoEntry: false })?.isFile() !== true) return undefined;
+  return { platformId: platform.id, file: platform.file, scan: scanRulesBlocks(readFileSync(path, 'utf-8')) };
+}
+
+/** The scan of every platform whose rules file exists, in PLATFORMS order. */
+export function readRulesStates(projectRoot: string): PlatformRulesState[] {
+  return PLATFORMS.flatMap((platform) => platformRulesState(projectRoot, platform) ?? []);
+}
+
+/** The first ctxo block in a platform's rules file; undefined without the file or a block. */
+function firstRulesBlock(projectRoot: string, platformId: string): RulesBlockSpan | undefined {
+  const platform = PLATFORMS.find((p) => p.id === platformId);
+  return platform ? platformRulesState(projectRoot, platform)?.scan.blocks[0] : undefined;
+}
+
+/**
+ * Whether the safe-edit guard should be registered: CLAUDE.md's first block is pre-tier or compact
+ * (a versioned full block records an opt-out, D5) and `gate.enabled` is not false.
+ */
+export function guardExpected(projectRoot: string): boolean {
+  return guardAndSkillsExpected(firstRulesBlock(projectRoot, 'claude-code')) && gateEnabled(projectRoot);
+}
+
+/**
+ * Whether the platform's skills should all be installed: one ctxo skill is already there, or its rules
+ * block is pre-tier or compact. Always false for a platform without skills. Throws like `skillStates`
+ * when the bundled skills cannot be found.
+ */
+export function skillsExpected(projectRoot: string, platformId: string): boolean {
+  if (!skillTarget(platformId)) return false;
+  return (
+    skillStates(projectRoot, platformId).some((s) => s.state !== 'missing') ||
+    guardAndSkillsExpected(firstRulesBlock(projectRoot, platformId))
+  );
 }
 
 /**
