@@ -321,6 +321,7 @@ describe('SymbolGraph', () => {
         expect(identity.canonicalId).toBe('dbo.usp_close::procedure');
         expect(identity.winner.symbolId).toBe(V1);
         expect(identity.definitions.map((node) => node.symbolId)).toEqual([V1, V7, DOCS]);
+        expect(identity.production.map((node) => node.symbolId)).toEqual([V1, V7]);
       }
       expect(migrationGraph([V1, V7, DOCS]).dataResourceIdentity(V7)).toEqual(graph.dataResourceIdentity(V7));
     });
@@ -337,6 +338,15 @@ describe('SymbolGraph', () => {
         'docs/db/schema.sql::dbo.loans::table',
       ]);
       expect(graph.dataResourceIdentity('dbo.loans::table')).toEqual(identity);
+    });
+
+    it('an identity with only docs and test copies has no production definition', () => {
+      const graph = new SymbolGraph();
+      graph.addNode(makeNode('src/Lending.Tests/procs.sql::dbo.usp_renew::procedure'));
+      graph.addNode(makeNode('docs/db/procs.sql::dbo.usp_renew::procedure'));
+      const identity = graph.dataResourceIdentity('dbo.usp_renew::procedure')!;
+      expect(identity.winner.symbolId).toBe('docs/db/procs.sql::dbo.usp_renew::procedure');
+      expect(identity.production).toEqual([]);
     });
 
     it('code symbols and unknown ids have no data resource identity', () => {

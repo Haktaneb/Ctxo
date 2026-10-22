@@ -40,6 +40,11 @@ export interface DataResourceIdentity {
   readonly winner: SymbolNode;
   /** Every definition of the name, once each, in tie-break order: the winner comes first. */
   readonly definitions: readonly SymbolNode[];
+  /**
+   * The definitions in neither a test file nor a documentation folder (the best `definitionRank`), in
+   * tie-break order. Empty when every definition is a docs or test copy.
+   */
+  readonly production: readonly SymbolNode[];
 }
 
 /**
@@ -213,7 +218,8 @@ export class SymbolGraph {
     }
     const definitions = [...byId.values()].sort(this.compareDefinitions);
     const winner = definitions[0] ?? node;
-    return { canonicalId: `${name}::${winner.kind}`, winner, definitions };
+    const production = definitions.filter((definition) => this.definitionRankOf(definition.symbolId) === 0);
+    return { canonicalId: `${name}::${winner.kind}`, winner, definitions, production };
   }
 
   /** `definitionRank`, cached per symbolId (the glob match runs once per definition). */

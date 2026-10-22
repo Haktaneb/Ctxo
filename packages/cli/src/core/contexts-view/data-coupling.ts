@@ -154,16 +154,19 @@ function unenteredSeeds(
  *   target, unless the symbol is a procedure: procedure bodies count through `executes` instead, so the
  *   candidate that holds a procedure script does not read and write every table its procedures touch.
  * - Procedures are executed by canonical name (`SymbolGraph.dataResourceIdentity`). An `executes` edge to a
- *   resolved procedure points at the winning definition of the name, and executes every definition of it:
- *   the executing candidate takes on the reads and writes of every copy's body, following further `executes`
- *   edges transitively; an unresolved procedure adds nothing. A copy that lost resolution is therefore
- *   executed whenever its name is.
+ *   resolved procedure points at the winning definition of the name, and executes the name's counted
+ *   definitions: every production copy (in neither a test file nor a documentation folder), or the winner
+ *   alone when no copy is production. The executing candidate takes on the reads and writes of their
+ *   bodies, following their further `executes` edges transitively; an unresolved procedure adds nothing.
+ *   A production copy that lost resolution is therefore executed whenever its name is, and the other docs
+ *   and test copies add nothing at all.
  * - A procedure name that no candidate-attributed symbol executes, directly or through a chain, credits the
- *   candidate of each file that defines it, as if that candidate executed it. Executors outside the view
+ *   candidate of each file that holds a counted definition of it, as if that candidate executed it. A name
+ *   that is executed never credits the candidates of the files that define it. Executors outside the view
  *   (unclustered files, test files) do not count as executing. Among such names, one that another of them
- *   with a definition in a candidate file reaches, from outside its own cycle, counts through that chain
- *   instead; names that only execute each other, with nothing outside the cycle executing them, each credit
- *   their own candidates. This is one strongly connected component pass, linear in procedures plus
+ *   with a counted definition in a candidate file reaches, from outside its own cycle, counts through that
+ *   chain instead; names that only execute each other, with nothing outside the cycle executing them, each
+ *   credit their own candidates. This is one strongly connected component pass, linear in procedures plus
  *   executes edges.
  * - Reading a view does not expand to its tables.
  * - A target that no indexed table or view defines is external and has no kind. Resources are keyed by
@@ -192,22 +195,22 @@ export function computeDataCoupling(input: DataCouplingInput): DataCoupling {
   };
   const isProcedure = (target: string): boolean => nodes.get(target)?.kind === 'procedure';
 
-  // Procedures by canonical name: each procedure node maps to its `name::procedure`, each name to its
-  // definitions (the winner first).
+  // Procedures by canonical name: each procedure node maps to its `name::procedure`, each name to its counted
+  // definitions (tie-break order): every production copy, or the winner alone when no copy is production.
   const procedureName = new Map<string, string>();
-  const definitionsOf = new Map<string, readonly string[]>();
+  const countedOf = new Map<string, readonly string[]>();
   for (const node of nodes.values()) {
     if (node.kind !== 'procedure' || procedureName.has(node.symbolId)) continue;
     const identity = graph.dataResourceIdentity(node.symbolId);
     if (!identity) continue;
-    const definitions = identity.definitions.map((definition) => definition.symbolId);
-    definitionsOf.set(identity.canonicalId, definitions);
-    for (const definition of definitions) procedureName.set(definition, identity.canonicalId);
+    for (const definition of identity.definitions) procedureName.set(definition.symbolId, identity.canonicalId);
+    const counted = identity.production.length > 0 ? identity.production : [identity.winner];
+    countedOf.set(identity.canonicalId, counted.map((definition) => definition.symbolId));
   }
 
-  /** Per procedure name, the resolved procedure names the bodies of its definitions execute. */
+  /** Per procedure name, the resolved procedure names the bodies of its counted definitions execute. */
   const executesNames = new Map<string, readonly string[]>();
-  for (const [name, definitions] of definitionsOf) {
+  for (const [name, definitions] of countedOf) {
     const targets = new Set<string>();
     for (const definition of definitions) {
       for (const edge of graph.getForwardEdges(definition)) {
@@ -262,26 +265,26 @@ export function computeDataCoupling(input: DataCouplingInput): DataCoupling {
   }
 
   // The procedure names that no non-procedure symbol of a candidate file reaches. A name that another of them
-  // with a definition in a candidate file reaches, from outside its own cycle, counts through that chain; the
-  // rest credit the candidate of each file that defines them. A cycle with no way in from outside credits
-  // each member's candidates.
+  // with a counted definition in a candidate file reaches, from outside its own cycle, counts through that
+  // chain; the rest credit the candidate of each file that holds a counted definition of them. A cycle with
+  // no way in from outside credits each member's candidates.
   const reached = closure([...executed.values()].flat());
-  const unreached = [...definitionsOf.keys()].filter((name) => !reached.has(name));
-  const inCandidateFile = (name: string): boolean => definitionsOf.get(name)!.some((definition) => fileCandidate.has(fileOf(definition)));
+  const unreached = [...countedOf.keys()].filter((name) => !reached.has(name));
+  const inCandidateFile = (name: string): boolean => countedOf.get(name)!.some((definition) => fileCandidate.has(fileOf(definition)));
   const unreachedSet = new Set(unreached);
   const executesUnreached = (from: string): string[] => executesNames.get(from)!.filter((name) => unreachedSet.has(name));
   for (const name of unenteredSeeds(unreached, executesUnreached, inCandidateFile)) {
-    for (const definition of definitionsOf.get(name)!) {
+    for (const definition of countedOf.get(name)!) {
       const candidate = fileCandidate.get(fileOf(definition));
       if (candidate !== undefined) execute(candidate, name);
     }
   }
 
   // One walk per candidate over the procedure names it executes, directly or through other procedures, and
-  // the body of every definition of each.
+  // the body of every counted definition of each.
   for (const [candidate, starts] of executed) {
     for (const name of closure(starts)) {
-      for (const definition of definitionsOf.get(name)!) {
+      for (const definition of countedOf.get(name)!) {
         for (const edge of graph.getForwardEdges(definition)) {
           if (edge.kind === 'reads' || edge.kind === 'writes') record(candidate, edge.to, edge.kind);
         }

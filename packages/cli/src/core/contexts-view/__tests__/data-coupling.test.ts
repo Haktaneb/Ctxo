@@ -230,7 +230,8 @@ describe('computeDataCoupling', () => {
     ]);
   });
 
-  it('executing a procedure takes on the accesses of every copy of it', () => {
+  it('an executor takes the union of the production copies of a procedure', () => {
+    // V1 wins resolution; V7 is another production copy, so its body counts too, chain included.
     const result = coupling(
       [
         LOANS_SQL,
@@ -258,6 +259,108 @@ describe('computeDataCoupling', () => {
       { name: 'dbo.audit', ...writtenBy0 },
       { name: 'dbo.loans', ...writtenBy0 },
       { name: 'dbo.members', ...writtenBy0 },
+    ]);
+  });
+
+  it('docs and test copies of a procedure add nothing when a production copy exists', () => {
+    const result = coupling(
+      [
+        LOANS_SQL,
+        MEMBERS_SQL,
+        sql('db/audit.sql', [['dbo.audit', 'table']]),
+        sql('db/fines.sql', [['dbo.fines', 'table']]),
+        sql('db/procs/close.sql', [['dbo.usp_close', 'procedure']], [['dbo.usp_close', 'dbo.loans::table', 'writes']]),
+        // A docs copy and a test copy, each with a body the production copy does not have.
+        sql('docs/db/close.sql', [['dbo.usp_close', 'procedure']], [
+          ['dbo.usp_close', 'dbo.audit::table', 'writes'],
+          ['dbo.usp_close', 'dbo.usp_log::procedure', 'executes'],
+        ]),
+        sql('src/Lending.Tests/db/close.sql', [['dbo.usp_close', 'procedure']], [['dbo.usp_close', 'dbo.members::table', 'writes']]),
+        // Only the docs copy executes it, so nobody does, and it credits its own candidate.
+        sql('db/procs/log.sql', [['dbo.usp_log', 'procedure']], [['dbo.usp_log', 'dbo.fines::table', 'writes']]),
+        cs('src/billing/Close.cs', [['dbo.usp_close::procedure', 'executes']]),
+      ],
+      [
+        ['src/billing/Close.cs', 0],
+        ['db/procs/close.sql', 1],
+        ['docs/db/close.sql', 2],
+        ['src/Lending.Tests/db/close.sql', 3],
+        ['db/procs/log.sql', 4],
+      ],
+    );
+
+    expect(result.resources).toEqual([
+      { name: 'dbo.fines', kind: 'table', external: false, accesses: [{ candidate: 4, modes: ['writes'] }], writers: [4], owner: 4 },
+      { name: 'dbo.loans', kind: 'table', external: false, accesses: [{ candidate: 0, modes: ['writes'] }], writers: [0], owner: 0 },
+    ]);
+  });
+
+  it('a procedure nobody executes credits only the candidates of its production copies', () => {
+    const result = coupling(
+      [
+        LOANS_SQL,
+        sql('db/migrations/V1__init.sql', [['dbo.usp_purge', 'procedure']], [['dbo.usp_purge', 'dbo.loans::table', 'writes']]),
+        sql('db/jobs/purge.sql', [['dbo.usp_purge', 'procedure']], [['dbo.usp_purge', 'dbo.loans::table', 'writes']]),
+        sql('docs/db/purge.sql', [['dbo.usp_purge', 'procedure']], [['dbo.usp_purge', 'dbo.loans::table', 'writes']]),
+        sql('src/Lending.Tests/db/purge.sql', [['dbo.usp_purge', 'procedure']], [['dbo.usp_purge', 'dbo.loans::table', 'writes']]),
+      ],
+      [
+        ['db/migrations/V1__init.sql', 1],
+        ['db/jobs/purge.sql', 2],
+        ['docs/db/purge.sql', 3],
+        ['src/Lending.Tests/db/purge.sql', 4],
+      ],
+    );
+
+    expect(result.resources).toEqual([
+      {
+        name: 'dbo.loans',
+        kind: 'table',
+        external: false,
+        accesses: [
+          { candidate: 1, modes: ['writes'] },
+          { candidate: 2, modes: ['writes'] },
+        ],
+        writers: [1, 2],
+      },
+    ]);
+  });
+
+  it('a procedure defined only in a docs file still credits its executor', () => {
+    const result = coupling(
+      [
+        LOANS_SQL,
+        sql('docs/db/renew.sql', [['dbo.usp_renew', 'procedure']], [['dbo.usp_renew', 'dbo.loans::table', 'writes']]),
+        cs('src/billing/Renew.cs', [['dbo.usp_renew::procedure', 'executes']]),
+      ],
+      [
+        ['src/billing/Renew.cs', 0],
+        ['docs/db/renew.sql', 1],
+      ],
+    );
+
+    // Executed, so the docs file's own candidate takes nothing.
+    expect(result.resources).toEqual([
+      { name: 'dbo.loans', kind: 'table', external: false, accesses: [{ candidate: 0, modes: ['writes'] }], writers: [0], owner: 0 },
+    ]);
+  });
+
+  it('when no production copy exists, the executor takes the winning copy only', () => {
+    const result = coupling(
+      [
+        LOANS_SQL,
+        MEMBERS_SQL,
+        sql('docs/db/a.sql', [['dbo.usp_renew', 'procedure']], [['dbo.usp_renew', 'dbo.loans::table', 'writes']]),
+        // Another docs copy and a test copy lose to docs/db/a.sql, so their bodies add nothing.
+        sql('docs/db/b.sql', [['dbo.usp_renew', 'procedure']], [['dbo.usp_renew', 'dbo.members::table', 'writes']]),
+        sql('src/Lending.Tests/db/renew.sql', [['dbo.usp_renew', 'procedure']], [['dbo.usp_renew', 'dbo.members::table', 'reads']]),
+        cs('src/billing/Renew.cs', [['dbo.usp_renew::procedure', 'executes']]),
+      ],
+      [['src/billing/Renew.cs', 0]],
+    );
+
+    expect(result.resources).toEqual([
+      { name: 'dbo.loans', kind: 'table', external: false, accesses: [{ candidate: 0, modes: ['writes'] }], writers: [0], owner: 0 },
     ]);
   });
 
