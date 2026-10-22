@@ -95,9 +95,12 @@ export function computeAndWriteContextsView(options: ContextsViewStepOptions): C
   new ArchitectureArtifactsWriter(ctxoRoot, { allowProductionPath: true }).writeContextsView(view);
 
   const { coverage } = view;
+  // A shared table is a resource of two or more candidates, as `ctxo contexts` counts it.
+  const sharedTables = view.dataResources.filter((resource) => resource.accesses.length >= 2).length;
   console.error(
     `[ctxo] Contexts view: ${view.candidates.length} candidates cover ${coverage.covered}/${coverage.files} files ` +
-      `(${Math.round(coverage.ratio * 100)}%), ${view.hubs.length} hubs, ${view.unclustered.count} unclustered`,
+      `(${Math.round(coverage.ratio * 100)}%), ${view.hubs.length} hubs, ${view.unclustered.count} unclustered` +
+      (sharedTables > 0 ? `, ${sharedTables} shared tables` : ''),
   );
   return view;
 }

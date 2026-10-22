@@ -200,4 +200,46 @@ describe('computeAndWriteContextsView', () => {
 
     expect(filesInView(view)).not.toContain(nameOnly);
   });
+
+  describe('the stderr line', () => {
+    function functionOf(file: string): SymbolNode {
+      const name = file.slice(file.lastIndexOf('/') + 1, file.lastIndexOf('.'));
+      return { symbolId: `${file}::${name}::function`, name, kind: 'function', startLine: 1, endLine: 2 };
+    }
+
+    /** Files that call each other in every pair; the first one also reads `table` when given. */
+    function area(files: readonly string[], table?: string): FileIndex[] {
+      return files.map((file, i) => {
+        const own = functionOf(file);
+        const edges: GraphEdge[] = files.slice(i + 1).map((other) => calls(own.symbolId, functionOf(other).symbolId));
+        if (table && i === 0) edges.push({ from: own.symbolId, to: `${table}::table`, kind: 'reads' });
+        return { ...plain(file), symbols: [own], edges };
+      });
+    }
+
+    const LOANS = ['src/loans/LoanDesk.ts', 'src/loans/LoanRules.ts', 'src/loans/LoanQueue.ts'];
+    const MEMBERS = ['src/members/MemberCard.ts', 'src/members/MemberFees.ts', 'src/members/MemberNotices.ts'];
+
+    function contextsLine(): string {
+      const lines = vi.mocked(console.error).mock.calls.map((args) => String(args[0]));
+      const line = lines.find((text) => text.startsWith('[ctxo] Contexts view:'));
+      expect(line).toBeDefined();
+      return line!;
+    }
+
+    it('ends with the shared table count when two candidates read one table', () => {
+      const view = viewOf([...area(LOANS, 'dbo.loans'), ...area(MEMBERS, 'dbo.loans')]);
+
+      expect(view.candidates).toHaveLength(2);
+      expect(contextsLine()).toMatch(/, 0 unclustered, 1 shared tables$/);
+    });
+
+    it('leaves the count out when no table is shared', () => {
+      const view = viewOf([...area(LOANS, 'dbo.loans'), ...area(MEMBERS, 'dbo.members')]);
+
+      expect(view.candidates).toHaveLength(2);
+      expect(view.dataResources).toHaveLength(2);
+      expect(contextsLine()).toMatch(/, 0 unclustered$/);
+    });
+  });
 });
