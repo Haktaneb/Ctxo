@@ -713,6 +713,8 @@ describe('GetArchitecturalOverlayHandler mode contexts', () => {
   });
 
   it('the candidate detail caps sharedTables at 15 with sharedTableCount and each accesses list at 10', async () => {
+    // The caps alone: a limit large enough that the fit to the response limit drops nothing.
+    process.env['CTXO_RESPONSE_LIMIT'] = '65536';
     // 30 candidates; each of 20 tables is written by candidate 1 and read by the 29 others.
     const resources = Array.from({ length: 20 }, (_, t) =>
       resource(
@@ -830,6 +832,105 @@ describe('GetArchitecturalOverlayHandler mode contexts', () => {
       expect(detail.payload['_meta'].truncated, `candidate ${id}`).toBe(false);
       expect(detail.bytes, `candidate ${id}`).toBeLessThanOrEqual(8192);
     }
+  });
+
+  /**
+   * PR 1A's worst-case detail view (candidate 2 takes part in 20 collisions of 21 occurrences with 20 members) plus
+   * 200 resources with 60-character names, three in four of them accessed by all 12 candidates. With the caps
+   * alone the detail of candidate 2 measured 14823 bytes.
+   */
+  function crowdedDetailView(): ContextsView {
+    const others = [1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+    const collisions: TermCollision[] = Array.from({ length: 20 }, (_, n) => {
+      const name = `entity${String(n).padStart(2, '0')}`;
+      const occurrence = (candidateId: number, i: number) => {
+        const file = `src/Modules/M${String(i).padStart(3, '0')}/Domain/${name}.cs`;
+        return {
+          candidate: candidateId,
+          file,
+          symbolId: `${file}::${name}::class`,
+          members: Array.from({ length: 20 }, (_, m) => `Member${String(m).padStart(2, '0')}`),
+        };
+      };
+      return {
+        name,
+        minJaccard: 0.1,
+        occurrences: [occurrence(2, 0), ...Array.from({ length: 20 }, (_, i) => occurrence(others[i % 11]!, i + 1))],
+      };
+    });
+    const resources = Array.from({ length: 200 }, (_, i) => {
+      const accessors = new Map<number, DataAccessMode[]>();
+      const spread = i % 4 === 3 ? 1 : 12;
+      for (let k = 0; k < spread; k++) accessors.set(((i * 7 + k * 5) % 12) + 1, k === 0 ? ['reads', 'writes'] : ['reads']);
+      const name = `dbo.resource_${String(i).padStart(3, '0')}`;
+      return resource(name.padEnd(60, 'x'), [...accessors], i % 10 === 9 ? 'external' : 'table');
+    });
+    return withData(
+      buildView(
+        MODULES.map((name, i) => candidate(i + 1, `src/Modules/${name}`, 40)),
+        { hubs: fixtureView().hubs, collisions },
+      ),
+      resources,
+    );
+  }
+
+  async function rawDetail(view: ContextsView, id: number) {
+    const handler = handleGetArchitecturalOverlay(storage, new MaskingPipeline(), undefined, undefined, undefined, port(view));
+    const text = (await handler({ mode: 'contexts', candidate: id })).content[0]!.text;
+    return { text, bytes: Buffer.byteLength(text, 'utf-8'), payload: JSON.parse(text) as Record<string, any> };
+  }
+
+  it('the candidate detail fits the response limit with many shared tables by dropping trailing entries', async () => {
+    const view = crowdedDetailView();
+    const own = view.candidates[1]!;
+    const ownResources = view.dataResources.filter((r) => r.accesses.some((a) => a.candidate === 2)).map((r) => r.name);
+
+    const detail = await rawDetail(view, 2);
+    const tables = detail.payload['candidate'].sharedTables as Array<{ name: string; accesses: Array<{ candidate: number }> }>;
+    const resources = detail.payload['dataResources'] as Array<{ name: string }>;
+
+    expect(detail.bytes).toBeLessThanOrEqual(8192);
+    expect(detail.payload['_meta'].truncated).toBe(false);
+    // Fewer shown than exist; the totals still count them all.
+    expect(detail.payload['candidate'].sharedTableCount).toBe(own.sharedTables.length);
+    expect(detail.payload['dataResourcesTotal']).toBe(ownResources.length);
+    expect(tables.length).toBeLessThan(own.sharedTables.length);
+    expect(resources.length).toBeLessThan(ownResources.length);
+    expect(tables.length).toBeGreaterThan(0);
+    expect(resources.length).toBeGreaterThan(0);
+    // The shown entries are a prefix by name of the full sorted lists.
+    expect(tables.map((t) => t.name)).toEqual(own.sharedTables.slice(0, tables.length).map((t) => t.name));
+    expect(resources.map((r) => r.name)).toEqual(ownResources.slice(0, resources.length));
+    // The longer list gave way first, dataResources on a tie: they end at most one apart.
+    expect(Math.abs(tables.length - resources.length)).toBeLessThanOrEqual(1);
+    expect(resources.length).toBeLessThanOrEqual(tables.length);
+    // Each kept table keeps its access cap and this candidate's own access; the other fields stay whole.
+    for (const table of tables) {
+      expect(table.accesses).toHaveLength(10);
+      expect(table.accesses.some((a) => a.candidate === 2)).toBe(true);
+    }
+    expect(detail.payload['candidate'].files).toHaveLength(15);
+    expect(detail.payload['collisions']).toHaveLength(10);
+    // Deterministic: the same input gives the same bytes.
+    expect((await rawDetail(view, 2)).text).toBe(detail.text);
+  });
+
+  it('a larger CTXO_RESPONSE_LIMIT shows more detail entries', async () => {
+    const view = crowdedDetailView();
+    const atDefault = await rawDetail(view, 2);
+
+    process.env['CTXO_RESPONSE_LIMIT'] = '16384';
+    const larger = await rawDetail(view, 2);
+
+    expect(larger.bytes).toBeLessThanOrEqual(16384);
+    expect(larger.bytes).toBeGreaterThan(8192);
+    expect(larger.payload['candidate'].sharedTables.length).toBeGreaterThan(
+      atDefault.payload['candidate'].sharedTables.length,
+    );
+    expect(larger.payload['dataResources'].length).toBeGreaterThan(atDefault.payload['dataResources'].length);
+    // 16 KB holds both lists at their caps.
+    expect(larger.payload['candidate'].sharedTables).toHaveLength(15);
+    expect(larger.payload['dataResources']).toHaveLength(15);
   });
 
   it('TRUNCATABLE_FIELDS is unchanged', () => {
