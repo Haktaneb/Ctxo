@@ -40,6 +40,8 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
   /** The stale-evidence re-run in flight, and the one follow-up queued behind it (`requestRefresh`). */
   private refreshRunning: Promise<boolean> | null = null;
   private refreshQueued: Promise<boolean> | null = null;
+  /** Set by `dispose`; a batch that finishes later is dropped. */
+  private disposed = false;
   private initialized = false;
   private readonly sqlCallSites: boolean;
   private sqlStats: { constant: number; nonConstant: number } | undefined;
@@ -69,6 +71,7 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
   }
 
   async initialize(rootDir: string): Promise<void> {
+    this.disposed = false;
     const toolchain = detectGoToolchain();
     if (!toolchain.available) {
       log.info(`Go analyzer unavailable: go ${toolchain.version ?? 'not found'} (>= 1.22 required)`);
@@ -213,6 +216,8 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
   }
 
   async dispose(): Promise<void> {
+    // A batch still in flight must not refill the cache after this.
+    this.disposed = true;
     this.cache.clear();
     this.deadSymbolIds.clear();
     this.batchPromise = null;
@@ -231,22 +236,30 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
    * Re-runs the batch for stale fact evidence; resolves true when the run succeeded. At most one re-run is in
    * flight plus one queued follow-up: a file that goes stale while a re-run is in flight joins the follow-up
    * (the running one may have read its bytes before the change), so a burst of saves costs two runs at most.
+   * A queued follow-up is joined first, also in the moment between the end of the running re-run and the
+   * start of the follow-up, so only one analyzer run is ever in flight.
    */
   private requestRefresh(): Promise<boolean> {
+    if (this.refreshQueued) return this.refreshQueued;
     if (!this.refreshRunning) return this.startRefresh();
-    if (!this.refreshQueued) {
-      this.refreshQueued = this.refreshRunning.then(() => {
-        this.refreshQueued = null;
-        return this.startRefresh();
-      });
-    }
+    const startFollowUp = (): Promise<boolean> => {
+      this.refreshQueued = null;
+      return this.startRefresh();
+    };
+    this.refreshQueued = this.refreshRunning.then(startFollowUp, startFollowUp);
     return this.refreshQueued;
   }
 
+  /** Starts a re-run; it never rejects (a run that throws, for example on spawn, resolves false). */
   private startRefresh(): Promise<boolean> {
-    const run: Promise<boolean> = this.runBatch(false).finally(() => {
-      if (this.refreshRunning === run) this.refreshRunning = null;
-    });
+    const run: Promise<boolean> = this.runBatch(false)
+      .catch((err: unknown) => {
+        log.warn(`Go analyzer re-run failed: ${(err as Error).message}; keeping the last results`);
+        return false;
+      })
+      .finally(() => {
+        if (this.refreshRunning === run) this.refreshRunning = null;
+      });
     this.refreshRunning = run;
     return run;
   }
@@ -261,6 +274,7 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
       sqlCallSites: this.sqlCallSites,
       ...(this.facts ? { facts: this.facts } : {}),
     });
+    if (this.disposed) return false;
     if (result.failed) {
       if (initial) {
         this.batchFailed = true;
