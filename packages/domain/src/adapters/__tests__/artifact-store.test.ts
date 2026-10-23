@@ -124,4 +124,66 @@ describe('DomainArtifactStore', () => {
     expect(existsSync(join(domainDir, 'Order.ts.json'))).toBe(true);
     store.removeAll();
   });
+
+  describe('source index entries under index/domain/ (I1)', () => {
+    const sourceEntry = (file: string): string => JSON.stringify({ file, lastModified: 1, symbols: [], edges: [] });
+
+    function seed(): Record<string, string> {
+      mkdirSync(join(domainDir, 'history'), { recursive: true });
+      const entries: Record<string, string> = {
+        [join(domainDir, 'history', 'order-history.ts.json')]: sourceEntry('domain/history/order-history.ts'),
+        [join(domainDir, 'history', '5-abc1234.json')]: sourceEntry('domain/history/5-abc1234'),
+        [join(domainDir, 'contexts.json')]: sourceEntry('domain/contexts'),
+        [join(domainDir, 'boundaries.json')]: sourceEntry('domain/boundaries'),
+      };
+      for (const [path, text] of Object.entries(entries)) writeFileSync(path, text, 'utf-8');
+      return entries;
+    }
+
+    const expectUntouched = (entries: Record<string, string>): void => {
+      for (const [path, text] of Object.entries(entries)) expect(readFileSync(path, 'utf-8')).toBe(text);
+    };
+
+    it('removeAll keeps unmarked entries, including history/<file>.ts.json', () => {
+      const entries = seed();
+      new DomainArtifactStore(root).removeAll();
+      expectUntouched(entries);
+    });
+
+    it('removeAll still removes marked artifacts and an emptied history folder', () => {
+      const store = new DomainArtifactStore(root);
+      store.writeIfChanged('contexts.json', CONTEXTS);
+      store.writeHistory(entry('aaaaaaa', 1));
+      writeFileSync(join(domainDir, 'history', '9-zzzzzzz.json'), JSON.stringify({ ...entry('zzzzzzz', 9), version: 2 }), 'utf-8');
+      store.removeAll();
+      expect(existsSync(join(domainDir, 'contexts.json'))).toBe(false);
+      expect(existsSync(join(domainDir, 'history'))).toBe(false);
+    });
+
+    it('writeHistory cleanup and retention never delete an unmarked entry', () => {
+      const entries = seed();
+      const store = new DomainArtifactStore(root);
+      store.writeHistory(entry('abc1234ffff', 1), 1);
+      store.writeHistory(entry('def5678ffff', 2), 1);
+      store.writeHistory(entry('abc1234ffff', 3), 1);
+      expectUntouched(entries);
+      expect(store.readHistory().map((h) => h.commitSha)).toEqual(['abc1234ffff']);
+    });
+
+    it('writeIfChanged refuses to overwrite an unmarked JSON file and reports no change', () => {
+      const entries = seed();
+      const store = new DomainArtifactStore(root);
+      expect(store.writeIfChanged('contexts.json', CONTEXTS)).toBe(false);
+      expect(store.writeIfChanged('boundaries.json', BOUNDARIES)).toBe(false);
+      expectUntouched(entries);
+    });
+
+    it('writeIfChanged still replaces a corrupt (unparseable) or marked artifact', () => {
+      mkdirSync(domainDir, { recursive: true });
+      writeFileSync(join(domainDir, 'contexts.json'), '{ not json', 'utf-8');
+      const store = new DomainArtifactStore(root);
+      expect(store.writeIfChanged('contexts.json', CONTEXTS)).toBe(true);
+      expect(store.writeIfChanged('contexts.json', { ...CONTEXTS, registryHash: 'h2' })).toBe(true);
+    });
+  });
 });

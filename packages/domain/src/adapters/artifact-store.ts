@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, rmdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { BoundaryViolationRecord, CrossContextSummary } from '../core/boundaries.js';
 import type { ContextHistoryEntry, MovedFile } from '../core/context-metrics.js';
@@ -165,6 +165,7 @@ export class DomainArtifactStore {
     const content = serialize(artifact);
     const existing = this.readText(target);
     if (existing !== undefined && normalize(existing) === content) return false;
+    if (this.isForeign(target, artifact.ctxoArtifact)) return false;
     this.writeAtomic(target, content);
     return true;
   }
@@ -180,6 +181,7 @@ export class DomainArtifactStore {
 
     for (const file of this.historyFiles()) {
       if (file.name === name) continue;
+      if (!this.isMarked(join(this.historyDir, file.name), 'domain-history')) continue;
       const sameCommit = file.sha === sha7 || this.readHistoryFile(file.name)?.commitSha === entry.commitSha;
       if (sameCommit) rmSync(join(this.historyDir, file.name), { force: true });
     }
@@ -187,9 +189,13 @@ export class DomainArtifactStore {
     const target = join(this.historyDir, name);
     const content = serialize(entry);
     const existing = this.readText(target);
-    if (existing === undefined || normalize(existing) !== content) this.writeAtomic(target, content);
+    if ((existing === undefined || normalize(existing) !== content) && !this.isForeign(target, 'domain-history')) {
+      this.writeAtomic(target, content);
+    }
 
-    const files = this.historyFiles().sort((a, b) => b.committedAt - a.committedAt || compare(b.name, a.name));
+    const files = this.historyFiles()
+      .filter((f) => this.isMarked(join(this.historyDir, f.name), 'domain-history'))
+      .sort((a, b) => b.committedAt - a.committedAt || compare(b.name, a.name));
     for (const file of files.slice(Math.max(1, keep))) rmSync(join(this.historyDir, file.name), { force: true });
   }
 
@@ -213,11 +219,43 @@ export class DomainArtifactStore {
     return out.sort((a, b) => b.committedAt - a.committedAt || compare(b.commitSha, a.commitSha));
   }
 
-  /** Deletes `contexts.json`, `boundaries.json` and `history/`; other files in the folder stay. */
+  /**
+   * Deletes the domain artifacts: `contexts.json`, `boundaries.json` and the history entries, each only when it
+   * carries the matching `ctxoArtifact` marker (ADR-018 C3). The folder also holds the index entries of a source
+   * folder named `domain/`, which are never touched. An emptied `history/` folder is removed.
+   */
   removeAll(): void {
-    rmSync(join(this.dir, 'contexts.json'), { force: true });
-    rmSync(join(this.dir, 'boundaries.json'), { force: true });
-    rmSync(this.historyDir, { recursive: true, force: true });
+    for (const [name, marker] of [
+      ['contexts.json', 'domain-contexts'],
+      ['boundaries.json', 'domain-boundaries'],
+    ] as const) {
+      const path = join(this.dir, name);
+      if (this.isMarked(path, marker)) rmSync(path, { force: true });
+    }
+    for (const file of this.historyFiles()) {
+      const path = join(this.historyDir, file.name);
+      if (this.isMarked(path, 'domain-history')) rmSync(path, { force: true });
+    }
+    try {
+      rmdirSync(this.historyDir);
+    } catch {
+      // not empty (source entries live here) or already gone
+    }
+  }
+
+  /** True when the file parses as JSON and carries this `ctxoArtifact` marker. */
+  private isMarked(path: string, marker: string): boolean {
+    const value = this.readJson(path);
+    return isRecord(value) && value['ctxoArtifact'] === marker;
+  }
+
+  /** True when the file holds valid JSON without the marker: a source index entry, never ours to overwrite. */
+  private isForeign(path: string, marker: string): boolean {
+    const value = this.readJson(path);
+    if (value === undefined) return false;
+    if (isRecord(value) && value['ctxoArtifact'] === marker) return false;
+    process.stderr.write(`[ctxo:domain] left ${path} alone: it is not a domain artifact\n`);
+    return true;
   }
 
   private historyFiles(): { name: string; committedAt: number; sha: string }[] {
