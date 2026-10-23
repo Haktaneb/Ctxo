@@ -100,3 +100,87 @@ describe('JavaAdapter.extractComplexity', () => {
     expect(g!.cyclomatic).toBe(4);
   });
 });
+
+describe('JavaAdapter annotations (syntax tier)', () => {
+  const annotationsOf = async (source: string, id: string) => {
+    const symbols = await new JavaAdapter().extractSymbols(FILE, source);
+    return symbols.find((s) => s.symbolId === `${FILE}::${id}`)?.annotations;
+  };
+
+  it('reads marker and string annotations on classes, fields, constructors and methods', async () => {
+    const source = `@Entity @Table(name = "Loans") public class Loan {
+  @Column(name = "member_id", nullable = false) private long memberId;
+  @Deprecated public Loan() {}
+  @GetMapping("/loans/{id}") public Loan find() { return null; }
+}`;
+    const symbols = await new JavaAdapter().extractSymbols(FILE, source);
+    const get = (id: string) => symbols.find((s) => s.symbolId === `${FILE}::${id}`);
+    expect(get('Loan::class')?.annotations).toEqual([{ name: 'Entity' }, { name: 'Table', named: { name: 'Loans' } }]);
+    expect(get('memberId::variable')?.annotations).toEqual([{ name: 'Column', named: { name: 'member_id' } }]);
+    expect(get('Loan::method')?.annotations).toEqual([{ name: 'Deprecated' }]);
+    expect(get('find::method')?.annotations).toEqual([{ name: 'GetMapping', args: ['/loans/{id}'] }]);
+  });
+
+  it('symbols without annotations have no annotations key', async () => {
+    const symbols = await new JavaAdapter().extractSymbols(FILE, 'class A { int x; void f() {} }');
+    for (const s of symbols) expect(s).not.toHaveProperty('annotations');
+  });
+
+  it('qualified names keep the simple name and string arrays flatten', async () => {
+    const source = `class A {
+  @org.junit.jupiter.api.Tag("LEND-03") void a() {}
+  @SuppressWarnings({"unchecked", "rawtypes"}) void b() {}
+  @Names(value = "x", list = {"p", "q"}) void c() {}
+}`;
+    expect(await annotationsOf(source, 'a::method')).toEqual([{ name: 'Tag', args: ['LEND-03'] }]);
+    expect(await annotationsOf(source, 'b::method')).toEqual([{ name: 'SuppressWarnings', args: ['unchecked', 'rawtypes'] }]);
+    expect(await annotationsOf(source, 'c::method')).toEqual([{ name: 'Names', args: ['x'], named: { list: 'p,q' } }]);
+  });
+
+  it('escapes are decoded; text blocks and non-string values are skipped', async () => {
+    const source = `class A {
+  @E("a\\tb\\nc\\"d\\\\e\\'f\\sg\\u0041\\0") void a() {}
+  @T(name = """
+      hi
+      """, other = "kept") void b() {}
+  @N(n = 1, flag = true, kind = Kind.X, cls = A.class, inner = @Other("z"), id = "k") void c() {}
+}`;
+    expect(await annotationsOf(source, 'a::method')).toEqual([
+      { name: 'E', args: ['a\tb\nc"d\\e\'f g\\u0041\\0'] },
+    ]);
+    expect(await annotationsOf(source, 'b::method')).toEqual([{ name: 'T', named: { other: 'kept' } }]);
+    expect(await annotationsOf(source, 'c::method')).toEqual([{ name: 'N', named: { id: 'k' } }]);
+  });
+
+  it('a member named type is dropped, a member named member is kept (QR1, QR23); first duplicate wins', async () => {
+    const source = `class A {
+  @M(type = "t", member = "m", name = "first", name = "second") void a() {}
+}`;
+    expect(await annotationsOf(source, 'a::method')).toEqual([
+      { name: 'M', named: { member: 'm', name: 'first' } },
+    ]);
+  });
+
+  it('caps apply as in the full tier', async () => {
+    const many = Array.from({ length: 25 }, (_, i) => `@A${i}`).join(' ');
+    const args = Array.from({ length: 12 }, (_, i) => `"v${i}"`).join(', ');
+    const pairs = Array.from({ length: 12 }, (_, i) => `k${i} = "v${i}"`).join(', ');
+    const long = 'x'.repeat(250);
+    const source = `class A {
+  ${many} void a() {}
+  @V({${args}}) void b() {}
+  @P(type = "dropped", ${pairs}) void c() {}
+  @L("${long}") @LN(note = "${long}") void d() {}
+}`;
+    const a = await annotationsOf(source, 'a::method');
+    expect(a).toHaveLength(20);
+    expect(a![19]).toEqual({ name: 'A19' });
+    const b = await annotationsOf(source, 'b::method');
+    expect(b![0]!.args).toEqual(Array.from({ length: 10 }, (_, i) => `v${i}`));
+    const c = await annotationsOf(source, 'c::method');
+    expect(Object.keys(c![0]!.named!)).toEqual(Array.from({ length: 10 }, (_, i) => `k${i}`));
+    const d = await annotationsOf(source, 'd::method');
+    expect(d![0]!.args![0]).toHaveLength(200);
+    expect(d![1]!.named!.note).toHaveLength(200);
+  });
+});

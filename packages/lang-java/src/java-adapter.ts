@@ -2,6 +2,7 @@ import JavaLanguage from 'tree-sitter-java';
 import type { SyntaxNode } from 'tree-sitter';
 import { TreeSitterAdapter } from './tree-sitter-adapter.js';
 import { createLogger } from './logger.js';
+import { annotationsFromModifiers } from './tree-sitter-annotations.js';
 import type { SymbolNode, GraphEdge, ComplexityMetrics, SymbolKind } from '@ctxo/plugin-api';
 
 const log = createLogger('ctxo:lang-java');
@@ -60,11 +61,13 @@ export class JavaAdapter extends TreeSitterAdapter {
       if (kind) {
         const name = child.childForFieldName('name')?.text;
         if (name) {
+          const annotations = annotationsFromModifiers(child);
           out.push({
             symbolId: this.buildSymbolId(filePath, name, kind),
             name,
             kind,
             ...this.nodeToLineRange(child),
+            ...(annotations ? { annotations } : {}),
           });
         }
         // Extract members from the body field. Spike: body field names differ per type:
@@ -88,11 +91,13 @@ export class JavaAdapter extends TreeSitterAdapter {
         // Spike: both have field name=identifier
         const name = member.childForFieldName('name')?.text;
         if (name) {
+          const annotations = annotationsFromModifiers(member);
           out.push({
             symbolId: this.buildSymbolId(filePath, name, 'method'),
             name,
             kind: 'method',
             ...this.nodeToLineRange(member),
+            ...(annotations ? { annotations } : {}),
           });
         }
       } else if (member.type === 'field_declaration') {
@@ -104,11 +109,13 @@ export class JavaAdapter extends TreeSitterAdapter {
             // Spike: variable_declarator has field name=identifier
             const name = decl.childForFieldName('name')?.text;
             if (name) {
+              const annotations = annotationsFromModifiers(member);
               out.push({
                 symbolId: this.buildSymbolId(filePath, name, 'variable'),
                 name,
                 kind: 'variable',
                 ...this.nodeToLineRange(member),
+                ...(annotations ? { annotations } : {}),
               });
             }
           }
