@@ -101,7 +101,15 @@ function stringValues(node: SyntaxNode): string[] {
 }
 
 function decode(raw: string): string {
-  return raw.replace(/\\(.)/gs, (all, c: string) => SIMPLE_ESCAPES[c] ?? all);
+  // Unicode escapes (one or more `u`), octal escapes (\0 to \377) and the simple escapes, as javac reads them.
+  return raw.replace(
+    /\\(?:u+([0-9a-fA-F]{4})|([0-3][0-7]{2}|[0-7]{1,2})|(.))/gs,
+    (all, hex: string | undefined, octal: string | undefined, c: string | undefined) => {
+      if (hex !== undefined) return String.fromCharCode(parseInt(hex, 16));
+      if (octal !== undefined) return String.fromCharCode(parseInt(octal, 8));
+      return SIMPLE_ESCAPES[c!] ?? all;
+    },
+  );
 }
 
 function cut(value: string): string {

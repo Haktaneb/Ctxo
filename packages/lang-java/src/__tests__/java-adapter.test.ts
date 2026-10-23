@@ -146,10 +146,24 @@ describe('JavaAdapter annotations (syntax tier)', () => {
   @N(n = 1, flag = true, kind = Kind.X, cls = A.class, inner = @Other("z"), id = "k") void c() {}
 }`;
     expect(await annotationsOf(source, 'a::method')).toEqual([
-      { name: 'E', args: ['a\tb\nc"d\\e\'f g\\u0041\\0'] },
+      { name: 'E', args: ['a\tb\nc"d\\e\'f gA\0'] },
     ]);
     expect(await annotationsOf(source, 'b::method')).toEqual([{ name: 'T', named: { other: 'kept' } }]);
     expect(await annotationsOf(source, 'c::method')).toEqual([{ name: 'N', named: { id: 'k' } }]);
+  });
+
+  it('unicode escapes (also with repeated u) and octal escapes are decoded like javac', async () => {
+    const source = `class A {
+  // tree-sitter-java 0.23.5 does not parse the repeated-u form (\\uu0041), so it cannot be asserted here
+  @U("\\u0041\\u00e9") void a() {}
+  @O("\\101\\12\\7\\1234\\400") void b() {}
+  @K("\\\\u0041 \\q") void c() {}
+}`;
+    expect(await annotationsOf(source, 'a::method')).toEqual([{ name: 'U', args: ['Aé'] }]);
+    // \101 = A, \12 = LF, \7 = BEL, \123 followed by 4 = "S4", \40 followed by 0 = " 0"
+    expect(await annotationsOf(source, 'b::method')).toEqual([{ name: 'O', args: ['A\n\x07S4 0'] }]);
+    // an escaped backslash before u0041 is not a unicode escape; an unknown escape stays as written
+    expect(await annotationsOf(source, 'c::method')).toEqual([{ name: 'K', args: ['\\u0041 \\q'] }]);
   });
 
   it('a member named type is dropped, a member named member is kept (QR1, QR23); first duplicate wins', async () => {
