@@ -231,8 +231,8 @@ describe.skipIf(!ENABLED)('native facts in TypeScript, C#, Java and Go', () => {
   });
 
   // In CI the toolchains must be there: a broken setup-java or setup-go must fail the job, not fall back.
-  it.runIf(Boolean(process.env['CI']))('the Java and Go toolchains are available in CI', () => {
-    expect({ go: HAS_GO, jdt: CAN_RUN_JDT }).toEqual({ go: true, jdt: true });
+  it.runIf(Boolean(process.env['CI']))('the Java, Go and .NET toolchains are available in CI', () => {
+    expect({ go: HAS_GO, jdt: CAN_RUN_JDT, dotnet: HAS_DOTNET }).toEqual({ go: true, jdt: true, dotnet: true });
   });
 
   it('without a fact request no file has a facts key', () => {
@@ -249,6 +249,10 @@ describe.skipIf(!ENABLED)('native facts in TypeScript, C#, Java and Go', () => {
     // The fact belongs to a symbol of the same file (the method or function holding the comparison).
     const fact = entry.facts!.find((f) => f.text === 'n >= 5')!;
     expect(entry.symbols.map((s) => s.symbolId)).toContain(fact.symbolId);
+  });
+
+  it.skipIf(!HAS_DOTNET)('the C# facts come from the Roslyn tier', () => {
+    expect(tierOf(factsOutput, 'C#')).toBe('full');
   });
 
   it.skipIf(!CAN_RUN_JDT)('the Java facts come from the JDT tier', () => {

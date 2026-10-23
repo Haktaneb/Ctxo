@@ -221,6 +221,11 @@ jobs:
           go-version-file: packages/lang-go/tools/ctxo-go-analyzer/go.mod
           cache-dependency-path: packages/lang-go/tools/ctxo-go-analyzer/go.sum
 
+      # The facts parity test runs C# on the Roslyn tier.
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 8.0.x
+
       - run: pnpm install --frozen-lockfile
 
       # Also builds the JDT analyzer JARs (Maven) that the Java full tier runs.
@@ -240,7 +245,7 @@ jobs:
         run: go test ./...
 
       # SQL call sites in TypeScript, Java and Go reach the lang-sql table, and the same
-      # native facts come from TypeScript, C#, Java and Go (C# in the tier the runner allows).
+      # native facts come from TypeScript, C# (Roslyn), Java and Go.
       # Both are opt-in (CTXO_PARITY_E2E=1), so the e2e-tests job skips them.
       - name: Run the end-to-end language parity tests
         env:
