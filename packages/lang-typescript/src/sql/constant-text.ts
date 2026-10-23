@@ -4,7 +4,8 @@ import { WalkState, declarationOf, exportOf, importBindingOf, unwrapExpression }
 
 /**
  * The compile-time constant string an expression evaluates to, or undefined (spec 8A.2, designer call 7).
- * At most 8 declaration steps, never the same declaration twice.
+ * At most 8 declaration steps; a declaration costs a step on its first visit only, so the same constant may
+ * appear several times in one expression, and a declaration that depends on itself has no text.
  *
  * - string literal, template without substitutions: its value
  * - template with substitutions: every substitution constant, joined with the literal parts
@@ -15,7 +16,14 @@ import { WalkState, declarationOf, exportOf, importBindingOf, unwrapExpression }
  * - anything else: undefined
  */
 export function constantText(expr: Node, resolver: ModuleResolver): string | undefined {
-  return textOf(expr, resolver, new WalkState());
+  return textOf(expr, resolver, new ConstantWalk());
+}
+
+/** One evaluation: the step budget, each declaration's text once known, and the declarations being evaluated. */
+class ConstantWalk {
+  readonly state = new WalkState();
+  readonly memo = new Map<Node, string | undefined>();
+  readonly inProgress = new Set<Node>();
 }
 
 /** A tagged template's text with each `${...}` replaced by `@p0`, `@p1`, ... in order. */
@@ -29,7 +37,7 @@ export function taggedTemplateText(template: TaggedTemplateExpression): string {
   return text;
 }
 
-function textOf(node: Node, resolver: ModuleResolver, state: WalkState): string | undefined {
+function textOf(node: Node, resolver: ModuleResolver, walk: ConstantWalk): string | undefined {
   const expr = unwrapExpression(node, false);
 
   if (Node.isStringLiteral(expr) || Node.isNoSubstitutionTemplateLiteral(expr)) return expr.getLiteralValue();
@@ -37,7 +45,7 @@ function textOf(node: Node, resolver: ModuleResolver, state: WalkState): string 
   if (Node.isTemplateExpression(expr)) {
     let text = expr.getHead().getLiteralText();
     for (const span of expr.getTemplateSpans()) {
-      const part = textOf(span.getExpression(), resolver, state);
+      const part = textOf(span.getExpression(), resolver, walk);
       if (part === undefined) return undefined;
       text += part + span.getLiteral().getLiteralText();
     }
@@ -45,24 +53,35 @@ function textOf(node: Node, resolver: ModuleResolver, state: WalkState): string 
   }
 
   if (Node.isBinaryExpression(expr) && expr.getOperatorToken().getKind() === SyntaxKind.PlusToken) {
-    const left = textOf(expr.getLeft(), resolver, state);
+    const left = textOf(expr.getLeft(), resolver, walk);
     if (left === undefined) return undefined;
-    const right = textOf(expr.getRight(), resolver, state);
+    const right = textOf(expr.getRight(), resolver, walk);
     return right === undefined ? undefined : left + right;
   }
 
-  if (Node.isIdentifier(expr)) return textOfDeclaration(declarationOf(expr), resolver, state);
+  if (Node.isIdentifier(expr)) return textOfDeclaration(declarationOf(expr), resolver, walk);
   return undefined;
 }
 
-function textOfDeclaration(declaration: Node | undefined, resolver: ModuleResolver, state: WalkState): string | undefined {
-  if (!declaration || !state.enter(declaration)) return undefined;
+/** A declaration's text, computed once per walk; a declaration met again while it is evaluated has none. */
+function textOfDeclaration(declaration: Node | undefined, resolver: ModuleResolver, walk: ConstantWalk): string | undefined {
+  if (!declaration) return undefined;
+  if (walk.memo.has(declaration)) return walk.memo.get(declaration);
+  if (walk.inProgress.has(declaration) || !walk.state.charge(declaration)) return undefined;
 
+  walk.inProgress.add(declaration);
+  const text = evaluateDeclaration(declaration, resolver, walk);
+  walk.inProgress.delete(declaration);
+  walk.memo.set(declaration, text);
+  return text;
+}
+
+function evaluateDeclaration(declaration: Node, resolver: ModuleResolver, walk: ConstantWalk): string | undefined {
   const binding = importBindingOf(declaration);
   if (binding) {
     if (!isRelativeSpecifier(binding.specifier) || binding.exportName === undefined) return undefined;
     const target = resolver.sourceFileFor(binding.file, binding.specifier);
-    return target ? textOfDeclaration(exportOf(target, binding.exportName, resolver, state), resolver, state) : undefined;
+    return target ? textOfDeclaration(exportOf(target, binding.exportName, resolver, walk.state), resolver, walk) : undefined;
   }
 
   if (Node.isVariableDeclaration(declaration)) {
@@ -70,9 +89,9 @@ function textOfDeclaration(declaration: Node | undefined, resolver: ModuleResolv
     if (!Node.isVariableDeclarationList(list) || list.getDeclarationKind() !== VariableDeclarationKind.Const) return undefined;
     if (!Node.isIdentifier(declaration.getNameNode())) return undefined;
     const initializer = declaration.getInitializer();
-    return initializer ? textOf(initializer, resolver, state) : undefined;
+    return initializer ? textOf(initializer, resolver, walk) : undefined;
   }
 
-  if (Node.isExportAssignment(declaration)) return textOf(declaration.getExpression(), resolver, state);
+  if (Node.isExportAssignment(declaration)) return textOf(declaration.getExpression(), resolver, walk);
   return undefined;
 }

@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { join, posix } from 'node:path';
+import { isAbsolute, posix, relative, resolve, sep } from 'node:path';
 import type { Project, SourceFile } from 'ts-morph';
 
 /** Only script files are read from disk (never `./config.json` or a stylesheet). */
@@ -44,7 +44,8 @@ export class ModuleResolver {
 
   /** The source file a relative `specifier` names from `from`: the project file, else a disk read under projectRoot. */
   sourceFileFor(from: SourceFile, specifier: string): SourceFile | undefined {
-    if (!isRelativeSpecifier(specifier)) return undefined;
+    // A backslash is a separator on Windows but not in the POSIX normalisation below, so `..\` could escape.
+    if (!isRelativeSpecifier(specifier) || specifier.includes('\\')) return undefined;
     const fromPath = from.getFilePath().replace(/\\/g, '/').replace(/^\/+/, '');
     const base = posix.normalize(posix.join(posix.dirname(fromPath), specifier));
     if (base === '..' || base.startsWith('../') || base.startsWith('/') || base === '.') return undefined;
@@ -57,11 +58,16 @@ export class ModuleResolver {
     }
     if (this.projectRoot === undefined) return undefined;
 
+    const root = resolve(this.projectRoot);
     for (const candidate of candidates) {
       if (this.misses.has(candidate) || !SCRIPT_EXTENSIONS.has(posix.extname(candidate))) continue;
+      // Path arithmetic only (no file-system check before the read): the platform's resolution must stay under the root.
+      const full = resolve(root, candidate);
+      const fromRoot = relative(root, full);
+      if (fromRoot === '' || fromRoot === '..' || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) continue;
       let text: string;
       try {
-        text = readFileSync(join(this.projectRoot, candidate), 'utf-8');
+        text = readFileSync(full, 'utf-8');
       } catch {
         this.misses.add(candidate);
         continue;

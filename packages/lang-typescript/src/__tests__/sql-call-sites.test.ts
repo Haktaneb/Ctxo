@@ -162,6 +162,43 @@ describe('SQL call sites: the known-API table', () => {
     expect(adapter.getSqlStats()).toEqual({ constant: 5, nonConstant: 4 });
   });
 
+  it('a constant used twice in one expression stays constant', async () => {
+    const { edges, adapter } = await dataEdges({
+      'src/sql/parts.ts': `export const LOANS = 'dbo.Loans';\nexport const MEMBERS = 'dbo.Members';\n`,
+      'src/sql/index.ts': `export * from './parts';\n`,
+      [FILE]: [
+        `import { Pool } from 'pg';`,
+        `import { LOANS, MEMBERS } from './sql';`,
+        `const pool = new Pool();`,
+        `const S = 'dbo';`,
+        `const A = B + 'x';`,
+        `const B = A + 'y';`,
+        `export async function inTemplate() {`,
+        `  await pool.query(\`SELECT * FROM \${S}.Loans l JOIN \${S}.Members m ON m.Id = l.MemberId\`);`,
+        `}`,
+        `export async function inConcatenation() {`,
+        `  await pool.query('SELECT * FROM ' + S + '.Holds h JOIN ' + S + '.Members m ON m.Id = h.MemberId');`,
+        `}`,
+        `export async function throughOneBarrel() {`,
+        `  await pool.query('SELECT * FROM ' + LOANS + ' l JOIN ' + MEMBERS + ' m ON m.Id = l.MemberId');`,
+        `}`,
+        `export async function cycle() {`,
+        `  await pool.query(A);`,
+        `}`,
+      ].join('\n'),
+    });
+    expect(edges).toEqual([
+      reads('src/run.ts::inConcatenation::function', 'dbo.holds'),
+      reads('src/run.ts::inConcatenation::function', 'dbo.members'),
+      reads('src/run.ts::inTemplate::function', 'dbo.loans'),
+      reads('src/run.ts::inTemplate::function', 'dbo.members'),
+      reads('src/run.ts::throughOneBarrel::function', 'dbo.loans'),
+      reads('src/run.ts::throughOneBarrel::function', 'dbo.members'),
+    ]);
+    // The cycle A -> B -> A ends without a text instead of looping.
+    expect(adapter.getSqlStats()).toEqual({ constant: 3, nonConstant: 1 });
+  });
+
   it('the receiver must trace to the listed library', async () => {
     const { edges, adapter } = await dataEdges({
       'src/bus.ts': `export const bus = { execute(name: string) { return name; } };\n`,
@@ -444,6 +481,36 @@ describe('SQL call sites: the module resolver', () => {
       expect(project.getSourceFiles().map((f) => f.getFilePath()).sort()).toEqual(['/src/preloaded.ts', '/src/run.ts']);
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('never reads a file outside projectRoot, with forward or back slashes', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'ctxo-ts-resolver-escape-'));
+    try {
+      const root = join(tmp, 'project');
+      writeTree(tmp, {
+        'outside.ts': 'export const decoy = true;\n',
+        'project/src/inside.ts': 'export const inside = true;\n',
+      });
+      const project = new Project({ useInMemoryFileSystem: true });
+      const nested = project.createSourceFile('src/run.ts', '');
+      const top = project.createSourceFile('run.ts', '');
+      const resolver = new ModuleResolver(project, root);
+
+      expect(resolver.sourceFileFor(nested, './inside')?.getFilePath()).toBe('/src/inside.ts');
+      for (const [from, specifier] of [
+        [top, '../outside'],
+        [nested, '../../outside'],
+        [nested, './..\\..\\outside'],
+        [nested, '../..\\outside'],
+        [top, './..\\outside'],
+      ] as const) {
+        expect(resolver.sourceFileFor(from, specifier), `${from.getFilePath()} ${specifier}`).toBeUndefined();
+      }
+      expect(project.getSourceFiles().some((f) => f.getText().includes('decoy'))).toBe(false);
+      resolver.release();
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
     }
   });
 

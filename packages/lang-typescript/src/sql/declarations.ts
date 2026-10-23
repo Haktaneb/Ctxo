@@ -7,16 +7,29 @@ import { isRelativeSpecifier, type ModuleResolver } from './module-resolver.js';
  * the type checker.
  */
 
-/** The walk budget: at most `MAX_STEPS` declaration hops, never the same declaration twice (QR8). */
+/** The walk budget: at most `MAX_STEPS` declaration hops (QR8). */
 export const MAX_STEPS = 8;
 
 export class WalkState {
   private steps = 0;
   private readonly visited = new Set<Node>();
 
-  /** Takes one step onto `node`; false when the budget is spent or `node` was seen before. */
+  /** Receiver provenance: one step onto `node`; false when the budget is spent or `node` was seen before. */
   enter(node: Node): boolean {
     if (this.visited.has(node) || this.steps >= MAX_STEPS) return false;
+    this.visited.add(node);
+    this.steps++;
+    return true;
+  }
+
+  /**
+   * Constant evaluation and module hops: the first visit of `node` costs a step, a revisit is free (the same
+   * constant twice in one expression). False only when a first visit finds the budget spent; callers guard
+   * against cycles themselves.
+   */
+  charge(node: Node): boolean {
+    if (this.visited.has(node)) return true;
+    if (this.steps >= MAX_STEPS) return false;
     this.visited.add(node);
     this.steps++;
     return true;
@@ -194,9 +207,20 @@ export function importBindingOf(declaration: Node): ImportBinding | undefined {
  * function, class or enum; `export default <expression>` (the export assignment) or a default function or
  * class for `default`; a local `export { x as name }` resolves to the local declaration of `x`, and an
  * `export { x as name } from` re-export to its export specifier (an import binding). `export * from` relative
- * modules is searched last, each module costing one step.
+ * modules is searched last, each module costing one step on its first visit; a module already on the search
+ * path is skipped, so `export *` cycles end.
  */
 export function exportOf(file: SourceFile, name: string, resolver: ModuleResolver, state: WalkState): Node | undefined {
+  return exportIn(file, name, resolver, state, new Set([file]));
+}
+
+function exportIn(
+  file: SourceFile,
+  name: string,
+  resolver: ModuleResolver,
+  state: WalkState,
+  path: Set<SourceFile>,
+): Node | undefined {
   const stars: string[] = [];
   for (const statement of file.getStatements()) {
     if (name === 'default') {
@@ -231,8 +255,10 @@ export function exportOf(file: SourceFile, name: string, resolver: ModuleResolve
   for (const specifier of stars) {
     if (!isRelativeSpecifier(specifier)) continue;
     const target = resolver.sourceFileFor(file, specifier);
-    if (!target || !state.enter(target)) continue;
-    const found = exportOf(target, name, resolver, state);
+    if (!target || path.has(target) || !state.charge(target)) continue;
+    path.add(target);
+    const found = exportIn(target, name, resolver, state, path);
+    path.delete(target);
     if (found) return found;
   }
   return undefined;
