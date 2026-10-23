@@ -17,6 +17,8 @@ import {
   SYMBOL_KINDS,
 } from '@ctxo/plugin-api';
 
+import { classAnnotations, methodAnnotations } from './decorators.js';
+
 const SUPPORTED_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx'] as const;
 
 export class TsMorphAdapter implements ILanguageAdapter {
@@ -181,6 +183,7 @@ export class TsMorphAdapter implements ILanguageAdapter {
       const name = cls.getName();
       if (!name || !this.isExported(cls)) continue;
 
+      const clsAnnotations = classAnnotations(cls);
       symbols.push({
         symbolId: this.buildSymbolId(filePath, name, 'class'),
         name,
@@ -189,11 +192,13 @@ export class TsMorphAdapter implements ILanguageAdapter {
         endLine: cls.getEndLineNumber() - 1,
         startOffset: cls.getStart(),
         endOffset: cls.getEnd(),
+        ...(clsAnnotations ? { annotations: clsAnnotations } : {}),
       });
 
       // Extract methods
       for (const method of cls.getMethods()) {
         const methodName = method.getName();
+        const methodAnn = methodAnnotations(method);
         symbols.push({
           symbolId: this.buildSymbolId(filePath, `${name}.${methodName}`, 'method'),
           name: `${name}.${methodName}`,
@@ -202,6 +207,7 @@ export class TsMorphAdapter implements ILanguageAdapter {
           endLine: method.getEndLineNumber() - 1,
           startOffset: method.getStart(),
           endOffset: method.getEnd(),
+          ...(methodAnn ? { annotations: methodAnn } : {}),
         });
       }
     }
