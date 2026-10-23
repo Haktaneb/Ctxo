@@ -1,6 +1,6 @@
 {
   "name": "@ctxo/lang-sql",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Ctxo SQL language plugin (T-SQL definitions and data access)",
   "type": "module",
   "engines": {

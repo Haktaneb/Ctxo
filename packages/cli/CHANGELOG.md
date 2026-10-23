@@ -1,5 +1,19 @@
 # @ctxo/cli
 
+## 0.13.0
+
+### Minor Changes
+
+- d85177e: Co-change now comes from one git pass with its own window (`cochange` config, `--cochange-commits`, `--cochange-since`), `ctxo index --files` and `--commit` re-index incrementally, the v2 post-commit hook runs `ctxo index --commit HEAD` once per commit (upgraded in place by `ctxo init` and `ctxo doctor --fix`, never written into a global or system `core.hooksPath`), history keeps one snapshot per commit with confidence counted in distinct commits, and every blast-radius caller uses co-change with a new `coChangedFiles` field on `get_blast_radius` (#157). On upgrade, the first index write removes older same-commit duplicates from `communities.history/` (no information is lost), and `ctxo verify-index` reports files with a rename in their history as stale until the next `ctxo index`.
+- a7d8357: `ctxo index` now writes `.ctxo/index/contexts-view.json`, candidate bounded contexts clustered from dependencies and co-change with hub files damped, readable through `get_architectural_overlay({ mode: "contexts" })` (summary first, `candidate: <id>` for one in full) and the new `ctxo contexts [--json]`, with new `communities:`, `contextsView:` and `index.tests` config (#156 Phase 1). The overlay `mode`, `get_ranked_context` `searchMode` and `search_symbols` `mode` parameters are now registered so clients can send them, and the unused `fuzzy` parameter is removed.
+- cacea40: Plugin protocol v2 and data coupling (#156 Phase 1): `@ctxo/plugin-api` adds the data kinds (`table`, `view`, `procedure` with `reads`, `writes` and `executes` edges), typed symbol annotations, an opt-in facts channel and host capabilities, and the new `@ctxo/lang-sql` plugin (built on the zero-dependency `@ctxo/sql-extract` library, installed with `ctxo install sql`) indexes T-SQL definitions and the tables their bodies read and write. `@ctxo/lang-csharp` reports attribute annotations, adds SQL edges at known ADO.NET, Dapper, `SqlBulkCopy` and EF Core call sites when `@ctxo/lang-sql` is installed, and falls back to tree-sitter when its Roslyn helper cannot restore or build. The CLI puts data edges in the confirmed blast-radius tier, reports shared tables, ownership and external resources in the contexts view, recognises test files by test-framework annotations and adds the `csharp_tier` doctor check, and the other official plugins widen their `@ctxo/plugin-api` peer range.
+- c7ace77: Claude Code now gets a compact ctxo block in `CLAUDE.md` when the safe-edit guard and the skills are installed, and every other client gets the full block, inside versioned markers that are replaced in place without touching the rest of the file (#159). `ctxo init` gains `--only`, `--skip` and `--no-guard`, and `ctxo doctor` gains the `ai_rules`, `skills` and `claude_guard_hook` checks, which `ctxo doctor --fix` repairs. The blocks and skills are formatter-stable, a rules file linked to another client's gets the full block, skills carry a version marker so an older ctxo leaves a newer skill alone, and a block that expects the guard and the skills is left unchanged until they are installed. Upgrade a team together: a ctxo from before this release does not read the versioned markers.
+
+### Patch Changes
+
+- Updated dependencies [cacea40]
+  - @ctxo/plugin-api@0.9.0
+
 ## 0.12.0
 
 ### Minor Changes
