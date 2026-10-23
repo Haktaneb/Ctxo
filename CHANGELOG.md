@@ -63,6 +63,7 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (ten packages today). Per-pack
 
 ### Changed (domain knowledge layer)
 
+- `@ctxo/cli` no longer ships source maps in its npm package (unpacked size about 2.1 MB to about 0.8 MB); stack traces were never mapped without `--enable-source-maps`, so behaviour is unchanged.
 - `ctxo --version --json` always carries `modules`: `{"name":"@ctxo/domain","status":"not-installed"}`
   when the package is absent.
 - An installed `@ctxo/domain` turns the facts request on for every plugin (`capabilities.facts`). No
