@@ -18,6 +18,8 @@ const CONVENTIONS_FIX = 'Review with "ctxo domain discover", then confirm with "
 const SKILL_MARKER = /^<!-- ctxo-skill v(\d+)\.(\d+) -->[ \t]*$/m;
 
 interface DomainState {
+  /** The config as the host loaded it, kept so a check that needs the raw config does not load it twice. */
+  readonly loaded: ReturnType<CtxoHost['services']['loadConfig']>;
   readonly config: DomainConfig;
   readonly configProblems: number;
   readonly registry: LoadedRegistry | undefined;
@@ -26,7 +28,7 @@ interface DomainState {
 function load(host: CtxoHost, ctx: CheckContext): DomainState {
   const loaded = host.services.loadConfig(ctx.ctxoRoot);
   const { config, problems } = resolveDomainConfig((loaded.config as Record<string, unknown>)['domain']);
-  return { config, configProblems: problems.length, registry: readRegistry(ctx.projectRoot, config.registry) };
+  return { loaded, config, configProblems: problems.length, registry: readRegistry(ctx.projectRoot, config.registry) };
 }
 
 /** A valid registry with at least one context: the other checks have nothing to check without one. */
@@ -183,8 +185,7 @@ function conventionsCheck(host: CtxoHost): IHealthCheck {
         const state = load(host, ctx);
         if (contextsOf(state) === undefined) return { id, title, status: 'pass', message: 'no contexts; nothing to discover' };
 
-        const loaded = host.services.loadConfig(ctx.ctxoRoot);
-        const input = await gatherDiscoveryInput(host, ctx.projectRoot, ctx.ctxoRoot, loaded, state.config);
+        const input = await gatherDiscoveryInput(host, ctx.projectRoot, ctx.ctxoRoot, state.loaded, state.config);
         const { evidence, proposal } = discoverConventions(input);
 
         const configured = new Set(state.config.rules.trackerPrefixes);

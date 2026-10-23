@@ -82,6 +82,14 @@ function writeAgentSetup(root: string, events: readonly string[] = ['SessionStar
   applyLoaderRules(root, expected, diffLoaderRules(expected, readExistingLoaderRules(root)));
 }
 
+/** The bundled skill with its version marker rewritten to an older one, whatever the bundled version is. */
+function oldSkill(): string {
+  const bundled = readBundledSkill();
+  const old = bundled.replace(/<!-- ctxo-skill v\d+\.\d+ -->/, '<!-- ctxo-skill v0.1 -->');
+  expect(old).not.toBe(bundled);
+  return old;
+}
+
 function checks(root: string): Record<string, IHealthCheck> {
   const host: CtxoHost = createModuleHost({ projectRoot: root, mode: 'cli', cliVersion: domainVersion() });
   return Object.fromEntries(domainDoctorChecks(host).map((check) => [check.id, check]));
@@ -180,7 +188,7 @@ describe('domain_agent_setup', () => {
   it('warns for an outdated skill', async () => {
     const root = setup();
     writeAgentSetup(root);
-    put(root, '.claude/skills/ctxo-domain-fold/SKILL.md', readBundledSkill().replace('<!-- ctxo-skill v0.14 -->', '<!-- ctxo-skill v0.1 -->'));
+    put(root, '.claude/skills/ctxo-domain-fold/SKILL.md', oldSkill());
     const result = await run(root, 'domain_agent_setup');
     expect(result.status).toBe('warn');
     expect(result.message).toMatch(/outdated/);
@@ -193,6 +201,63 @@ describe('domain_agent_setup', () => {
     const result = await run(root, 'domain_agent_setup');
     expect(result.status).toBe('warn');
     expect(result.message).toMatch(/loader rules/);
+  });
+
+  it('expects SubagentStop when domain.guard.subagents is true', async () => {
+    const root = setup();
+    put(root, '.ctxo/config.yaml', 'version: "1.0"\ndomain:\n  guard:\n    subagents: true\n');
+    writeAgentSetup(root);
+    const missing = await run(root, 'domain_agent_setup');
+    expect(missing.status).toBe('warn');
+    expect(missing.message).toContain('not registered for SubagentStop');
+
+    writeAgentSetup(root, ['SessionStart', 'Stop', 'TaskCompleted', 'SubagentStop']);
+    expect((await run(root, 'domain_agent_setup')).status).toBe('pass');
+  });
+
+  it('does not expect SubagentStop by default', async () => {
+    const root = setup();
+    writeAgentSetup(root);
+    const result = await run(root, 'domain_agent_setup');
+    expect(result.status).toBe('pass');
+    expect(result.message).not.toContain('SubagentStop');
+  });
+
+  it('warns for a missing Cursor skill when .cursor/ exists, and for an outdated one', async () => {
+    const root = setup();
+    put(root, '.cursor/.keep', '');
+    writeAgentSetup(root);
+    const missing = await run(root, 'domain_agent_setup');
+    expect(missing.status).toBe('warn');
+    expect(missing.message).toContain('ctxo-domain-fold skill missing (.cursor/rules/ctxo-domain-fold.mdc)');
+    expect(missing.message).not.toContain('.claude/skills');
+
+    put(root, '.cursor/rules/ctxo-domain-fold.mdc', oldSkill());
+    const outdated = await run(root, 'domain_agent_setup');
+    expect(outdated.status).toBe('warn');
+    expect(outdated.message).toContain('ctxo-domain-fold skill outdated (.cursor/rules/ctxo-domain-fold.mdc)');
+
+    put(root, '.cursor/rules/ctxo-domain-fold.mdc', readBundledSkill());
+    expect((await run(root, 'domain_agent_setup')).status).toBe('pass');
+  });
+
+  it('reports a loader rule without the generated marker as blocked', async () => {
+    const root = setup();
+    writeAgentSetup(root);
+    put(root, '.claude/rules/ctxo-context-lending.md', '# written by hand\n');
+    const result = await run(root, 'domain_agent_setup');
+    expect(result.status).toBe('warn');
+    expect(result.message).toContain('loader rules out of date (1 blocked)');
+  });
+
+  it('warns, and does not throw, when .claude/settings.json is not valid JSON', async () => {
+    const root = setup();
+    writeAgentSetup(root);
+    put(root, '.claude/settings.json', '{ not json');
+    const result = await run(root, 'domain_agent_setup');
+    expect(result.status).toBe('warn');
+    expect(result.message).toContain('.claude/settings.json is not valid JSON');
+    expect(result.message).not.toContain('check failed');
   });
 });
 
