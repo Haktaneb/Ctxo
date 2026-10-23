@@ -386,4 +386,17 @@ describe('handleGetPrImpact', () => {
     expect(seen[0]!.hadMeta).toBe(false);
     expect(seen[0]!.args).toMatchObject({ since: 'HEAD~1', maxFiles: 50 });
   });
+
+  it('awaits an async enricher before the envelope', async () => {
+    const enrich: ResponseEnricher = async (payload) => ({ ...payload, enrichedBy: 'async', enrichedSecret: 'AKIAIOSFODNN7EXAMPLE' });
+    const git = createMockGit(['src/b.ts', 'src/c.ts']);
+    const handler = handleGetPrImpact(storage, git, new MaskingPipeline(), undefined, tempDir, undefined, undefined, enrich);
+
+    const result = await handler({ since: 'HEAD~1' });
+
+    const payload = JSON.parse(result.content[0]!.text);
+    expect(payload.enrichedBy).toBe('async');
+    expect(payload.enrichedSecret).toBe('[REDACTED:AWS_KEY]');
+    expect(payload._meta.totalItems).toBe(2);
+  });
 });

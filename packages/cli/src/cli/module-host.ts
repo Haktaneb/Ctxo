@@ -65,7 +65,8 @@ const HOST_SERVICES: CtxoHostServices = Object.freeze({
   createDocumentSearch: (documents: readonly SearchDocument[]) => {
     const engine = new SearchEngine(DOCUMENT_SEARCH_CONFIG);
     engine.buildDocumentIndex(documents);
-    return engine;
+    // Only search goes out: a module never reaches buildIndex or updateFile.
+    return { search: (query: string, limit?: number) => engine.search(query, limit) };
   },
   splitIdentifier: (name: string) => SymbolTokenizer.splitName(name),
 });

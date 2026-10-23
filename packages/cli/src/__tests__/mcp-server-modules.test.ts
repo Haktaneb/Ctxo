@@ -215,4 +215,25 @@ describe('registerTools with modules', () => {
       expect(payload['_meta'], tool).toBeDefined();
     }
   });
+
+  it('get_context_for_task receives the module reservation and enricher', async () => {
+    const reserveArgs: Array<Readonly<Record<string, unknown>>> = [];
+    const client = await connect([
+      moduleWith({
+        reserveTaskContextTokens: (args) => {
+          reserveArgs.push(args);
+          return 200;
+        },
+        enrich: { get_context_for_task: (payload) => ({ ...payload, enrichedBy: 'get_context_for_task' }) },
+      }),
+    ]);
+
+    const payload = await call(client, 'get_context_for_task', { symbolId: 'src/a.ts::A::function', taskType: 'understand' });
+
+    expect(payload['error']).toBeUndefined();
+    expect(payload['enrichedBy']).toBe('get_context_for_task');
+    expect(payload['tokenBudget']).toBe(4000);
+    expect(payload['_meta']).toBeDefined();
+    expect(reserveArgs).toEqual([{ symbolId: 'src/a.ts::A::function', taskType: 'understand', tokenBudget: 4000 }]);
+  });
 });

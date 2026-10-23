@@ -321,4 +321,19 @@ describe('GetWhyContextHandler', () => {
     const plain = JSON.parse((await handleGetWhyContext(storage, git, new MaskingPipeline(), undefined, tempDir)({ symbolId })).content[0]!.text);
     expect(plain.enrichedBy).toBeUndefined();
   });
+
+  it('awaits an async enricher before the envelope', async () => {
+    const symbolId = 'src/foo.ts::processPayment::function';
+    const enrich: ResponseEnricher = async (payload) => ({ ...payload, enrichedBy: 'async', enrichedSecret: 'AKIAIOSFODNN7EXAMPLE' });
+    const git = createMockGit([{ hash: 'abc', message: 'feat: add payment', date: '2024-01-01', author: 'dev' }]);
+    const handler = handleGetWhyContext(storage, git, new MaskingPipeline(), undefined, tempDir, undefined, enrich);
+
+    const result = await handler({ symbolId });
+
+    const payload = JSON.parse(result.content[0]!.text);
+    expect(payload.enrichedBy).toBe('async');
+    expect(payload.enrichedSecret).toBe('[REDACTED:AWS_KEY]');
+    expect(payload.commitHistory).toHaveLength(1);
+    expect(payload._meta).toMatchObject({ truncated: false });
+  });
 });

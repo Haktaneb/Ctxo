@@ -145,6 +145,31 @@ describe('host services', () => {
     expect(search.search('member', 1).results).toHaveLength(1);
   });
 
+  it('createDocumentSearch hands out search only, not the engine', () => {
+    const { services } = createModuleHost({ projectRoot: tempDir(), mode: 'cli' });
+    const search = services.createDocumentSearch([
+      { id: 'term:lending/hold', title: 'Hold', kind: 'term', path: 'docs/domain/glossary.md', text: 'A reservation of a copy for a member.' },
+    ]);
+
+    expect(Object.keys(search)).toEqual(['search']);
+    const raw = search as unknown as Record<string, unknown>;
+    expect(raw['buildIndex']).toBeUndefined();
+    expect(raw['buildDocumentIndex']).toBeUndefined();
+    expect(raw['updateFile']).toBeUndefined();
+    expect(search.search('reservation').results[0]!.symbolId).toBe('term:lending/hold');
+  });
+
+  it('createDocumentSearch keeps the input order for equal scores', () => {
+    const { services } = createModuleHost({ projectRoot: tempDir(), mode: 'cli' });
+    const twin = (id: string) => ({ id, title: 'Hold', kind: 'term', path: 'docs/domain/glossary.md', text: 'A reservation of a copy.' });
+
+    const ab = services.createDocumentSearch([twin('a'), twin('b')]).search('reservation').results.map((r) => r.symbolId);
+    const ba = services.createDocumentSearch([twin('b'), twin('a')]).search('reservation').results.map((r) => r.symbolId);
+
+    expect(ab).toEqual(['a', 'b']);
+    expect(ba).toEqual(['b', 'a']);
+  });
+
   it('splitIdentifier splits camelCase, PascalCase and snake_case', () => {
     const { services } = createModuleHost({ projectRoot: tempDir(), mode: 'cli' });
     expect(services.splitIdentifier('ILoanRepository')).toEqual(['I', 'Loan', 'Repository']);

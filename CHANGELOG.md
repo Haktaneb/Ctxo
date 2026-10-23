@@ -63,7 +63,16 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (ten packages today). Per-pack
   `SearchEngine.buildDocumentIndex`, `DOCUMENT_SEARCH_CONFIG` and `SymbolTokenizer.tokenizeText`; the
   `DocumentSearch` type) and `splitIdentifier(name)` (`SymbolTokenizer.splitName`). `@ctxo/cli/internal`
   also exports the `SearchDocument`, `SearchResponse`, `SearchResult` and `SearchMetrics` types. Search
-  behaviour for symbols is unchanged.
+  behaviour for symbols is unchanged. `createDocumentSearch` hands out only `search`.
+- Module API additions for the domain graph (#156, PR 3): `ResponseEnricher` may return a Promise.
+  `get_blast_radius`, `get_pr_impact` and `get_why_context` await it (new `applyEnricherAsync`, the
+  same plain-data guard); the synchronous tools drop a Promise result with the warning `<tool> enricher
+  returned a Promise; a synchronous tool cannot wait for it` and swallow its rejection. Several modules'
+  enrichers chain through a Promise. `get_context_for_task` joins the enrich seam as its seventh tool,
+  and the optional `CtxoModuleRegistration.reserveTaskContextTokens` (the `TokenReservation` type,
+  exported from `@ctxo/cli/internal`) keeps tokens back from its budget: the code context is packed into
+  `tokenBudget` minus the reservation (summed over modules, rounded, capped at a quarter of the budget,
+  0 when it throws or is not finite), and the payload still reports the requested `tokenBudget`.
 - CI: the domain acceptance tests (`pnpm --filter @ctxo/domain test:e2e`) run in `e2e-tests` and, with
   `CTXO_REQUIRE_DOTNET=1`, in `dotnet-tests` (a C# run that falls back to the syntax tier fails there
   instead of skipping). The e2e job timeout is 15 minutes.

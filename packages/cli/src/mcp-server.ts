@@ -33,7 +33,7 @@ import { handleGetSymbolImportance } from './adapters/mcp/get-symbol-importance.
 import { handleGetPrImpact } from './adapters/mcp/get-pr-impact.js';
 import { SessionRecorderAdapter } from './adapters/stats/session-recorder-adapter.js';
 import { withRecording } from './adapters/stats/with-recording.js';
-import { collectEnrichers } from './adapters/mcp/enrich-payload.js';
+import { collectEnrichers, collectTaskContextReservation } from './adapters/mcp/enrich-payload.js';
 import { CORE_TOOL_NAMES, collectModuleTools, handleModuleTool, moduleInputShape } from './adapters/mcp/module-tool-handler.js';
 import type { StalenessCheck } from './adapters/mcp/get-logic-slice.js';
 import type { LoadedModule } from './adapters/modules/module-loader.js';
@@ -138,8 +138,9 @@ export async function startMcpServer(options: StartMcpServerOptions = {}): Promi
 
 /**
  * Registers the 14 core tools, then the tools of the loaded modules, on `server`. A module's enrichers
- * reach the six core tools with an enrich seam; a module tool named like a core tool, or one whose input
- * schema cannot be built, is skipped with a warning. Exported for tests.
+ * reach the seven core tools with an enrich seam, and their token reservations reach get_context_for_task;
+ * a module tool named like a core tool, or one whose input schema cannot be built, is skipped with a
+ * warning. Exported for tests.
  */
 export function registerTools(
   server: McpServer,
@@ -154,6 +155,7 @@ export function registerTools(
   modules: readonly LoadedModule[] = [],
 ): void {
   const enrichers = collectEnrichers(modules);
+  const taskContextReservation = collectTaskContextReservation(modules);
 
   // Tool annotations — all Ctxo tools are read-only index queries
   const toolAnnotations = {
@@ -258,7 +260,7 @@ export function registerTools(
     (args) => deadCodeHandler(args),
   );
 
-  const contextForTaskHandler = withRecording('get_context_for_task', handleGetContextForTask(storage, masking, staleness, ctxoRoot, coChange), recorder);
+  const contextForTaskHandler = withRecording('get_context_for_task', handleGetContextForTask(storage, masking, staleness, ctxoRoot, coChange, enrichers.get('get_context_for_task'), taskContextReservation), recorder);
 
   server.registerTool(
     'get_context_for_task',

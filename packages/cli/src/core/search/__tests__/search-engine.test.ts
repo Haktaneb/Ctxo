@@ -361,6 +361,17 @@ describe('SearchEngine document search', () => {
     expect(engine.search('reservation').results[0]!.symbolId).toBe('term:lending/hold');
   });
 
+  it('buildIndex after buildDocumentIndex makes updateFile work again', () => {
+    const engine = new SearchEngine(DOCUMENT_SEARCH_CONFIG);
+    engine.buildDocumentIndex(DOCUMENTS);
+    engine.buildIndex([sym('LoanPolicy', 'class', 'src/loan-policy.ts')]);
+    engine.updateFile('src/renewal.ts', [sym('RenewalWindow', 'class', 'src/renewal.ts')]);
+
+    expect(engine.search('RenewalWindow').results[0]!.symbolId).toBe('src/renewal.ts::RenewalWindow::class');
+    expect(engine.search('LoanPolicy').results[0]!.symbolId).toBe('src/loan-policy.ts::LoanPolicy::class');
+    expect(engine.search('reservation').results.map((r) => r.symbolId)).not.toContain('term:lending/hold');
+  });
+
   it('rebuilding the document index replaces the earlier documents', () => {
     const engine = new SearchEngine(DOCUMENT_SEARCH_CONFIG);
     engine.buildDocumentIndex(DOCUMENTS);

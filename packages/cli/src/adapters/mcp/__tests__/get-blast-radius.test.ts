@@ -303,6 +303,18 @@ describe('GetBlastRadiusHandler', () => {
     expect(seen[0]!.hadMeta).toBe(false);
     expect(seen[0]!.args).toMatchObject({ symbolId: 'src/c.ts::C::interface' });
   });
+
+  it('awaits an async enricher before the envelope', async () => {
+    const enrich: ResponseEnricher = async (payload) => ({ ...payload, enrichedBy: 'async', enrichedSecret: 'AKIAIOSFODNN7EXAMPLE' });
+    const handler = handleGetBlastRadius(storage, new MaskingPipeline(), undefined, tempDir, undefined, undefined, undefined, enrich);
+
+    const result = await handler({ symbolId: 'src/c.ts::C::interface' });
+
+    const payload = JSON.parse(result.content[0]!.text);
+    expect(payload.enrichedBy).toBe('async');
+    expect(payload.enrichedSecret).toBe('[REDACTED:AWS_KEY]');
+    expect(payload._meta.totalItems).toBe(2);
+  });
 });
 
 /** b.ts imports a.ts (a potential dependent of A); c.ts has no edge to either. */

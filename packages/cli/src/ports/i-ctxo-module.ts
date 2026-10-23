@@ -33,12 +33,22 @@ export type CoreToolName =
 
 /**
  * Adds fields to a core tool's payload before the envelope, truncation and masking see it. Additive only:
- * it returns the payload with its fields added and never removes or rewrites the core's fields.
+ * it returns the payload with its fields added and never removes or rewrites the core's fields. Seven core
+ * tools have the seam: `get_blast_radius`, `get_pr_impact` and `get_why_context` await a Promise result;
+ * the synchronous `search_symbols`, `find_importers`, `get_logic_slice` and `get_context_for_task` cannot,
+ * so for them a Promise result is dropped with a warning.
  */
 export type ResponseEnricher = (
   payload: Record<string, unknown>,
   args: Readonly<Record<string, unknown>>,
-) => Record<string, unknown>;
+) => Record<string, unknown> | Promise<Record<string, unknown>>;
+
+/**
+ * The tokens a module keeps back from `get_context_for_task`'s budget for the fields its enricher adds,
+ * given the tool's validated arguments. The core packs the code context into what is left; it rounds the
+ * value and caps it at a quarter of the budget, and reserves nothing when it throws or is not finite.
+ */
+export type TokenReservation = (args: Readonly<Record<string, unknown>>) => number;
 
 /** An MCP tool a module contributes. The CLI wraps the handler with the envelope, masking and recording. */
 export interface ModuleToolDefinition {
@@ -150,6 +160,8 @@ export interface CtxoModuleRegistration {
   indexPass?(ctx: IndexPassContext): Promise<void>;
   registerTools?(registrar: ToolRegistrar): void;
   readonly enrich?: Partial<Record<CoreToolName, ResponseEnricher>>;
+  /** Tokens kept back from `get_context_for_task`'s budget for this module's enriched fields. */
+  readonly reserveTaskContextTokens?: TokenReservation;
   registerCommands?(registrar: CommandRegistrar): void;
   readonly init?: InitContribution;
   readonly doctorChecks?: readonly IHealthCheck[];
@@ -186,7 +198,10 @@ export interface CtxoHostServices {
   readonly testFrameworkAnnotations: readonly string[];
   /** Symbol kinds that are data resources (`table`, `view`): plugin-api's own `DATA_RESOURCE_KINDS`, one source. */
   readonly dataResourceKinds: readonly string[];
-  /** A BM25 search over documents (the core engine: camelCase-aware, trigram and fuzzy fallback), built once. */
+  /**
+   * A BM25 search over documents (the core engine: camelCase-aware, trigram and fuzzy fallback), built once.
+   * Pass the documents in codepoint order (of `id`, say): equal scores keep the input order.
+   */
   createDocumentSearch(documents: readonly SearchDocument[]): DocumentSearch;
   /** Splits an identifier into its words: `ILoanRepository` gives `I`, `Loan`, `Repository`; `member_account_id` gives `member`, `account`, `id`. */
   splitIdentifier(name: string): string[];

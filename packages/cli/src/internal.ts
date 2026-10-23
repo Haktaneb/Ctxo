@@ -13,6 +13,7 @@ import type { BlastRadiusCalculator as BlastRadiusCalculatorClass } from './core
 export type {
   CoreToolName,
   ResponseEnricher,
+  TokenReservation,
   ModuleToolDefinition,
   ToolRegistrar,
   ModuleCommandContext,

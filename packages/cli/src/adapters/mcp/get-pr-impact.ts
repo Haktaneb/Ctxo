@@ -12,7 +12,7 @@ import type { ClusterLabelMasker } from '../../core/overlay/cluster-label-masker
 import { wrapResponse } from '../../core/response-envelope.js';
 import type { CommunitySnapshot } from '../../core/types.js';
 import type { ResponseEnricher } from '../../ports/i-ctxo-module.js';
-import { applyEnricher } from './enrich-payload.js';
+import { applyEnricherAsync } from './enrich-payload.js';
 
 export const InputSchema = z.object({
   since: z.string().optional().default('HEAD~1'),
@@ -235,7 +235,7 @@ export function handleGetPrImpact(
 
       const stalenessMeta = await buildSnapshotStaleness(storage, git);
       const extras = stalenessMeta ? { snapshotStaleness: stalenessMeta } : undefined;
-      const enriched = applyEnricher(enrich, body, parsed.data, 'get_pr_impact');
+      const enriched = await applyEnricherAsync(enrich, body, parsed.data, 'get_pr_impact');
       const payload = masking.mask(JSON.stringify(wrapResponse(enriched, extras)));
 
       const content: Array<{ type: 'text'; text: string }> = [];
