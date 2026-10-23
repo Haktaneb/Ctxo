@@ -1,0 +1,9 @@
+{
+  "description": "JdbcTemplate query/queryForObject/update/batchUpdate, NamedParameterJdbcTemplate.queryForList, createNativeQuery, a native @Query and the four MyBatis annotations give reads and writes; a JPQL @Query gives nothing.",
+  "mode": "java",
+  "accesses": {
+    "reads": ["dbo.holds", "dbo.loans"],
+    "writes": ["dbo.holds", "dbo.loans", "dbo.members"],
+    "executes": []
+  }
+}

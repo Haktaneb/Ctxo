@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { delimiter } from 'node:path';
 import { createLogger } from '../logger.js';
+import type { SqlCallSite } from '../sql-edges.js';
 
 const log = createLogger('ctxo:lang-java');
 
@@ -35,18 +36,37 @@ export interface JdtFileResult {
   symbols: JdtSymbol[];
   edges: JdtEdge[];
   complexity: unknown[];
+  /** SQL call sites (only with `--sql-call-sites`; omitted by the analyzer when the file has none). */
+  sqlCallSites?: SqlCallSite[];
+}
+
+/** How many SQL texts the analyzer read as compile-time constants and how many it could not. */
+export interface JdtSqlStats {
+  constant: number;
+  nonConstant: number;
 }
 
 export interface JdtBatchResult {
   files: JdtFileResult[];
   totalFiles: number;
   elapsed: string;
+  /** From the `done` line; absent without `--sql-call-sites` (the keep-alive prints no `done` line). */
+  sql?: JdtSqlStats;
 }
 
 export interface RunOpts {
   classpathOverride?: string[];
   allowBuildTools?: boolean;
   timeoutMs?: number;
+  /** Pass `--sql-call-sites`: the analyzer reports SQL call-site records and counts. */
+  sqlCallSites?: boolean;
+}
+
+/** Reads the `sql` member of a `done` line; undefined unless both counts are numbers. */
+function parseSqlStats(value: unknown): JdtSqlStats | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const { constant, nonConstant } = value as { constant?: unknown; nonConstant?: unknown };
+  return typeof constant === 'number' && typeof nonConstant === 'number' ? { constant, nonConstant } : undefined;
 }
 
 /**
@@ -57,6 +77,7 @@ export function buildAnalyzerArgs(jarPath: string, projectRoot: string, opts: Ru
   const args = ['-jar', jarPath, projectRoot];
   if (opts.classpathOverride?.length) args.push('--classpath', opts.classpathOverride.join(delimiter));
   if (opts.allowBuildTools) args.push('--allow-build-tools');
+  if (opts.sqlCallSites) args.push('--sql-call-sites');
   return args;
 }
 
@@ -76,6 +97,7 @@ export async function runBatchIndex(
     const args = buildAnalyzerArgs(jarPath, projectRoot, opts);
     const proc = spawn(javaBin, args, { stdio: ['ignore', 'pipe', 'pipe'], timeout: timeoutMs });
     const files: JdtFileResult[] = [];
+    let sql: JdtSqlStats | undefined;
     let totalFiles = 0,
       elapsed = '',
       stderr = '',
@@ -88,7 +110,13 @@ export async function runBatchIndex(
         buffer = buffer.slice(nl + 1);
         if (!line) continue;
         try {
-          const obj = JSON.parse(line) as { type: string; message?: unknown; totalFiles?: unknown; elapsed?: unknown };
+          const obj = JSON.parse(line) as {
+            type: string;
+            message?: unknown;
+            totalFiles?: unknown;
+            elapsed?: unknown;
+            sql?: unknown;
+          };
           switch (obj.type) {
             case 'file':
               files.push(obj as unknown as JdtFileResult);
@@ -99,6 +127,7 @@ export async function runBatchIndex(
             case 'done':
               totalFiles = Number(obj.totalFiles ?? 0);
               elapsed = String(obj.elapsed ?? '');
+              sql = parseSqlStats(obj.sql);
               break;
           }
         } catch {
@@ -115,7 +144,7 @@ export async function runBatchIndex(
         resolve(empty);
         return;
       }
-      resolve({ files, totalFiles, elapsed });
+      resolve({ files, totalFiles, elapsed, ...(sql ? { sql } : {}) });
     });
     proc.on('error', (err) => {
       log.error(`ctxo-jdt-analyzer spawn error: ${(err as Error).message}`);
@@ -124,8 +153,18 @@ export async function runBatchIndex(
   });
 }
 
+/** Options of the keep-alive process. */
+export interface JdtKeepAliveOptions {
+  /** Pass `--sql-call-sites` (after `--keep-alive`), so each file result carries its call-site records. */
+  readonly sqlCallSites?: boolean;
+  /** Inactivity timeout in milliseconds (default 300000). */
+  readonly idleMs?: number;
+}
+
 /** Keep-alive JDT analyzer for watch mode: stays alive, re-analyzes one file per request. */
 export class JdtKeepAlive {
+  private readonly sqlCallSites: boolean;
+  private readonly idleMs: number;
   private proc: ChildProcess | null = null;
   private buffer = '';
   private pending = new Map<string, (r: JdtFileResult | null) => void>();
@@ -135,16 +174,19 @@ export class JdtKeepAlive {
     private readonly javaBin: string,
     private readonly jarPath: string,
     private readonly projectRoot: string,
-    private readonly idleMs = 300_000,
-  ) {}
+    options: JdtKeepAliveOptions = {},
+  ) {
+    this.sqlCallSites = options.sqlCallSites === true;
+    this.idleMs = options.idleMs ?? 300_000;
+  }
 
   async start(): Promise<boolean> {
     return new Promise((resolve) => {
       let settled = false;
       const settle = (v: boolean) => { if (!settled) { settled = true; resolve(v); } };
-      this.proc = spawn(this.javaBin, ['-jar', this.jarPath, this.projectRoot, '--keep-alive'], {
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
+      const args = ['-jar', this.jarPath, this.projectRoot, '--keep-alive'];
+      if (this.sqlCallSites) args.push('--sql-call-sites');
+      this.proc = spawn(this.javaBin, args, { stdio: ['pipe', 'pipe', 'pipe'] });
       this.proc.stdout!.on('data', (chunk: Buffer) => {
         this.buffer += chunk.toString();
         let nl: number;

@@ -1,8 +1,8 @@
 import type { ComplexityMetrics, GraphEdge, ILanguageAdapter, SymbolNode } from '@ctxo/plugin-api';
 import { createLogger } from '../logger.js';
 import { resolveAnalyzerJar, analyzerPackageVersion, baseVersionMismatch, PLUGIN_VERSION } from './jar-resolve.js';
-import { toSymbolNode } from './jdt-mapping.js';
-import { runBatchIndex, JdtKeepAlive, type JdtFileResult } from './jdt-process.js';
+import { toGraphEdges, toSymbolNode } from './jdt-mapping.js';
+import { runBatchIndex, JdtKeepAlive, type JdtFileResult, type JdtSqlStats } from './jdt-process.js';
 import { detectJavaRuntime } from './toolchain-detect.js';
 
 const log = createLogger('ctxo:lang-java');
@@ -19,6 +19,22 @@ export class JdtAnalyzerAdapter implements ILanguageAdapter {
   private batchPromise: Promise<void> | null = null;
   private initialized = false;
   private keepAlive: JdtKeepAlive | null = null;
+  private readonly sqlCallSites: boolean;
+  private sqlStats: JdtSqlStats | undefined;
+
+  /** `sqlCallSites`: ask the analyzer for SQL call sites and turn them into data edges (the host's `capabilities.sqlCallSites`). */
+  constructor(options: { readonly sqlCallSites?: boolean } = {}) {
+    this.sqlCallSites = options.sqlCallSites === true;
+  }
+
+  /**
+   * How many SQL texts the analyzer read as constants and how many it could not, summed over the batch
+   * runs of this adapter instance (cumulative: a full index run creates fresh adapters, and `ctxo watch`
+   * never reports it). Undefined without `sqlCallSites` or before any batch has reported.
+   */
+  getSqlStats(): JdtSqlStats | undefined {
+    return this.sqlStats ? { ...this.sqlStats } : undefined;
+  }
 
   isSupported(filePath: string): boolean {
     return filePath.toLowerCase().endsWith('.java');
@@ -63,9 +79,7 @@ export class JdtAnalyzerAdapter implements ILanguageAdapter {
     await this.ensureBatch();
     const file = this.cache.get(this.norm(filePath));
     if (!file) return [];
-    return file.edges
-      .filter((e) => FULL_SYMBOL_ID.test(e.from) && e.to.length > 0)
-      .map((e) => ({ from: e.from, to: e.to, kind: e.kind as GraphEdge['kind'] }));
+    return toGraphEdges(file, { sqlCallSites: this.sqlCallSites });
   }
 
   async extractComplexity(_filePath: string, _source: string): Promise<ComplexityMetrics[]> {
@@ -74,7 +88,7 @@ export class JdtAnalyzerAdapter implements ILanguageAdapter {
 
   async startKeepAlive(): Promise<boolean> {
     if (!this.isReady() || !this.jarPath || !this.root) return false;
-    this.keepAlive = new JdtKeepAlive(this.javaBin, this.jarPath, this.root);
+    this.keepAlive = new JdtKeepAlive(this.javaBin, this.jarPath, this.root, { sqlCallSites: this.sqlCallSites });
     const ok = await this.keepAlive.start();
     if (!ok) this.keepAlive = null;
     return ok;
@@ -104,7 +118,13 @@ export class JdtAnalyzerAdapter implements ILanguageAdapter {
 
   private async runBatch(): Promise<void> {
     if (!this.jarPath || !this.root) return;
-    const result = await runBatchIndex(this.javaBin, this.jarPath, this.root);
+    const result = await runBatchIndex(this.javaBin, this.jarPath, this.root, { sqlCallSites: this.sqlCallSites });
+    if (result.sql) {
+      this.sqlStats = {
+        constant: (this.sqlStats?.constant ?? 0) + result.sql.constant,
+        nonConstant: (this.sqlStats?.nonConstant ?? 0) + result.sql.nonConstant,
+      };
+    }
     this.cache.clear();
     for (const file of result.files) this.cache.set(this.norm(file.file), file);
     log.info(`Java analyzer batch: ${result.files.length} files in ${result.elapsed}`);

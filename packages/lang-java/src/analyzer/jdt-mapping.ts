@@ -1,5 +1,22 @@
-import type { SymbolAnnotation, SymbolKind, SymbolNode } from '@ctxo/plugin-api';
-import type { JdtAnnotation, JdtSymbol } from './jdt-process.js';
+import type { GraphEdge, SymbolAnnotation, SymbolKind, SymbolNode } from '@ctxo/plugin-api';
+import { sqlEdgesFromCallSites } from '../sql-edges.js';
+import type { JdtAnnotation, JdtFileResult, JdtSymbol } from './jdt-process.js';
+
+const FULL_SYMBOL_ID = /^.+::.+::.+$/;
+
+/**
+ * The graph edges of one analyzer file result, shared by the batch and keep-alive paths: the analyzer's
+ * own edges (full three-part source ids, non-empty target), then the SQL data edges of the call-site
+ * records when `sqlCallSites` is on. Data edges bypass the three-part filter: their targets are
+ * `<name>::table` and `<name>::procedure`.
+ */
+export function toGraphEdges(file: JdtFileResult, options: { readonly sqlCallSites: boolean }): GraphEdge[] {
+  const edges = file.edges
+    .filter((e) => FULL_SYMBOL_ID.test(e.from) && e.to.length > 0)
+    .map((e) => ({ from: e.from, to: e.to, kind: e.kind as GraphEdge['kind'] }));
+  if (!options.sqlCallSites || !file.sqlCallSites?.length) return edges;
+  return [...edges, ...sqlEdgesFromCallSites(file.sqlCallSites)];
+}
 
 function toAnnotation(a: JdtAnnotation): SymbolAnnotation {
   const named = a.named && Object.keys(a.named).length > 0 ? { ...a.named } : undefined;

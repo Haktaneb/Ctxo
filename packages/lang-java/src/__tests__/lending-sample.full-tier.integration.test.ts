@@ -57,3 +57,88 @@ describe.skipIf(!CAN_RUN_JDT)('lending sample (JDT full tier, real jar)', () => 
     expect(byId.get(`${LOAN_FILE}::memberId::method`)).not.toHaveProperty('annotations');
   }, 130_000);
 });
+
+const DATA = 'src/main/java/lending/data';
+const DATA_FILES = [`${DATA}/LoanRepository.java`, `${DATA}/LoanJpaRepository.java`, `${DATA}/LoanMapper.java`];
+
+/** The data edges (`reads`, `writes`, `executes`) of the data files as `symbolId -> ["kind target", ...]`. */
+async function dataEdges(adapter: JavaCompositeAdapter): Promise<Record<string, string[]>> {
+  const out: Record<string, string[]> = {};
+  for (const file of DATA_FILES) {
+    for (const e of await adapter.extractEdges(file, '')) {
+      if (e.kind !== 'reads' && e.kind !== 'writes' && e.kind !== 'executes') continue;
+      (out[e.from] ??= []).push(`${e.kind} ${e.to}`);
+    }
+  }
+  return out;
+}
+
+const EXPECTED_DATA_EDGES: Record<string, string[]> = {
+  [`${DATA}/LoanRepository.java::findActive::method`]: ['reads dbo.loans::table', 'reads dbo.members::table'],
+  [`${DATA}/LoanRepository.java::close::method`]: ['executes dbo.usp_closeloan::procedure'],
+  [`${DATA}/LoanRepository.java::archive::method`]: ['reads dbo.loans::table', 'writes dbo.loanarchive::table'],
+  [`${DATA}/LoanRepository.java::holdsFor::method`]: ['reads dbo.holds::table'],
+  [`${DATA}/LoanRepository.java::purge::method`]: ['writes dbo.holds::table'],
+  [`${DATA}/LoanRepository.java::flagAll::method`]: ['writes dbo.loans::table', 'writes dbo.members::table'],
+  [`${DATA}/LoanRepository.java::later::method`]: ['writes dbo.holds::table'],
+  [`${DATA}/LoanJpaRepository.java::findOverdue::method`]: ['reads dbo.loans::table'],
+  [`${DATA}/LoanMapper.java::active::method`]: ['reads dbo.loans::table'],
+  [`${DATA}/LoanMapper.java::add::method`]: ['writes dbo.loans::table'],
+  [`${DATA}/LoanMapper.java::renew::method`]: ['writes dbo.loans::table'],
+  [`${DATA}/LoanMapper.java::remove::method`]: ['writes dbo.loans::table'],
+};
+
+describe.skipIf(!CAN_RUN_JDT)('lending sample SQL call sites (JDT full tier, real jar)', () => {
+  const withSql = new JavaCompositeAdapter({ sqlCallSites: true });
+  const withoutSql = new JavaCompositeAdapter();
+
+  beforeAll(async () => {
+    vi.stubEnv('CTXO_JDT_ANALYZER_JAR', testAnalyzerJar()!);
+    await withSql.initialize(LENDING_FIXTURE);
+    await withoutSql.initialize(LENDING_FIXTURE);
+  }, 130_000);
+
+  afterAll(async () => {
+    await withSql.dispose();
+    await withoutSql.dispose();
+    vi.unstubAllEnvs();
+  });
+
+  it('repository, JPA and MyBatis methods have the expected data edges', async () => {
+    expect(withSql.sqlCallSites).toBe(true);
+    expect(await dataEdges(withSql)).toEqual(EXPECTED_DATA_EDGES);
+  }, 130_000);
+
+  it('getSqlStats reports 13 constant and 1 non-constant texts', async () => {
+    await withSql.extractEdges(DATA_FILES[0]!, '');
+    expect(withSql.getAnalyzerDelegate()!.getSqlStats()).toEqual({ constant: 13, nonConstant: 1 });
+  }, 130_000);
+
+  it('without sqlCallSites there are no data edges and no stats', async () => {
+    expect(withoutSql.sqlCallSites).toBe(false);
+    expect(await dataEdges(withoutSql)).toEqual({});
+    expect(withoutSql.getAnalyzerDelegate()!.getSqlStats()).toBeUndefined();
+  }, 130_000);
+
+  it('the keep-alive reindex of LoanRepository.java returns the batch data edges and annotations', async () => {
+    const cap = withSql.getIncrementalReindex();
+    expect(cap).not.toBeNull();
+    expect(await cap!.startKeepAlive!()).toBe(true);
+    const isData = (e: { kind: string }): boolean => e.kind === 'reads' || e.kind === 'writes' || e.kind === 'executes';
+    const file = DATA_FILES[0]!;
+    const result = await cap!.reindexFile(file);
+    expect(result).not.toBeNull();
+
+    const batchEdges = (await withSql.extractEdges(file, '')).filter(isData);
+    expect(batchEdges.length).toBeGreaterThan(0);
+    expect(result!.edges.filter(isData)).toEqual(batchEdges);
+
+    // Annotations come with the same reindex (the JPA interface carries @Query).
+    const jpa = await cap!.reindexFile(DATA_FILES[1]!);
+    expect(jpa!.symbols).toEqual(await withSql.extractSymbols(DATA_FILES[1]!, ''));
+    expect(jpa!.symbols.find((s) => s.name === 'findOverdue')?.annotations?.[0]?.name).toBe('Query');
+    expect(jpa!.edges.filter(isData)).toEqual([
+      { from: `${DATA}/LoanJpaRepository.java::findOverdue::method`, to: 'dbo.loans::table', kind: 'reads' },
+    ]);
+  }, 130_000);
+});

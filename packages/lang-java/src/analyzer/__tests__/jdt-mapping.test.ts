@@ -34,8 +34,43 @@ vi.mock('../jdt-adapter.js', () => ({
   },
 }));
 
-import { toSymbolNode } from '../jdt-mapping.js';
+import { toSymbolNode, toGraphEdges } from '../jdt-mapping.js';
 import { JavaCompositeAdapter } from '../../composite-adapter.js';
+
+describe('toGraphEdges', () => {
+  const REPO = 'src/main/java/lending/data/LoanRepository.java';
+  const file: JdtFileResult = {
+    type: 'file',
+    file: REPO,
+    symbols: [],
+    edges: [
+      { from: `${REPO}::findActive::method`, to: 'src/main/java/lending/domain/Loan.java::Loan::class', kind: 'uses' },
+      { from: 'not-a-symbol', to: 'x::y::class', kind: 'uses' },
+      { from: `${REPO}::findActive::method`, to: '', kind: 'calls' },
+    ],
+    complexity: [],
+    sqlCallSites: [
+      { symbolId: `${REPO}::findActive::method`, line: 3, text: 'SELECT Id FROM dbo.Loans', kind: 'statement' },
+      { symbolId: `${REPO}::close::method`, line: 8, text: 'dbo.usp_CloseLoan', kind: 'procedureName' },
+    ],
+  };
+  const analyzerEdge = {
+    from: `${REPO}::findActive::method`,
+    to: 'src/main/java/lending/domain/Loan.java::Loan::class',
+    kind: 'uses',
+  };
+
+  it('toGraphEdges keeps the analyzer edges and adds SQL edges only when enabled', () => {
+    expect(toGraphEdges(file, { sqlCallSites: false })).toEqual([analyzerEdge]);
+    expect(toGraphEdges(file, { sqlCallSites: true })).toEqual([
+      analyzerEdge,
+      { from: `${REPO}::close::method`, to: 'dbo.usp_closeloan::procedure', kind: 'executes' },
+      { from: `${REPO}::findActive::method`, to: 'dbo.loans::table', kind: 'reads' },
+    ]);
+    const bare = { ...file, sqlCallSites: undefined };
+    expect(toGraphEdges(bare, { sqlCallSites: true })).toEqual([analyzerEdge]);
+  });
+});
 
 describe('toSymbolNode', () => {
   it('toSymbolNode copies annotations and offsets and omits absent ones', () => {

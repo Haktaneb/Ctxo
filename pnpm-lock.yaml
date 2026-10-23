@@ -164,6 +164,9 @@ importers:
 
   packages/lang-java:
     dependencies:
+      '@ctxo/sql-extract':
+        specifier: workspace:^
+        version: link:../sql-extract
       tree-sitter:
         specifier: ^0.22.4
         version: 0.22.4

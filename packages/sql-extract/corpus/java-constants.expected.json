@@ -1,0 +1,5 @@
+{
+  "description": "Constant SQL text from a static final in another class, concatenation and a text block reads dbo.loans and dbo.members; a non-final local and a method parameter give nothing (dbo.holds would show up here if the local did).",
+  "mode": "java",
+  "accesses": { "reads": ["dbo.loans", "dbo.members"], "writes": [], "executes": [] }
+}
