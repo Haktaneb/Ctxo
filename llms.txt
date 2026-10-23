@@ -18,7 +18,7 @@ ctxo                       # Start MCP server (stdio)
 - `@ctxo/cli` - CLI + MCP server (formerly `ctxo-mcp`)
 - `@ctxo/plugin-api` - `CtxoLanguagePlugin` interface, protocol v1 and v2 (`SUPPORTED_API_VERSIONS = ['1', '2']`; v2 adds data kinds, annotations, facts on request and host capabilities)
 - `@ctxo/lang-typescript` - ts-morph full-tier plugin
-- `@ctxo/lang-go` - tree-sitter / gopls plugin
+- `@ctxo/lang-go` - ctxo-go-analyzer (full tier, Go 1.22+) + tree-sitter plugin
 - `@ctxo/lang-csharp` - Roslyn plugin (attribute annotations; SQL edges at known call sites when `@ctxo/lang-sql` is installed)
 - `@ctxo/lang-java` - tree-sitter Java plugin (syntax tier built-in; full tier via `@ctxo/lang-java-analyzer` companion, requires JRE 11+)
 - `@ctxo/lang-sql` - T-SQL plugin for `.sql` files (protocol v2): tables, views, procedures, functions and their reads/writes/executes

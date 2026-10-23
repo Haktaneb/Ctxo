@@ -111,8 +111,8 @@ they call, and `find_dead_code` no longer reports functions whose only callers
 are tests. Production analysis, `hasMain` and the analyzer's dead list are
 unchanged and never hold a test symbol.
 
-- Build-tagged test files (for example `//go:build integration`) are not loaded
-  and fall back to the syntax tier.
+- Build-tagged test files (for example `//go:build integration`) are not loaded,
+  so the full tier gives them no symbols.
 - Loading and type-checking test packages makes full-tier runs slower on
   modules with many tests.
 - `t.Run` subtests are not symbols of their own.
@@ -162,6 +162,7 @@ root, not the module root.
 | No `go.mod` / `go.work` found            | Falls back to tree-sitter syntax tier        |
 | Analyzer build fails                     | Falls back to tree-sitter syntax tier, warn  |
 | Analyzer batch times out                 | Marks batch `timedOut`, uses partial results |
+| Analyzer run fails, crashes or is killed (120 s limit) | Falls back to tree-sitter syntax tier for the run, warn |
 
 The active tier is reported by `ctxo doctor` (look for the Go language
 coverage check).

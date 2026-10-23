@@ -67,7 +67,8 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (nine packages today). Per-pac
   which ignore annotations and never request SQL edges. `@ctxo/lang-java-analyzer` takes the same
   version as `@ctxo/lang-java` (#156).
 - The three plugins now depend on `@ctxo/sql-extract`, the zero-dependency library of the ADR-017
-  dependency exception (K18) (#156).
+  dependency exception (#156).
+- The Go full tier falls back to the tree-sitter syntax tier, with a warning, when the analyzer run fails, crashes or times out, instead of indexing every Go file with no symbols. `ctxo visualize` escapes symbol names in the embedded page data (#156).
 
 **Architectural intelligence: community detection, drift and boundary violations; co-change and incremental indexing (#157); the contexts view and data coupling with T-SQL (#156); tiered agent rules (#159).**
 

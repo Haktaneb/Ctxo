@@ -20,7 +20,7 @@ v2; v2 adds data kinds, annotations, facts and host capabilities.
 | TypeScript/JavaScript | `@ctxo/lang-typescript` | ts-morph                                         | `full`   | `.ts .tsx .js .jsx`        | decorators | test blocks (`describe` / `it` / `test`) | yes |
 | Go                    | `@ctxo/lang-go`         | `ctxo-go-analyzer` (Go 1.22+) + tree-sitter-go   | `full`   | `.go`                      | struct tags (both tiers) | `_test.go` functions (full tier) | full tier |
 | C#                    | `@ctxo/lang-csharp`     | `ctxo-roslyn` (.NET SDK 8+) + tree-sitter-c-sharp | `full`  | `.cs`                      | attributes (both tiers) | test methods | Roslyn tier |
-| Java                  | `@ctxo/lang-java` + `@ctxo/lang-java-analyzer` | Eclipse JDT Core (JRE 17+) + tree-sitter-java | `full` | `.java` | annotations (both tiers) | test methods (`src/test/java`) | JDT full tier |
+| Java                  | `@ctxo/lang-java` + `@ctxo/lang-java-analyzer` | Eclipse JDT Core (JRE 11+) + tree-sitter-java | `full` | `.java` | annotations (both tiers) | test methods (`src/test/java`) | JDT full tier |
 | SQL (T-SQL)           | `@ctxo/lang-sql`        | `@ctxo/sql-extract` (TypeScript tokenizer)       | `syntax` | `.sql`                   | `columns` on tables | none | defines the targets |
 
 SQL at call sites needs `@ctxo/lang-sql` installed: without it, no language
@@ -37,7 +37,7 @@ Two tiers are defined by the plugin contract:
 The Go, C#, and Java plugins advertise `tier: 'full'` and auto-downgrade to
 syntax at runtime when the required toolchain or analyzer package is missing.
 For Java, full tier requires the `@ctxo/lang-java-analyzer` companion package
-and a JRE 17+ on PATH - not a build toolchain. You can see the active tier in
+and a JRE 11+ on PATH - not a build toolchain. You can see the active tier in
 `ctxo doctor --json` under the language coverage check.
 
 ## What gets extracted

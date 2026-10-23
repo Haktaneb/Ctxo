@@ -60,7 +60,7 @@ The full tier loads packages with their tests: functions and methods in `_test.g
 symbols with `calls` edges (a test fake can implement a production interface), so tests count as
 dependents in the blast radius. Production analysis, `hasMain` and the dead list are unchanged and
 never hold a test symbol. Build-tagged test files (for example `//go:build integration`) are not
-loaded and fall back to the syntax tier. Loading tests makes full-tier runs slower on modules with
+loaded, so the full tier gives them no symbols. Loading tests makes full-tier runs slower on modules with
 many tests.
 
 ## SQL at call sites

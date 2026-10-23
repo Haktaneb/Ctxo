@@ -29,7 +29,7 @@ Ctxo is a pnpm workspace monorepo:
 - `@ctxo/cli` (packages/cli) - CLI entry, composition root, MCP server, tool handlers
 - `@ctxo/plugin-api` (packages/plugin-api) - `CtxoLanguagePlugin` protocol interface (v1 and v2)
 - `@ctxo/lang-typescript` - ts-morph (full tier) plugin for TS/JS
-- `@ctxo/lang-go` - tree-sitter / gopls plugin for Go
+- `@ctxo/lang-go` - ctxo-go-analyzer (full tier, Go 1.22+) + tree-sitter plugin for Go
 - `@ctxo/lang-csharp` - Roslyn plugin for C# (attribute annotations; SQL edges at known call sites when `@ctxo/lang-sql` is installed)
 - `@ctxo/lang-java` - tree-sitter Java plugin (syntax tier); full tier via `@ctxo/lang-java-analyzer` companion package (JRE 11+ required)
 - `@ctxo/lang-sql` (packages/lang-sql) - T-SQL plugin for `.sql` files, protocol v2 (`ctxo install sql`, alias `tsql`)
@@ -489,7 +489,7 @@ Title path joined with ` > `; whitespace collapsed; runs of `:` collapsed and a 
 - Tests count as blast-radius dependents (the gate may fire more often on well-tested symbols); symbol-level communities shift once; Go full-tier runs type-check test packages; JDT `calls`/`uses` edges stay type-level.
 - find_dead_code: shared test-file classifier (default globs plus test-annotated files); test symbols are never dead, production code called only from tests is not dead (Go included); production code under `test/` or `src/test/` folders and test-annotated files are left out of the analysis.
 - A Java file with a `@Test` method counts as a test file anywhere.
-- Limits: TypeScript misses union-typed receivers (`Pool | null`), getters returning a pool, namespace imports of relative modules and numeric constants in templates. Java's tree-sitter tier keeps strings only and evaluates no constants; MyBatis `<script>` and `${}` pass through as written; without a binding, subclass receivers, `super.update(...)` and `batchUpdate` array literals are missed. Go's tree-sitter tier decodes interpreted tag literals with JSON rules and reads exported structs only; build-tagged test files fall back to the syntax tier; sqlc-style interfaces, method values and method expressions give no call sites; sqlx `...Context` forms are not listed.
+- Limits: TypeScript misses union-typed receivers (`Pool | null`), getters returning a pool, namespace imports of relative modules and numeric constants in templates. Java's tree-sitter tier keeps strings only and evaluates no constants; MyBatis `<script>` and `${}` pass through as written; without a binding, subclass receivers, `super.update(...)` and `batchUpdate` array literals are missed. Go's tree-sitter tier decodes interpreted tag literals with JSON rules and reads exported structs only; build-tagged test files are not loaded, so the full tier gives them no symbols; sqlc-style interfaces, method values and method expressions give no call sites; sqlx `...Context` forms are not listed.
 - Corpus: `packages/sql-extract/corpus/<case>.<ts|java|go>.fixture` with `mode` `typescript`, `java` or `go`, run only by the matching plugin.
 
 ---

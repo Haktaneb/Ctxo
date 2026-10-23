@@ -6,9 +6,9 @@ description: "@ctxo/lang-java: Eclipse JDT Core (full tier) + tree-sitter-java f
 # Java
 
 Plugin: **`@ctxo/lang-java`** ([npm](https://www.npmjs.com/package/@ctxo/lang-java))
-Parser: **`@ctxo/lang-java-analyzer`** (Eclipse JDT Core, JRE 17+) with
+Parser: **`@ctxo/lang-java-analyzer`** (Eclipse JDT Core, JRE 11+) with
 **tree-sitter-java** fallback
-Tier: **`full`** (advertised), downgrades to `syntax` when JRE 17+ or the analyzer package is absent
+Tier: **`full`** (advertised), downgrades to `syntax` when JRE 11+ or the analyzer package is absent
 Extensions: `.java`
 
 ## What this plugin does
@@ -18,7 +18,7 @@ setup, always available. For full semantic resolution, install the companion
 package **`@ctxo/lang-java-analyzer`**, which carries a prebuilt (~15 MB)
 uber-JAR containing Eclipse JDT Core. The plugin resolves the JAR at runtime
 from `node_modules` via `require.resolve` - no build toolchain required, only
-a **JRE 17+** on your PATH to execute it.
+a **JRE 11+** on your PATH to execute it.
 
 This differs from the Go and C# plugins, which compile or restore their analyzer
 from a local toolchain. Java ships a prebuilt JAR with npm-native integrity and
@@ -51,7 +51,7 @@ globally with `--global`:
 ctxo install java --global --yes
 ```
 
-`ctxo install java --global` installs the syntax tier plugin. If a JRE 17+ is
+`ctxo install java --global` installs the syntax tier plugin. If a JRE 11+ is
 detected on your PATH it also installs `@ctxo/lang-java-analyzer` (full tier).
 To force full tier installation regardless of detection:
 
@@ -170,7 +170,7 @@ The full tier requires two things:
 
 1. **`@ctxo/lang-java-analyzer`** installed in the project (or globally). This
    package ships the prebuilt JDT uber-JAR - no Maven, Gradle, or javac needed.
-2. **JRE 17+** on your PATH. Run `java -version` to confirm.
+2. **JRE 11+** on your PATH. Run `java -version` to confirm.
 
 When both are present, the plugin launches the JAR as a subprocess at index
 time, performs one batch analysis pass over the project, and caches per-file
@@ -200,7 +200,7 @@ indexing.
 | Condition                                | Result                                                           |
 | ---------------------------------------- | ---------------------------------------------------------------- |
 | `@ctxo/lang-java-analyzer` not installed | Falls back to tree-sitter syntax tier                            |
-| JRE 17+ not on PATH                      | Falls back to tree-sitter syntax tier                            |
+| JRE 11+ not on PATH                      | Falls back to tree-sitter syntax tier                            |
 | JAR fails to load or verify              | Falls back to tree-sitter syntax tier, warn                      |
 | Analyzer batch times out                 | Marks batch `timedOut`, uses partial results                     |
 
