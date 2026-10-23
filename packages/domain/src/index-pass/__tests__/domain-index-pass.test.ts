@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { createModuleHost, type CoChangeWindowCommits, type FileIndex, type IndexPassContext } from '@ctxo/cli/internal';
+import { createModuleHost, type CoChangeWindowCommits, type CtxoHost, type FileIndex, type IndexPassContext } from '@ctxo/cli/internal';
 import type { DomainGraph } from '../../core/domain-graph.js';
 import { domainIndexPass } from '../domain-index-pass.js';
 
@@ -98,8 +98,8 @@ function writeRegistry(text: string): void {
   writeFileSync(join(root, 'docs', 'domain', 'contexts.yaml'), text, 'utf-8');
 }
 
-async function runPass(history?: CoChangeWindowCommits): Promise<void> {
-  const host = createModuleHost({ cliVersion: '0.0.0', mode: 'cli', projectRoot: root });
+async function runPass(history?: CoChangeWindowCommits, wrap: (host: CtxoHost) => CtxoHost = (h) => h): Promise<void> {
+  const host = wrap(createModuleHost({ cliVersion: '0.0.0', mode: 'cli', projectRoot: root }));
   const { services } = host;
   // Read the index the way the CLI does, so the artifacts from an earlier run must be skipped.
   const indices = services.readIndex(ctxoRoot);
@@ -195,6 +195,32 @@ describe('domainIndexPass', () => {
     expect(JSON.parse(read('contexts.json')).movedFiles).toEqual(before);
     // No change log, no new history entry.
     expect(readdirSync(join(domainDir(), 'history'))).toEqual(['1700000500-abc1234.json']);
+  });
+
+  it('a graph build failure logs a warning and still writes contexts.json and boundaries.json', async () => {
+    const failing = (host: CtxoHost): CtxoHost => {
+      const services = { ...host.services };
+      Object.defineProperty(services, 'dataResourceKinds', {
+        get() {
+          throw new Error('boom');
+        },
+      });
+      return { ...host, services };
+    };
+    await runPass(HISTORY, failing);
+
+    expect(JSON.parse(read('contexts.json')).ctxoArtifact).toBe('domain-contexts');
+    expect(JSON.parse(read('boundaries.json')).ctxoArtifact).toBe('domain-boundaries');
+    expect(existsSync(join(domainDir(), 'graph.json'))).toBe(false);
+    expect(readdirSync(join(domainDir(), 'history'))).toEqual(['1700000500-abc1234.json']);
+    expect(logs.some((l) => l.includes('The domain graph could not be built: boom; graph.json not updated'))).toBe(true);
+    expect(logs.some((l) => /Domain: 2 contexts, 3 cross-context edges, 2 boundary violations \(\d+ ms\)/.test(l))).toBe(true);
+
+    // A later successful run writes graph.json; a failing run after it leaves that file as it was.
+    await runPass(HISTORY);
+    const graph = read('graph.json');
+    await runPass(HISTORY, failing);
+    expect(read('graph.json')).toBe(graph);
   });
 
   it('removes the artifacts when the registry is gone', async () => {

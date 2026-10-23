@@ -6,10 +6,8 @@ import { readRegistry } from '../adapters/registry-reader.js';
 import type { BoundaryViolationRecord } from '../core/boundaries.js';
 import { contextDrift, type ContextHistoryEntry } from '../core/context-metrics.js';
 import { resolveDomainConfig } from '../core/domain-config.js';
+import { ADDITIVE_CAP } from '../core/limits.js';
 import { registryHash } from '../core/registry.js';
-
-/** The most entries an additive array carries on an existing tool; a `<name>Total` count says when more existed. */
-const ADDITIVE_CAP = 50;
 
 type Payload = Record<string, unknown>;
 

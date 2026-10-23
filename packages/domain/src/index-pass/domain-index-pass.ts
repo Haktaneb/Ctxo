@@ -115,11 +115,17 @@ export function domainIndexPass(host: CtxoHost): (ctx: IndexPassContext) => Prom
       violations: boundaries.violations,
     };
 
-    const graph = await composeGraph(host, ctx, { registry, registryHash: hash, config, ownership, files, warn: (m) => log.warn(m) });
+    // A graph that cannot be built skips only graph.json: the ownership and boundary artifacts are still written.
+    let graph: DomainGraph | undefined;
+    try {
+      graph = await composeGraph(host, ctx, { registry, registryHash: hash, config, ownership, files, warn: (m) => log.warn(m) });
+    } catch (err) {
+      log.warn(`The domain graph could not be built: ${(err as Error).message}; graph.json not updated`);
+    }
 
     store.writeIfChanged('contexts.json', contextsArtifact);
     store.writeIfChanged('boundaries.json', boundariesArtifact);
-    store.writeIfChanged('graph.json', graph);
+    if (graph !== undefined) store.writeIfChanged('graph.json', graph);
     if (ctx.history !== undefined) {
       store.writeHistory(
         historyEntry({ sha: ctx.history.head, committedAt: ctx.history.headCommittedAt }, hash, nonTestFiles, boundaries),
@@ -127,11 +133,15 @@ export function domainIndexPass(host: CtxoHost): (ctx: IndexPassContext) => Prom
     }
 
     const crossCount = boundaries.crossEdges.reduce((sum, c) => sum + c.allowed + c.violations, 0);
-    const tested = new Set(graph.links.flatMap((l) => (l.kind === 'rule-test' ? [l.from] : [])));
-    const withoutTests = graph.rules.filter((rule) => !tested.has(rule.id)).length;
+    let graphPart = '';
+    if (graph !== undefined) {
+      const tested = new Set(graph.links.flatMap((l) => (l.kind === 'rule-test' ? [l.from] : [])));
+      const withoutTests = graph.rules.filter((rule) => !tested.has(rule.id)).length;
+      graphPart = `${graph.rules.length} rules (${withoutTests} without tests), ${graph.links.length} links, `;
+    }
     const ms = Math.round(performance.now() - started);
     log.info(
-      `Domain: ${registry.contexts.length} contexts, ${graph.rules.length} rules (${withoutTests} without tests), ${graph.links.length} links, ` +
+      `Domain: ${registry.contexts.length} contexts, ${graphPart}` +
         `${crossCount} cross-context edges, ${boundaries.violations.length} boundary violations (${ms} ms)`,
     );
   };
