@@ -1,5 +1,5 @@
 // Shared fact rules (PR 4, issue #156, Fact contract FC-2 and FC-4 to FC-8). Copied unchanged into
-// every official language plugin and @ctxo/domain; only import paths may differ. The rules are
+// every official language plugin; only import paths may differ. The rules are
 // pinned by packages/plugin-api/conformance/fact-vectors.json.
 import type { LiteralKind, StringLiteralDecoder, TrivialLiteral } from './fact-types.js';
 

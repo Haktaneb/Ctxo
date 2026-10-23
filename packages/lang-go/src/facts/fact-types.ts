@@ -1,5 +1,5 @@
 // Shared fact contract types (PR 4, issue #156). This file is copied unchanged into every official
-// language plugin and @ctxo/domain; only import paths may differ. The rules are pinned by
+// language plugin; only import paths may differ. The rules are pinned by
 // packages/plugin-api/conformance/fact-vectors.json.
 import type { FactKind } from '@ctxo/plugin-api';
 

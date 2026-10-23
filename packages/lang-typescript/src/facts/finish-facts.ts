@@ -1,5 +1,5 @@
 // Shared fact finisher (PR 4, issue #156, Fact contract FC-1 to FC-10). Copied unchanged into every
-// official language plugin and @ctxo/domain; only import paths may differ.
+// official language plugin; only import paths may differ.
 import type { CodeFact, FactKind, SymbolNode } from '@ctxo/plugin-api';
 import { FACT_KIND_ORDER } from './fact-types.js';
 import type { FactEvidence, FactOptions, StringLiteralDecoder } from './fact-types.js';

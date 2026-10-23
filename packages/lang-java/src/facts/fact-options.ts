@@ -1,5 +1,5 @@
-// Shared fact options (PR 4, issue #156). Copied unchanged into every official language plugin and
-// @ctxo/domain; only import paths may differ.
+// Shared fact options (PR 4, issue #156). Copied unchanged into every official language plugin;
+// only import paths may differ.
 import type { FactOptions, TrivialLiteral } from './fact-types.js';
 
 /** The spec 12.1 lists: trivial literals and normalization methods, in spec order. */
