@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { createModuleHost } from '../module-host.js';
 import { getVersion } from '../cli-paths.js';
+import { DATA_RESOURCE_KINDS } from '@ctxo/plugin-api';
 import { TEST_FRAMEWORK_ANNOTATIONS } from '../../core/test-files/test-file-classifier.js';
 import { JsonIndexWriter } from '../../adapters/storage/json-index-writer.js';
 import { compareCodepoint } from '../../core/compare-codepoint.js';
@@ -124,6 +125,30 @@ describe('host services', () => {
   it('testFrameworkAnnotations is the classifier constant', () => {
     const { services } = createModuleHost({ projectRoot: tempDir(), mode: 'cli' });
     expect(services.testFrameworkAnnotations).toEqual(TEST_FRAMEWORK_ANNOTATIONS);
+  });
+
+  it('dataResourceKinds is the plugin API constant', () => {
+    const { services } = createModuleHost({ projectRoot: tempDir(), mode: 'cli' });
+    expect(services.dataResourceKinds).toEqual(DATA_RESOURCE_KINDS);
+  });
+
+  it('createDocumentSearch returns BM25 hits over the documents', () => {
+    const { services } = createModuleHost({ projectRoot: tempDir(), mode: 'cli' });
+    const search = services.createDocumentSearch([
+      { id: 'rule:LEND-03', title: 'LEND-03 A member holds at most five loans', kind: 'rule', path: 'docs/domain/lending.md', text: 'The sixth loan is refused while five are open.' },
+      { id: 'term:lending/hold', title: 'Hold', kind: 'term', path: 'docs/domain/glossary.md', text: 'A reservation of a copy for a member.' },
+    ]);
+
+    const response = search.search('sixth loan');
+    expect(response.results[0]!.symbolId).toBe('rule:LEND-03');
+    expect(response.results[0]!.name).toBe('LEND-03 A member holds at most five loans');
+    expect(search.search('member', 1).results).toHaveLength(1);
+  });
+
+  it('splitIdentifier splits camelCase, PascalCase and snake_case', () => {
+    const { services } = createModuleHost({ projectRoot: tempDir(), mode: 'cli' });
+    expect(services.splitIdentifier('ILoanRepository')).toEqual(['I', 'Loan', 'Repository']);
+    expect(services.splitIdentifier('member_account_id')).toEqual(['member', 'account', 'id']);
   });
 
   it('host services load config, match globs, classify test files and read the index', () => {

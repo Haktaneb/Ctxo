@@ -1,5 +1,5 @@
 import type { z, ZodRawShape } from 'zod';
-import type { CommitChangeSet, FileIndex } from '../core/types.js';
+import type { CommitChangeSet, FileIndex, SearchDocument, SearchResponse } from '../core/types.js';
 import type { CtxoConfig } from '../core/config/config-schema.js';
 import type { LoadedConfig } from '../core/config/load-config.js';
 import type { SymbolGraph } from '../core/graph/symbol-graph.js';
@@ -162,6 +162,11 @@ export interface LoadedModule {
   readonly registration: CtxoModuleRegistration;
 }
 
+/** A built document index. Hits carry the document `id` in `symbolId`, its `title` in `name`, its `kind` and `path`. */
+export interface DocumentSearch {
+  search(query: string, limit?: number): SearchResponse;
+}
+
 /** The runtime services a module gets from the CLI instead of importing them. */
 export interface CtxoHostServices {
   createLogger(namespace: string): Logger;
@@ -179,6 +184,12 @@ export interface CtxoHostServices {
   findGitRoot(dir: string): string | undefined;
   /** Short names of the attributes that mark a test (`Fact`, `Test`, `TestMethod`, ...): the classifier's own list. */
   readonly testFrameworkAnnotations: readonly string[];
+  /** Symbol kinds that are data resources (`table`, `view`): plugin-api's own `DATA_RESOURCE_KINDS`, one source. */
+  readonly dataResourceKinds: readonly string[];
+  /** A BM25 search over documents (the core engine: camelCase-aware, trigram and fuzzy fallback), built once. */
+  createDocumentSearch(documents: readonly SearchDocument[]): DocumentSearch;
+  /** Splits an identifier into its words: `ILoanRepository` gives `I`, `Loan`, `Repository`; `member_account_id` gives `member`, `account`, `id`. */
+  splitIdentifier(name: string): string[];
 }
 
 export interface CtxoHost {

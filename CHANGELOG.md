@@ -57,6 +57,13 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (ten packages today). Per-pack
   represent (a `Date`, a `Map`, a `Promise`) and drops the enrichment with one warning, and
   `JsonIndexWriter.deleteEntryFile`, which refuses to delete a `ctxoArtifact` JSON file, and the
   optional `ModuleCommand.usage` (the full text `ctxo <command> --help` prints for a module command).
+- Host API additions for the domain graph (#156, PR 3), all required `CtxoHostServices` members:
+  `dataResourceKinds` (plugin-api's `DATA_RESOURCE_KINDS`, `table` and `view`, one source),
+  `createDocumentSearch(documents)` (BM25 over documents with the core engine, via the new
+  `SearchEngine.buildDocumentIndex`, `DOCUMENT_SEARCH_CONFIG` and `SymbolTokenizer.tokenizeText`; the
+  `DocumentSearch` type) and `splitIdentifier(name)` (`SymbolTokenizer.splitName`). `@ctxo/cli/internal`
+  also exports the `SearchDocument`, `SearchResponse`, `SearchResult` and `SearchMetrics` types. Search
+  behaviour for symbols is unchanged.
 - CI: the domain acceptance tests (`pnpm --filter @ctxo/domain test:e2e`) run in `e2e-tests` and, with
   `CTXO_REQUIRE_DOTNET=1`, in `dotnet-tests` (a C# run that falls back to the syntax tier fails there
   instead of skipping). The e2e job timeout is 15 minutes.

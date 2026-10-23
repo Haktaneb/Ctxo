@@ -384,6 +384,18 @@ export interface SearchResult {
   combinedScore: number;
 }
 
+/**
+ * A document for the BM25 engine's document index (`SearchEngine.buildDocumentIndex`). A hit carries `id` in
+ * `symbolId`, `title` in `name`, `kind` and `path` in `filePath`.
+ */
+export interface SearchDocument {
+  readonly id: string;
+  readonly title: string;
+  readonly kind: string;
+  readonly path: string;
+  readonly text: string;
+}
+
 export interface SearchMetrics {
   porterHits: number;
   trigramHits: number;

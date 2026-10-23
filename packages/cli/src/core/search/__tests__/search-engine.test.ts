@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { SearchEngine } from '../search-engine.js';
-import type { SymbolNode } from '../../types.js';
+import { SearchEngine, DOCUMENT_SEARCH_CONFIG } from '../search-engine.js';
+import type { SearchDocument, SymbolNode } from '../../types.js';
 
 function sym(name: string, kind: SymbolNode['kind'] = 'class', file = 'src/test.ts'): SymbolNode {
   return {
@@ -259,5 +259,114 @@ describe('SearchEngine', () => {
     it('returns "in-memory"', () => {
       expect(engine.getTier()).toBe('in-memory');
     });
+  });
+});
+
+const DOCUMENTS: readonly SearchDocument[] = [
+  {
+    id: 'rule:LEND-03',
+    title: 'LEND-03 A member holds at most five loans',
+    kind: 'rule',
+    path: 'docs/domain/lending.md',
+    text: 'The sixth loan is refused while five are open.',
+  },
+  {
+    id: 'term:lending/hold',
+    title: 'Hold',
+    kind: 'term',
+    path: 'docs/domain/glossary.md',
+    text: 'A reservation of a copy for a member.',
+  },
+  {
+    id: 'file:docs/specs/loan-limit.md',
+    title: 'Loan limit',
+    kind: 'file',
+    path: 'docs/specs/loan-limit.md',
+    text: 'The limit rose from three to five loans after the renewal study.',
+  },
+];
+
+describe('SearchEngine document search', () => {
+  it('DOCUMENT_SEARCH_CONFIG pins BM25 and drops the PageRank weight', () => {
+    expect(DOCUMENT_SEARCH_CONFIG).toEqual({ bm25: { k1: 1.2, b: 0.75 }, pageRankWeight: 0 });
+  });
+
+  it('buildDocumentIndex ranks documents by title and text', () => {
+    const engine = new SearchEngine(DOCUMENT_SEARCH_CONFIG);
+    engine.buildDocumentIndex(DOCUMENTS);
+
+    expect(engine.search('sixth loan').results[0]!.symbolId).toBe('rule:LEND-03');
+    expect(engine.search('reservation').results[0]!.symbolId).toBe('term:lending/hold');
+    expect(engine.search('renewal study').results[0]!.symbolId).toBe('file:docs/specs/loan-limit.md');
+    expect(engine.search('LEND-03').results[0]!.symbolId).toBe('rule:LEND-03');
+  });
+
+  it('hits carry the id in symbolId, the title in name, the kind and the path in filePath', () => {
+    const engine = new SearchEngine(DOCUMENT_SEARCH_CONFIG);
+    engine.buildDocumentIndex(DOCUMENTS);
+
+    const hit = engine.search('reservation').results[0]!;
+    expect(hit.symbolId).toBe('term:lending/hold');
+    expect(hit.name).toBe('Hold');
+    expect(hit.kind).toBe('term');
+    expect(hit.filePath).toBe('docs/domain/glossary.md');
+    expect(hit.importanceScore).toBe(0);
+  });
+
+  it('finds a word that appears only in a title with spaces', () => {
+    const engine = new SearchEngine(DOCUMENT_SEARCH_CONFIG);
+    engine.buildDocumentIndex([
+      { id: 'a', title: 'Quarantine procedure for returned items', kind: 'rule', path: 'docs/a.md', text: 'Nothing relevant here.' },
+      { id: 'b', title: 'Other', kind: 'rule', path: 'docs/b.md', text: 'Unrelated prose about shelves.' },
+    ]);
+
+    const response = engine.search('quarantine');
+    expect(response.results[0]!.symbolId).toBe('a');
+    // Found by the title word itself (the primary index), not only by the trigram fallback.
+    expect(response.metrics.porterHits).toBe(1);
+  });
+
+  it('finds a document by a word of its path', () => {
+    const engine = new SearchEngine(DOCUMENT_SEARCH_CONFIG);
+    engine.buildDocumentIndex(DOCUMENTS);
+
+    expect(engine.search('specs').results[0]!.symbolId).toBe('file:docs/specs/loan-limit.md');
+  });
+
+  it('document search corrects a typo', () => {
+    const engine = new SearchEngine(DOCUMENT_SEARCH_CONFIG);
+    engine.buildDocumentIndex(DOCUMENTS);
+
+    const response = engine.search('renewel');
+    expect(response.fuzzyCorrection).toBeDefined();
+    expect(response.results[0]!.symbolId).toBe('file:docs/specs/loan-limit.md');
+  });
+
+  it('the same documents give identical results', () => {
+    const first = new SearchEngine(DOCUMENT_SEARCH_CONFIG);
+    const second = new SearchEngine(DOCUMENT_SEARCH_CONFIG);
+    first.buildDocumentIndex(DOCUMENTS);
+    second.buildDocumentIndex(DOCUMENTS);
+
+    for (const query of ['sixth loan', 'renewal study', 'member', 'renewel']) {
+      expect(first.search(query).results).toEqual(second.search(query).results);
+    }
+  });
+
+  it('updateFile leaves a document index as it is', () => {
+    const engine = new SearchEngine(DOCUMENT_SEARCH_CONFIG);
+    engine.buildDocumentIndex(DOCUMENTS);
+    engine.updateFile('docs/domain/glossary.md', []);
+
+    expect(engine.search('reservation').results[0]!.symbolId).toBe('term:lending/hold');
+  });
+
+  it('rebuilding the document index replaces the earlier documents', () => {
+    const engine = new SearchEngine(DOCUMENT_SEARCH_CONFIG);
+    engine.buildDocumentIndex(DOCUMENTS);
+    engine.buildDocumentIndex([DOCUMENTS[1]!]);
+
+    expect(engine.search('sixth loan').results.map((r) => r.symbolId)).not.toContain('rule:LEND-03');
+    expect(engine.search('reservation').results[0]!.symbolId).toBe('term:lending/hold');
   });
 });

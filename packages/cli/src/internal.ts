@@ -27,6 +27,7 @@ export type {
   InitPartContext,
   InitContribution,
   CtxoModuleRegistration,
+  DocumentSearch,
   CtxoHostServices,
   CtxoHost,
   CtxoModuleRegister,
@@ -47,6 +48,10 @@ export type {
   GitRange,
   GitRefs,
   CoChangeEntry,
+  SearchDocument,
+  SearchResponse,
+  SearchResult,
+  SearchMetrics,
 } from './core/types.js';
 
 // Ports
