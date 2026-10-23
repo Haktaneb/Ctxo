@@ -63,7 +63,7 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (ten packages today). Per-pack
 
 ### Changed (domain knowledge layer)
 
-- `@ctxo/cli` no longer ships source maps in its npm package (unpacked size about 2.1 MB to about 0.8 MB); stack traces were never mapped without `--enable-source-maps`, so behaviour is unchanged.
+- `@ctxo/cli` no longer ships source maps in its npm package (unpacked size about 2.1 MB to about 0.8 MB, so the release-packaging limit is 850 KB, it was 2100 KB); stack traces were never mapped without `--enable-source-maps`, so behaviour is unchanged.
 - `ctxo --version --json` always carries `modules`: `{"name":"@ctxo/domain","status":"not-installed"}`
   when the package is absent.
 - An installed `@ctxo/domain` turns the facts request on for every plugin (`capabilities.facts`). No
@@ -80,10 +80,10 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (ten packages today). Per-pack
 - `get_why_context` responses gain the `_meta` envelope the other tools already carry.
 - `ctxo install <name>` with an unknown name still exits 1; its message now lists `domain` among the
   known names.
-- The root `.npmrc` sets `hoist-workspace-packages=false`, so a workspace package is never resolved
-  through pnpm's hidden hoist; `@ctxo/lang-java` declares `@ctxo/lang-java-analyzer` as a devDependency
+- `pnpm-workspace.yaml` sets `hoistWorkspacePackages: false`, so a workspace package is never resolved
+  through pnpm's hidden hoist; the setting moved out of the root `.npmrc`, so npm no longer warns
+  "Unknown project config"; `@ctxo/lang-java` declares `@ctxo/lang-java-analyzer` as a devDependency
   for the test that resolves it.
-- The CLI tarball limit in the release-packaging test is 2150 KB (it was 2100 KB).
 - MCP tool descriptions of `search_symbols`, `get_blast_radius`, `find_importers`, `get_logic_slice`,
   `get_pr_impact` and `get_why_context` name the new additive field.
 - `ctxo domain rules --check` fails on blocked files (a hand-written file at a generated path) as well
