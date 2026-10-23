@@ -49,6 +49,20 @@ import { pluginStepEnabled, resolveInitParts, type InitPart } from './init-parts
 
 const requireCjs = createRequire(import.meta.url);
 
+/** True when the project's package.json lists @ctxo/cli in any dependency field. Unreadable or absent: false. */
+function projectDeclaresCtxoCli(root: string): boolean {
+  try {
+    const pkg: unknown = JSON.parse(readFileSync(join(root, 'package.json'), 'utf-8'));
+    if (typeof pkg !== 'object' || pkg === null) return false;
+    return ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'].some((field) => {
+      const deps = (pkg as Record<string, unknown>)[field];
+      return typeof deps === 'object' && deps !== null && '@ctxo/cli' in deps;
+    });
+  } catch {
+    return false;
+  }
+}
+
 function resolveInstalledPlugins(needed: readonly KnownLanguage[]): {
   installed: KnownLanguage[];
   missing: KnownLanguage[];
@@ -533,7 +547,10 @@ export class InitCommand {
     }
 
     if (parts.has('mcp')) {
-      const installKind = cliInstallKind(getCliPackageRoot(), root);
+      // A project that declares @ctxo/cli is a project install even when init runs from a global copy: the
+      // committed npx entry stays, so teammates without a global install keep a working MCP server (K15).
+      const detected = cliInstallKind(getCliPackageRoot(), root);
+      const installKind = detected === 'global' && projectDeclaresCtxoCli(root) ? 'project' : detected;
       for (const target of getMcpConfigTargets([...toolIds])) results.push(ensureMcpConfig(root, target, { ...write, installKind }));
     }
 

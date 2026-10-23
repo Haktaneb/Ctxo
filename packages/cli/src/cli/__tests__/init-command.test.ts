@@ -1324,3 +1324,48 @@ describe('InitCommand - the domain part (@ctxo/domain)', () => {
     expect(contexts()).toEqual([]);
   });
 });
+
+describe('InitCommand - MCP entry from a global install (K15, I2)', () => {
+  const NPX_ENTRY = { command: 'npx', args: ['-y', '@ctxo/cli'] };
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    errorSpy.mockRestore();
+  });
+
+  /** The test runs from the workspace, outside the temp project's node_modules: a global install. */
+  async function initMcp(dir: string): Promise<Record<string, unknown>> {
+    await new InitCommand(dir).run({ tools: ['claude-code'], yes: true, noInstall: true, only: ['mcp'] });
+    return (JSON.parse(readFileSync(join(dir, '.mcp.json'), 'utf-8')) as { mcpServers: Record<string, unknown> }).mcpServers['ctxo'] as Record<string, unknown>;
+  }
+
+  it.each(['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'])(
+    'keeps the committed npx entry when package.json declares @ctxo/cli in %s',
+    async (field) => {
+      const dir = makeTempProject();
+      writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'p', [field]: { '@ctxo/cli': '^0.13.0' } }), 'utf-8');
+      writeFileSync(join(dir, '.mcp.json'), JSON.stringify({ mcpServers: { ctxo: NPX_ENTRY } }), 'utf-8');
+
+      expect(await initMcp(dir)).toEqual(NPX_ENTRY);
+    },
+  );
+
+  it('writes a new entry as npx in a project that declares @ctxo/cli', async () => {
+    const dir = makeTempProject();
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ devDependencies: { '@ctxo/cli': '^0.13.0' } }), 'utf-8');
+
+    expect(await initMcp(dir)).toEqual(NPX_ENTRY);
+  });
+
+  it('still moves the npx entry to the global binary in a project without a local @ctxo/cli', async () => {
+    const dir = makeTempProject();
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'p', devDependencies: { vitest: '^1.0.0' } }), 'utf-8');
+    writeFileSync(join(dir, '.mcp.json'), JSON.stringify({ mcpServers: { ctxo: NPX_ENTRY } }), 'utf-8');
+
+    expect(await initMcp(dir)).toMatchObject({ command: 'ctxo' });
+  });
+});

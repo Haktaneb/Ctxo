@@ -149,7 +149,7 @@ ctxo init --domain --boundaries report -y   # non-interactive
 ctxo init --only domain --dry-run           # list the files, write nothing
 ```
 
-When init runs from a global install, it writes MCP entries that call the global `ctxo` binary instead of
+When init runs from a global install in a project without `@ctxo/cli` in its `package.json`, it writes MCP entries that call the global `ctxo` binary instead of
 `npx -y @ctxo/cli` (it replaces only ctxo's own default npx entry). See
 [`ctxo install`](./install.md#global-installs).
 

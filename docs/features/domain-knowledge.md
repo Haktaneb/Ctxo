@@ -701,7 +701,7 @@ npm i -g @ctxo/cli @ctxo/domain @ctxo/lang-sql
 ```
 
 - `ctxo install` without a `package.json` installs globally and says so; `ctxo install domain` pins `@ctxo/domain` to the running CLI's version. Project-local installs in repositories with `package.json` keep working.
-- When `ctxo init` runs from a global install, it writes MCP entries that call the global `ctxo` binary instead of `npx -y @ctxo/cli`. It replaces only ctxo's own default npx entry, never a custom one.
+- When `ctxo init` runs from a global install in a project without `@ctxo/cli` in its `package.json`, it writes MCP entries that call the global `ctxo` binary instead of `npx -y @ctxo/cli`. It replaces only ctxo's own default npx entry, never a custom one.
 - **`install_copies`** (doctor check). The MCP entries and the hooks should start the same copy of ctxo. The check warns, and never fails, when the hooks call `ctxo` and none is on PATH (they never run), or when the MCP entry is an npx entry pinned to a version that differs from the global CLI the hooks run (two copies: a package added to one is missing from the other). An unpinned npx entry shares the global copy and passes. It runs on every project; its message names `@ctxo/domain` only when the package is installed.
 
 ### Doctor checks

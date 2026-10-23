@@ -41,8 +41,10 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (ten packages today). Per-pack
 - Three doctor checks (`domain_registry`, `domain_agent_setup`, `domain_conventions`) and the
   `install_copies` check, which warns when the MCP entries and the hooks start different copies of ctxo.
 - `ctxo install domain`, and `ctxo install` without a `package.json`, which installs globally and says
-  so; `ctxo init` run from a global install writes MCP entries that call the global `ctxo` binary
-  instead of `npx -y @ctxo/cli` (only ctxo's own default entry is replaced).
+  so; `ctxo init` run from a global install, in a project without `@ctxo/cli` in its `package.json`,
+  writes MCP entries that call the global `ctxo` binary instead of `npx -y @ctxo/cli` (only ctxo's own
+  default entry is replaced). A project that declares `@ctxo/cli` in any dependency field keeps the
+  committed npx entry, even when init runs from a global install.
 - `@ctxo/cli/internal`, the type-only internal API that `@ctxo/domain` builds against (plus
   `createModuleHost`); the one runtime function. `@ctxo/cli` and `@ctxo/domain` share one version
   (a changesets `fixed` group).
@@ -60,6 +62,12 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (ten packages today). Per-pack
   instead of skipping). The e2e job timeout is 15 minutes.
 
 ### Changed (domain knowledge layer)
+
+- `ctxo --version --json` always carries `modules`: `{"name":"@ctxo/domain","status":"not-installed"}`
+  when the package is absent.
+- An installed `@ctxo/domain` turns the facts request on for every plugin (`capabilities.facts`). No
+  plugin implements `extractFacts` yet, so nothing changes in the index until one does; then the
+  committed index JSON of every project with the package installed will gain `facts`.
 
 - `packages/cli/src/index.ts` is a thin argv router; the MCP wiring moved to `mcp-server.ts` (the MCP
   composition root). `ctxo domain-guard-hook` takes a fast route that loads neither the MCP SDK nor the
