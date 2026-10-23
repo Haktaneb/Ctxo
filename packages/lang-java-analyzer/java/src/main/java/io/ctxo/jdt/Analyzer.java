@@ -3,6 +3,9 @@ package io.ctxo.jdt;
 import org.eclipse.jdt.core.JavaCore;
 import org.eclipse.jdt.core.dom.*;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
@@ -13,6 +16,7 @@ public final class Analyzer {
   private final String rootDir;
   private final String[] classpath;
   private final boolean sqlCallSites;
+  private final Dtos.FactOptions facts;
   private Dtos.SqlStats sqlStats;
 
   public Analyzer(String rootDir, String[] classpath) {
@@ -21,10 +25,19 @@ public final class Analyzer {
 
   /** With {@code sqlCallSites}, file results carry the SQL text at known call sites ({@link SqlCallSites}). */
   public Analyzer(String rootDir, String[] classpath, boolean sqlCallSites) {
+    this(rootDir, classpath, sqlCallSites, null);
+  }
+
+  /**
+   * With {@code facts} (the {@code --facts=} options), file results also carry fact evidence
+   * ({@link FactEvidence}); null leaves the output exactly as without facts.
+   */
+  public Analyzer(String rootDir, String[] classpath, boolean sqlCallSites, Dtos.FactOptions facts) {
     this.rootDir = rootDir;
     this.classpath = classpath;
     this.sqlCallSites = sqlCallSites;
     this.sqlStats = sqlCallSites ? new Dtos.SqlStats() : null;
+    this.facts = facts;
   }
 
   /**
@@ -63,6 +76,12 @@ public final class Analyzer {
           sites.sort(SQL_SITE_ORDER);
           fr.sqlCallSites = sites;
         }
+        if (facts != null) {
+          String source = sourceOf(sourceFilePath, cu);
+          List<Dtos.Evidence> evidence = new ArrayList<>();
+          if (source != null) FactEvidence.collect(cu, source, rel, facts, evidence);
+          if (!evidence.isEmpty()) fr.factEvidence = evidence;
+        }
         // imports: anchor on the first top-level type symbol (JDT visits imports before types,
         // so this must run after the visitor has populated symbols).
         String anchor = null;
@@ -95,6 +114,21 @@ public final class Analyzer {
     };
     parser.createASTs(files, encodings, new String[0], requestor, null);
     return new ArrayList<>(byPath.values());
+  }
+
+  /**
+   * The text JDT parsed (UTF-8, as {@code setEnvironment} reads it), so node offsets index into it;
+   * a byte order mark JDT skipped is dropped. Null when unreadable or when the offsets do not fit.
+   */
+  private static String sourceOf(String path, CompilationUnit cu) {
+    try {
+      String source = new String(Files.readAllBytes(Paths.get(path)), StandardCharsets.UTF_8);
+      int end = cu.getStartPosition() + cu.getLength();
+      if (source.startsWith("\uFEFF") && end < source.length()) source = source.substring(1);
+      return end <= source.length() ? source : null;
+    } catch (IOException | RuntimeException e) {
+      return null;
+    }
   }
 
   private String relativize(String absSourcePath) {

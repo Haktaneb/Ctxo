@@ -2,6 +2,8 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { delimiter } from 'node:path';
 import { createLogger } from '../logger.js';
 import type { SqlCallSite } from '../sql-edges.js';
+import { encodeFactOptions } from '../facts/fact-options.js';
+import type { FactEvidence, FactOptions } from '../facts/fact-types.js';
 
 const log = createLogger('ctxo:lang-java');
 
@@ -38,6 +40,8 @@ export interface JdtFileResult {
   complexity: unknown[];
   /** SQL call sites (only with `--sql-call-sites`; omitted by the analyzer when the file has none). */
   sqlCallSites?: SqlCallSite[];
+  /** Fact evidence (only with `--facts=`; omitted by the analyzer when the file has none). */
+  factEvidence?: FactEvidence[];
 }
 
 /** How many SQL texts the analyzer read as compile-time constants and how many it could not. */
@@ -60,6 +64,13 @@ export interface RunOpts {
   timeoutMs?: number;
   /** Pass `--sql-call-sites`: the analyzer reports SQL call-site records and counts. */
   sqlCallSites?: boolean;
+  /** Pass `--facts=<encodeFactOptions>`: the analyzer reports fact evidence. */
+  facts?: FactOptions;
+}
+
+/** The analyzer's `--facts=` argument: standard base64 of `{"normalizationMethods":[...]}`. */
+export function factsArgument(facts: FactOptions): string {
+  return `--facts=${encodeFactOptions(facts)}`;
 }
 
 /** Reads the `sql` member of a `done` line; undefined unless both counts are numbers. */
@@ -78,6 +89,9 @@ export function buildAnalyzerArgs(jarPath: string, projectRoot: string, opts: Ru
   if (opts.classpathOverride?.length) args.push('--classpath', opts.classpathOverride.join(delimiter));
   if (opts.allowBuildTools) args.push('--allow-build-tools');
   if (opts.sqlCallSites) args.push('--sql-call-sites');
+  // Last: the analyzer matches it by prefix before its exact-match switch (an older JAR takes it for
+  // an extra positional argument and ignores it).
+  if (opts.facts) args.push(factsArgument(opts.facts));
   return args;
 }
 
@@ -157,6 +171,8 @@ export async function runBatchIndex(
 export interface JdtKeepAliveOptions {
   /** Pass `--sql-call-sites` (after `--keep-alive`), so each file result carries its call-site records. */
   readonly sqlCallSites?: boolean;
+  /** Pass `--facts=` (after the other flags), so each file result carries its fact evidence. */
+  readonly facts?: FactOptions;
   /** Inactivity timeout in milliseconds (default 300000). */
   readonly idleMs?: number;
 }
@@ -164,6 +180,7 @@ export interface JdtKeepAliveOptions {
 /** Keep-alive JDT analyzer for watch mode: stays alive, re-analyzes one file per request. */
 export class JdtKeepAlive {
   private readonly sqlCallSites: boolean;
+  private readonly facts: FactOptions | undefined;
   private readonly idleMs: number;
   private proc: ChildProcess | null = null;
   private buffer = '';
@@ -177,6 +194,7 @@ export class JdtKeepAlive {
     options: JdtKeepAliveOptions = {},
   ) {
     this.sqlCallSites = options.sqlCallSites === true;
+    this.facts = options.facts;
     this.idleMs = options.idleMs ?? 300_000;
   }
 
@@ -186,6 +204,7 @@ export class JdtKeepAlive {
       const settle = (v: boolean) => { if (!settled) { settled = true; resolve(v); } };
       const args = ['-jar', this.jarPath, this.projectRoot, '--keep-alive'];
       if (this.sqlCallSites) args.push('--sql-call-sites');
+      if (this.facts) args.push(factsArgument(this.facts));
       this.proc = spawn(this.javaBin, args, { stdio: ['pipe', 'pipe', 'pipe'] });
       this.proc.stdout!.on('data', (chunk: Buffer) => {
         this.buffer += chunk.toString();

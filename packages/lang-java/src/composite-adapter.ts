@@ -1,4 +1,5 @@
-import type { SymbolNode, GraphEdge, ComplexityMetrics, SymbolKind, ILanguageAdapter, IIncrementalReindex, ReindexResult } from '@ctxo/plugin-api';
+import type { SymbolNode, GraphEdge, ComplexityMetrics, SymbolKind, ILanguageAdapter, IIncrementalReindex, ReindexResult, CodeFact } from '@ctxo/plugin-api';
+import type { FactOptions } from './facts/fact-types.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { JavaAdapter } from './java-adapter.js';
@@ -22,8 +23,12 @@ export class JavaCompositeAdapter implements ILanguageAdapter {
   /** SQL data edges (`reads`, `writes`, `executes`) are emitted: the host's `capabilities.sqlCallSites`. Full tier only. */
   readonly sqlCallSites: boolean;
 
-  constructor(options: { readonly sqlCallSites?: boolean } = {}) {
+  /** Fact detector options: set when the host requests facts (`capabilities.facts`); without them `extractFacts` returns `[]`. */
+  readonly facts: FactOptions | undefined;
+
+  constructor(options: { readonly sqlCallSites?: boolean; readonly facts?: FactOptions } = {}) {
     this.sqlCallSites = options.sqlCallSites === true;
+    this.facts = options.facts;
     this.treeSitter = new JavaAdapter();
   }
 
@@ -31,7 +36,7 @@ export class JavaCompositeAdapter implements ILanguageAdapter {
     this.rootDir = rootDir;
     this.incrementalCapability = null;
     try {
-      const analyzer = new JdtAnalyzerAdapter({ sqlCallSites: this.sqlCallSites });
+      const analyzer = new JdtAnalyzerAdapter({ sqlCallSites: this.sqlCallSites, ...(this.facts ? { facts: this.facts } : {}) });
       await analyzer.initialize(rootDir);
       if (analyzer.isReady()) {
         this.analyzer = analyzer;
@@ -60,6 +65,17 @@ export class JavaCompositeAdapter implements ILanguageAdapter {
 
   extractComplexity(filePath: string, source: string): Promise<ComplexityMetrics[]> {
     return this.treeSitter.extractComplexity(filePath, source);
+  }
+
+  /**
+   * Code facts from the active tier: the JDT analyzer's evidence and annotation routes in the full
+   * tier; the syntax tier's own `extractFacts` when it has one, else `[]`. `[]` without the `facts` option.
+   */
+  async extractFacts(filePath: string, source: string): Promise<CodeFact[]> {
+    if (!this.facts) return [];
+    if (this.analyzer) return this.analyzer.extractFacts(filePath, source);
+    const syntax = this.treeSitter as ILanguageAdapter;
+    return typeof syntax.extractFacts === 'function' ? syntax.extractFacts(filePath, source) : [];
   }
 
   isSupported(filePath: string): boolean { return filePath.toLowerCase().endsWith('.java'); }

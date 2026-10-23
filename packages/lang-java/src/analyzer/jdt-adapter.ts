@@ -1,4 +1,8 @@
-import type { ComplexityMetrics, GraphEdge, ILanguageAdapter, SymbolNode } from '@ctxo/plugin-api';
+import type { CodeFact, ComplexityMetrics, GraphEdge, ILanguageAdapter, SymbolNode } from '@ctxo/plugin-api';
+import { annotationRouteEvidence } from '../facts/annotation-endpoints.js';
+import type { FactOptions } from '../facts/fact-types.js';
+import { finishFacts } from '../facts/finish-facts.js';
+import { decodeJavaStringLiteral } from '../facts/java-string-literal.js';
 import { createLogger } from '../logger.js';
 import { resolveAnalyzerJar, analyzerPackageVersion, baseVersionMismatch, PLUGIN_VERSION } from './jar-resolve.js';
 import { toGraphEdges, toSymbolNode } from './jdt-mapping.js';
@@ -22,9 +26,22 @@ export class JdtAnalyzerAdapter implements ILanguageAdapter {
   private readonly sqlCallSites: boolean;
   private sqlStats: JdtSqlStats | undefined;
 
-  /** `sqlCallSites`: ask the analyzer for SQL call sites and turn them into data edges (the host's `capabilities.sqlCallSites`). */
-  constructor(options: { readonly sqlCallSites?: boolean } = {}) {
+  /** The `facts` option as constructed. */
+  readonly facts: FactOptions | undefined;
+
+  /**
+   * `sqlCallSites`: ask the analyzer for SQL call sites and turn them into data edges (the host's
+   * `capabilities.sqlCallSites`). `facts`: ask it for fact evidence (`--facts=`, the host's
+   * `capabilities.facts`); without it `extractFacts` returns `[]`.
+   */
+  constructor(options: { readonly sqlCallSites?: boolean; readonly facts?: FactOptions } = {}) {
     this.sqlCallSites = options.sqlCallSites === true;
+    this.facts = options.facts;
+  }
+
+  /** The analyzer options; `facts` only when set, so a run without facts is the same as before. */
+  private analyzerOptions(): { sqlCallSites: boolean; facts?: FactOptions } {
+    return { sqlCallSites: this.sqlCallSites, ...(this.facts ? { facts: this.facts } : {}) };
   }
 
   /**
@@ -86,17 +103,40 @@ export class JdtAnalyzerAdapter implements ILanguageAdapter {
     return [];
   }
 
+  /**
+   * Code facts (protocol v2, only with the `facts` option): the analyzer's evidence for the file plus
+   * Spring and JAX-RS annotation routes, finished by the shared rules with the Java string literal
+   * decoder. Reads the same cache as `extractSymbols`, which a keep-alive reindex refreshes.
+   */
+  async extractFacts(filePath: string, _source: string): Promise<CodeFact[]> {
+    const options = this.facts;
+    if (!options || !this.isReady()) return [];
+    await this.ensureBatch();
+    const file = this.cache.get(this.norm(filePath));
+    if (!file) return [];
+    const symbols = file.symbols.filter((s) => FULL_SYMBOL_ID.test(s.symbolId)).map(toSymbolNode);
+    const evidence = [...(file.factEvidence ?? []), ...annotationRouteEvidence(symbols)];
+    return finishFacts(this.norm(filePath), evidence, symbols, options, decodeJavaStringLiteral);
+  }
+
   async startKeepAlive(): Promise<boolean> {
     if (!this.isReady() || !this.jarPath || !this.root) return false;
-    this.keepAlive = new JdtKeepAlive(this.javaBin, this.jarPath, this.root, { sqlCallSites: this.sqlCallSites });
+    this.keepAlive = new JdtKeepAlive(this.javaBin, this.jarPath, this.root, this.analyzerOptions());
     const ok = await this.keepAlive.start();
     if (!ok) this.keepAlive = null;
     return ok;
   }
 
+  /**
+   * Re-analyzes one file in the keep-alive process. The result replaces the file's cache entry, so a
+   * later `extractSymbols`, `extractEdges` or `extractFacts` (the watch path calls `extractFacts` right
+   * after) sees the new file rather than the batch's version; a failed request leaves the cache as it was.
+   */
   async reindexFileRaw(relativePath: string): Promise<JdtFileResult | null> {
     if (!this.keepAlive?.isAlive()) return null;
-    return this.keepAlive.analyzeFile(relativePath);
+    const result = await this.keepAlive.analyzeFile(relativePath);
+    if (result) this.cache.set(this.norm(result.file), result);
+    return result;
   }
 
   async dispose(): Promise<void> {
@@ -118,7 +158,7 @@ export class JdtAnalyzerAdapter implements ILanguageAdapter {
 
   private async runBatch(): Promise<void> {
     if (!this.jarPath || !this.root) return;
-    const result = await runBatchIndex(this.javaBin, this.jarPath, this.root, { sqlCallSites: this.sqlCallSites });
+    const result = await runBatchIndex(this.javaBin, this.jarPath, this.root, this.analyzerOptions());
     if (result.sql) {
       this.sqlStats = {
         constant: (this.sqlStats?.constant ?? 0) + result.sql.constant,

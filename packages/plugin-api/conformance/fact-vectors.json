@@ -1435,6 +1435,268 @@
           "expected": false
         }
       ]
+    },
+    "java": {
+      "$comment": "Run with decodeJavaStringLiteral: text blocks (JLS 3.10.6). The opening \"\"\" must be followed by optional spaces, tabs or form feeds and a line break; the content up to the first unescaped \"\"\" (which must end the literal) gets LF line breaks, then String.stripIndent (the last line counts toward the indentation even when blank, so a closing delimiter on its own line keeps the final newline, and one at column 0 keeps all indentation; each whitespace character, a tab included, counts as one; trailing whitespace is removed), then String.translateEscapes (\\b \\t \\n \\f \\r \\s \\\" \\' \\\\, octal \\0 to \\377, a backslash before a line break joins the lines). A Unicode escape (\\u0041) and any other escape are not constants, as in the shared rules. Plain \"...\" strings never reach the decoder (\"\\s\" is not a constant). Int overflow (24 * 60 * 60 * 1000 * 365) is decided by the JDT evidence step, not by these rules: an int-typed step outside the int range gives no evidence.",
+      "isTrivialLiteral": [
+        {
+          "input": {
+            "literal": "\"\"\"\n    raw\n    \"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "raw\n"
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "\"\"\"\n    raw\n    \"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "raw",
+              "    raw\n"
+            ]
+          },
+          "expected": false
+        },
+        {
+          "input": {
+            "literal": "\"\"\"\n    raw\"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "raw"
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "\"\"\"\n  a\n    b\n  \"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "a\n  b\n"
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "\"\"\"\n  a\n\"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "  a\n"
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "\"\"\"\n    a\n  \"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "  a\n"
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "\"\"\"\r\n    raw\r\n    \"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "raw\n"
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "\"\"\"   \n  gold\"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "gold"
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "\"\"\"\n\"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              ""
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "\"\"\"\n    a\n\n    b\n    \"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "a\n\nb\n"
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "\"\"\"\n  a   \n  \"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "a\n"
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "\"\"\"\n\ta\n    \"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "a\n"
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "\"\"\"\n  a\\tb\\s\n  \"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "a\tb \n"
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "\"\"\"\n  a \\\n  b\"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "a b"
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "\"\"\"\n\\101\\60\"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "A0"
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "\"\"\"\n  \\\"\"\"x\n  \"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "\"\"\"x\n"
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "\"\"\"\n  say \"hi\" and \"\"twice\"\"\n  \"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "say \"hi\" and \"\"twice\"\"\n"
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "\"\"\"abc\"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "abc"
+            ]
+          },
+          "expected": false
+        },
+        {
+          "input": {
+            "literal": "\"\"\"\nab\"\"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "ab\"",
+              "ab"
+            ]
+          },
+          "expected": false
+        },
+        {
+          "input": {
+            "literal": "\"\"\"\nab\\\"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "ab\"",
+              "ab"
+            ]
+          },
+          "expected": false
+        },
+        {
+          "input": {
+            "literal": "\"\"\"\na\"\"\"b\n\"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "a\"\"\"b\n"
+            ]
+          },
+          "expected": false
+        },
+        {
+          "input": {
+            "literal": "\"\"\"\n\\u0041\"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "A",
+              "\\u0041",
+              "u0041"
+            ]
+          },
+          "expected": false
+        },
+        {
+          "input": {
+            "literal": "\"\"\"\n\\q\"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "q",
+              "\\q"
+            ]
+          },
+          "expected": false
+        },
+        {
+          "input": {
+            "literal": "\"\\s\"",
+            "kind": "string",
+            "trivialLiterals": [
+              " ",
+              "\\s"
+            ]
+          },
+          "expected": false
+        },
+        {
+          "input": {
+            "literal": "'\\u0041'",
+            "kind": "char",
+            "trivialLiterals": [
+              "A"
+            ]
+          },
+          "expected": false
+        }
+      ]
     }
   }
 }

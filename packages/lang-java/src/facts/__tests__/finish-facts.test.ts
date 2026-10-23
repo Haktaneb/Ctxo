@@ -1,0 +1,180 @@
+import { describe, expect, it } from 'vitest';
+import type { SymbolNode } from '@ctxo/plugin-api';
+import type { FactEvidence } from '../fact-types.js';
+import { DEFAULT_FACT_OPTIONS } from '../fact-options.js';
+import { finishFacts, moduleSymbolId } from '../finish-facts.js';
+import { decodeJavaStringLiteral } from '../java-string-literal.js';
+
+const FILE = 'src/Loans/LoanPolicy.cs';
+const M = `${FILE}::Lending.LoanPolicy.CanBorrow::method`;
+
+function finish(evidence: readonly FactEvidence[], symbols: readonly SymbolNode[] = []) {
+  return finishFacts(FILE, evidence, symbols, DEFAULT_FACT_OPTIONS);
+}
+
+describe('finishFacts', () => {
+  it('a trivial comparison is dropped and the string "0" is kept', () => {
+    const facts = finish([
+      { kind: 'comparison', symbolId: M, line: 3, text: 'count == 0', operator: '==', literal: '0', literalKind: 'number' },
+      { kind: 'comparison', symbolId: M, line: 4, text: 'code  ==\n "0"', operator: '==', literal: '"0"', literalKind: 'string' },
+      { kind: 'comparison', symbolId: M, line: 5, text: 'tier == "gold"', operator: '==', literal: '"gold"', literalKind: 'string' },
+    ]);
+    expect(facts).toEqual([
+      { kind: 'literal-comparison', symbolId: M, line: 4, text: 'code == "0"', detail: { operator: '==', literal: '"0"' } },
+      { kind: 'literal-comparison', symbolId: M, line: 5, text: 'tier == "gold"', detail: { operator: '==', literal: '"gold"' } },
+    ]);
+  });
+
+  it('detail.literal is capped at 200 code points like text', () => {
+    const literal = `"${'x'.repeat(4096)}"`;
+    const [fact] = finish([{ kind: 'comparison', symbolId: M, line: 1, text: `code == ${literal}`, operator: '==', literal, literalKind: 'string' }]);
+    expect(Array.from(fact!.detail!['literal']!)).toHaveLength(200);
+    expect(fact!.detail!['literal']).toBe(`"${'x'.repeat(199)}`);
+    expect(Array.from(fact!.text)).toHaveLength(200);
+
+    const pairAtCut = `"${'y'.repeat(198)}😀😀 tail"`;
+    const [paired] = finish([{ kind: 'comparison', symbolId: M, line: 2, text: 'x == y', operator: '==', literal: pairAtCut, literalKind: 'string' }]);
+    expect(paired!.detail!['literal']).toBe(`"${'y'.repeat(198)}😀`);
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(paired!.detail!['literal']!)).toBe(false);
+
+    const spaceAtCut = `"${'z'.repeat(198)}  more"`;
+    const [trimmed] = finish([{ kind: 'comparison', symbolId: M, line: 3, text: 'x == z', operator: '==', literal: spaceAtCut, literalKind: 'string' }]);
+    expect(trimmed!.detail!['literal']).toBe(`"${'z'.repeat(198)}`);
+
+    const short = '"a  b"';
+    const [kept] = finish([{ kind: 'comparison', symbolId: M, line: 4, text: 'x == "a  b"', operator: '==', literal: short, literalKind: 'string' }]);
+    expect(kept!.detail!['literal']).toBe(short);
+  });
+
+  it('the string literal decoder hook reaches the trivial-literal check', () => {
+    const evidence: FactEvidence[] = [
+      { kind: 'comparison', symbolId: M, line: 1, text: 'note == """\n"""', operator: '==', literal: '"""\n"""', literalKind: 'string' },
+      { kind: 'comparison', symbolId: M, line: 2, text: 'note == """\n  """', operator: '==', literal: '"""\n  """', literalKind: 'string' },
+    ];
+    expect(finishFacts(FILE, evidence, [], DEFAULT_FACT_OPTIONS)).toHaveLength(2);
+    expect(finishFacts(FILE, evidence, [], DEFAULT_FACT_OPTIONS, decodeJavaStringLiteral)).toEqual([]);
+  });
+
+  it('a text block that does not compile or holds a Unicode escape is not trivial, so its comparison is kept', () => {
+    const evidence: FactEvidence[] = [
+      { kind: 'comparison', symbolId: M, line: 1, text: 'note == """"""', operator: '==', literal: '""""""', literalKind: 'string' },
+      { kind: 'comparison', symbolId: M, line: 2, text: 'note == """\n\\u0030"""', operator: '==', literal: '"""\n\\u0030"""', literalKind: 'string' },
+    ];
+    expect(finishFacts(FILE, evidence, [], DEFAULT_FACT_OPTIONS, decodeJavaStringLiteral).map(f => f.line)).toEqual([1, 2]);
+  });
+
+  it('a call is kept only when a normalization pattern matches', () => {
+    const facts = finish([
+      { kind: 'call', symbolId: M, line: 2, text: 'email.Trim().ToLowerInvariant()', method: 'ToLowerInvariant' },
+      { kind: 'call', symbolId: M, line: 2, text: 'email.ToString()', method: 'ToString' },
+    ]);
+    expect(facts).toEqual([
+      { kind: 'normalization', symbolId: M, line: 2, text: 'email.Trim().ToLowerInvariant()', detail: { method: 'ToLowerInvariant' } },
+    ]);
+  });
+
+  it('a binding needs a fragment name and a numeric constant', () => {
+    expect(finish([{ kind: 'binding', symbolId: M, line: 1, name: 'REQUEST_TIMEOUT', value: '30 * 1000' }])).toEqual([
+      { kind: 'retry-timeout', symbolId: M, line: 1, text: 'REQUEST_TIMEOUT = 30000', detail: { name: 'REQUEST_TIMEOUT', value: '30000' } },
+    ]);
+    expect(finish([
+      { kind: 'binding', symbolId: M, line: 1, name: 'settlementDays', value: '3' },
+      { kind: 'binding', symbolId: M, line: 2, name: 'timeout', value: 'x * 2' },
+    ])).toEqual([]);
+  });
+
+  it('durations carry their unit and their binding name', () => {
+    expect(finish([{ kind: 'duration', symbolId: M, line: 7, name: 'Timeout', constructor: 'System.TimeSpan.FromSeconds', unit: 's', amount: '30' }])).toEqual([
+      { kind: 'retry-timeout', symbolId: M, line: 7, text: 'Timeout = 30s', detail: { name: 'Timeout', value: '30s' } },
+    ]);
+    expect(finish([{ kind: 'duration', symbolId: M, line: 7, constructor: 'System.TimeSpan.FromSeconds', unit: 's', amount: '30' }])).toEqual([
+      { kind: 'retry-timeout', symbolId: M, line: 7, text: 'TimeSpan.FromSeconds = 30s', detail: { name: 'TimeSpan.FromSeconds', value: '30s' } },
+    ]);
+    expect(finish([{ kind: 'duration', symbolId: M, line: 8, name: 'poll', constructor: 'setTimeout', unit: 'ms', amount: '5_000' }])).toEqual([
+      { kind: 'retry-timeout', symbolId: M, line: 8, text: 'setTimeout = 5000ms', detail: { name: 'setTimeout', value: '5000ms' } },
+    ]);
+    expect(finish([{ kind: 'duration', symbolId: M, line: 9, name: 'Wait', constructor: 'TimeSpan.FromSeconds', unit: 's', amount: 'seconds' }])).toEqual([]);
+  });
+
+  it('routes are upper-cased and joined', () => {
+    expect(finish([{ kind: 'route', symbolId: M, line: 0, verb: 'get', route: 'loans/' }])).toEqual([
+      { kind: 'endpoint', symbolId: M, line: 0, text: 'GET /loans', detail: { verb: 'GET', route: '/loans' } },
+    ]);
+  });
+
+  it('evidence without a symbolId goes to the innermost symbol or the module symbol', () => {
+    expect(moduleSymbolId('src/Program.cs')).toBe('src/Program.cs::Program::variable');
+    expect(moduleSymbolId('Program.cs')).toBe('Program.cs::Program::variable');
+    expect(moduleSymbolId('src/app.config.ts')).toBe('src/app.config.ts::app.config::variable');
+
+    const cls: SymbolNode = { symbolId: `${FILE}::Lending.LoanPolicy::class`, name: 'Lending.LoanPolicy', kind: 'class', startLine: 2, endLine: 40 };
+    const method: SymbolNode = { symbolId: M, name: 'Lending.LoanPolicy.CanBorrow', kind: 'method', startLine: 10, endLine: 20 };
+    const sameStartWide: SymbolNode = { symbolId: `${FILE}::Lending.LoanPolicy.Wide::method`, name: 'Wide', kind: 'method', startLine: 10, endLine: 30 };
+    const twin: SymbolNode = { symbolId: `${FILE}::Lending.LoanPolicy.Twin::method`, name: 'Twin', kind: 'method', startLine: 10, endLine: 20 };
+    const symbols = [cls, sameStartWide, method, twin];
+    const at = (line: number): FactEvidence => ({ kind: 'route', line, verb: 'GET', route: `r${line}` });
+
+    const facts = finish([at(0), at(5), at(15), at(25), at(50)], symbols);
+    expect(facts.map(f => [f.line, f.symbolId])).toEqual([
+      [0, moduleSymbolId(FILE)],
+      [5, cls.symbolId],
+      [15, M],
+      [25, sameStartWide.symbolId],
+      [50, moduleSymbolId(FILE)],
+    ]);
+  });
+
+  it('facts are sorted, de-duplicated and capped at 500', () => {
+    const evidence: FactEvidence[] = [];
+    for (let line = 599; line >= 0; line--) {
+      evidence.push({ kind: 'comparison', symbolId: M, line, text: `tier == "gold${line}"`, operator: '==', literal: `"gold${line}"`, literalKind: 'string' });
+    }
+    evidence.push({ ...evidence[0]! });
+    const facts = finish(evidence);
+    expect(facts).toHaveLength(500);
+    expect(facts.map(f => f.line)).toEqual(Array.from({ length: 500 }, (_, i) => i));
+
+    const sameLine = finish([
+      { kind: 'route', symbolId: M, line: 1, verb: 'GET', route: 'b' },
+      { kind: 'comparison', symbolId: M, line: 1, text: 'x == 2', operator: '==', literal: '2', literalKind: 'number' },
+      { kind: 'route', symbolId: M, line: 1, verb: 'GET', route: 'a' },
+      { kind: 'binding', symbolId: M, line: 1, name: 'MaxRetries', value: '3' },
+      { kind: 'route', symbolId: M, line: 1, verb: 'GET', route: 'a' },
+    ]);
+    expect(sameLine.map(f => `${f.kind}|${f.text}`)).toEqual([
+      'literal-comparison|x == 2',
+      'retry-timeout|MaxRetries = 3',
+      'endpoint|GET /a',
+      'endpoint|GET /b',
+    ]);
+  });
+
+  it('shuffled evidence gives deep-equal facts', () => {
+    const symbols: SymbolNode[] = [
+      { symbolId: `${FILE}::Lending.LoanPolicy::class`, name: 'Lending.LoanPolicy', kind: 'class', startLine: 0, endLine: 30 },
+      { symbolId: M, name: 'Lending.LoanPolicy.CanBorrow', kind: 'method', startLine: 5, endLine: 15 },
+    ];
+    const evidence: FactEvidence[] = [
+      { kind: 'comparison', line: 6, text: 'tier == "gold"', operator: '==', literal: '"gold"', literalKind: 'string' },
+      { kind: 'comparison', symbolId: 'other', line: 6, text: 'tier == "gold"', operator: '==', literal: '"gold"', literalKind: 'string' },
+      { kind: 'call', line: 7, text: 'name.Trim()', method: 'Trim' },
+      { kind: 'binding', line: 2, name: 'MaxRetries', value: '3' },
+      { kind: 'duration', line: 20, name: 'HoldTtl', constructor: 'TimeSpan.FromDays', unit: 'd', amount: '7' },
+      { kind: 'route', line: 6, verb: 'post', route: 'loans' },
+      { kind: 'route', line: 6, verb: 'get', route: 'loans' },
+      { kind: 'comparison', line: 40, text: 'x > 10', operator: '>', literal: '10', literalKind: 'number' },
+    ];
+    const expected = finish(evidence, symbols);
+    expect(expected).toHaveLength(8);
+    let seed = 7;
+    for (let round = 0; round < 20; round++) {
+      const shuffled = [...evidence];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        const j = seed % (i + 1);
+        [shuffled[i], shuffled[j]] = [shuffled[j]!, shuffled[i]!];
+      }
+      expect(finish(shuffled, [...symbols].reverse())).toEqual(expected);
+    }
+  });
+});
