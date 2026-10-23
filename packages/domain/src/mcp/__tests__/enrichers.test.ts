@@ -117,6 +117,14 @@ const run = (
   args: Record<string, unknown> = {},
 ): Record<string, unknown> => e[tool]!(structuredClone(payload), args);
 
+/** `run` for an enricher that may return a Promise (`get_pr_impact` adds its asynchronous domain fields). */
+const runAsync = async (
+  e: ReturnType<typeof enrichers>,
+  tool: keyof ReturnType<typeof enrichers>,
+  payload: Record<string, unknown>,
+  args: Record<string, unknown> = {},
+): Promise<Record<string, unknown>> => await e[tool]!(structuredClone(payload), args);
+
 describe('createEnrichers', () => {
   it('registers an enricher for the seven tools', () => {
     expect(Object.keys(enrichers()).sort()).toEqual([
@@ -205,8 +213,8 @@ describe('createEnrichers', () => {
     ]);
   });
 
-  it('get_pr_impact adds context to symbols of singly-owned files and nothing for unowned files', () => {
-    const result = run(enrichers(), 'get_pr_impact', {
+  it('get_pr_impact adds context to symbols of singly-owned files and nothing for unowned files', async () => {
+    const result = await runAsync(enrichers(), 'get_pr_impact', {
       files: [
         { file: 'src/Lending/Loan.ts', symbols: [{ symbolId: 'src/Lending/Loan.ts::Loan::class' }] },
         { file: 'src/Loose.ts', symbols: [{ symbolId: 'src/Loose.ts::Loose::class' }] },
@@ -219,18 +227,18 @@ describe('createEnrichers', () => {
     ]);
   });
 
-  it('without a registry the payload is unchanged', () => {
+  it('without a registry the payload is unchanged', async () => {
     const e = enrichers({ registry: false });
     const payload = { results: [{ symbolId: 'a', file: 'src/Lending/Loan.ts' }] };
 
     expect(run(e, 'search_symbols', payload)).toEqual(payload);
-    expect(run(e, 'get_pr_impact', { files: [] })).toEqual({ files: [] });
+    expect(await runAsync(e, 'get_pr_impact', { files: [] })).toEqual({ files: [] });
     expect(run(e, 'get_why_context', { symbolId: 'src/Lending/Loan.ts::Loan::class' }, { symbolId: 'src/Lending/Loan.ts::Loan::class' })).toEqual({
       symbolId: 'src/Lending/Loan.ts::Loan::class',
     });
   });
 
-  it('stale artifacts add nothing', () => {
+  it('stale artifacts add nothing', async () => {
     const e = enrichers({
       hash: 'not-the-current-hash',
       violations: [violation(1)],
@@ -240,15 +248,15 @@ describe('createEnrichers', () => {
     const pr = { files: [{ file: 'src/Lending/L1.ts', symbols: [{ symbolId: 'src/Lending/L1.ts::L1::class' }] }] };
 
     expect(run(e, 'search_symbols', search)).toEqual(search);
-    expect(run(e, 'get_pr_impact', pr)).toEqual(pr);
+    expect(await runAsync(e, 'get_pr_impact', pr)).toEqual(pr);
     const why = { symbolId: 'src/Lending/Loan.ts::Loan::class' };
     expect(run(e, 'get_why_context', why, why)).toEqual(why);
   });
 
-  it('contextBoundaryViolations lists the violations touching changed symbols', () => {
+  it('contextBoundaryViolations lists the violations touching changed symbols', async () => {
     const e = enrichers({ violations: [violation(1), violation(2), violation(3)] });
 
-    const result = run(e, 'get_pr_impact', {
+    const result = await runAsync(e, 'get_pr_impact', {
       files: [
         { file: 'src/Lending/L1.ts', symbols: [{ symbolId: 'src/Lending/L1.ts::L1::class' }] },
         // The `to` end of violation 3 is a changed symbol too.
@@ -260,33 +268,33 @@ describe('createEnrichers', () => {
     expect(result).not.toHaveProperty('contextBoundaryViolationsTotal');
   });
 
-  it('contextBoundaryViolations is absent when no violation touches a changed symbol', () => {
+  it('contextBoundaryViolations is absent when no violation touches a changed symbol', async () => {
     const e = enrichers({ violations: [violation(1)] });
 
-    const result = run(e, 'get_pr_impact', {
+    const result = await runAsync(e, 'get_pr_impact', {
       files: [{ file: 'src/Lending/Other.ts', symbols: [{ symbolId: 'src/Lending/Other.ts::O::class' }] }],
     });
 
     expect(result).not.toHaveProperty('contextBoundaryViolations');
   });
 
-  it('contextBoundaryViolations is capped at 50 with contextBoundaryViolationsTotal', () => {
+  it('contextBoundaryViolations is capped at 50 with contextBoundaryViolationsTotal', async () => {
     const many = Array.from({ length: 60 }, (_, i) => violation(i));
     const changed = {
       files: many.map((v) => ({ file: v.from.file, symbols: [{ symbolId: v.from.symbolId }] })),
     };
 
-    const capped = run(enrichers({ violations: many }), 'get_pr_impact', changed);
+    const capped = await runAsync(enrichers({ violations: many }), 'get_pr_impact', changed);
 
     expect(capped['contextBoundaryViolations']).toEqual(many.slice(0, 50));
     expect(capped['contextBoundaryViolationsTotal']).toBe(60);
   });
 
-  it('contextBoundaryViolations keeps all ten with no total field', () => {
+  it('contextBoundaryViolations keeps all ten with no total field', async () => {
     const ten = Array.from({ length: 10 }, (_, i) => violation(i));
     const changed = { files: ten.map((v) => ({ file: v.from.file, symbols: [{ symbolId: v.from.symbolId }] })) };
 
-    const result = run(enrichers({ violations: ten }), 'get_pr_impact', changed);
+    const result = await runAsync(enrichers({ violations: ten }), 'get_pr_impact', changed);
 
     expect(result['contextBoundaryViolations']).toEqual(ten);
     expect(result).not.toHaveProperty('contextBoundaryViolationsTotal');

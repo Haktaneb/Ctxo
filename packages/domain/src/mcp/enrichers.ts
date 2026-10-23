@@ -10,6 +10,7 @@ import { ADDITIVE_CAP } from '../core/limits.js';
 import { registryHash } from '../core/registry.js';
 import type { DomainState } from './domain-state.js';
 import { blastRadiusDomainFields, taskContextDomainFields, whyContextDomainFields } from './graph-enrichers.js';
+import { prImpactDomainFields } from './pr-impact-fields.js';
 
 type Payload = Record<string, unknown>;
 
@@ -265,22 +266,26 @@ export function createEnrichers(host: CtxoHost, state: DomainState): Partial<Rec
       }
     }),
 
+    // The git reads of the domain fields keep running when the bound fires; only their fields are dropped.
     get_pr_impact: bounded(
       'get_pr_impact',
-      withDomain((payload, _args, domain) => {
-        if (Array.isArray(payload['files'])) {
-          for (const file of payload['files']) if (isRecord(file)) tagAll(file['symbols'], domain);
-        }
-        const artifact = domain.boundaries();
-        if (artifact === undefined) return;
-        const changed = changedSymbolIds(payload);
-        const touching: BoundaryViolationRecord[] = artifact.violations.filter(
-          (v) => changed.has(v.from.symbolId) || changed.has(v.to.symbolId),
-        );
-        if (touching.length === 0) return;
-        payload['contextBoundaryViolations'] = touching.slice(0, ADDITIVE_CAP);
-        if (touching.length > ADDITIVE_CAP) payload['contextBoundaryViolationsTotal'] = touching.length;
-      }),
+      compose(
+        withDomain((payload, _args, domain) => {
+          if (Array.isArray(payload['files'])) {
+            for (const file of payload['files']) if (isRecord(file)) tagAll(file['symbols'], domain);
+          }
+          const artifact = domain.boundaries();
+          if (artifact === undefined) return;
+          const changed = changedSymbolIds(payload);
+          const touching: BoundaryViolationRecord[] = artifact.violations.filter(
+            (v) => changed.has(v.from.symbolId) || changed.has(v.to.symbolId),
+          );
+          if (touching.length === 0) return;
+          payload['contextBoundaryViolations'] = touching.slice(0, ADDITIVE_CAP);
+          if (touching.length > ADDITIVE_CAP) payload['contextBoundaryViolationsTotal'] = touching.length;
+        }),
+        prImpactDomainFields(host, state),
+      ),
     ),
 
     get_why_context: bounded(
