@@ -136,8 +136,11 @@ final class Annotations {
     }
   }
 
-  /** Member name to value expression, in source order; the first of two same-named members wins. */
-  private static Map<String, Expression> syntaxMembers(Annotation annotation) {
+  /**
+   * Member name to value expression, in source order; the first of two same-named members wins.
+   * Package-private for {@link SqlCallSites}.
+   */
+  static Map<String, Expression> syntaxMembers(Annotation annotation) {
     Map<String, Expression> members = new LinkedHashMap<>();
     if (annotation.isSingleMemberAnnotation()) {
       members.put(VALUE, ((SingleMemberAnnotation) annotation).getValue());

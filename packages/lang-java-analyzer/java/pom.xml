@@ -72,6 +72,11 @@
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.2.5</version>
         <configuration>
+          <!--
+            A non-UTF-8 default charset, as on JRE 11-17 on Windows, so the tests prove that sources
+            and keep-alive requests are read as UTF-8 on every JDK (JDK 18+ defaults to UTF-8).
+          -->
+          <argLine>-Dfile.encoding=ISO-8859-1</argLine>
           <includes>
             <include>**/*Test.java</include>
             <include>**/*IT.java</include>
