@@ -192,6 +192,26 @@ describe('runVerifyChecks', () => {
     expect(outcome(base({ ...ruleCard('### LEND-01 X\n'), ruleLinks: links }), '6').status).toBe('pass');
   });
 
+  it('check 6 sorts unknown rule references by file, line and id', () => {
+    const mk = (file: string, line: number, id: string) => ({ file, line, raw: id, id, kind: 'annotation' as const });
+    const unknown = [mk('b.test.ts', 1, 'LEND-9'), mk('a.test.ts', 10, 'LEND-8'), mk('a.test.ts', 2, 'LEND-9'), mk('a.test.ts', 2, 'LEND-7'), mk('B.test.ts', 5, 'LEND-1')];
+    const out = outcome(base({ ruleLinks: { links: new Map([['LEND-01', []]]), unknown } }), '6');
+    expect(out.findings.map((f) => `${f.file}:${f.line}:${f.message.split(':')[0]}`)).toEqual([
+      'B.test.ts:5:LEND-1',
+      'a.test.ts:2:LEND-7',
+      'a.test.ts:2:LEND-9',
+      'a.test.ts:10:LEND-8',
+      'b.test.ts:1:LEND-9',
+    ]);
+  });
+
+  it('check 6 accepts a Tests value with a ::name suffix when the file exists', () => {
+    const ok = outcome(base(ruleCard('### LEND-01 X\nTests: `src/Lending/Loan.test.ts::LEND-01`\n')), '6');
+    expect(ok.status).toBe('pass');
+    const missing = outcome(base(ruleCard('### LEND-01 X\nTests: `src/Nope.test.ts::LEND-01`\n')), '6');
+    expect(missing.findings[0]!.message).toContain('"src/Nope.test.ts"');
+  });
+
   it('check 6 fails on a duplicate id across cards', () => {
     const registry = loaded(REGISTRY.replace('rung: fear', 'rung: named\n    card: docs/domain/reporting.md\n    rulePrefix: REP'));
     const cards = new Map<string, ParsedCard | undefined>([
@@ -227,6 +247,15 @@ describe('runVerifyChecks', () => {
     expect(messages).toContain('#nowhere');
     expect(messages).not.toContain('example.com');
     expect(out.findings.every((f) => f.line !== undefined)).toBe(true);
+  });
+
+  it('check 7 accepts a sibling path that starts with two dots and still rejects an escape from the repo', () => {
+    const text = GOOD_CARD + '\n[a](/..hidden/x.md) [b](../../../../outside.md) [c](..\\..\\..\\..\\outside.md)\n';
+    const out = outcome(base({ ...withCard(text), fileExists: (p) => p === '..hidden/x.md' || p === 'src/Lending/Loan.test.ts' || p === 'docs/domain/lending/domain.md' }), '7');
+    const messages = out.findings.map((f) => f.message).join(' | ');
+    expect(messages).not.toContain('..hidden');
+    expect(out.findings).toHaveLength(2);
+    expect(messages).toContain('outside.md');
   });
 
   it('check 7 passes on a card without bad links', () => {

@@ -210,7 +210,10 @@ function check6(cards: readonly CardRef[], input: VerifyInput): CheckOutcome {
       }
     }
   }
-  for (const ref of input.ruleLinks.unknown) {
+  const unknown = [...input.ruleLinks.unknown].sort(
+    (a, b) => compare(a.file, b.file) || a.line - b.line || compare(a.id, b.id),
+  );
+  for (const ref of unknown) {
     findings.push(error('6', `${ref.id}: referenced as "${ref.raw}" but no card defines it`, { file: ref.file, line: ref.line }));
   }
   return outcomeOf('6', findings);
@@ -237,14 +240,14 @@ function check7(cards: readonly CardRef[], input: VerifyInput): CheckOutcome {
       const hash = target.indexOf('#');
       const rawPath = hash === -1 ? target : target.slice(0, hash);
       const anchor = hash === -1 ? '' : decode(target.slice(hash + 1)).toLowerCase();
-      const pathPart = decode(rawPath.split('?')[0]!);
+      const pathPart = decode(rawPath.split('?')[0]!).replace(/\\/g, '/');
 
       let slugs: ReadonlySet<string> | undefined;
       if (pathPart === '') {
         slugs = ownSlugs;
       } else {
         const resolved = pathPart.startsWith('/') ? posix.normalize(pathPart.slice(1)) : posix.normalize(posix.join(posix.dirname(path), pathPart));
-        if (resolved.startsWith('..') || !input.fileExists(resolved.replace(/\/$/, ''))) {
+        if (resolved === '..' || resolved.startsWith('../') || !input.fileExists(resolved.replace(/\/$/, ''))) {
           findings.push(error('7', `link target "${target}" does not exist`, at));
           continue;
         }
