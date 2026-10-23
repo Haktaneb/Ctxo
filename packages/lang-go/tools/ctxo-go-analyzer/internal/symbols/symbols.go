@@ -131,6 +131,19 @@ func SymbolID(relFile, name, kind string) string {
 	return relFile + "::" + name + "::" + kind
 }
 
+// FuncDeclSymbolID names the symbol a function declaration's body belongs
+// to: "Recv.Name" as a method when the receiver reduces to a type name, else
+// the bare name as a function. Edges and SQL call sites use it for their
+// from side.
+func FuncDeclSymbolID(relFile string, fd *ast.FuncDecl) string {
+	if fd.Recv != nil && len(fd.Recv.List) > 0 {
+		if recv := receiverTypeName(fd.Recv.List[0].Type); recv != "" {
+			return SymbolID(relFile, recv+"."+fd.Name.Name, "method")
+		}
+	}
+	return SymbolID(relFile, fd.Name.Name, "function")
+}
+
 // receiverTypeName strips pointer indirection and generic instantiation from
 // a method receiver, returning the bare type name. Returns empty when the
 // expression cannot be reduced to a single identifier.

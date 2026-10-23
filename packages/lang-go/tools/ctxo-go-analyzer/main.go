@@ -26,6 +26,7 @@ import (
 	"github.com/alperhankendi/ctxo/tools/ctxo-go-analyzer/internal/implements"
 	"github.com/alperhankendi/ctxo/tools/ctxo-go-analyzer/internal/load"
 	"github.com/alperhankendi/ctxo/tools/ctxo-go-analyzer/internal/reach"
+	"github.com/alperhankendi/ctxo/tools/ctxo-go-analyzer/internal/sqlsites"
 	"github.com/alperhankendi/ctxo/tools/ctxo-go-analyzer/internal/symbols"
 )
 
@@ -36,6 +37,7 @@ const version = "0.8.0-alpha.0"
 func main() {
 	root := flag.String("root", "", "module root to analyze (required)")
 	showVersion := flag.Bool("version", false, "print version and exit")
+	sqlCallSites := flag.Bool("sql-call-sites", false, "report raw SQL at known database/sql, sqlx, pgx and gorm call sites")
 	flag.Parse()
 
 	if *showVersion {
@@ -48,7 +50,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := run(*root, os.Stdout); err != nil {
+	if err := run(*root, options{sqlCallSites: *sqlCallSites}, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "ctxo-go-analyzer:", err)
 		os.Exit(1)
 	}
@@ -57,9 +59,16 @@ func main() {
 type fileAggregate struct {
 	symbols []emit.Symbol
 	edges   []emit.Edge
+	sql     []emit.SqlCallSite
 }
 
-func run(root string, stdout io.Writer) error {
+// options holds the command-line switches that change what run reports.
+type options struct {
+	// sqlCallSites adds FileRecord.SqlCallSites and Summary.Sql.
+	sqlCallSites bool
+}
+
+func run(root string, opts options, stdout io.Writer) error {
 	w := emit.NewWriter(stdout)
 	start := time.Now()
 
@@ -90,6 +99,18 @@ func run(root string, stdout io.Writer) error {
 
 	parts := load.Partition(res.Packages)
 
+	// SQL call sites are collected in both passes, so a test function that
+	// queries the database gets its records too. collectSQL is nil without
+	// --sql-call-sites.
+	var sqlStats emit.SqlStats
+	var collectSQL func(pkg *packages.Package, file *ast.File, rel string)
+	if opts.sqlCallSites {
+		collectSQL = func(pkg *packages.Package, file *ast.File, rel string) {
+			agg := get(rel)
+			agg.sql = append(agg.sql, sqlsites.Collect(pkg, file, rel, &sqlStats)...)
+		}
+	}
+
 	// Production pass: exactly the analysis of a load without tests.
 	for _, pkg := range parts.Prod {
 		for _, fs := range symbols.Extract(pkg, root) {
@@ -105,6 +126,9 @@ func run(root string, stdout io.Writer) error {
 				continue
 			}
 			get(rel).edges = append(get(rel).edges, ext.Extract(pkg, file)...)
+			if collectSQL != nil {
+				collectSQL(pkg, file, rel)
+			}
 		}
 	}
 
@@ -116,7 +140,7 @@ func run(root string, stdout io.Writer) error {
 		get(rel).edges = append(get(rel).edges, extEdges...)
 	}
 
-	testPass(root, parts.Tests, ext, get)
+	testPass(root, parts.Tests, ext, get, collectSQL)
 
 	paths := make([]string, 0, len(byFile))
 	for p := range byFile {
@@ -125,10 +149,12 @@ func run(root string, stdout io.Writer) error {
 	sort.Strings(paths)
 	for _, p := range paths {
 		agg := byFile[p]
+		sortSQL(agg.sql)
 		if err := w.File(emit.FileRecord{
-			File:    p,
-			Symbols: agg.symbols,
-			Edges:   agg.edges,
+			File:         p,
+			Symbols:      agg.symbols,
+			Edges:        agg.edges,
+			SqlCallSites: agg.sql,
 		}); err != nil {
 			return err
 		}
@@ -147,9 +173,23 @@ func run(root string, stdout io.Writer) error {
 		_ = w.Progress("reachability analysis exceeded deadline; dead-code precision degraded")
 	}
 
-	return w.Summary(emit.Summary{
+	summary := emit.Summary{
 		TotalFiles: len(paths),
 		Elapsed:    time.Since(start).String(),
+	}
+	if opts.sqlCallSites {
+		summary.Sql = &sqlStats
+	}
+	return w.Summary(summary)
+}
+
+// sortSQL orders a file's call sites by line, then text.
+func sortSQL(sites []emit.SqlCallSite) {
+	sort.SliceStable(sites, func(i, j int) bool {
+		if sites[i].Line != sites[j].Line {
+			return sites[i].Line < sites[j].Line
+		}
+		return sites[i].Text < sites[j].Text
 	})
 }
 
@@ -158,8 +198,10 @@ func run(root string, stdout io.Writer) error {
 // function appears once. implements and extends run inside the variant's own
 // package universe, restricted to the files this variant emits, so a test
 // fake links to the production interface it satisfies. A file's edges are
-// de-duplicated by from, to, kind and typeArgs.
-func testPass(root string, tests []*packages.Package, ext *edges.Extractor, get func(string) *fileAggregate) {
+// de-duplicated by from, to, kind and typeArgs. collectSQL, when not nil,
+// runs once per emitted file.
+func testPass(root string, tests []*packages.Package, ext *edges.Extractor, get func(string) *fileAggregate,
+	collectSQL func(*packages.Package, *ast.File, string)) {
 	emitted := make(map[string]bool)
 	for _, pkg := range tests {
 		mine := make(map[string]bool)
@@ -184,6 +226,9 @@ func testPass(root string, tests []*packages.Package, ext *edges.Extractor, get 
 			agg := get(rel)
 			agg.symbols = append(agg.symbols, fs.Symbols...)
 			agg.edges = append(agg.edges, ext.Extract(pkg, file)...)
+			if collectSQL != nil {
+				collectSQL(pkg, file, rel)
+			}
 		}
 		if len(mine) == 0 {
 			continue

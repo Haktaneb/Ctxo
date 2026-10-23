@@ -69,17 +69,20 @@ func TestOnly(t *testing.T) {}
 }
 
 type runOutput struct {
-	files map[string]emit.FileRecord
-	dead  emit.Dead
+	files      map[string]emit.FileRecord
+	rawFiles   map[string]map[string]json.RawMessage
+	dead       emit.Dead
+	summary    emit.Summary
+	rawSummary map[string]json.RawMessage
 }
 
-func runInto(t *testing.T, root string) runOutput {
+func runInto(t *testing.T, root string, opts options) runOutput {
 	t.Helper()
 	var buf bytes.Buffer
-	if err := run(root, &buf); err != nil {
+	if err := run(root, opts, &buf); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	out := runOutput{files: map[string]emit.FileRecord{}}
+	out := runOutput{files: map[string]emit.FileRecord{}, rawFiles: map[string]map[string]json.RawMessage{}}
 	sc := bufio.NewScanner(&buf)
 	sc.Buffer(make([]byte, 1<<20), 1<<26)
 	for sc.Scan() {
@@ -100,8 +103,20 @@ func runInto(t *testing.T, root string) runOutput {
 				t.Errorf("file %s emitted twice", rec.File)
 			}
 			out.files[rec.File] = rec
+			var raw map[string]json.RawMessage
+			if err := json.Unmarshal(line, &raw); err != nil {
+				t.Fatal(err)
+			}
+			out.rawFiles[rec.File] = raw
 		case "dead":
 			if err := json.Unmarshal(line, &out.dead); err != nil {
+				t.Fatal(err)
+			}
+		case "summary":
+			if err := json.Unmarshal(line, &out.summary); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(line, &out.rawSummary); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -183,7 +198,7 @@ func hasEdge(rec emit.FileRecord, from, to, kind string) bool {
 }
 
 func TestRunEmitsEachTestFunctionOnceWithItsCalls(t *testing.T) {
-	out := runInto(t, copyModule(t, lendingFixture, all))
+	out := runInto(t, copyModule(t, lendingFixture, all), options{})
 	const canBorrow = "loans/policy.go::CanBorrow::function"
 	cases := []struct {
 		file, fn string
@@ -224,8 +239,8 @@ func TestRunLeavesProductionRecordsUnchanged(t *testing.T) {
 	}
 	for name, build := range modules {
 		t.Run(name, func(t *testing.T) {
-			with := runInto(t, build(all))
-			without := runInto(t, build(noTests))
+			with := runInto(t, build(all), options{})
+			without := runInto(t, build(noTests), options{})
 
 			for file, rec := range without.files {
 				got, ok := with.files[file]
@@ -249,7 +264,7 @@ func TestRunLeavesProductionRecordsUnchanged(t *testing.T) {
 			}
 		})
 	}
-	app := runInto(t, writeModule(t, appModule, all))
+	app := runInto(t, writeModule(t, appModule, all), options{})
 	if !app.dead.HasMain {
 		t.Error("app module must keep hasMain true")
 	}
@@ -259,14 +274,14 @@ func TestRunLeavesProductionRecordsUnchanged(t *testing.T) {
 	if !contains(app.dead.SymbolIDs, "main.go::helper::function") {
 		t.Errorf("helper is called only from a test and must stay dead in the analyzer list: %v", app.dead.SymbolIDs)
 	}
-	lending := runInto(t, copyModule(t, lendingFixture, all))
+	lending := runInto(t, copyModule(t, lendingFixture, all), options{})
 	if lending.dead.HasMain {
 		t.Error("lending module is a library; hasMain must stay false")
 	}
 }
 
 func TestRunLinksTestFakesToProductionInterfaces(t *testing.T) {
-	out := runInto(t, copyModule(t, lendingFixture, all))
+	out := runInto(t, copyModule(t, lendingFixture, all), options{})
 	rec := out.files["loans/policy_test.go"]
 	if !hasEdge(rec, "loans/policy_test.go::fakeStore::class", "loans/policy.go::Store::interface", "implements") {
 		t.Errorf("fakeStore does not implement Store: %+v", rec.Edges)
@@ -284,7 +299,7 @@ func TestRunNeverListsTestSymbolsAsDead(t *testing.T) {
 		writeModule(t, appModule, all),
 		copyModule(t, lendingFixture, all),
 	} {
-		out := runInto(t, root)
+		out := runInto(t, root, options{})
 		for _, id := range out.dead.SymbolIDs {
 			file := id[:strings.Index(id, "::")]
 			if strings.HasSuffix(file, "_test.go") {
@@ -292,12 +307,62 @@ func TestRunNeverListsTestSymbolsAsDead(t *testing.T) {
 			}
 		}
 	}
-	app := runInto(t, writeModule(t, appModule, all))
+	app := runInto(t, writeModule(t, appModule, all), options{})
 	if symbolCount(app.files["main_test.go"], "main_test.go::unusedInTest::function") != 1 {
 		t.Errorf("unusedInTest must be a symbol: %+v", app.files["main_test.go"].Symbols)
 	}
 	if symbolCount(app.files["onlytests/only_test.go"], "onlytests/only_test.go::TestOnly::function") != 1 {
 		t.Errorf("TestOnly must be a symbol: %+v", app.files["onlytests/only_test.go"])
+	}
+}
+
+func TestRunReportsSqlCallSitesOnlyWithTheFlag(t *testing.T) {
+	const repo = "loans/repository.go"
+	const repoTest = "loans/repository_test.go"
+	with := runInto(t, copyModule(t, lendingFixture, all), options{sqlCallSites: true})
+
+	want := map[string][]emit.SqlCallSite{
+		repo: {
+			{SymbolID: repo + "::ActiveLoans::function", Line: 18, Text: "SELECT l.Id FROM dbo.Loans l JOIN [dbo].[Members] m ON m.Id = l.MemberId", Kind: "statement"},
+			{SymbolID: repo + "::CloseLoan::function", Line: 23, Text: "EXEC dbo.usp_CloseLoan @id = ?", Kind: "statement"},
+			{SymbolID: repo + "::HoldsFor::function", Line: 30, Text: "SELECT * FROM dbo.Holds WHERE MemberId = ?", Kind: "statement"},
+			{SymbolID: repo + "::Archive::function", Line: 36, Text: "INSERT INTO dbo.LoanArchive (Id) SELECT Id FROM dbo.Loans WHERE ClosedAt IS NOT NULL", Kind: "statement"},
+			{SymbolID: repo + "::Purge::function", Line: 42, Text: "DELETE FROM dbo.Holds WHERE ExpiresAt < CURRENT_TIMESTAMP", Kind: "statement"},
+		},
+		repoTest: {
+			{SymbolID: repoTest + "::TestActiveLoanCount::function", Line: 13, Text: "SELECT COUNT(*) FROM dbo.Loans", Kind: "statement"},
+		},
+	}
+	for file, sites := range want {
+		if got := with.files[file].SqlCallSites; !reflect.DeepEqual(got, sites) {
+			t.Errorf("%s sqlCallSites:\n got  %+v\n want %+v", file, got, sites)
+		}
+	}
+	for file, rec := range with.files {
+		if _, ok := want[file]; !ok && len(rec.SqlCallSites) > 0 {
+			t.Errorf("%s: unexpected sqlCallSites %+v", file, rec.SqlCallSites)
+		}
+		if _, ok := want[file]; !ok {
+			if _, has := with.rawFiles[file]["sqlCallSites"]; has {
+				t.Errorf("%s: an empty sqlCallSites must be omitted", file)
+			}
+		}
+	}
+	if with.summary.Sql == nil || *with.summary.Sql != (emit.SqlStats{Constant: 6, NonConstant: 1}) {
+		t.Errorf("summary.sql = %+v, want {6 1}", with.summary.Sql)
+	}
+
+	without := runInto(t, copyModule(t, lendingFixture, all), options{})
+	for file, raw := range without.rawFiles {
+		if _, has := raw["sqlCallSites"]; has {
+			t.Errorf("%s has sqlCallSites without the flag", file)
+		}
+	}
+	if without.rawSummary == nil {
+		t.Fatal("no summary line")
+	}
+	if _, has := without.rawSummary["sql"]; has {
+		t.Errorf("summary has sql without the flag: %s", without.rawSummary["sql"])
 	}
 }
 

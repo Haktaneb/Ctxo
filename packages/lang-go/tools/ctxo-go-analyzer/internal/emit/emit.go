@@ -50,13 +50,33 @@ type Complexity struct {
 	Cyclomatic int    `json:"cyclomatic"`
 }
 
-// FileRecord is emitted once per source file analyzed.
+// SqlCallSite is raw SQL text found at a known database API call site, as
+// reported with --sql-call-sites. Line is 0-based; Kind is "statement". The
+// TypeScript side turns the text into data edges.
+type SqlCallSite struct {
+	SymbolID string `json:"symbolId"`
+	Line     int    `json:"line"`
+	Text     string `json:"text"`
+	Kind     string `json:"kind"`
+}
+
+// SqlStats counts the SQL arguments of known call sites in one run: Constant
+// ones gave a record, NonConstant ones did not.
+type SqlStats struct {
+	Constant    int `json:"constant"`
+	NonConstant int `json:"nonConstant"`
+}
+
+// FileRecord is emitted once per source file analyzed. SqlCallSites is
+// sorted by line, then text, and omitted when empty (always without
+// --sql-call-sites).
 type FileRecord struct {
-	Type       string       `json:"type"`
-	File       string       `json:"file"`
-	Symbols    []Symbol     `json:"symbols"`
-	Edges      []Edge       `json:"edges"`
-	Complexity []Complexity `json:"complexity"`
+	Type         string        `json:"type"`
+	File         string        `json:"file"`
+	Symbols      []Symbol      `json:"symbols"`
+	Edges        []Edge        `json:"edges"`
+	Complexity   []Complexity  `json:"complexity"`
+	SqlCallSites []SqlCallSite `json:"sqlCallSites,omitempty"`
 }
 
 // ProjectRecord is emitted once per run to describe module-level edges.
@@ -77,12 +97,14 @@ type ProjectEdge struct {
 	Kind string `json:"kind"`
 }
 
-// Summary is the final record emitted when analysis completes.
+// Summary is the final record emitted when analysis completes. Sql is set
+// only with --sql-call-sites.
 type Summary struct {
-	Type       string `json:"type"`
-	TotalFiles int    `json:"totalFiles"`
-	Elapsed    string `json:"elapsed"`
-	Hint       string `json:"hint,omitempty"`
+	Type       string    `json:"type"`
+	TotalFiles int       `json:"totalFiles"`
+	Elapsed    string    `json:"elapsed"`
+	Hint       string    `json:"hint,omitempty"`
+	Sql        *SqlStats `json:"sql,omitempty"`
 }
 
 // Progress is an optional informational record. Consumed by the TS parser
