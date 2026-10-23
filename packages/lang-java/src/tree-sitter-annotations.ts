@@ -104,9 +104,10 @@ function stringValues(node: SyntaxNode): string[] {
 }
 
 /**
- * Values of a `method` member (Spring `RequestMapping(method = RequestMethod.POST)`): string literals
- * and enum constant names as written (`RequestMethod.POST`, `POST`), so the JDT and syntax tiers
- * read the same verbs (PR 4, #156, Q11).
+ * Values of any annotation member named `method`, on any annotation (Spring
+ * `RequestMapping(method = RequestMethod.POST)` is the case it is for): string literals and enum
+ * constant names as written (`RequestMethod.POST`, `POST`), so the JDT and syntax tiers read the same
+ * verbs (PR 4, #156, Q11). Other members keep string values only.
  */
 function methodValues(node: SyntaxNode): string[] {
   if (node.type === 'identifier' || node.type === 'field_access') {

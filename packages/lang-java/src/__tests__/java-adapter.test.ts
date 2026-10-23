@@ -35,6 +35,34 @@ describe('JavaAdapter.extractSymbols', () => {
     expect(byName('run')).toMatchObject({ kind: 'method' });
   });
 
+  it('indexes the members the JDT tier indexes: enum body declarations, interface constants, compact constructors, enum constant and anonymous class bodies', async () => {
+    const source = [
+      'interface Limits { int RETRY_LIMIT = 4, MAX = 5; void check(); }',
+      '@interface Cfg { int DEFAULT_TTL = 9; }',
+      'record Range(int a) { Range { } }',
+      'enum Tier {',
+      '  GOLD { void q() {} int bonus = 1; };',
+      '  private final int rank = 0;',
+      '  Tier() {}',
+      '  int rank() { return rank; }',
+      '}',
+      'class Host {',
+      '  Runnable r = new Runnable() { public void run() {} };',
+      '  void m() { new Object() { int seen; void z() {} }; }',
+      '}',
+    ].join('\n');
+    const symbols = await new JavaAdapter().extractSymbols(FILE, source);
+    const ids = symbols.map((s) => s.symbolId.slice(FILE.length + 2)).sort();
+    expect(ids).toEqual([
+      'Cfg::interface', 'DEFAULT_TTL::variable', 'Host::class', 'Limits::interface', 'MAX::variable',
+      'RETRY_LIMIT::variable', 'Range::class', 'Range::method', 'Tier::method', 'Tier::type', 'bonus::variable',
+      'check::method', 'm::method', 'q::method', 'r::variable', 'rank::method', 'rank::variable', 'run::method',
+      'seen::variable', 'z::method',
+    ]);
+    expect(symbols.find((s) => s.name === 'RETRY_LIMIT')).toMatchObject({ startLine: 0, endLine: 0 });
+    expect(symbols.find((s) => s.name === 'q')).toMatchObject({ kind: 'method', startLine: 4, endLine: 4 });
+  });
+
   it('returns [] on unparseable source without throwing', async () => {
     const adapter = new JavaAdapter();
     const symbols = await adapter.extractSymbols(FILE, 'class {{{ broken');

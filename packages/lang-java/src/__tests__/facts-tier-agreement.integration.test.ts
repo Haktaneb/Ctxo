@@ -93,6 +93,34 @@ function shape(facts: readonly CodeFact[]): string[] {
     .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
+/** Every sample: the fixture files as `[label, file, source]`, and the generated sources. */
+function samples(): [string, string, string][] {
+  const fromDir = (label: string, dir: string): [string, string, string][] =>
+    javaFiles(dir).map((file) => [label, file, readFileSync(join(dir, file), 'utf-8')]);
+  return [
+    ...fromDir('lending', LENDING_FIXTURE),
+    ...fromDir('fixture', JDT_FIXTURE),
+    ...Object.entries(generatedSources()).map(([file, source]): [string, string, string] => ['generated', file, source]),
+  ];
+}
+
+describe('Java syntax tier: fact owners are symbols', () => {
+  it('every fact symbolId is a symbol extractSymbols returns for the same file', async () => {
+    let total = 0;
+    for (const [, options] of OPTION_SETS) {
+      const syntax = new JavaAdapter({ facts: options });
+      for (const [label, file, source] of samples()) {
+        const ids = new Set((await syntax.extractSymbols(file, source)).map((s) => s.symbolId));
+        for (const fact of await syntax.extractFacts(file, source)) {
+          total++;
+          expect(ids.has(fact.symbolId), `${label}/${file}: ${fact.symbolId} (${fact.text})`).toBe(true);
+        }
+      }
+    }
+    expect(total).toBeGreaterThan(30);
+  });
+});
+
 describe.skipIf(!CAN_RUN_JDT)('Java fact tier agreement (JDT full tier vs tree-sitter syntax tier)', () => {
   const generated = mkdtempSync(join(tmpdir(), 'ctxo-java-facts-'));
   const roots: [string, string][] = [['lending', LENDING_FIXTURE], ['fixture', JDT_FIXTURE], ['generated', generated]];
@@ -118,6 +146,24 @@ describe.skipIf(!CAN_RUN_JDT)('Java fact tier agreement (JDT full tier vs tree-s
     vi.unstubAllEnvs();
     rmSync(generated, { recursive: true, force: true });
   });
+
+  it('both tiers give the same symbol ids, except members of enum constant bodies', async () => {
+    // EmitVisitor visits an enum's body declarations but not its constants, so a method in an enum
+    // constant body owns facts in both tiers yet is a symbol only in the syntax tier.
+    const enumConstantMembers: Record<string, string[]> = { 'src/gen/Shapes.java': ['src/gen/Shapes.java::q::method'] };
+    for (const [name, dir] of roots) {
+      const jdt = full.get(`default:${name}`)!;
+      for (const file of javaFiles(dir)) {
+        const source = readFileSync(join(dir, file), 'utf-8');
+        const ids = async (adapter: { extractSymbols(f: string, s: string): Promise<{ symbolId: string }[]> }) =>
+          new Set((await adapter.extractSymbols(file, source)).map((s) => s.symbolId));
+        const syntaxIds = await ids(new JavaAdapter());
+        const jdtIds = await ids(jdt);
+        expect([...jdtIds].filter((id) => !syntaxIds.has(id)), `${name}/${file} missing`).toEqual([]);
+        expect([...syntaxIds].filter((id) => !jdtIds.has(id)), `${name}/${file} extra`).toEqual(enumConstantMembers[file] ?? []);
+      }
+    }
+  }, 300_000);
 
   it('both tiers give the same facts', async () => {
     let total = 0;
