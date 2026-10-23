@@ -11,7 +11,6 @@ import {
   CHARGE,
   fixtureSnapshot,
   GLOSSARY_PATH,
-  GLOSSARY_TEXT,
   LENDING_CARD,
   LENDING_FIXTURE,
   LOOSE,

@@ -38,7 +38,7 @@ function repoPath(projectRoot: string, raw: string): string | undefined {
   if (drive && process.platform !== 'win32') return undefined;
   let path = (isAbsolute(trimmed) || drive ? relative(projectRoot, trimmed) : trimmed).replace(/\\/g, '/');
   while (path.startsWith('./')) path = path.slice(2);
-  path = path.replace(/\/+$/, '');
+  while (path.endsWith('/')) path = path.slice(0, -1);
   // `relative` gives `../...` above the root, and an absolute path for another drive.
   if (path === '..' || path.startsWith('../') || isAbsolute(path) || /^[A-Za-z]:/.test(path)) return undefined;
   return path;
