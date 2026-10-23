@@ -6,6 +6,7 @@ import type { LiteralKind, TrivialLiteral } from '../fact-types.js';
 import { DEFAULT_FACT_OPTIONS } from '../fact-options.js';
 import {
   canonicalNumber,
+  capFactValue,
   hasRetryTimeoutFragment,
   isTrivialLiteral,
   joinRoute,
@@ -30,7 +31,13 @@ interface Vectors {
   readonly matchesNormalizationPattern: Vector<{ method: string; qualifier?: string }, boolean>[];
   readonly matchesNormalizationPatternCustom: Vector<{ method: string; qualifier?: string; patterns: string[] }, boolean>[];
   readonly normalizeFactText: Vector<Segments, Segments>[];
+  readonly capFactValue: Vector<Segments, Segments>[];
   readonly joinRoute: Vector<string[], string>[];
+  readonly languageSpecific: {
+    readonly csharp: {
+      readonly isTrivialLiteral: Vector<{ literal: string; kind: LiteralKind; trivialLiterals: TrivialLiteral[] }, boolean>[];
+    };
+  };
 }
 
 const vectors = JSON.parse(readFileSync(VECTORS_PATH, 'utf8')) as Vectors;
@@ -44,11 +51,13 @@ describe('fact conformance vectors', () => {
     expect(Object.keys(vectors).sort()).toEqual([
       '$comment',
       'canonicalNumber',
+      'capFactValue',
       'defaults',
       'hasRetryTimeoutFragment',
       'isTrivialLiteral',
       'isTrivialLiteralCustom',
       'joinRoute',
+      'languageSpecific',
       'matchesNormalizationPattern',
       'matchesNormalizationPatternCustom',
       'normalizeFactText',
@@ -59,8 +68,8 @@ describe('fact conformance vectors', () => {
     expect(vectors.defaults).toEqual(DEFAULT_FACT_OPTIONS);
   });
 
-  it('every normalizeFactText vector is a segment array', () => {
-    for (const { input, expected } of vectors.normalizeFactText) {
+  it('every normalizeFactText and capFactValue vector is a segment array', () => {
+    for (const { input, expected } of [...vectors.normalizeFactText, ...vectors.capFactValue]) {
       expect(Array.isArray(input) && Array.isArray(expected)).toBe(true);
     }
   });
@@ -91,6 +100,14 @@ describe('fact conformance vectors', () => {
 
   it.each(vectors.normalizeFactText.map((v, i) => ({ ...v, i })))('normalizeFactText vector $i', ({ input, expected }) => {
     expect(normalizeFactText(expand(input))).toBe(expand(expected));
+  });
+
+  it.each(vectors.capFactValue.map((v, i) => ({ ...v, i })))('capFactValue vector $i', ({ input, expected }) => {
+    expect(capFactValue(expand(input))).toBe(expand(expected));
+  });
+
+  it.each(vectors.languageSpecific.csharp.isTrivialLiteral)('C# isTrivialLiteral($input.literal) with $input.trivialLiterals is $expected', ({ input, expected }) => {
+    expect(isTrivialLiteral(input.literal, input.kind, input.trivialLiterals)).toBe(expected);
   });
 
   it.each(vectors.joinRoute)('joinRoute($input) is $expected', ({ input, expected }) => {

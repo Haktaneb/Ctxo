@@ -128,8 +128,25 @@ class Parser {
   }
 }
 
-function formatNumber(value: number): string | undefined {
-  if (!Number.isFinite(value)) return undefined;
+const MAX_EXACT_INTEGER = 2 ** 53;
+
+/**
+ * FC-7 evaluation, shared by `canonicalNumber` and the FC-6 number check: the IEEE double of a
+ * constant expression, or `undefined` when it is not a constant. Not constants: names, strings,
+ * division by zero, non-finite results, results with |v| >= 2^53, and non-zero results that round
+ * to 0 at 6 decimals.
+ */
+function evaluate(expression: string): number | undefined {
+  const tokens = tokenize(expression);
+  if (!tokens || tokens.length === 0) return undefined;
+  const value = new Parser(tokens).parse();
+  if (value === undefined || !Number.isFinite(value) || Math.abs(value) >= MAX_EXACT_INTEGER) return undefined;
+  if (value !== 0 && Number(value.toFixed(6)) === 0) return undefined;
+  return value;
+}
+
+/** An integer prints as plain digits; anything else rounded to 6 decimals, trailing zeros removed; `-0` prints `0`. */
+function formatNumber(value: number): string {
   if (Number.isInteger(value)) return value === 0 ? '0' : String(value);
   const fixed = value.toFixed(6).replace(/\.?0+$/, '');
   return fixed === '-0' ? '0' : fixed;
@@ -138,18 +155,40 @@ function formatNumber(value: number): string | undefined {
 /**
  * FC-7: the canonical text of a numeric constant (`_` and type suffixes removed; decimal, exponent,
  * hex, binary and octal forms; `+ - * /`, parentheses and unary minus in IEEE doubles), or
- * `undefined` when the expression is not a constant.
+ * `undefined` when the expression is not a constant (see `evaluate`).
  */
 export function canonicalNumber(expression: string): string | undefined {
-  const tokens = tokenize(expression);
-  if (!tokens || tokens.length === 0) return undefined;
-  const value = new Parser(tokens).parse();
+  const value = evaluate(expression);
   return value === undefined ? undefined : formatNumber(value);
 }
 
 // ── FC-6 trivial literals ───────────────────────────────────────
 
 const ESCAPES: Readonly<Record<string, string>> = { '"': '"', "'": "'", '\\': '\\', n: '\n', t: '\t', r: '\r' };
+
+/**
+ * C# raw string literal content (raw-string decoding is language-specific; Java text blocks get
+ * their own rule): a delimiter of 3 or more quotes; a single-line literal is taken as written; in a
+ * multi-line literal the opening line and the closing line (with the line break before it) are
+ * dropped, and the closing line's leading whitespace is removed from every content line. Lines are
+ * joined with `\n`, so CRLF and LF sources agree. Undefined when the text is not a raw string.
+ */
+function rawStringContent(text: string): string | undefined {
+  let quotes = 0;
+  while (text[quotes] === '"') quotes++;
+  if (quotes < 3 || text.length < 2 * quotes) return undefined;
+  if (!text.endsWith('"'.repeat(quotes))) return undefined;
+  const body = text.slice(quotes, text.length - quotes);
+  if (!/[\r\n]/.test(body)) return body;
+
+  const lines = body.split(/\r?\n/);
+  const closing = lines[lines.length - 1]!;
+  if (lines[0]!.trim() !== '' || closing.trim() !== '') return undefined;
+  return lines
+    .slice(1, -1)
+    .map(line => (line.startsWith(closing) ? line.slice(closing.length) : line.trim() === '' ? '' : line))
+    .join('\n');
+}
 
 /** Decoded content of a string or char literal; undefined when the text is not one. */
 function stringContent(literal: string): string | undefined {
@@ -161,10 +200,7 @@ function stringContent(literal: string): string | undefined {
   }
   if (text.endsWith('u8')) text = text.slice(0, -2);
 
-  if (text.length >= 6 && text.startsWith('"""') && text.endsWith('"""')) {
-    // C# raw string or Java text block: no escapes in C#; the opening line break is not content.
-    return text.slice(3, -3).replace(/^\r?\n/, '');
-  }
+  if (text.startsWith('"""')) return rawStringContent(text);
   const quote = text[0];
   if (text.length < 2 || (quote !== '"' && quote !== "'" && quote !== '`') || text[text.length - 1] !== quote) return undefined;
   const body = text.slice(1, -1);
@@ -174,15 +210,15 @@ function stringContent(literal: string): string | undefined {
 }
 
 /**
- * FC-6: true when the literal equals an entry of the trivial list of the same type: numbers by
- * canonical value, strings and chars by decoded content, `null`/`nil`/`None` with `null`, booleans
+ * FC-6: true when the literal equals an entry of the trivial list of the same type: numbers when
+ * the evaluated double (FC-7) equals the list's number exactly, strings and chars by decoded content, `null`/`nil`/`None` with `null`, booleans
  * case-insensitively.
  */
 export function isTrivialLiteral(literal: string, kind: LiteralKind, trivial: readonly TrivialLiteral[]): boolean {
   switch (kind) {
     case 'number': {
-      const value = canonicalNumber(literal);
-      return value !== undefined && trivial.some(t => typeof t === 'number' && formatNumber(t) === value);
+      const value = evaluate(literal);
+      return value !== undefined && trivial.some(t => typeof t === 'number' && t === value);
     }
     case 'string':
     case 'char': {
@@ -222,8 +258,10 @@ export function matchesNormalizationPattern(method: string, qualifier: string | 
 const NAME_TOKEN = /[A-Z]+(?![a-z])|[A-Z][a-z]*|[a-z]+|\d+/g;
 
 /**
- * FC-5: the name is split into lower-cased tokens (camelCase, PascalCase, `_`, `-`, digit runs); a
- * fragment matches when the tokens joined from the start of some token begin with it. A deliberate
+ * FC-5: the name is split into lower-cased ASCII tokens (camelCase, PascalCase, digit runs): only
+ * A-Z, a-z and 0-9 form tokens, every other character (`_`, `-`, non-ASCII letters) separates them,
+ * with no Unicode case tests and no locale-dependent lowercasing (`ñretry` matches). A fragment
+ * matches when the tokens joined from the start of some token begin with it. A deliberate
  * narrowing of spec 12.1's "a name containing": `settlementDays` never matches `ttl`.
  */
 export function hasRetryTimeoutFragment(name: string): boolean {

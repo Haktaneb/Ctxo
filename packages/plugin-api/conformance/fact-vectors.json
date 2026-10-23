@@ -1,5 +1,5 @@
 {
-  "$comment": "Shared fact conformance vectors (PR 4, #156). Every category is an array of { input, expected }. canonicalNumber: expected null means not a constant (canonicalNumber returns undefined). matchesNormalizationPattern: an absent qualifier means the call has no receiver (written Name(...)). Categories without a list in their input use the defaults block. normalizeFactText: input and expected are segment arrays, concatenated; a segment is a string or { repeat, count }.",
+  "$comment": "Shared fact conformance vectors (PR 4, #156). Every category is an array of { input, expected }. canonicalNumber: expected null means not a constant (canonicalNumber returns undefined); an integer result prints as plain digits, a result with |v| >= 2^53 is not a constant, and a non-zero result that rounds to 0 at 6 decimals is not a constant. isTrivialLiteral: a number literal is evaluated as in canonicalNumber and the double is compared exactly with the list's numbers (0.9999999 is not 1). hasRetryTimeoutFragment: tokens are ASCII only (A-Z, a-z, 0-9); every other character separates tokens; no Unicode case tests and no locale-dependent lowercasing. matchesNormalizationPattern: an absent qualifier means the call has no receiver (written Name(...)). Categories without a list in their input use the defaults block. normalizeFactText and capFactValue: input and expected are segment arrays, concatenated; a segment is a string or { repeat, count }. languageSpecific holds vectors only one language's copy runs: raw-string decoding is language-specific (csharp: C# raw string literals); Java text blocks get their own rule and vectors in PR 4.1 Task 6.",
   "defaults": {
     "trivialLiterals": [
       0,
@@ -94,11 +94,15 @@
     },
     {
       "input": "1e-9",
-      "expected": "0"
+      "expected": null
     },
     {
       "input": "1e21",
-      "expected": "1e+21"
+      "expected": null
+    },
+    {
+      "input": "9007199254740991",
+      "expected": "9007199254740991"
     },
     {
       "input": "x * 2",
@@ -225,6 +229,20 @@
     },
     {
       "input": {
+        "literal": "1e-9",
+        "kind": "number"
+      },
+      "expected": false
+    },
+    {
+      "input": {
+        "literal": "0.9999999",
+        "kind": "number"
+      },
+      "expected": false
+    },
+    {
+      "input": {
         "literal": "5",
         "kind": "number"
       },
@@ -346,26 +364,6 @@
     },
     {
       "input": {
-        "literal": "\"\"\"\nraw\n\"\"\"",
-        "kind": "string",
-        "trivialLiterals": [
-          "raw\n"
-        ]
-      },
-      "expected": true
-    },
-    {
-      "input": {
-        "literal": "\"\"\"\nraw\n\"\"\"",
-        "kind": "string",
-        "trivialLiterals": [
-          "raw"
-        ]
-      },
-      "expected": false
-    },
-    {
-      "input": {
         "literal": "\"abc\"u8",
         "kind": "string",
         "trivialLiterals": [
@@ -454,6 +452,10 @@
     },
     {
       "input": "HTTPTimeout",
+      "expected": true
+    },
+    {
+      "input": "ñretry",
       "expected": true
     }
   ],
@@ -709,6 +711,103 @@
       ]
     }
   ],
+  "capFactValue": [
+    {
+      "input": [
+        {
+          "repeat": "a",
+          "count": 200
+        }
+      ],
+      "expected": [
+        {
+          "repeat": "a",
+          "count": 200
+        }
+      ]
+    },
+    {
+      "input": [
+        {
+          "repeat": "a",
+          "count": 199
+        },
+        "😀😀"
+      ],
+      "expected": [
+        {
+          "repeat": "a",
+          "count": 199
+        },
+        "😀"
+      ]
+    },
+    {
+      "input": [
+        {
+          "repeat": "a",
+          "count": 199
+        },
+        "😀",
+        "b"
+      ],
+      "expected": [
+        {
+          "repeat": "a",
+          "count": 199
+        },
+        "😀"
+      ]
+    },
+    {
+      "input": [
+        {
+          "repeat": "a",
+          "count": 199
+        },
+        " ",
+        "bc"
+      ],
+      "expected": [
+        {
+          "repeat": "a",
+          "count": 199
+        }
+      ]
+    },
+    {
+      "input": [
+        {
+          "repeat": "a",
+          "count": 198
+        },
+        "  ",
+        "bc"
+      ],
+      "expected": [
+        {
+          "repeat": "a",
+          "count": 198
+        }
+      ]
+    },
+    {
+      "input": [
+        "  a  b  "
+      ],
+      "expected": [
+        "  a  b  "
+      ]
+    },
+    {
+      "input": [
+        ""
+      ],
+      "expected": [
+        ""
+      ]
+    }
+  ],
   "joinRoute": [
     {
       "input": [
@@ -744,5 +843,81 @@
       ],
       "expected": "/loans"
     }
-  ]
+  ],
+  "languageSpecific": {
+    "csharp": {
+      "isTrivialLiteral": [
+        {
+          "input": {
+            "literal": "\"\"\"\nraw\n\"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "raw"
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "\"\"\"\nraw\n\"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "raw\n"
+            ]
+          },
+          "expected": false
+        },
+        {
+          "input": {
+            "literal": "\"\"\"\n    raw\n      more\n    \"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "raw\n  more"
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "\"\"\"\r\n    raw\r\n    \"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "raw"
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "\"\"\"\"\n\"\"\"inner\"\"\"\n\"\"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "\"\"\"inner\"\"\""
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "\"\"\"abc\"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "abc"
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "$\"\"\"\n  x\n  \"\"\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "x"
+            ]
+          },
+          "expected": true
+        }
+      ]
+    }
+  }
 }
