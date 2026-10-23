@@ -74,18 +74,18 @@ describe('SimpleGitAdapter.getSkipWorktreePaths', () => {
     repo.write('src/kept.ts', 'export const kept = 1;\n');
     repo.write('docs/note.md', 'note\n');
     repo.write('odd dir/with space.ts', 'export const a = 1;\n');
-    repo.write('src/\u015fube.ts', 'export const b = 2;\n');
+    repo.write('src/\u00f6d\u00fcn\u00e7.ts', 'export const b = 2;\n');
     repo.commit('init');
-    repo.git('update-index', '--skip-worktree', 'docs/note.md', 'odd dir/with space.ts', 'src/\u015fube.ts');
+    repo.git('update-index', '--skip-worktree', 'docs/note.md', 'odd dir/with space.ts', 'src/\u00f6d\u00fcn\u00e7.ts');
     // The files are gone from the working tree on purpose, as in a sparse checkout.
     repo.remove('docs');
     repo.remove('odd dir');
-    repo.remove('src/\u015fube.ts');
+    repo.remove('src/\u00f6d\u00fcn\u00e7.ts');
 
     const paths = await new SimpleGitAdapter(repo.dir).getSkipWorktreePaths();
 
     expect(paths).toBeDefined();
-    expect([...paths!].sort()).toEqual(['docs/note.md', 'odd dir/with space.ts', 'src/\u015fube.ts']);
+    expect([...paths!].sort()).toEqual(['docs/note.md', 'odd dir/with space.ts', 'src/\u00f6d\u00fcn\u00e7.ts']);
   });
 
   it('returns an empty set when no path is marked', async () => {
