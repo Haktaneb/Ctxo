@@ -157,12 +157,12 @@ describe('SimpleGitAdapter change log', () => {
 
   it('getChangeLog keeps paths with spaces and non-ASCII characters intact', async () => {
     const repo = createRepo();
-    repo.write('src/şube kaydı.ts', 'export const kayit = 1;\n');
+    repo.write('src/ödünç kaydı.ts', 'export const kayit = 1;\n');
     repo.commit('add file with a non-ASCII name');
 
     const changeLog = await readChangeLog(repo.dir);
 
-    expect(changeLog.commits[0]?.changes[0]?.path).toBe('src/şube kaydı.ts');
+    expect(changeLog.commits[0]?.changes[0]?.path).toBe('src/ödünç kaydı.ts');
     expect(changeLog.commits[0]?.changes).toHaveLength(1);
   });
 
