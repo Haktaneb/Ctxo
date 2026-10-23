@@ -199,6 +199,9 @@ importers:
         specifier: 0.23.5
         version: 0.23.5(tree-sitter@0.22.4)
     devDependencies:
+      '@ctxo/lang-java-analyzer':
+        specifier: workspace:*
+        version: link:../lang-java-analyzer
       '@ctxo/plugin-api':
         specifier: workspace:*
         version: link:../plugin-api

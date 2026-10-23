@@ -42,6 +42,7 @@
     "@ctxo/plugin-api": "^0.7.3 || ^0.8.0 || ^0.9.0"
   },
   "devDependencies": {
+    "@ctxo/lang-java-analyzer": "workspace:*",
     "@ctxo/plugin-api": "workspace:*",
     "@types/node": "^26.6.1",
     "tsup": "^8.4.0",
