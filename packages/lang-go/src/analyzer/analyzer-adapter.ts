@@ -37,6 +37,9 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
   private timedOut = false;
   private batchFailed = false;
   private batchPromise: Promise<void> | null = null;
+  /** The stale-evidence re-run in flight, and the one follow-up queued behind it (`requestRefresh`). */
+  private refreshRunning: Promise<boolean> | null = null;
+  private refreshQueued: Promise<boolean> | null = null;
   private initialized = false;
   private readonly sqlCallSites: boolean;
   private sqlStats: { constant: number; nonConstant: number } | undefined;
@@ -176,9 +179,10 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
   /**
    * Code facts (protocol v2, only with the `facts` option): the batch's evidence for the file, finished by
    * the shared rules with the Go string literal decoder. When the source differs from the bytes the batch
-   * read (the analyzer's `factSourceHash`, for example after a `ctxo watch` save), the batch runs again,
-   * so stale evidence is never served; if the source still differs, this throws and the host writes no
-   * facts for the file. Go has no annotation routes.
+   * read (the analyzer's `factSourceHash`, for example after a `ctxo watch` save), the batch runs again
+   * (see `requestRefresh`), so stale evidence is never served. When that re-run fails, or the source still
+   * differs afterwards, this throws and the host writes no facts for the file; a failed re-run keeps the
+   * last good results and the full tier. Go has no annotation routes.
    */
   async extractFacts(filePath: string, source: string): Promise<CodeFact[]> {
     const options = this.facts;
@@ -187,13 +191,12 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
     const path = this.normalizePath(filePath);
     let file = this.cache.get(path);
     if (file && isStale(file, source)) {
-      const observed = this.batchPromise;
-      await this.batchPromise;
-      if (this.batchPromise === observed) this.batchPromise = null;
-      await this.ensureBatch();
+      if (!(await this.requestRefresh())) {
+        throw new Error(`Go analyzer re-run failed; no fact evidence for ${path}`);
+      }
       file = this.cache.get(path);
       if (file && isStale(file, source)) {
-        throw new Error(`Go analyzer fact evidence for ${path} does not match the current source`);
+        throw new Error(`Go analyzer fact evidence for ${path} does not match the current source after a re-run`);
       }
     }
     const evidence = (file?.factEvidence ?? []).map(toFactEvidence).filter((e): e is FactEvidence => e !== undefined);
@@ -213,27 +216,61 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
     this.cache.clear();
     this.deadSymbolIds.clear();
     this.batchPromise = null;
+    this.refreshRunning = null;
+    this.refreshQueued = null;
     this.initialized = false;
   }
 
   private async ensureBatch(): Promise<void> {
     if (this.batchPromise) return this.batchPromise;
-    this.batchPromise = this.runBatch();
+    this.batchPromise = this.runBatch(true).then(() => undefined);
     return this.batchPromise;
   }
 
-  private async runBatch(): Promise<void> {
-    if (!this.binaryPath || !this.moduleRoot) return;
+  /**
+   * Re-runs the batch for stale fact evidence; resolves true when the run succeeded. At most one re-run is in
+   * flight plus one queued follow-up: a file that goes stale while a re-run is in flight joins the follow-up
+   * (the running one may have read its bytes before the change), so a burst of saves costs two runs at most.
+   */
+  private requestRefresh(): Promise<boolean> {
+    if (!this.refreshRunning) return this.startRefresh();
+    if (!this.refreshQueued) {
+      this.refreshQueued = this.refreshRunning.then(() => {
+        this.refreshQueued = null;
+        return this.startRefresh();
+      });
+    }
+    return this.refreshQueued;
+  }
+
+  private startRefresh(): Promise<boolean> {
+    const run: Promise<boolean> = this.runBatch(false).finally(() => {
+      if (this.refreshRunning === run) this.refreshRunning = null;
+    });
+    this.refreshRunning = run;
+    return run;
+  }
+
+  /**
+   * One analyzer batch; true when it succeeded and its result is cached. A failed first batch marks the
+   * analyzer as failed (the composite then uses tree-sitter); a failed re-run keeps the last good cache.
+   */
+  private async runBatch(initial: boolean): Promise<boolean> {
+    if (!this.binaryPath || !this.moduleRoot) return false;
     const result = await runBatchAnalyze(this.binaryPath, this.moduleRoot, {
       sqlCallSites: this.sqlCallSites,
       ...(this.facts ? { facts: this.facts } : {}),
     });
     if (result.failed) {
-      this.batchFailed = true;
-      log.warn('Go analyzer run failed or timed out; these files fall back to the tree-sitter syntax tier');
-      return;
+      if (initial) {
+        this.batchFailed = true;
+        log.warn('Go analyzer run failed or timed out; these files fall back to the tree-sitter syntax tier');
+      } else {
+        log.warn('Go analyzer re-run failed or timed out; keeping the last results');
+      }
+      return false;
     }
-    this.absorbBatch(result);
+    this.absorbBatch(result, initial);
     if (this.sqlCallSites) {
       if (result.sql) {
         log.debug(`Go analyzer SQL arguments: ${result.sql.constant} constant, ${result.sql.nonConstant} non-constant`);
@@ -242,9 +279,11 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
       }
     }
     log.info(`Go analyzer batch: ${result.totalFiles} files in ${result.elapsed}, ${result.dead.length} dead`);
+    return true;
   }
 
-  private absorbBatch(result: AnalyzerBatchResult): void {
+  /** Caches a batch result; SQL statistics count only the first batch, so a re-run does not count twice. */
+  private absorbBatch(result: AnalyzerBatchResult, countSql: boolean): void {
     this.cache.clear();
     this.deadSymbolIds.clear();
     this.hasMain = result.hasMain;
@@ -275,7 +314,7 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
           : {}),
       });
     }
-    if (result.sql) {
+    if (result.sql && countSql) {
       this.sqlStats = {
         constant: (this.sqlStats?.constant ?? 0) + result.sql.constant,
         nonConstant: (this.sqlStats?.nonConstant ?? 0) + result.sql.nonConstant,

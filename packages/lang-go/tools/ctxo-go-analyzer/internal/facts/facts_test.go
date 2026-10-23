@@ -1,7 +1,9 @@
 package facts
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -24,7 +26,17 @@ var ginStub = map[string]string{
 
 type HandlerFunc func()
 
-type IRoutes interface{}
+type IRoutes interface {
+	GET(string, ...HandlerFunc) IRoutes
+	POST(string, ...HandlerFunc) IRoutes
+	Any(string, ...HandlerFunc) IRoutes
+	Handle(string, string, ...HandlerFunc) IRoutes
+}
+
+type IRouter interface {
+	IRoutes
+	Group(string) *RouterGroup
+}
 
 type RouterGroup struct{}
 
@@ -406,6 +418,89 @@ func Clean(e Email, s string) string {
 	if got := methods(Options{}); got != nil {
 		t.Errorf("no patterns: %v", got)
 	}
+}
+
+func TestRoutesThroughGinInterfaces(t *testing.T) {
+	got := collectApp(t, `package app
+
+import "github.com/gin-gonic/gin"
+
+func Register(r gin.IRouter, routes gin.IRoutes) {
+	r.GET("/loans/:id", nil)
+	r.Group("/v2").POST("/holds", nil)
+	routes.Any("/ping")
+	routes.Handle("PATCH", "/members/:id", nil)
+}
+`)
+	reg := "app.go::Register::function"
+	want := []emit.FactEvidence{
+		{Kind: "route", SymbolID: reg, Line: 5, Text: `r.GET("/loans/:id", nil)`, Verb: "GET", Route: "/loans/:id"},
+		{Kind: "route", SymbolID: reg, Line: 6, Text: `r.Group("/v2").POST("/holds", nil)`, Verb: "POST", Route: "/holds"},
+		{Kind: "route", SymbolID: reg, Line: 7, Text: `routes.Any("/ping")`, Verb: "ANY", Route: "/ping"},
+		{Kind: "route", SymbolID: reg, Line: 8, Text: `routes.Handle("PATCH", "/members/:id", nil)`, Verb: "PATCH", Route: "/members/:id"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		gotJSON, _ := json.MarshalIndent(got, "", "  ")
+		t.Errorf("got:\n%s", gotJSON)
+	}
+}
+
+func TestChainedDurationsAreReportedOnce(t *testing.T) {
+	got := collectApp(t, `package app
+
+import "time"
+
+func Wait() {
+	time.Sleep(2 * time.Second * 3)
+	var graceTimeout = 4 * (time.Minute * 15)
+	_ = graceTimeout
+}
+`)
+	w := "app.go::Wait::function"
+	want := []emit.FactEvidence{
+		{Kind: "duration", SymbolID: w, Line: 5, Text: "2 * time.Second * 3", Constructor: "time.Second", Unit: "s", Amount: "(2) * (3)"},
+		{Kind: "duration", SymbolID: w, Line: 6, Text: "4 * (time.Minute * 15)", Name: "graceTimeout", Constructor: "time.Minute", Unit: "min", Amount: "(15) * (4)"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		gotJSON, _ := json.MarshalIndent(got, "", "  ")
+		t.Errorf("got:\n%s", gotJSON)
+	}
+}
+
+func TestSourceHashIsOfTheBytesTheCollectorRead(t *testing.T) {
+	files := map[string]string{"go.mod": appGoMod, "app.go": "package app\n\nfunc F(n int) {\n\tif n > 7 {\n\t}\n}\n"}
+	for k, v := range ginStub {
+		files[k] = v
+	}
+	dir := writeFiles(t, files)
+	res := load.Packages(dir)
+	if res.FatalError != nil {
+		t.Fatal(res.FatalError)
+	}
+	for _, pkg := range res.Packages {
+		if pkg.PkgPath != "app" {
+			continue
+		}
+		file := pkg.Syntax[0]
+		evidence, hash := CollectFile(pkg, file, "app.go", defaultOptions)
+		sum := sha256.Sum256([]byte(files["app.go"]))
+		if hash != hex.EncodeToString(sum[:]) || len(evidence) != 1 {
+			t.Errorf("hash %q, evidence %+v", hash, evidence)
+		}
+		// The file changed size after parsing: its bytes are not the parsed ones, so there is no hash.
+		if err := os.WriteFile(filepath.Join(dir, "app.go"), []byte(files["app.go"]+"// later\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		evidence, hash = CollectFile(pkg, file, "app.go", defaultOptions)
+		if hash != "" {
+			t.Errorf("a changed file must have no hash, got %q", hash)
+		}
+		if len(evidence) != 1 || evidence[0].Text != "n > 7" {
+			t.Errorf("evidence falls back to printed text: %+v", evidence)
+		}
+		return
+	}
+	t.Fatal("package app not loaded")
 }
 
 func TestEvidenceIsCappedPerFile(t *testing.T) {

@@ -143,8 +143,9 @@ func run(root string, opts options, stdout io.Writer) error {
 		factOpts := *opts.facts
 		collectFacts = func(pkg *packages.Package, file *ast.File, rel string) {
 			agg := get(rel)
-			agg.facts = append(agg.facts, facts.Collect(pkg, file, rel, factOpts)...)
-			agg.sourceHash = facts.SourceHash(pkg, file)
+			evidence, hash := facts.CollectFile(pkg, file, rel, factOpts)
+			agg.facts = append(agg.facts, evidence...)
+			agg.sourceHash = hash
 		}
 	}
 	collect := func(pkg *packages.Package, file *ast.File, rel string) {

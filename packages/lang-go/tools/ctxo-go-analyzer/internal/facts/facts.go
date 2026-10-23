@@ -180,6 +180,11 @@ var ginVerbs = map[string]string{
 
 const ginPath = "github.com/gin-gonic/gin"
 
+// ginReceivers are the gin types whose route methods count: the RouterGroup
+// struct (and Engine through embedding) and the IRoutes and IRouter
+// interfaces (an interface method's receiver is the interface declaring it).
+var ginReceivers = map[string]bool{"RouterGroup": true, "IRoutes": true, "IRouter": true}
+
 // readSource returns the bytes of the file the AST was parsed from, or nil
 // when they cannot be read or do not match the parsed file's size.
 func readSource(fset *token.FileSet, file *ast.File) []byte {
@@ -194,22 +199,21 @@ func readSource(fset *token.FileSet, file *ast.File) []byte {
 	return src
 }
 
-// SourceHash is the hex SHA-256 of the file's bytes, or "" when they cannot
-// be read.
-func SourceHash(pkg *packages.Package, file *ast.File) string {
-	if pkg == nil || pkg.Fset == nil || file == nil {
-		return ""
+// CollectFile is Collect plus the hex SHA-256 of the exact bytes the
+// collector read, so a reader can tell whether the evidence belongs to a
+// given source. The hash is "" when the bytes could not be read or their size
+// differs from the parsed file's (the file changed after parsing).
+func CollectFile(pkg *packages.Package, file *ast.File, relFile string, opts Options) ([]emit.FactEvidence, string) {
+	if pkg == nil || pkg.TypesInfo == nil || pkg.Fset == nil || file == nil {
+		return nil, ""
 	}
-	tf := pkg.Fset.File(file.Pos())
-	if tf == nil {
-		return ""
-	}
-	src, err := os.ReadFile(tf.Name())
-	if err != nil {
-		return ""
+	src := readSource(pkg.Fset, file)
+	out := collect(pkg, file, relFile, opts, src)
+	if src == nil {
+		return out, ""
 	}
 	sum := sha256.Sum256(src)
-	return hex.EncodeToString(sum[:])
+	return out, hex.EncodeToString(sum[:])
 }
 
 type collector struct {
@@ -227,14 +231,16 @@ type collector struct {
 // that variable), and returns the file's evidence sorted by line, then kind,
 // then text, at most MaxEvidencePerFile records.
 func Collect(pkg *packages.Package, file *ast.File, relFile string, opts Options) []emit.FactEvidence {
-	if pkg == nil || pkg.TypesInfo == nil || pkg.Fset == nil || file == nil {
-		return nil
-	}
+	out, _ := CollectFile(pkg, file, relFile, opts)
+	return out
+}
+
+func collect(pkg *packages.Package, file *ast.File, relFile string, opts Options, src []byte) []emit.FactEvidence {
 	c := &collector{
 		info:     pkg.TypesInfo,
 		fset:     pkg.Fset,
 		tf:       pkg.Fset.File(file.Pos()),
-		src:      readSource(pkg.Fset, file),
+		src:      src,
 		opts:     opts,
 		consumed: map[ast.Node]bool{},
 	}
@@ -343,7 +349,8 @@ func (c *collector) inspect(root ast.Node, sid string) {
 			}
 		case *ast.BinaryExpr:
 			if !c.consumed[x] {
-				if d, ok := c.duration(x); ok {
+				if d, nested, ok := c.duration(x); ok {
+					c.consume(nested)
 					c.add(sid, x.Pos(), d)
 				}
 			}
@@ -475,10 +482,17 @@ func (c *collector) literalKind(e ast.Expr) string {
 
 // binding reports a bound value: a time.Duration value as a named duration,
 // any other value only when the name has a retry or timeout fragment.
+// consume marks duration products that an enclosing report already covers.
+func (c *collector) consume(nodes []ast.Node) {
+	for _, n := range nodes {
+		c.consumed[n] = true
+	}
+}
+
 func (c *collector) binding(at ast.Node, name string, value ast.Expr, sid string) {
 	inner := unparen(value)
-	if d, ok := c.duration(inner); ok {
-		c.consumed[inner] = true
+	if d, nested, ok := c.duration(inner); ok {
+		c.consume(append(nested, inner))
 		d.Name = name
 		c.add(sid, inner.Pos(), d)
 		return
@@ -513,10 +527,15 @@ func (c *collector) timeConst(e ast.Expr) (unit, name string, ok bool) {
 
 // duration matches n * time.<Unit> and time.Duration(n) * time.<Unit> (either
 // order); the amount is the source of n.
-func (c *collector) duration(e ast.Expr) (emit.FactEvidence, bool) {
+//
+// A chain such as 2 * time.Second * 3 or 4 * (time.Minute * 15) is one
+// duration: its amount multiplies the parts, "(2) * (3)", and the returned
+// nodes are the nested duration products, which the caller must not report
+// again.
+func (c *collector) duration(e ast.Expr) (emit.FactEvidence, []ast.Node, bool) {
 	bin, ok := e.(*ast.BinaryExpr)
 	if !ok || bin.Op != token.MUL {
-		return emit.FactEvidence{}, false
+		return emit.FactEvidence{}, nil, false
 	}
 	other := bin.Y
 	unit, name, isConst := c.timeConst(bin.X)
@@ -524,19 +543,41 @@ func (c *collector) duration(e ast.Expr) (emit.FactEvidence, bool) {
 		other = bin.X
 		unit, name, isConst = c.timeConst(bin.Y)
 	}
-	if !isConst {
-		return emit.FactEvidence{}, false
+	if isConst {
+		if _, _, both := c.timeConst(other); both {
+			return emit.FactEvidence{}, nil, false
+		}
+		return emit.FactEvidence{
+			Kind: "duration", Text: c.text(bin), Constructor: "time." + name, Unit: unit, Amount: c.text(c.amountOf(other)),
+		}, nil, true
 	}
-	if _, _, both := c.timeConst(other); both {
-		return emit.FactEvidence{}, false
+	for _, pair := range [][2]ast.Expr{{bin.X, bin.Y}, {bin.Y, bin.X}} {
+		side, rest := unparen(pair[0]), pair[1]
+		inner, nested, ok := c.duration(side)
+		if !ok {
+			continue
+		}
+		if _, _, isUnit := c.timeConst(rest); isUnit {
+			return emit.FactEvidence{}, nil, false
+		}
+		if _, _, isDuration := c.duration(unparen(rest)); isDuration {
+			return emit.FactEvidence{}, nil, false
+		}
+		return emit.FactEvidence{
+			Kind: "duration", Text: c.text(bin), Constructor: inner.Constructor, Unit: inner.Unit,
+			Amount: "(" + inner.Amount + ") * (" + c.text(c.amountOf(rest)) + ")",
+		}, append(nested, side), true
 	}
-	amount := unparen(other)
+	return emit.FactEvidence{}, nil, false
+}
+
+// amountOf unwraps time.Duration(n) to n.
+func (c *collector) amountOf(e ast.Expr) ast.Expr {
+	amount := unparen(e)
 	if call, ok := amount.(*ast.CallExpr); ok && len(call.Args) == 1 && c.isDurationType(call.Fun) {
-		amount = call.Args[0]
+		return call.Args[0]
 	}
-	return emit.FactEvidence{
-		Kind: "duration", Text: c.text(bin), Constructor: "time." + name, Unit: unit, Amount: c.text(amount),
-	}, true
+	return amount
 }
 
 func (c *collector) isDurationType(fun ast.Expr) bool {
@@ -599,7 +640,7 @@ func (c *collector) route(call *ast.CallExpr, sel *ast.SelectorExpr) (verb, rout
 			return "", "", false
 		}
 		return httpPattern(pattern)
-	case fn.Pkg().Path() == ginPath && recv == "RouterGroup":
+	case fn.Pkg().Path() == ginPath && ginReceivers[recv]:
 		if v, known := ginVerbs[name]; known {
 			path, isStr := c.constString(call, 0)
 			return v, path, isStr
