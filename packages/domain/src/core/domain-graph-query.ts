@@ -234,7 +234,7 @@ export function rulesForSymbols(index: GraphIndex, symbolIds: readonly string[])
 const RULE_ID_VARIANT = /^([A-Za-z][A-Za-z0-9]*?)[-_]?(\d+)$/;
 
 /** A leading node-id prefix (`rule:`), as domain-scope hits of `get_ranked_context` carry it. */
-const RULE_NODE_PREFIX = /^rule:[ 	]*/i;
+const RULE_NODE_PREFIX = /^rule:[ \t]*/i;
 
 /**
  * `lend03`, `Lend_03` and `LEND-03` all give `LEND-03`, when that is a rule; else undefined. A leading `rule:`
