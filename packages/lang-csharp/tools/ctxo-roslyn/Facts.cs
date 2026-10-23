@@ -478,11 +478,15 @@ static class Facts
             };
         }
 
-        /// <summary>The assigned member or local; else the last name of the target as written.</summary>
+        /// <summary>
+        /// The assigned member or local; else the last name of the target as written. An indexer
+        /// (<c>x[k] = ...</c>) names nothing, as an array element does, so both tiers agree.
+        /// </summary>
         static string? AssignedName(ISimpleAssignmentOperation assignment) => assignment.Target switch
         {
             ILocalReferenceOperation local => local.Local.Name,
             IFieldReferenceOperation field => field.Field.Name,
+            IPropertyReferenceOperation { Property.IsIndexer: true } => null,
             IPropertyReferenceOperation property => property.Property.Name,
             IParameterReferenceOperation parameter => parameter.Parameter.Name,
             { Syntax: IdentifierNameSyntax identifier } => identifier.Identifier.ValueText,

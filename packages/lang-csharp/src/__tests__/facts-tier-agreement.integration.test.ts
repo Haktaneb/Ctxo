@@ -41,7 +41,7 @@ describe.skipIf(!HAS_DOTNET)('C# fact tier agreement', () => {
   });
 
   it('the samples hold every Facts file', () => {
-    expect(FILES).toEqual(['Endpoints.cs', 'LoanPolicy.cs', 'LoansController.cs', 'Program.cs', 'RenewalRules.cs', 'RetryNames.cs']);
+    expect(FILES).toEqual(['Endpoints.cs', 'LoanPolicy.cs', 'LoansController.cs', 'Program.cs', 'RenewalRules.cs', 'RetryNames.cs', 'ShelfController.cs']);
   });
 
   it.each(FILES)('both tiers give the same facts: %s', async (file) => {

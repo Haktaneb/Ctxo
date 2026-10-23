@@ -106,6 +106,10 @@ function trailingPattern(pattern: SyntaxNode | null): SyntaxNode | undefined {
   return current && (current.type === 'relational_pattern' || current.type === 'constant_pattern') ? current : undefined;
 }
 
+function isPatternChain(node: SyntaxNode): boolean {
+  return node.type === 'and_pattern' || node.type === 'or_pattern';
+}
+
 function unwrapParentheses(node: SyntaxNode): SyntaxNode {
   let current = node;
   while (current.type === 'parenthesized_expression' && current.namedChildren.length === 1) current = current.namedChildren[0]!;
@@ -426,7 +430,7 @@ class Collector {
         const body = node.childForFieldName('body');
         if (!subject || !body) break;
         for (const section of body.namedChildren) {
-          if (section.type === 'switch_section') this.switchSection(section, subject.text);
+          if (section.type === 'switch_section') this.switchSection(section, unwrapParentheses(subject).text);
         }
         break;
       }
@@ -436,7 +440,7 @@ class Collector {
         for (const arm of node.namedChildren) {
           if (arm.type !== 'switch_expression_arm') continue;
           const pattern = arm.namedChildren[0];
-          if (pattern) this.casePattern(pattern, subject.text);
+          if (pattern) this.casePattern(pattern, unwrapParentheses(subject).text);
           this.guard(arm.namedChildren.find(c => c.type === 'when_clause'));
         }
         break;
@@ -624,9 +628,16 @@ class Collector {
         if (literal) this.addPattern(this.text(isExpression), this.row(isExpression), pattern.children[0]!.text, literal);
         break;
       }
-      case 'negated_pattern':
-        this.isPattern(pattern.namedChildren[0] ?? null, isExpression, !negated, repaired);
+      case 'negated_pattern': {
+        const inner = pattern.namedChildren[0] ?? null;
+        if (inner && isPatternChain(inner)) {
+          // `not A and B` is `(not A) and B`; a combination under negation gives no evidence.
+          if (!negated) this.negatedChain(inner, isExpression, repaired);
+        } else {
+          this.isPattern(inner, isExpression, !negated, repaired);
+        }
         break;
+      }
       case 'and_pattern':
       case 'or_pattern':
         if (negated) break;
@@ -634,6 +645,17 @@ class Collector {
         this.isPattern(pattern.childForFieldName('right'), isExpression, negated, repaired);
         break;
     }
+  }
+
+  /**
+   * tree-sitter-c-sharp 0.23.1 parses `not A and B` as `not (A and B)`; C# binds `not` to `A`. The
+   * chain is read as `(not A) and B`: the first operand negated, the rest as written.
+   */
+  private negatedChain(chain: SyntaxNode, isExpression: Expr, repaired: VirtualIs | undefined): void {
+    const left = chain.childForFieldName('left');
+    if (left && isPatternChain(left)) this.negatedChain(left, isExpression, repaired);
+    else this.isPattern(left, isExpression, true, repaired);
+    this.isPattern(chain.childForFieldName('right'), isExpression, false, repaired);
   }
 
   private switchSection(section: SyntaxNode, subject: string): void {
@@ -674,6 +696,18 @@ class Collector {
         const right = pattern.childForFieldName('right');
         if (left) this.casePattern(left, subject);
         if (right) this.casePattern(right, subject);
+        break;
+      }
+      case 'negated_pattern': {
+        // A negated label gives nothing, but `not A and B` is `(not A) and B`, so B still counts.
+        let chain = pattern.namedChildren[0];
+        const rest: SyntaxNode[] = [];
+        while (chain && isPatternChain(chain)) {
+          const right = chain.childForFieldName('right');
+          if (right) rest.push(right);
+          chain = chain.childForFieldName('left') ?? undefined;
+        }
+        for (const right of rest.reverse()) this.casePattern(right, subject);
         break;
       }
     }
@@ -804,6 +838,22 @@ function namespaceName(declaration: SyntaxNode): string {
 
 function qualify(container: string, name: string): string {
   return container ? `${container}.${name}` : name;
+}
+
+/**
+ * The syntax tier's symbols as the fact collector names them. The symbol visitor reads only block
+ * namespaces, so in a file with a file-scoped namespace (`namespace X;`, which precedes every type
+ * of the file) each symbol gains that namespace; elsewhere the symbols are returned as they are.
+ * Attribute routes built from these symbols then carry the same IDs as the method's other facts.
+ */
+export function factSymbols(root: SyntaxNode, file: string, symbols: readonly SymbolNode[]): readonly SymbolNode[] {
+  const declaration = root.namedChildren.find(c => c.type === 'file_scoped_namespace_declaration');
+  if (!declaration) return symbols;
+  const namespace = namespaceName(declaration);
+  return symbols.map(symbol => {
+    const name = qualify(namespace, symbol.name);
+    return { ...symbol, name, symbolId: `${file}::${name}::${symbol.kind}` };
+  });
 }
 
 /**

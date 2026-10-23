@@ -131,6 +131,15 @@ describe('C# tree-sitter facts', () => {
     expect(await new CSharpAdapter().extractFacts(`${PREFIX}/LoanPolicy.cs`, source('LoanPolicy.cs'))).toEqual([]);
   });
 
+  it('attribute routes in a file-scoped namespace carry the same namespaced ID as the other facts of the method', async () => {
+    const facts = await syntaxFacts('ShelfController.cs');
+    const id = `${PREFIX}/ShelfController.cs::Lending.Facts.Shelves.ShelfController.Get(1)::method`;
+    expect(facts.map(f => `${f.kind} ${f.text} ${f.symbolId}`)).toEqual([
+      `endpoint GET /api/Shelf/{id} ${id}`,
+      `literal-comparison id > 40 ${id}`,
+    ]);
+  });
+
   it('top-level statements belong to the module symbol', async () => {
     const facts = await syntaxFacts('Program.cs');
     expect(facts).toEqual([{
@@ -164,5 +173,20 @@ describe('C# tree-sitter facts', () => {
     const texts = facts.map(f => f.text);
     expect(texts).toEqual(expect.arrayContaining(['holdDelay is > 30', 'days is > 21', 'code != "LATE"', 'limit is 3', 'attemptLimit > 2']));
     expect(texts.some(text => text.includes('30 ? 2'))).toBe(false);
+  });
+
+  it('`not` binds to the first pattern of an and/or chain, as in C#', async () => {
+    const facts = await syntaxFacts('RenewalRules.cs');
+    const chain = facts.filter(f => f.text === 'code is not "LOST" and not "DAMAGED"');
+    expect(chain.map(f => `${f.detail['operator']} ${f.detail['literal']}`).sort()).toEqual(['!= "DAMAGED"', '!= "LOST"']);
+    const labels = facts.filter(f => f.text.startsWith('days case')).map(f => f.text);
+    expect(labels).toContain('days case < 45');
+    expect(labels).not.toContain('days case 0');
+  });
+
+  it('a parenthesized switch subject reads without its parentheses, and an indexer target names no duration', async () => {
+    const texts = (await syntaxFacts('RenewalRules.cs')).map(f => f.text);
+    expect(texts).toContain('code case "REF"');
+    expect(texts).toContain('TimeSpan.FromHours = 3h');
   });
 });

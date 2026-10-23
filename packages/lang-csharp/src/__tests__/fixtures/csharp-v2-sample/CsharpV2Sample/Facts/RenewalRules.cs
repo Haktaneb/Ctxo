@@ -97,6 +97,13 @@ namespace Lending.Facts
             if (fine == +5L) return 8;
             if (code == @"Hold" && code != """Raw""") return 9;
             if (code == $"{days}") return 10;
+            if (code is not "LOST" and not "DAMAGED") return 13;
+            var shelf = (code) switch { "REF" => 1, _ => 0 };
+            switch (days)
+            {
+                case not 0 and < 45:
+                    return 14;
+            }
 
             bool Late(int n) => n >= 35;
             Func<int, bool> early = n => n <= 2;
@@ -122,6 +129,8 @@ namespace Lending.Facts
             holdDelay = 50;
             this.holdDelay = 55;
             const int retryBudget = 2 * 60 * 1000;
+            var holds = new System.Collections.Generic.Dictionary<string, TimeSpan>();
+            holds["reserve"] = TimeSpan.FromHours(3);
             return options;
         }
 
