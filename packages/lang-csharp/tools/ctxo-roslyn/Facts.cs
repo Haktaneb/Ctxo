@@ -154,8 +154,9 @@ static class Facts
 
     /// <summary>
     /// Walks each member (method, constructor, accessor, local function, field and property
-    /// declarator, event) in source order. Accessors and local functions belong to their property,
-    /// event or method; every field declarator uses its own name.
+    /// declarator, event) and top-level statement in source order. Accessors and local functions
+    /// belong to their property, event or method; every field declarator uses its own name; a
+    /// top-level statement has no symbol id, so the finisher gives it the file's module id.
     /// </summary>
     public static List<CtxoFactEvidence> Collect(SyntaxNode root, SemanticModel model, string filePath, FactOptions options)
     {
@@ -192,6 +193,10 @@ static class Facts
                             collector.Member(model.GetDeclaredSymbol(declarator), model.GetOperation(declarator.Initializer));
                     }
                     break;
+                case GlobalStatementSyntax global:
+                    // Top-level statements: no symbol id, so the finisher gives them the file's module id.
+                    collector.TopLevel(model.GetOperation(global) ?? model.GetOperation(global.Statement));
+                    break;
             }
         }
         return collector.Evidence;
@@ -210,6 +215,19 @@ static class Facts
             var kind = SymbolNames.Kind(symbol);
             if (kind == null) return;
             symbolId = $"{filePath}::{SymbolNames.Qualified(symbol)}::{kind}";
+            Walk(body);
+        }
+
+        /// <summary>A top-level statement: evidence without a symbol id.</summary>
+        public void TopLevel(IOperation? body)
+        {
+            if (body == null) return;
+            symbolId = null;
+            Walk(body);
+        }
+
+        void Walk(IOperation body)
+        {
             foreach (var op in Enumerate(body))
             {
                 if (Full) return;

@@ -1,7 +1,12 @@
 import CSharpLanguage from 'tree-sitter-c-sharp';
 import type { SyntaxNode } from 'tree-sitter';
 import { TreeSitterAdapter } from './tree-sitter-adapter.js';
-import type { SymbolNode, GraphEdge, ComplexityMetrics, SymbolKind, SymbolAnnotation } from '@ctxo/plugin-api';
+import type { CodeFact, SymbolNode, GraphEdge, ComplexityMetrics, SymbolKind, SymbolAnnotation } from '@ctxo/plugin-api';
+import type { FactOptions } from './facts/fact-types.js';
+import { finishFacts } from './facts/finish-facts.js';
+import { annotationRouteEvidence } from './facts/annotation-endpoints.js';
+import { decodeCsharpStringLiteral } from './facts/csharp-string-literal.js';
+import { collectTreeSitterEvidence } from './facts/tree-sitter-evidence.js';
 
 const CSHARP_BRANCH_TYPES = [
   'if_statement', 'for_statement', 'foreach_statement',
@@ -25,8 +30,12 @@ const SIMPLE_ESCAPES: Record<string, string> = {
 export class CSharpAdapter extends TreeSitterAdapter {
   readonly extensions = ['.cs'] as const;
 
-  constructor() {
+  /** Fact detector options; undefined when facts are off. */
+  readonly facts: FactOptions | undefined;
+
+  constructor(options: { readonly facts?: FactOptions } = {}) {
     super(CSharpLanguage);
+    this.facts = options.facts;
   }
 
   async extractSymbols(filePath: string, source: string): Promise<SymbolNode[]> {
@@ -65,6 +74,23 @@ export class CSharpAdapter extends TreeSitterAdapter {
       return metrics;
     } catch (err) {
       console.error(`[ctxo:csharp] Complexity extraction failed for ${filePath}: ${(err as Error).message}`);
+      return [];
+    }
+  }
+
+  /**
+   * The file's facts in the syntax tier: tree-sitter evidence plus attribute routes, finished with the
+   * C# string literal decoder. [] without the facts option.
+   */
+  async extractFacts(filePath: string, source: string): Promise<CodeFact[]> {
+    if (!this.facts) return [];
+    try {
+      const tree = this.parse(source);
+      const symbols = await this.extractSymbols(filePath, source);
+      const evidence = [...collectTreeSitterEvidence(tree.rootNode, filePath, symbols, this.facts), ...annotationRouteEvidence(symbols)];
+      return finishFacts(filePath, evidence, symbols, this.facts, decodeCsharpStringLiteral);
+    } catch (err) {
+      console.error(`[ctxo:csharp] Fact extraction failed for ${filePath}: ${(err as Error).message}`);
       return [];
     }
   }

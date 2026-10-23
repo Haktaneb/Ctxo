@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { CodeFact } from '@ctxo/plugin-api';
@@ -17,6 +17,7 @@ const HAS_DOTNET = (() => {
 
 const FIXTURE_DIR = resolve(import.meta.dirname, 'fixtures/csharp-v2-sample');
 const FACTS_DIR = 'CsharpV2Sample/Facts';
+const HELPER_DIR = resolve(import.meta.dirname, '../../tools/ctxo-roslyn');
 const FILES = ['LoanPolicy.cs', 'LoansController.cs', 'Endpoints.cs'] as const;
 type FactFile = (typeof FILES)[number];
 
@@ -145,6 +146,43 @@ describe.skipIf(!HAS_DOTNET)('Roslyn facts', () => {
     } finally {
       await plain.adapter.dispose();
     }
+  }, 120_000);
+
+  it('every FC-5 vector name that is a C# identifier gives a retry-timeout fact, and no other name does', async () => {
+    const names = (await adapter.extractFacts(`${FACTS_DIR}/RetryNames.cs`, '')).map(f => {
+      expect(f.kind).toBe('retry-timeout');
+      expect(f.symbolId).toBe(`${FACTS_DIR}/RetryNames.cs::Lending.Facts.RetryNames.${f.detail['name']}::variable`);
+      return f.detail['name'];
+    });
+    expect(names.sort()).toEqual([
+      'MaxRetries', 'MAX_RETRIES', 'retryCount', 'attempts', 'TimeOut', 'requestTimeoutMs', 'tokenTTL', 'ExpiryDays',
+      'backoffFactor', 'delayMs', 'HOLD_TIMEOUT', 'délaiRetry', 'retry2x', 'HTTPTimeout', 'ñretry',
+    ].sort());
+  });
+
+  it('top-level statements give evidence that belongs to the module symbol', async () => {
+    const program = `${FACTS_DIR}/Program.cs`;
+    const lines = readFileSync(resolve(FIXTURE_DIR, program), 'utf-8').split(/\r?\n/);
+    expect(await adapter.extractFacts(program, '')).toEqual([{
+      kind: 'endpoint',
+      symbolId: `${program}::Program::variable`,
+      line: lines.findIndex(line => line.includes('MapGet(')),
+      text: 'GET /loans',
+      detail: { verb: 'GET', route: '/loans' },
+    }]);
+  });
+
+  it('a bad --facts= value gives no evidence and one stderr line', () => {
+    const run = spawnSync('dotnet', [
+      'run', '--project', HELPER_DIR, '--', resolve(FIXTURE_DIR, 'CsharpV2Sample.sln'), '--facts=not-base64!',
+    ], { encoding: 'utf-8', timeout: 120_000 });
+    expect(run.status).toBe(0);
+    const files = run.stdout.split(/\r?\n/).filter(line => line.startsWith('{"type":"file"'));
+    expect(files.length).toBeGreaterThan(0);
+    for (const line of files) expect(line).not.toContain('"factEvidence"');
+    const stderr = run.stderr.split(/\r?\n/).filter(line => line.trim() !== '');
+    expect(stderr).toHaveLength(1);
+    expect(stderr[0]).toMatch(/^\[ctxo-roslyn\] --facts= ignored: /);
   }, 120_000);
 
   it('the keep-alive reindex returns the batch\'s facts', async () => {

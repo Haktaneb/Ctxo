@@ -60,7 +60,7 @@ export class CSharpCompositeAdapter implements ILanguageAdapter {
     }
 
     try {
-      this.treeSitter = new CSharpAdapter();
+      this.treeSitter = new CSharpAdapter(this.treeSitterOptions());
       this.delegate = this.treeSitter;
       log.info('C# plugin: tree-sitter syntax-tier active (install .NET 8+ SDK for full tier)');
     } catch (err) {
@@ -87,7 +87,7 @@ export class CSharpCompositeAdapter implements ILanguageAdapter {
     return this.delegate ? this.delegate.extractComplexity(filePath, source) : Promise.resolve([]);
   }
 
-  /** Forwards to the active delegate; `[]` without one or when the delegate has no fact detectors. */
+  /** Forwards to the active delegate (Roslyn, or tree-sitter with the same options); `[]` without one. */
   extractFacts(filePath: string, source: string): Promise<CodeFact[]> {
     this.fallBackIfRoslynFailed();
     return this.delegate?.extractFacts ? this.delegate.extractFacts(filePath, source) : Promise.resolve([]);
@@ -123,6 +123,11 @@ export class CSharpCompositeAdapter implements ILanguageAdapter {
     return 'unavailable';
   }
 
+  /** The tree-sitter adapter's options, the same at initialize and after a fallback: facts only when set. */
+  private treeSitterOptions(): { readonly facts?: FactOptions } {
+    return this.facts ? { facts: this.facts } : {};
+  }
+
   /**
    * Switches to the tree-sitter adapter the first time the Roslyn delegate reports a failure.
    * Warns once; never throws (a tree-sitter that cannot load leaves no delegate).
@@ -136,7 +141,7 @@ export class CSharpCompositeAdapter implements ILanguageAdapter {
     this.delegate = null;
     log.warn(`Roslyn helper failed (${failure}); C# falls back to the tree-sitter syntax tier. Run "ctxo doctor".`);
     try {
-      const treeSitter = new CSharpAdapter();
+      const treeSitter = new CSharpAdapter(this.treeSitterOptions());
       if (this.symbolRegistry) treeSitter.setSymbolRegistry(this.symbolRegistry);
       this.treeSitter = treeSitter;
       this.delegate = treeSitter;

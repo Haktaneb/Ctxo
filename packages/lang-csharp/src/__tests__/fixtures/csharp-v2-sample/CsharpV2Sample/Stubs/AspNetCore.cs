@@ -52,5 +52,21 @@ namespace Microsoft.AspNetCore.Builder
         public void MapPost(string pattern, System.Delegate handler)
         {
         }
+
+        public void MapPut(string pattern, System.Delegate handler)
+        {
+        }
+
+        public void MapDelete(string pattern, System.Delegate handler)
+        {
+        }
+
+        public void MapPatch(string pattern, System.Delegate handler)
+        {
+        }
+
+        public void MapPatch(System.ReadOnlySpan<byte> pattern, System.Delegate handler)
+        {
+        }
     }
 }

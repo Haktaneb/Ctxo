@@ -163,6 +163,14 @@ describe('CSharpCompositeAdapter Roslyn fallback', () => {
 
 describe('CSharpCompositeAdapter facts', () => {
   const KEY_FILE = 'Loans/Key.cs';
+  const KEY_SOURCE = [
+    'namespace Lending.Loans;',
+    'public static class Key',
+    '{',
+    '    public static string Of(string email) => email.Trim().ToLower();',
+    '}',
+    '',
+  ].join('\n');
   const KEY_METHOD = {
     symbolId: `${KEY_FILE}::Lending.Loans.Key.Of::method`,
     name: 'Lending.Loans.Key.Of',
@@ -226,6 +234,32 @@ describe('CSharpCompositeAdapter facts', () => {
     expect(await composite.extractFacts(KEY_FILE, 'public class Key {}')).toEqual([]);
     expect(composite.getTier()).toBe('syntax');
     expect(composite.facts).toBe(DEFAULT_FACT_OPTIONS);
+  });
+
+  it('the tree-sitter fallback after a failed batch reports facts with the composite options', async () => {
+    helper.runBatchIndex.mockResolvedValue(failedBatch());
+    const composite = new CSharpCompositeAdapter({ facts: FACT_OPTIONS });
+    await composite.initialize(ROOT);
+    await composite.getRoslynDelegate()!.batchIndex();
+
+    const facts = await composite.extractFacts(KEY_FILE, KEY_SOURCE);
+    expect(composite.getTier()).toBe('syntax');
+    // FACT_OPTIONS keeps only Trim, so ToLower is not a normalization fact.
+    expect(facts.map((f) => `${f.line} ${f.kind} ${f.text} ${f.symbolId}`)).toEqual([
+      `3 normalization email.Trim() ${KEY_FILE}::Lending.Loans.Key.Of(1)::method`,
+    ]);
+  });
+
+  it('the syntax tier chosen at initialize reports facts', async () => {
+    discovery.detectDotnetSdk.mockReturnValue({ available: false });
+    const composite = new CSharpCompositeAdapter({ facts: DEFAULT_FACT_OPTIONS });
+    await composite.initialize(ROOT);
+
+    expect(composite.getTier()).toBe('syntax');
+    expect((await composite.extractFacts(KEY_FILE, KEY_SOURCE)).map((f) => f.text)).toEqual([
+      'email.Trim()',
+      'email.Trim().ToLower()',
+    ]);
   });
 
   it('extractFacts returns [] before initialize', async () => {
