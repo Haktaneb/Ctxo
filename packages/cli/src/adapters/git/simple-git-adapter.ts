@@ -12,6 +12,7 @@ import type {
   GitRefs,
   RangeCommit,
 } from '../../core/types.js';
+import { compareCodepoint } from '../../core/compare-codepoint.js';
 import { createLogger } from '../../core/logger.js';
 
 const log = createLogger('ctxo:git');
@@ -183,7 +184,7 @@ function parseBranchNames(raw: string): string[] {
       names.add(ref.slice('refs/remotes/'.length));
     }
   }
-  return [...names].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return [...names].sort(compareCodepoint);
 }
 
 const TRAILER_KEY = /^[A-Za-z0-9][A-Za-z0-9-]*$/;

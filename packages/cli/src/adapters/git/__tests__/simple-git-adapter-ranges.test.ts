@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { SimpleGitAdapter } from '../simple-git-adapter.js';
+import { compareCodepoint } from '../../../core/compare-codepoint.js';
 import { isolateGitEnv, type IsolatedGitEnv } from '../../../cli/__tests__/git-test-env.js';
 
 // Developer machines often set commit.gpgsign=true globally; these overrides keep every commit
@@ -201,7 +202,7 @@ describe('SimpleGitAdapter.getWorkingTreeChanges', () => {
     const all = await adapter.getWorkingTreeChanges('all');
     const staged = await adapter.getWorkingTreeChanges('staged');
 
-    const byPath = (list: typeof all) => [...(list ?? [])].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+    const byPath = (list: typeof all) => [...(list ?? [])].sort((a, b) => compareCodepoint(a.path, b.path));
     expect(byPath(all)).toEqual([
       { status: 'M', path: 'edit.ts' },
       { status: 'R', path: 'moved.ts', oldPath: 'move.ts' },
@@ -226,7 +227,7 @@ describe('SimpleGitAdapter.getWorkingTreeChanges', () => {
 
     const all = await new SimpleGitAdapter(repo.dir).getWorkingTreeChanges('all');
 
-    expect([...(all ?? [])].sort((a, b) => (a.path < b.path ? -1 : 1))).toEqual([
+    expect([...(all ?? [])].sort((a, b) => compareCodepoint(a.path, b.path))).toEqual([
       { status: 'D', path: 'gone.ts' },
       { status: 'D', path: 'gone2.ts' },
     ]);
