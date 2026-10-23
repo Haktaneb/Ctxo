@@ -26,7 +26,8 @@ export class GoCompositeAdapter implements ILanguageAdapter {
   constructor(options: { readonly sqlCallSites?: boolean; readonly facts?: FactOptions } = {}) {
     this.sqlCallSites = options.sqlCallSites === true;
     this.facts = options.facts;
-    this.treeSitter = new GoAdapter();
+    // The one syntax-tier construction: it serves facts when there is no analyzer and after a failed batch (Q8).
+    this.treeSitter = new GoAdapter(this.facts ? { facts: this.facts } : {});
   }
 
   async initialize(rootDir: string): Promise<void> {
@@ -69,8 +70,8 @@ export class GoCompositeAdapter implements ILanguageAdapter {
   }
 
   /**
-   * Code facts (protocol v2): from the analyzer's evidence in the full tier. The syntax tier has no fact
-   * collector yet, so it gives `[]`; without the `facts` option this is always `[]`.
+   * Code facts (protocol v2): from the analyzer's evidence in the full tier, from the tree-sitter collector in the
+   * syntax tier (no analyzer, or its batch failed); without the `facts` option this is always `[]`.
    */
   async extractFacts(filePath: string, source: string): Promise<CodeFact[]> {
     if (!this.facts) return [];
