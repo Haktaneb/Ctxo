@@ -1,0 +1,1 @@
+export const ACTIVE_LOANS_SQL = 'SELECT l.Id FROM dbo.Loans l JOIN [dbo].[Members] m ON m.Id = l.MemberId WHERE l.ClosedAt IS NULL';

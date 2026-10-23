@@ -10,13 +10,18 @@ const corpusDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'cor
 
 interface AccessLists { reads: string[]; writes: string[]; executes: string[] }
 interface ExpectedDefinition { kind: string; name: string; columns?: string[] }
-interface CorpusCase {
-  name: string;
+interface RawCase {
   description: string;
   mode: string;
-  sides: string[];
+  sides?: string[];
   definitions?: ExpectedDefinition[];
   accesses: AccessLists;
+}
+interface CorpusCase extends Omit<RawCase, 'sides'> {
+  name: string;
+  sides: string[];
+  /** True when the expected.json names its sides. */
+  sidesGiven: boolean;
 }
 
 const DEFAULT_SIDES: Record<string, string[]> = {
@@ -24,20 +29,36 @@ const DEFAULT_SIDES: Record<string, string[]> = {
   file: ['sql-extract', 'lang-sql', 'scriptdom'],
 };
 
-/** Reads every case and keeps the statement and file modes (host-language modes default to no sides). */
-function loadCorpus(): CorpusCase[] {
+/** Host-language cases (PR 1C): `<case>.<ext>.fixture`, whose mode follows the extension. */
+const HOST_MODES: Record<string, string> = { ts: 'typescript', java: 'java', go: 'go' };
+const HOST_SOURCE = /^(.+)\.(ts|java|go)\.fixture$/;
+const isSqlMode = (mode: string): boolean => mode === 'statement' || mode === 'file';
+
+/** The sides of a case: as written, else the default of its mode; host-language modes default to none. */
+const sidesOf = (raw: Pick<RawCase, 'mode' | 'sides'>): string[] => raw.sides ?? DEFAULT_SIDES[raw.mode] ?? [];
+
+/** Reads every case, whatever its mode. */
+function loadAllCases(): CorpusCase[] {
   return readdirSync(corpusDir)
     .filter((f) => f.endsWith('.expected.json'))
     .sort()
     .map((f) => {
-      const raw = JSON.parse(readFileSync(join(corpusDir, f), 'utf8')) as Omit<CorpusCase, 'name' | 'sides'> & { sides?: string[] };
-      return { ...raw, name: f.slice(0, -'.expected.json'.length), sides: raw.sides ?? DEFAULT_SIDES[raw.mode] ?? [] };
-    })
-    .filter((c) => c.mode === 'statement' || c.mode === 'file');
+      const raw = JSON.parse(readFileSync(join(corpusDir, f), 'utf8')) as RawCase;
+      return { ...raw, name: f.slice(0, -'.expected.json'.length), sides: sidesOf(raw), sidesGiven: raw.sides !== undefined };
+    });
 }
+
+/** The selections of the three SQL-side loops: this file, lang-sql's corpus test and the ScriptDom test. */
+const selectedBySqlExtract = (c: CorpusCase): boolean => isSqlMode(c.mode) && c.sides.includes('sql-extract');
+const selectedByLangSql = (c: CorpusCase): boolean => c.mode === 'file' && c.sides.includes('lang-sql');
+const selectedByScriptDom = (c: CorpusCase): boolean => isSqlMode(c.mode) && c.sides.includes('scriptdom');
 
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 const sqlOf = (c: CorpusCase): string => readFileSync(join(corpusDir, `${c.name}.sql`), 'utf8');
+const hostSourceOf = (c: CorpusCase): string => {
+  const ext = Object.keys(HOST_MODES).find((e) => HOST_MODES[e] === c.mode)!;
+  return readFileSync(join(corpusDir, `${c.name}.${ext}.fixture`), 'utf8');
+};
 
 function lists(accesses: readonly SqlAccess[]): AccessLists {
   const sets = { reads: new Set<string>(), writes: new Set<string>(), executes: new Set<string>() };
@@ -61,18 +82,60 @@ function expected(c: CorpusCase): Pick<CorpusCase, 'definitions' | 'accesses'> {
   return c.mode === 'statement' ? { accesses: c.accesses } : { definitions: c.definitions, accesses: c.accesses };
 }
 
-const cases = loadCorpus();
-const ours = cases.filter((c) => c.sides.includes('sql-extract'));
+const allCases = loadAllCases();
+/** Statement and file cases: SQL text in `<case>.sql`. */
+const cases = allCases.filter((c) => isSqlMode(c.mode));
+/** Host-language cases: source in `<case>.<ts|java|go>.fixture`, run only by the matching plugin. */
+const hostCases = allCases.filter((c) => !isSqlMode(c.mode));
+const ours = allCases.filter(selectedBySqlExtract);
 
 describe('conformance corpus', () => {
-  it('every corpus .sql file has an expected.json and the reverse', () => {
+  it('every corpus source (.sql or .<ts|java|go>.fixture) has an expected.json and the reverse', () => {
     const files = readdirSync(corpusDir);
-    const sqlCases = files.filter((f) => f.endsWith('.sql')).map((f) => f.slice(0, -'.sql'.length));
+    const sources = new Map<string, string[]>();
+    for (const f of files) {
+      const name = f.endsWith('.sql') ? f.slice(0, -'.sql'.length) : HOST_SOURCE.exec(f)?.[1];
+      if (name !== undefined) sources.set(name, [...(sources.get(name) ?? []), f]);
+    }
     const expectedCases = new Set(files.filter((f) => f.endsWith('.expected.json')).map((f) => f.slice(0, -'.expected.json'.length)));
-    for (const name of sqlCases) expect(expectedCases.has(name), `${name}.expected.json`).toBe(true);
-    // Statement and file cases need their .sql; host-language cases (PR 1C) use other sources.
-    for (const c of cases) expect(sqlCases, `${c.name}.sql`).toContain(c.name);
+    for (const name of sources.keys()) expect(expectedCases.has(name), `${name}.expected.json`).toBe(true);
+    for (const name of expectedCases) expect(sources.get(name), `the source of ${name}`).toHaveLength(1);
     expect(cases.length).toBeGreaterThan(0);
+    expect(hostCases.length).toBeGreaterThan(0);
+  });
+
+  it('host-language cases use the mode of their extension', () => {
+    const byName = new Map(allCases.map((c) => [c.name, c]));
+    for (const f of readdirSync(corpusDir)) {
+      const host = HOST_SOURCE.exec(f);
+      if (host) expect(byName.get(host[1]!)?.mode, f).toBe(HOST_MODES[host[2]!]);
+      if (f.endsWith('.sql')) expect(['statement', 'file'], f).toContain(byName.get(f.slice(0, -'.sql'.length))?.mode);
+    }
+    for (const c of hostCases) expect(Object.values(HOST_MODES), c.name).toContain(c.mode);
+  });
+
+  it('host-language cases default to sides []', () => {
+    for (const mode of Object.values(HOST_MODES)) expect(sidesOf({ mode }), mode).toEqual([]);
+    for (const c of hostCases) {
+      expect(c.sidesGiven, `${c.name} leaves sides out`).toBe(false);
+      expect(c.sides, c.name).toEqual([]);
+      expect(selectedBySqlExtract(c) || selectedByLangSql(c) || selectedByScriptDom(c), c.name).toBe(false);
+    }
+    expect(ours.every((c) => isSqlMode(c.mode))).toBe(true);
+  });
+
+  it('every host-language case has a description, sorted lists and LF text', () => {
+    for (const c of hostCases) {
+      expect(typeof c.description, c.name).toBe('string');
+      expect(c.definitions, c.name).toBeUndefined();
+      expect(Object.keys(c.accesses).sort(), c.name).toEqual(['executes', 'reads', 'writes']);
+      for (const list of [c.accesses.reads, c.accesses.writes, c.accesses.executes]) {
+        expect(list, c.name).toEqual([...new Set(list)].sort(cmp));
+      }
+      const text = hostSourceOf(c);
+      expect(text.includes('\r'), `${c.name} fixture has CR`).toBe(false);
+      expect(text.charCodeAt(0), `${c.name} fixture has a BOM`).not.toBe(0xfeff);
+    }
   });
 
   it('every case has a description, known sides, sorted lists and LF text', () => {

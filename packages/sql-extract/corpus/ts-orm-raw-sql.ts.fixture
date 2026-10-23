@@ -1,0 +1,36 @@
+import knexFactory from 'knex';
+import { Prisma, PrismaClient } from '@prisma/client';
+import { DataSource } from 'typeorm';
+import { Model, Sequelize } from 'sequelize';
+
+const knex = knexFactory({ client: 'mssql' });
+const prisma = new PrismaClient();
+const dataSource = new DataSource({ type: 'mssql' });
+const sequelize = new Sequelize('mssql://localhost/lending');
+
+class Loan extends Model {}
+
+export async function knexCalls(): Promise<void> {
+  await knex.raw('SELECT Id FROM dbo.Loans WHERE ClosedAt IS NULL');
+  await knex('Reservations').where({ Id: 1 }).select('Id');
+}
+
+export async function prismaCalls(memberId: number): Promise<void> {
+  await prisma.$queryRaw`SELECT Id FROM dbo.Holds WHERE MemberId = ${memberId}`;
+  await prisma.$queryRaw(Prisma.sql`SELECT Id FROM dbo.Members WHERE Id = ${memberId}`);
+  await prisma.$executeRaw`UPDATE dbo.Holds SET Notified = 1 WHERE MemberId = ${memberId}`;
+  await prisma.$queryRawUnsafe('SELECT Id FROM dbo.Loans WHERE MemberId = @P1', memberId);
+  await prisma.$executeRawUnsafe('INSERT INTO dbo.LoanStaging (Id) SELECT Id FROM dbo.Loans');
+  await prisma.reservation.findMany();
+}
+
+export async function typeormCalls(): Promise<void> {
+  await dataSource.query('SELECT Id FROM dbo.Members');
+  const repository = dataSource.getRepository('Reservation');
+  await repository.find();
+}
+
+export async function sequelizeCalls(): Promise<void> {
+  await sequelize.query('DELETE FROM dbo.LoanStaging');
+  await Loan.findAll();
+}

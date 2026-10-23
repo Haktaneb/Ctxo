@@ -18,9 +18,22 @@ import {
 } from '@ctxo/plugin-api';
 
 import { classAnnotations, methodAnnotations } from './decorators.js';
+import { createLogger } from './logger.js';
 import { findTestBlocks, testBlockSymbol } from './test-blocks.js';
+import { ModuleResolver } from './sql/module-resolver.js';
+import { collectSqlCallSites, symbolScopes, type SqlStats } from './sql/sql-call-sites.js';
+import { sqlEdgesFromCallSites } from './sql/sql-edges.js';
 
 const SUPPORTED_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx'] as const;
+
+const log = createLogger('ctxo:lang-typescript');
+
+export interface TsMorphAdapterOptions {
+  /** Emit SQL call-site edges (`reads`, `writes`, `executes`): the host's `capabilities.sqlCallSites`. */
+  readonly sqlCallSites?: boolean;
+  /** Absolute project root; relative modules missing from the in-memory project are read from disk under it. */
+  readonly projectRoot?: string;
+}
 
 /** Source ranges `[start, end]`, sorted by start, none inside another. */
 type Ranges = ReadonlyArray<readonly [number, number]>;
@@ -58,11 +71,18 @@ export class TsMorphAdapter implements ILanguageAdapter {
   readonly extensions = SUPPORTED_EXTENSIONS;
   readonly tier = 'full' as const;
 
+  /** The `sqlCallSites` option as constructed. */
+  readonly sqlCallSites: boolean;
+
   private readonly project: Project;
+  private readonly projectRoot: string | undefined;
+  private readonly sqlStats: SqlStats = { constant: 0, nonConstant: 0 };
   private symbolRegistry = new Map<string, SymbolKind>();
   private projectPreloaded = false;
 
-  constructor() {
+  constructor(options: TsMorphAdapterOptions = {}) {
+    this.sqlCallSites = options.sqlCallSites === true;
+    this.projectRoot = options.projectRoot;
     this.project = new Project({
       compilerOptions: {
         target: ScriptTarget.ES2022,
@@ -81,6 +101,14 @@ export class TsMorphAdapter implements ILanguageAdapter {
 
   setSymbolRegistry(registry: Map<string, SymbolKind>): void {
     this.symbolRegistry = registry;
+  }
+
+  /**
+   * SQL call sites seen by `extractEdges` so far, with and without a constant text. Cumulative per adapter
+   * instance and never reset: a full index run creates fresh adapters, and `ctxo watch` never reports them.
+   */
+  getSqlStats(): SqlStats {
+    return { ...this.sqlStats };
   }
 
   loadProjectSources(files: Map<string, string>): void {
@@ -129,6 +157,8 @@ export class TsMorphAdapter implements ILanguageAdapter {
   async extractEdges(filePath: string, source: string): Promise<GraphEdge[]> {
     const sourceFile = this.parseSource(filePath, source);
     if (!sourceFile) return [];
+    // Files the resolver reads from disk live only for this call (Review Focus 1); preloaded files stay.
+    const resolver = this.sqlCallSites ? new ModuleResolver(this.project, this.projectRoot) : undefined;
 
     try {
       const edges: GraphEdge[] = [];
@@ -138,12 +168,15 @@ export class TsMorphAdapter implements ILanguageAdapter {
       this.extractCallEdges(sourceFile, filePath, edges);
       this.extractReferenceEdges(sourceFile, filePath, edges);
       this.extractTestBlockEdges(sourceFile, filePath, edges);
+      // Last, so files the resolver adds never change the edges above.
+      if (resolver) edges.push(...this.extractSqlEdges(sourceFile, filePath, resolver));
 
       return edges;
     } catch (err) {
       console.error(`[ctxo:ts-morph] Edge extraction failed for ${filePath}: ${(err as Error).message}`);
       return [];
     } finally {
+      resolver?.release();
       if (!this.projectPreloaded) {
         this.cleanupSourceFile(filePath);
       }
@@ -568,6 +601,27 @@ export class TsMorphAdapter implements ILanguageAdapter {
         edges.push({ from: block.symbolId, to: resolved, kind: 'calls' });
       }
       if (importMap.size > 0) this.emitUsesEdges(block.body, block.symbolId, importMap, edges, block.nested);
+    }
+  }
+
+  /**
+   * SQL data edges (only with `sqlCallSites`): call sites of the known APIs whose receiver traces to the listed
+   * module, with constant text, parsed by `@ctxo/sql-extract`. A failure here keeps the file's other edges.
+   */
+  private extractSqlEdges(sourceFile: SourceFile, filePath: string, resolver: ModuleResolver): GraphEdge[] {
+    try {
+      const stats: SqlStats = { constant: 0, nonConstant: 0 };
+      const scopes = symbolScopes(sourceFile, filePath, findTestBlocks(sourceFile, filePath));
+      const sites = collectSqlCallSites(sourceFile, scopes, resolver, stats);
+      this.sqlStats.constant += stats.constant;
+      this.sqlStats.nonConstant += stats.nonConstant;
+      if (stats.constant + stats.nonConstant > 0) {
+        log.debug(`sql ${filePath}: constant ${stats.constant}, nonConstant ${stats.nonConstant}`);
+      }
+      return sqlEdgesFromCallSites(sites);
+    } catch (err) {
+      log.warn(`SQL call sites skipped for ${filePath}: ${(err as Error).message}`);
+      return [];
     }
   }
 
