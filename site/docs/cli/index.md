@@ -108,6 +108,10 @@ entries of sources that were deleted or are now ignored, but never the entries
 of paths git marks skip-worktree (sparse checkout), and nothing is removed when
 that query fails.
 
+## Domain pass
+
+With [`@ctxo/domain`](/concepts/domain-knowledge) installed and a registry, `ctxo index` ends with a domain pass on every run that refreshes the index. It writes `.ctxo/index/domain/` (`contexts.json`, `boundaries.json` and a rotating `history/` of per-commit metrics) and logs one line with the context count, the cross-context edges and the boundary violations. Without a registry it removes those artifacts; with a registry that has problems it warns and leaves them as they are. A failing pass is reported and the run continues.
+
 ## Co-change window
 
 `co-changes.json` is built from one `git log` pass, with its own window

@@ -6,6 +6,7 @@ import { SqliteStorageAdapter } from '../../storage/sqlite-storage-adapter.js';
 import { MaskingPipeline } from '../../../core/masking/masking-pipeline.js';
 import { handleFindImporters } from '../find-importers.js';
 import type { FileIndex } from '../../../core/types.js';
+import type { ResponseEnricher } from '../../../ports/i-ctxo-module.js';
 
 function buildIndices(): FileIndex[] {
   return [
@@ -323,5 +324,28 @@ describe('FindImportersHandler', () => {
     const result = handler({ symbolId: 'src/c.ts::C::interface' });
 
     expect(result.content[0]!.text).toContain('[REDACTED:AWS_KEY]');
+  });
+
+  it('applies the enricher before the envelope and masking', () => {
+    const seen: Array<{ hadMeta: boolean; args: Readonly<Record<string, unknown>> }> = [];
+    const enrich: ResponseEnricher = (payload, args) => {
+      seen.push({ hadMeta: '_meta' in payload, args });
+      const importers = (payload['importers'] as Array<Record<string, unknown>>).map((entry) => ({ ...entry, enrichedBy: 'stub' }));
+      return { ...payload, importers, enrichedBy: 'stub', enrichedSecret: 'AKIAIOSFODNN7EXAMPLE' };
+    };
+    const handler = handleFindImporters(storage, new MaskingPipeline(), undefined, tempDir, enrich);
+
+    const result = handler({ symbolId: 'src/c.ts::C::interface', transitive: true });
+
+    expect(result.content[0]!.text).not.toContain('AKIAIOSFODNN7EXAMPLE');
+    const payload = JSON.parse(result.content[0]!.text);
+    expect(payload.enrichedBy).toBe('stub');
+    expect(payload.enrichedSecret).toBe('[REDACTED:AWS_KEY]');
+    expect(payload.importers.map((e: { symbolId: string }) => e.symbolId)).toEqual(['src/b.ts::B::class', 'src/a.ts::A::function']);
+    expect(payload.importers.every((e: { enrichedBy?: string }) => e.enrichedBy === 'stub')).toBe(true);
+    expect(payload._meta.totalItems).toBe(2);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.hadMeta).toBe(false);
+    expect(seen[0]!.args).toMatchObject({ symbolId: 'src/c.ts::C::interface', transitive: true });
   });
 });

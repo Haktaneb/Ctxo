@@ -74,6 +74,9 @@ jobs:
       - name: Run unit tests with coverage
         run: pnpm --filter @ctxo/cli test:unit:coverage
 
+      - name: Run domain unit tests
+        run: pnpm --filter @ctxo/domain test:unit
+
       # lang-csharp runs its `unit` vitest project here: the tree-sitter, mocked
       # Roslyn and packaging tests need no .NET. The `dotnet` project (Roslyn
       # integration tests) builds the helper and runs in the dotnet-tests job.
@@ -177,6 +180,13 @@ jobs:
           CTXO_DOTNET_E2E: '1'
         run: pnpm --filter @ctxo/cli test:e2e tests/e2e/csharp-sql-call-site.test.ts
 
+      # The domain acceptance suite on the Roslyn tier: with .NET set up, a C# run that falls back to the
+      # syntax tier fails instead of skipping the cross-context edge tests.
+      - name: Run the domain acceptance tests on the Roslyn tier
+        env:
+          CTXO_REQUIRE_DOTNET: '1'
+        run: pnpm --filter @ctxo/domain test:e2e
+
   # The TypeScript, Java and Go plugins with their toolchains: the plugin suites on the
   # JDT and Go analyzer tiers, the analyzer's JUnit tests on both JDT profiles, the Go
   # analyzer's own tests, and the CLI's end-to-end language parity test.
@@ -269,7 +279,7 @@ jobs:
         run: |
           echo "## Package Contents" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          for pkg in @ctxo/plugin-api @ctxo/cli @ctxo/lang-typescript @ctxo/lang-go @ctxo/lang-csharp @ctxo/sql-extract @ctxo/lang-sql; do
+          for pkg in @ctxo/plugin-api @ctxo/cli @ctxo/lang-typescript @ctxo/lang-go @ctxo/lang-csharp @ctxo/sql-extract @ctxo/lang-sql @ctxo/domain; do
             echo "### $pkg" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             pnpm --filter "$pkg" pack --dry-run 2>&1 | grep -E "^npm notice" | tee -a $GITHUB_STEP_SUMMARY
@@ -280,7 +290,7 @@ jobs:
   e2e-tests:
     name: E2E Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     needs: [build]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -302,6 +312,9 @@ jobs:
 
       - name: Run E2E tests
         run: pnpm --filter @ctxo/cli test:e2e
+
+      - name: Run domain E2E tests
+        run: pnpm --filter @ctxo/domain test:e2e
 
       - name: E2E Test Report
         uses: dorny/test-reporter@d1b5dff021aa968b288b02285a8bf47471c5928a # v3.2.0

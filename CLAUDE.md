@@ -6,7 +6,7 @@ Ctxo is a **Model Context Protocol (MCP) server** that gives AI coding assistant
 
 * **Type:** npm package / CLI tool / MCP server (stdio transport)
 * **Author:** Alper Hankendi
-* **Status:** 14 MCP tools, pnpm monorepo with 9 packages, 987+ tests
+* **Status:** 14 MCP tools, pnpm monorepo with 10 packages, 987+ tests
 * **Language:** TypeScript (ESM-first, `"type": "module"`)
 * **Runtime:** Node.js >= 20
 
@@ -48,7 +48,7 @@ ctxo index --cochange-since 12m     # co-change window by age from HEAD (d, w, m
 ctxo watch                          # file watcher for incremental re-index
 ctxo sync                           # rebuild SQLite from committed JSON
 ctxo init                           # rules, skills, guard, MCP config, git hooks (post-commit v2), config + plugin install prompt
-ctxo init --only <parts>            # install only these parts: rules,skills,guard,mcp,git-hooks,config
+ctxo init --only <parts>            # install only these parts: rules,skills,guard,mcp,git-hooks,config,domain
 ctxo init --skip <parts>            # install every part except these
 ctxo init --no-guard                # does not install the safe-edit guard (full rules block unless a guard is already registered)
 ctxo init --dry-run                 # list every file init would create or change; writes nothing
@@ -67,6 +67,15 @@ ctxo blast-radius <symbolId> --json # blast radius for one symbol, JSON to stdou
 ctxo gate --preview                 # preview which symbols the guard would block
 ctxo gate --preview --json          # same, machine-readable
 ctxo contexts [--json]              # candidate contexts: table to stderr, full contexts-view.json to stdout with --json
+
+# Domain knowledge layer (opt-in, needs @ctxo/domain; ADR-018)
+ctxo install domain                 # install @ctxo/domain at this CLI's version (globally without package.json)
+ctxo init --domain                  # also set up the domain part: config defaults, registry skeleton, fold guard hooks, skill
+ctxo init --domain --boundaries by-rung|report   # boundary mode without the prompt
+ctxo contexts-touched --since origin/main [--committed | --staged] [--json] [--check]   # named contexts a change touched
+ctxo verify-domain --since origin/main [--boundaries by-rung|report] [--json]            # CI gate, 11 checks, exit 0/1/2
+ctxo domain rules --write|--check   # generated path-scoped loader rules (.claude/rules, .cursor/rules)
+ctxo domain discover [--json] [--write]   # propose tracker prefixes, rule trait keys and test folders
 
 # Environment
 DEBUG=ctxo:*                  # enable all debug output
@@ -88,7 +97,8 @@ packages/
 ├── lang-csharp/      @ctxo/lang-csharp     # Roslyn (+ ScriptDom for SQL call sites) + tree-sitter + tools/ctxo-roslyn
 ├── lang-java/        @ctxo/lang-java       # tree-sitter Java (syntax tier); full tier via @ctxo/lang-java-analyzer companion (JRE 11+, ADR-014); annotations, SQL call sites (full tier, via @ctxo/sql-extract)
 ├── lang-java-analyzer/ @ctxo/lang-java-analyzer # prebuilt Eclipse JDT analyzer JARs for the Java full tier (annotations, SQL call sites)
-└── lang-sql/         @ctxo/lang-sql        # T-SQL .sql files on protocol v2 (tables, views, procedures, data edges)
+├── lang-sql/         @ctxo/lang-sql        # T-SQL .sql files on protocol v2 (tables, views, procedures, data edges)
+└── domain/           @ctxo/domain          # domain knowledge layer (opt-in, ADR-018)
 ```
 
 ### Key Rules
@@ -98,8 +108,8 @@ packages/
   * **`core/`** **NEVER imports from** **`ports/`** — ports import from core types
   * **`ports/`** **NEVER imports from** **`adapters/`**
   * **`adapters/mcp/`** **may import from** **`core/`** **and** **`ports/`** **only**
-  * **Composition root (`packages/cli/src/index.ts`)** is the ONLY file that wires adapters to ports
-* **Plugins (`@ctxo/lang-*`) import only from** **`@ctxo/plugin-api`; never from** **`@ctxo/cli`.** The one exception (ADR-017): a Ctxo-owned utility package with zero runtime dependencies, today only `@ctxo/sql-extract` (used by `@ctxo/lang-sql`, `@ctxo/lang-typescript`, `@ctxo/lang-java` and `@ctxo/lang-go`).
+  * **Composition root (`packages/cli/src/mcp-server.ts`)** is the MCP composition root and the ONLY file that wires adapters to ports for the server; `packages/cli/src/index.ts` is the entry, a thin argv router that loads it only for the server route (the hook route `domain-guard-hook` never loads it). The module host (`cli/module-host.ts`, `createModuleHost`) wires the opt-in `@ctxo/domain` into the tool, command, init, doctor and index-pass seams
+* **Plugins (`@ctxo/lang-*`) import only from** **`@ctxo/plugin-api`; never from** **`@ctxo/cli`.** The one exception (ADR-017): a Ctxo-owned utility package with zero runtime dependencies, today only `@ctxo/sql-extract` (used by `@ctxo/lang-sql`, `@ctxo/lang-typescript`, `@ctxo/lang-java` and `@ctxo/lang-go`). `@ctxo/domain` is not a language plugin and is the other exception (ADR-018): it imports `@ctxo/cli` and `@ctxo/cli/internal` as types only (lint-enforced); every runtime service arrives through `host.services` from the running CLI. `@ctxo/cli` and `@ctxo/domain` share one version (a changesets `fixed` group).
 * **No barrel exports** (`index.ts` re-exports) — import directly from source file path
 * **Port-first rule:** every adapter MUST implement a port interface
 
@@ -107,7 +117,9 @@ packages/
 
 ```
 packages/cli/src/
-  index.ts                     # composition root + StdioServerTransport
+  index.ts                     # entry: thin argv router (CLI routes, hook fast route, MCP server)
+  mcp-server.ts                # MCP composition root + StdioServerTransport
+  internal.ts                  # @ctxo/cli/internal: type-only module API for @ctxo/domain (the one barrel)
   ports/                       # interfaces only (ILanguageAdapter, IStoragePort, IGitPort, IMaskingPort)
   core/                        # pure domain (graph, logic-slice, blast-radius, overlay, why-context, change-intelligence, masking, detail-levels,
                                # co-change, contexts-view, data-coupling, test-files, gate, agent-rules, config, history, search, importance, dead-code)
@@ -128,7 +140,10 @@ packages/cli/src/
   cli/                         # index, init, sync, status, verify, watch, visualize, contexts,
                                # blast-radius, gate, gate-hook, stats, update, doctor,
                                # version-command.ts, install-command.ts,
-                               # plugin-loader.ts, doctor-fix.ts, ai-rules.ts, git-hooks.ts, init-parts.ts
+                               # plugin-loader.ts, doctor-fix.ts, ai-rules.ts, git-hooks.ts,
+                               # init-parts.ts (parts: rules, skills, guard, mcp, git-hooks, config, domain),
+                               # module-host.ts, module-commands.ts
+  adapters/modules/            # module-loader.ts: resolves @ctxo/domain (project, then next to the CLI)
 ```
 
 ### Storage (ADR-STORAGE-01)
@@ -184,8 +199,16 @@ contextsView:                  # candidate contexts (file level), see ADR-016 ad
   resolution: 1.0
   minCandidateFiles: 3         # smaller groups fold into a neighbour
   technicalTerms: []           # replaces the default list of dropped words
+domain:                        # read only when @ctxo/domain is installed (ADR-018)
+  registry: docs/domain/contexts.yaml
+  coverage: { unowned: warn }  # warn | error
+  boundaries: { enforce: by-rung, blockingRungs: [bounded, boring] }   # by-rung | report
+  rules: { idPattern: "^[A-Z][A-Z0-9]*-\\d+$", trackerPrefixes: [] }
+  tests: { ruleTraitKeys: [Rule] }
+  guard: { enabled: true, subagents: false }   # base: <ref> is optional
 ```
 
+* `domain`: every key and default in [config-schema.md](site/docs/reference/config-schema.md#domain).
 * `index.ignore`: per-file picomatch globs, matched against repo-relative forward-slash paths.
 * `index.ignoreProjects`: matched against workspace paths; skipped workspaces are never enumerated and their plugin deps are never imported.
 * `cochange`: see [ADR-016](docs/architecture/ADR/adr-016-co-change-engine-and-snapshot-policy.md). One `git log` pass builds `co-changes.json` (window recorded under `window`) and every blast-radius path reads it. Overrides: `--cochange-commits`, `--cochange-since`.

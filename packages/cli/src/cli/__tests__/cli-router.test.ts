@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { CliRouter } from '../cli-router.js';
+import { CORE_COMMANDS } from '../module-commands.js';
+import { writeStubDomainPackage } from './helpers/stub-domain-package.js';
 
 describe('CliRouter', () => {
   it('outputs help text for --help flag', async () => {
@@ -514,6 +519,262 @@ describe('cli-router subcommand --help and -h', () => {
 
     expect(constructed).toEqual(['SyncCommand']);
   });
+
+  it('the core command set that module commands may not shadow is exactly the routed commands', () => {
+    expect([...CORE_COMMANDS].sort()).toEqual([...SUBCOMMANDS].sort());
+  });
+});
+
+describe('cli-router module commands', () => {
+  // The stub registers one visible command and one hidden hook command. Every run is recorded on globalThis.
+  const STUB = `
+export async function register() {
+  return {
+    id: 'domain',
+    registerCommands(registrar) {
+      registrar.registerCommand({
+        name: 'verify-domain',
+        help: ['ctxo verify-domain [--json]   Check the domain registry (stub)'],
+        usage: ['Usage: ctxo verify-domain [--json]', '', 'Exit codes: 0 no errors, 1 errors.'],
+        async run(args) {
+          (globalThis.__ctxoRouterRuns ??= []).push(args);
+          return 4;
+        },
+      });
+      for (const name of ['contexts-touched', 'domain']) {
+        registrar.registerCommand({
+          name,
+          help: ['ctxo ' + name + '   stub'],
+          usage: ['Usage: ctxo ' + name + ' [flags]', '', 'Exit codes: 0 ok.'],
+          hidden: true,
+          async run(args) {
+            (globalThis.__ctxoRouterRuns ??= []).push(args);
+            return 0;
+          },
+        });
+      }
+      registrar.registerCommand({
+        name: 'domain-guard-hook',
+        help: ['ctxo domain-guard-hook   Stub hook entry'],
+        hidden: true,
+        async run() {
+          return 0;
+        },
+      });
+    },
+  };
+}
+`;
+
+  const tempDirs: string[] = [];
+  let errorSpy: MockInstance<typeof console.error>;
+  let exitSpy: MockInstance<typeof process.exit>;
+  let previousExitCode: typeof process.exitCode;
+
+  function tempDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'ctxo-router-modules-'));
+    tempDirs.push(dir);
+    return dir;
+  }
+
+  /** A router for a project in a temp dir; the CLI's own location is another empty temp dir. */
+  function routerFor(project: string): CliRouter {
+    return new CliRouter(project, { cliAnchor: tempDir() });
+  }
+
+  function printed(): string {
+    return errorSpy.mock.calls.map((args) => args.map(String).join(' ')).join('\n');
+  }
+
+  function runs(): unknown[] {
+    return ((globalThis as Record<string, unknown>).__ctxoRouterRuns as unknown[] | undefined) ?? [];
+  }
+
+  beforeEach(() => {
+    previousExitCode = process.exitCode;
+    process.exitCode = undefined;
+    delete (globalThis as Record<string, unknown>).__ctxoRouterRuns;
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    process.exitCode = previousExitCode;
+    for (const dir of tempDirs.splice(0)) {
+      try {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      } catch {
+        /* best effort */
+      }
+    }
+  });
+
+  it('a known domain command without @ctxo/domain prints an install hint and exits 1', async () => {
+    await routerFor(tempDir()).route(['verify-domain']);
+
+    expect(errorSpy).toHaveBeenCalledWith('[ctxo] "ctxo verify-domain" needs @ctxo/domain. Install it with "ctxo install domain".');
+    expect(process.exitCode).toBe(1);
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(printed()).not.toContain('Unknown command');
+  });
+
+  it.each(['contexts-touched', 'domain'])('ctxo %s without @ctxo/domain prints the install hint too', async (name) => {
+    await routerFor(tempDir()).route([name, '--check']);
+
+    expect(errorSpy).toHaveBeenCalledWith(`[ctxo] "ctxo ${name}" needs @ctxo/domain. Install it with "ctxo install domain".`);
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('ctxo domain-guard-hook without @ctxo/domain prints nothing and exits 0', async () => {
+    await routerFor(tempDir()).route(['domain-guard-hook']);
+
+    expect(printed()).toBe('');
+    expect(process.exitCode ?? 0).toBe(0);
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("ctxo domain-guard-hook looks for @ctxo/domain next to the router's cliAnchor", async () => {
+    const anchor = tempDir();
+    writeStubDomainPackage(
+      anchor,
+      `export async function register() {
+  return {
+    id: 'domain',
+    registerCommands(registrar) {
+      registrar.registerCommand({ name: 'domain-guard-hook', help: ['hook'], hidden: true, async run() { return 5; } });
+    },
+  };
+}
+`,
+    );
+
+    await new CliRouter(tempDir(), { cliAnchor: anchor }).route(['domain-guard-hook']);
+
+    expect(process.exitCode).toBe(5);
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([['2.5', '2.5'], ['a string', "'two'"], ['NaN', 'Number.NaN']])(
+    'a module command exit code that is not an integer (%s) sets exit code 1',
+    async (_label, returned) => {
+      const project = tempDir();
+      writeStubDomainPackage(
+        project,
+        `export async function register() {
+  return {
+    id: 'domain',
+    registerCommands(registrar) {
+      registrar.registerCommand({ name: 'verify-domain', help: ['verify'], async run() { return ${returned}; } });
+    },
+  };
+}
+`,
+      );
+
+      await routerFor(project).route(['verify-domain']);
+
+      expect(process.exitCode).toBe(1);
+      expect(exitSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it('an unknown command that no module knows keeps the existing message and process.exit(1)', async () => {
+    const project = tempDir();
+    writeStubDomainPackage(project, STUB);
+
+    await routerFor(project).route(['verify-nothing']);
+
+    expect(errorSpy).toHaveBeenCalledWith('[ctxo] Unknown command: "verify-nothing". Run "ctxo --help" for usage.');
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it('runs a module command with the remaining args and sets its exit code', async () => {
+    const project = tempDir();
+    writeStubDomainPackage(project, STUB);
+
+    await routerFor(project).route(['verify-domain', '--json', 'x']);
+
+    expect(runs()).toEqual([['--json', 'x']]);
+    expect(process.exitCode).toBe(4);
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it.each(['--help', '-h'])('ctxo verify-domain %s prints the full command usage, not the global help, and runs nothing', async (flag) => {
+    const project = tempDir();
+    writeStubDomainPackage(project, STUB);
+
+    await routerFor(project).route(['verify-domain', flag]);
+
+    expect(printed()).toContain('Usage: ctxo verify-domain [--json]');
+    expect(printed()).toContain('Exit codes');
+    expect(printed()).not.toContain('ctxo --help');
+    expect(runs()).toEqual([]);
+    expect(process.exitCode ?? 0).toBe(0);
+  });
+
+  it.each(['contexts-touched', 'domain'])('ctxo %s --help prints the full command usage and runs nothing', async (name) => {
+    const project = tempDir();
+    writeStubDomainPackage(project, STUB);
+
+    await routerFor(project).route([name, '--help']);
+
+    expect(printed()).toContain(`Usage: ctxo ${name} [flags]`);
+    expect(printed()).toContain('Exit codes');
+    expect(printed()).not.toContain('ctxo --help');
+    expect(runs()).toEqual([]);
+    expect(process.exitCode ?? 0).toBe(0);
+  });
+
+  it('help lists module commands when the module is loaded', async () => {
+    const project = tempDir();
+    writeStubDomainPackage(project, STUB);
+
+    await routerFor(project).route(['--help']);
+
+    const help = printed();
+    expect(help).toContain('Usage:');
+    expect(help).toContain('Domain commands (@ctxo/domain):');
+    expect(help).toContain('  ctxo verify-domain [--json]   Check the domain registry (stub)');
+    // One two-space indent under the heading, matching the core lines; never four (M3).
+    expect(help).toMatch(/^ {2}ctxo verify-domain /m);
+    expect(help).not.toMatch(/^ {3,}ctxo verify-domain /m);
+    expect(help).not.toContain('Stub hook entry');
+    expect(help).not.toContain('Domain commands need @ctxo/domain');
+  });
+
+  it('help ends with the install hint line when @ctxo/domain is not installed', async () => {
+    await routerFor(tempDir()).route(['--help']);
+
+    const help = printed();
+    expect(help).toContain('Usage:');
+    expect(help.trimEnd().endsWith('  Domain commands need @ctxo/domain: run "ctxo install domain"')).toBe(true);
+    expect(help).not.toContain('Domain commands (@ctxo/domain):');
+  });
+
+  it('ctxo index and ctxo doctor receive the loaded modules', async () => {
+    const project = tempDir();
+    writeStubDomainPackage(project, STUB);
+    const seen: Array<{ command: string; modules: unknown }> = [];
+    const indexModule = await import('../index-command.js');
+    const doctorModule = await import('../doctor-command.js');
+    for (const [name, mod] of [['IndexCommand', indexModule], ['DoctorCommand', doctorModule]] as const) {
+      vi.spyOn(mod, name as never).mockImplementation(
+        function (this: unknown) {
+          return { run: async (options: { modules?: unknown }) => { seen.push({ command: name, modules: options.modules }); } };
+        } as never,
+      );
+    }
+
+    const router = routerFor(project);
+    await router.route(['index', '--skip-history']);
+    await router.route(['doctor', '--json']);
+
+    expect(seen.map((s) => s.command)).toEqual(['IndexCommand', 'DoctorCommand']);
+    for (const { modules } of seen) {
+      expect(modules).toEqual([expect.objectContaining({ name: '@ctxo/domain' })]);
+    }
+  });
 });
 
 describe('cli-router init parts flags', () => {
@@ -565,6 +826,30 @@ describe('cli-router init parts flags', () => {
     expect(initRuns[1]!['only']).toBeUndefined();
   });
 
+  it('passes --domain and --boundaries to InitCommand.run', async () => {
+    await route('--domain', '--boundaries', 'report', '-y');
+    await route('--only', 'domain', '--boundaries=by-rung');
+    await route('--tools', 'cursor');
+
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(initRuns).toHaveLength(3);
+    expect(initRuns[0]).toMatchObject({ domain: true, boundaries: 'report', yes: true });
+    expect(initRuns[1]).toMatchObject({ domain: false, boundaries: 'by-rung', only: ['domain'] });
+    expect(initRuns[2]).toMatchObject({ domain: false });
+    expect(initRuns[2]!['boundaries']).toBeUndefined();
+  });
+
+  it.each([[['--boundaries']], [['--boundaries', 'strict']], [['--boundaries=']], [['--boundaries', '-y']], [['--boundaries=Report']]])(
+    'rejects an invalid --boundaries value: %j',
+    async (args) => {
+      await route('--domain', ...args);
+
+      expect(errorSpy).toHaveBeenCalledWith('[ctxo] --boundaries requires by-rung or report');
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(initConstructed).toBe(0);
+    },
+  );
+
   it('leaves the part options unset when the flags are absent', async () => {
     await route('--tools', 'cursor', '--dry-run', '--no-install');
 
@@ -601,17 +886,17 @@ describe('cli-router init parts flags', () => {
     await route('--only', 'rules,hooks');
 
     expect(errorSpy).toHaveBeenCalledWith(
-      '[ctxo] Unknown init part: hooks. Valid parts: rules, skills, guard, mcp, git-hooks, config',
+      '[ctxo] Unknown init part: hooks. Valid parts: rules, skills, guard, mcp, git-hooks, config, domain',
     );
     expect(exitSpy).toHaveBeenCalledWith(1);
     expect(initConstructed).toBe(0);
   });
 
   it('rejects an unknown part given to --skip', async () => {
-    await route('--skip', 'domain');
+    await route('--skip', 'domains');
 
     expect(errorSpy).toHaveBeenCalledWith(
-      '[ctxo] Unknown init part: domain. Valid parts: rules, skills, guard, mcp, git-hooks, config',
+      '[ctxo] Unknown init part: domains. Valid parts: rules, skills, guard, mcp, git-hooks, config, domain',
     );
     expect(exitSpy).toHaveBeenCalledWith(1);
     expect(initConstructed).toBe(0);
@@ -638,7 +923,7 @@ describe('cli-router init parts flags', () => {
   });
 
   it.each(['--only', '--skip'])('rejects %s without a value', async (flag) => {
-    const message = `[ctxo] ${flag} requires a comma-separated list of parts: rules, skills, guard, mcp, git-hooks, config`;
+    const message = `[ctxo] ${flag} requires a comma-separated list of parts: rules, skills, guard, mcp, git-hooks, config, domain`;
 
     await route(flag);
     expect(errorSpy).toHaveBeenLastCalledWith(message);
@@ -655,7 +940,7 @@ describe('cli-router init parts flags', () => {
   });
 
   it.each(['--only', '--skip'])('%s followed by a flag token such as -y has no value', async (flag) => {
-    const message = `[ctxo] ${flag} requires a comma-separated list of parts: rules, skills, guard, mcp, git-hooks, config`;
+    const message = `[ctxo] ${flag} requires a comma-separated list of parts: rules, skills, guard, mcp, git-hooks, config, domain`;
 
     await route(flag, '-y');
     expect(errorSpy).toHaveBeenLastCalledWith(message);
@@ -670,14 +955,14 @@ describe('cli-router init parts flags', () => {
 
   it('handles the = spelling edges: an empty value, a comma-only value and an attached dash', async () => {
     const missing = (flag: string): string =>
-      `[ctxo] ${flag} requires a comma-separated list of parts: rules, skills, guard, mcp, git-hooks, config`;
+      `[ctxo] ${flag} requires a comma-separated list of parts: rules, skills, guard, mcp, git-hooks, config, domain`;
 
     await route('--only=');
     expect(errorSpy).toHaveBeenLastCalledWith(missing('--only'));
     await route('--skip=');
     expect(errorSpy).toHaveBeenLastCalledWith(missing('--skip'));
     await route('--only=-y');
-    expect(errorSpy).toHaveBeenLastCalledWith('[ctxo] Unknown init part: -y. Valid parts: rules, skills, guard, mcp, git-hooks, config');
+    expect(errorSpy).toHaveBeenLastCalledWith('[ctxo] Unknown init part: -y. Valid parts: rules, skills, guard, mcp, git-hooks, config, domain');
     expect(exitSpy).toHaveBeenCalledTimes(3);
     expect(initConstructed).toBe(0);
 
@@ -691,7 +976,9 @@ describe('cli-router init parts flags', () => {
     await route('--help');
 
     const help = printed();
-    expect(help).toContain('ctxo init --only <parts>  Install only these parts: rules,skills,guard,mcp,git-hooks,config');
+    expect(help).toContain('ctxo init --only <parts>  Install only these parts: rules,skills,guard,mcp,git-hooks,config,domain');
+    expect(help).toContain('  ctxo init --domain        Also set up the domain layer: registry, fold guard, skill (@ctxo/domain)');
+    expect(help).toContain('  ctxo init --boundaries <by-rung|report>   Boundary mode for --domain, without the prompt');
     expect(help).toContain('ctxo init --skip <parts>  Install everything except these parts');
     expect(help).toContain('ctxo init --no-guard      Does not install the Claude Code safe-edit guard');
     expect(help).not.toContain('rules use the full block');

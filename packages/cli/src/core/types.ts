@@ -325,6 +325,41 @@ export interface ChangeLog {
   readonly commits: readonly CommitChangeSet[];
 }
 
+/** A revision range: commits reachable from `head` and from none of `exclude`. */
+export interface GitRange {
+  readonly head: string;
+  readonly exclude: readonly string[];
+}
+
+/** One commit of a range log. */
+export interface RangeCommit {
+  /** Full commit SHA (git %H). */
+  readonly hash: string;
+  readonly subject: string;
+  /** More than one parent. */
+  readonly isMerge: boolean;
+  /** Values of the requested trailer key, in message order, trimmed, no empties. */
+  readonly trailers: readonly string[];
+  /** Files the commit changed; empty for merge commits. */
+  readonly changes: readonly FileChange[];
+}
+
+/** Branch facts of a repository; every field but `branches` is absent when git cannot say. */
+export interface GitRefs {
+  /** Undefined on a detached HEAD. */
+  readonly currentBranch?: string;
+  /** For example 'origin/feat'. */
+  readonly upstream?: string;
+  /** For example 'origin/main'. */
+  readonly originHead?: string;
+  /** Local and remote-tracking short names without the remote HEAD aliases, in codepoint order. */
+  readonly branches: readonly string[];
+  /** Local branches only (refs/heads), in codepoint order. */
+  readonly localBranches?: readonly string[];
+  /** Remote-tracking branches as `<remote>/<name>` (refs/remotes, no HEAD aliases), in codepoint order. */
+  readonly remoteBranches?: readonly string[];
+}
+
 // ── Blame Line (from git adapter) ───────────────────────────────
 
 export interface BlameLine {

@@ -1,0 +1,34 @@
+version: 1
+contexts:
+  - id: lending
+    name: Lending
+    card: docs/domain/lending/domain.md
+    rung: pinned
+    rulePrefix: LEND
+    paths:
+      - "src/Lending/**"
+      - "tests/Lending.Tests/**"
+      - "db/migrations/lending/**"
+    contracts:
+      billing:
+        - "src/Billing/IChargeService.cs"
+  - id: billing
+    name: Billing
+    card: docs/domain/billing/domain.md
+    rung: bounded
+    rulePrefix: BILL
+    paths:
+      - "src/Billing/**"
+      - "db/migrations/billing/**"
+  - id: catalog
+    name: Catalog
+    rung: fear
+    paths:
+      - "src/Catalog/**"
+      - "db/migrations/catalog/**"
+unowned:
+  allow:
+    - "src/Program.cs"
+    - "obj/**"
+glossary: docs/domain/glossary.md
+contextMap: docs/domain/context-map.md

@@ -57,6 +57,31 @@ jobs:
 
 The `fetch-depth: 0` line matters: without full history, `ctxo index` cannot populate `intent` and `antiPatterns` for each file, and the committed index will not match the regenerated one.
 
+## Domain gate
+
+With the opt-in [`@ctxo/domain`](/concepts/domain-knowledge) package and a registry, `ctxo verify-domain` is the gate for contexts, cards, rule IDs, loader rules and boundaries. `--since` also checks that every context a branch changed has a card change or a `Domain-Unchanged` trailer, which needs the base branch's history: check out with `fetch-depth: 0`.
+
+```yaml
+jobs:
+  ctxo-domain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the merge base with the base branch must be reachable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm i -g @ctxo/cli @ctxo/domain
+
+      - name: Verify the domain registry and cards
+        run: ctxo verify-domain --since origin/main
+```
+
+`verify-domain` reads the committed index (`.ctxo/index/`), so keep it fresh with `ctxo index --check` in the job above. Exit 0 passes (warnings allowed), 1 fails on errors, 2 means an internal failure, a missing index or a base that cannot be found, so CI never passes silently. With `--json`, stdout is empty on exit 2 and when there is no registry; read the exit code. On day one the gate is green with the init skeleton: unowned files and a missing context map are warnings until `domain.coverage.unowned` is `error`. See [Domain commands](/cli/domain).
+
 ## Pre-push git hook
 
 Wire the same check into a local pre-push hook so regressions are caught before they hit CI.

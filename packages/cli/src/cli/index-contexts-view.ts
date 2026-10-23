@@ -10,7 +10,11 @@ import {
   resolveContextsViewConfig,
 } from '../core/config/load-config.js';
 import { buildContextsView, type ContextsView } from '../core/contexts-view/contexts-view-builder.js';
-import { createTestFileClassifier, filesWithTestAnnotations } from '../core/test-files/test-file-classifier.js';
+import {
+  createTestFileClassifier,
+  filesWithTestAnnotations,
+  hasCSharpAnnotations,
+} from '../core/test-files/test-file-classifier.js';
 import type { CommunitySnapshot, FileIndex } from '../core/types.js';
 
 export interface ContextsViewStepOptions {
@@ -30,17 +34,6 @@ export interface ContextsViewStepOptions {
 function fileOfSymbol(symbolId: string): string {
   const cut = symbolId.indexOf('::');
   return cut === -1 ? symbolId : symbolId.slice(0, cut);
-}
-
-/**
- * Whether any `.cs` index entry carries an annotation on any symbol. That is the evidence that the v2 C#
- * plugin ran, so a `.cs` file without a test annotation really has none.
- */
-function hasCSharpAnnotations(indices: readonly FileIndex[]): boolean {
-  return indices.some(
-    (index) =>
-      index.file.endsWith('.cs') && index.symbols.some((symbol) => symbol.annotations && symbol.annotations.length > 0),
-  );
 }
 
 /**

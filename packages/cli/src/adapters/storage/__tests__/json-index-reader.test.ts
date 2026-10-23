@@ -104,6 +104,46 @@ describe('JsonIndexReader', () => {
       errorSpy.mockRestore();
     });
 
+    it('skips JSON carrying ctxoArtifact without logging', () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      new JsonIndexWriter(tempDir).write(buildFileIndex());
+      const domainDir = join(tempDir, 'index', 'domain');
+      mkdirSync(join(domainDir, 'history'), { recursive: true });
+      writeFileSync(join(domainDir, 'contexts.json'), JSON.stringify({ ctxoArtifact: 'domain-contexts', version: 1 }), 'utf-8');
+      writeFileSync(join(domainDir, 'boundaries.json'), JSON.stringify({ ctxoArtifact: 'domain-boundaries', version: 1 }), 'utf-8');
+      writeFileSync(
+        join(domainDir, 'history', '1700000000-abc1234.json'),
+        JSON.stringify({ ctxoArtifact: 'domain-history', version: 1 }),
+        'utf-8',
+      );
+      // A marker on something that would otherwise be a valid entry still wins.
+      writeFileSync(join(tempDir, 'index', 'marked.json'), JSON.stringify({ ...buildFileIndex(), ctxoArtifact: 'domain-graph' }), 'utf-8');
+
+      const files = reader.readAll().map((index) => index.file);
+
+      expect(files).toEqual(['src/foo.ts']);
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(stderrSpy).not.toHaveBeenCalled();
+      errorSpy.mockRestore();
+      stderrSpy.mockRestore();
+    });
+
+    it('reads FileIndex files under a source folder named domain/', () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const writer = new JsonIndexWriter(tempDir);
+      writer.write(buildFileIndex({ file: 'domain/Order.ts' }));
+      writeFileSync(
+        join(tempDir, 'index', 'domain', 'contexts.json'),
+        JSON.stringify({ ctxoArtifact: 'domain-contexts', version: 1, registryHash: 'x', contexts: [] }),
+        'utf-8',
+      );
+
+      expect(reader.readAll().map((index) => index.file)).toEqual(['domain/Order.ts']);
+      expect(errorSpy).not.toHaveBeenCalled();
+      errorSpy.mockRestore();
+    });
+
     it('readAll returns the same indices', () => {
       const writer = new JsonIndexWriter(tempDir);
       writer.write(buildFileIndex());

@@ -135,6 +135,10 @@ Because the safe-edit guard counts `confirmed + likely` dependents, a co-change-
 | `crossClusterEdges` | Same | Count of impacted-set edges that cross the target's own cluster |
 | `multiClusterHint` | `byCluster` touches ≥ 3 clusters | Human-readable nudge for multi-team review |
 
+### Named contexts
+
+With `@ctxo/domain` and a registry, each entry of `impactedSymbols` also carries `context`, the id of the one named context that owns its file, so you can see which contexts a change reaches. Absent for unowned and multiply owned files, and when there is no registry.
+
 ## Killer example: same `impactScore`, different risk
 
 Two candidate refactors both report `impactScore: 10`. Before v0.8, they look identical.

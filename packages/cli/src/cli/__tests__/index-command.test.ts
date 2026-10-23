@@ -4,9 +4,13 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
+import type { CodeFact, CtxoLanguagePlugin, PluginContext } from '@ctxo/plugin-api';
 import { IndexCommand } from '../index-command.js';
 import * as pluginLoader from '../plugin-loader.js';
+import * as pluginDiscovery from '../../adapters/language/plugin-discovery.js';
 import * as detectorModule from '../../core/overlay/community-detector.js';
+import type { LoadedModule } from '../../adapters/modules/module-loader.js';
+import type { IndexPassContext } from '../../ports/i-ctxo-module.js';
 import { isolateGitEnv, type IsolatedGitEnv } from './git-test-env.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -263,5 +267,161 @@ describe('IndexCommand', () => {
     expect(afterSymbolCount).toBeGreaterThanOrEqual(beforeSymbolCount);
     // Cluster count stays in the right order of magnitude (no singleton explosion).
     expect(afterClusterCount).toBeLessThanOrEqual(beforeSymbolCount);
+  });
+});
+
+describe('IndexCommand module seams', () => {
+  let tempDir: string;
+  let gitEnv: IsolatedGitEnv;
+
+  beforeEach(() => {
+    gitEnv = isolateGitEnv();
+    tempDir = setupTempProject();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    gitEnv.restore();
+    try {
+      rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch {
+      /* best effort */
+    }
+  });
+
+  interface PassRecord {
+    readonly indices: number;
+    readonly commits: number | undefined;
+    readonly head: string | undefined;
+    readonly sameGraph: boolean;
+    readonly graphNodes: number;
+    readonly testFile: boolean;
+    readonly sourceFile: boolean;
+    readonly ctxoRoot: string;
+  }
+
+  function moduleWith(indexPass: (ctx: IndexPassContext) => Promise<void>): LoadedModule {
+    return { name: '@ctxo/domain', version: '0.0.0', registration: { id: 'domain', indexPass } };
+  }
+
+  function recorder(seen: PassRecord[]): LoadedModule {
+    return moduleWith(async (ctx) => {
+      const graph = ctx.graph();
+      seen.push({
+        indices: ctx.indices.length,
+        commits: ctx.history?.commits.length,
+        head: ctx.history?.head,
+        sameGraph: ctx.graph() === graph,
+        graphNodes: graph.nodeCount,
+        testFile: ctx.isTestFile('src/__tests__/greet.test.ts'),
+        sourceFile: ctx.isTestFile('src/greet.ts'),
+        ctxoRoot: ctx.ctxoRoot,
+      });
+    });
+  }
+
+  it('ctxo index runs module index passes on the merged index and survives a failing pass', async () => {
+    const seen: PassRecord[] = [];
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await new IndexCommand(tempDir).run({ modules: [recorder(seen)] });
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({
+      indices: 3,
+      commits: 1,
+      sameGraph: true,
+      testFile: true,
+      sourceFile: false,
+      ctxoRoot: join(tempDir, '.ctxo'),
+    });
+    expect(seen[0]!.head).toMatch(/^[0-9a-f]{7,}$/);
+    expect(seen[0]!.graphNodes).toBeGreaterThan(0);
+
+    // An incremental run re-indexes one file; the pass still sees the merged index of all three.
+    await new IndexCommand(tempDir).run({ files: ['src/types.ts'], modules: [recorder(seen)] });
+    expect(seen[1]).toMatchObject({ indices: 3, commits: 1 });
+
+    // A throwing pass is reported; the passes after it still run and the run completes.
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const failing = moduleWith(async () => {
+      throw new Error('registry exploded');
+    });
+    await new IndexCommand(tempDir).run({ modules: [failing, recorder(seen)] });
+
+    const stderr = errorSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+    expect(stderr).toContain('[ctxo] @ctxo/domain index pass failed: registry exploded');
+    expect(stderr).toContain('[ctxo] Index complete');
+    expect(seen).toHaveLength(3);
+  });
+
+  it('module index passes run with --skip-community and --skip-history, and never with --check', async () => {
+    const seen: PassRecord[] = [];
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+
+    await new IndexCommand(tempDir).run({ skipCommunity: true, skipHistory: true, modules: [recorder(seen)] });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ indices: 3, commits: undefined, head: undefined });
+
+    // A failed community detection does not skip it either.
+    vi.spyOn(detectorModule, 'CommunityDetector').mockImplementation(function () {
+      throw new Error('louvain down');
+    } as never);
+    await new IndexCommand(tempDir).run({ modules: [recorder(seen)] });
+    expect(seen).toHaveLength(2);
+
+    await new IndexCommand(tempDir).run({ check: true, modules: [recorder(seen)] });
+    expect(seen).toHaveLength(2);
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it('facts are requested when a module asks for them', async () => {
+    writeFileSync(join(tempDir, 'src', 'a.fake'), 'fake source\n', 'utf-8');
+    const fact: CodeFact = { kind: 'endpoint', symbolId: 'src/a.fake::a::function', line: 1, text: 'GET /a' };
+    const capabilities: Array<PluginContext['capabilities']> = [];
+    const extractFacts = vi.fn(async () => [fact]);
+    const plugin: CtxoLanguagePlugin = {
+      apiVersion: '2',
+      id: 'fake',
+      name: 'fake',
+      version: '0.0.1',
+      extensions: ['.fake'],
+      tier: 'syntax',
+      createAdapter: (ctx: PluginContext) => {
+        capabilities.push(ctx.capabilities);
+        return {
+          extractSymbols: async () => [{ symbolId: 'src/a.fake::a::function', name: 'a', kind: 'function', startLine: 0, endLine: 0 }],
+          extractEdges: async () => [],
+          extractComplexity: async () => [],
+          extractFacts,
+          isSupported: () => true,
+        };
+      },
+    };
+    vi.spyOn(pluginDiscovery, 'discoverPlugins').mockResolvedValue({
+      plugins: [{ plugin, specifier: 'ctxo-lang-fake' }],
+      failures: [],
+    } as unknown as Awaited<ReturnType<typeof pluginDiscovery.discoverPlugins>>);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const jsonFile = join(tempDir, '.ctxo', 'index', 'src', 'a.fake.json');
+
+    // Without a module asking (and without index.facts), no facts are requested.
+    await new IndexCommand(tempDir).run({ skipHistory: true, modules: [] });
+    expect(capabilities.at(-1)?.facts).toBe(false);
+    expect(extractFacts).not.toHaveBeenCalled();
+    expect(Object.keys(JSON.parse(readFileSync(jsonFile, 'utf-8')))).not.toContain('facts');
+
+    const asking: LoadedModule = {
+      name: '@ctxo/domain',
+      version: '0.0.0',
+      registration: { id: 'domain', indexCapabilities: { facts: true } },
+    };
+    await new IndexCommand(tempDir).run({ skipHistory: true, modules: [asking] });
+
+    // Both sites follow the module: the capability handed to the plugins and the Phase 1c extraction.
+    expect(capabilities.at(-1)?.facts).toBe(true);
+    expect(extractFacts).toHaveBeenCalled();
+    expect(JSON.parse(readFileSync(jsonFile, 'utf-8')).facts).toEqual([fact]);
   });
 });

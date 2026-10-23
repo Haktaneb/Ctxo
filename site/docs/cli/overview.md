@@ -27,9 +27,9 @@ Examples below assume `ctxo` is on your PATH from a global install (or a local `
 
 | Command | Purpose |
 | --- | --- |
-| [`ctxo install`](./install.md) | Install language plugins (auto-detects if omitted) |
+| [`ctxo install`](./install.md) | Install language plugins and `@ctxo/domain` (auto-detects languages if omitted); installs globally when the project has no `package.json` |
 | [`ctxo update`](./update.md) | Check the npm registry for newer ctxo releases and apply them |
-| [`ctxo init`](./init.md) | Interactive setup: rules, skills, safe-edit guard, MCP config, git hooks (post-commit runs `ctxo index --commit HEAD`), plugin install. `--only`, `--skip` and `--no-guard` pick the parts |
+| [`ctxo init`](./init.md) | Interactive setup: rules, skills, safe-edit guard, MCP config, git hooks (post-commit runs `ctxo index --commit HEAD`), plugin install. `--only`, `--skip` and `--no-guard` pick the parts; `--domain` adds the opt-in domain part |
 | [`ctxo index`](./index.md) | Build the codebase index (symbols, edges, history, co-change); `--files` and `--commit` re-index part of it |
 | [`ctxo watch`](./watch.md) | File watcher for incremental re-indexing |
 | [`ctxo sync`](./sync.md) | Rebuild the SQLite cache from committed JSON |
@@ -39,6 +39,10 @@ Examples below assume `ctxo` is on your PATH from a global install (or a local `
 | [`ctxo blast-radius`](./blast-radius.md) | Blast radius for one symbol, JSON to stdout |
 | [`ctxo gate --preview`](./gate.md) | Preview which symbols the safe-edit guard would block |
 | [`ctxo contexts`](./contexts.md) | Candidate bounded contexts as a table; `--json` prints the full `contexts-view.json` |
+| [`ctxo verify-domain`](./domain.md) | Domain CI gate: registry, cards, rule IDs, loader rules, boundaries (`--since`, `--boundaries`, `--json`). Needs `@ctxo/domain` |
+| [`ctxo contexts-touched`](./domain.md#ctxo-contexts-touched) | Named contexts a change touched and whether each is resolved (`--since`, `--committed`, `--staged`, `--check`). Needs `@ctxo/domain` |
+| [`ctxo domain rules`](./domain.md#ctxo-domain-rules) | Generate (`--write`) or check (`--check`) the path-scoped loader rules per context. Needs `@ctxo/domain` |
+| [`ctxo domain discover`](./domain.md#ctxo-domain-discover) | Propose tracker prefixes and test conventions found in the repo (`--json`, `--write`). Needs `@ctxo/domain` |
 | `ctxo verify-index` | CI gate: fail if index drifts from source |
 | `ctxo stats` | Show MCP usage statistics (`--json`, `--days N`, `--clear`) |
 | `ctxo version` | Verbose version report (`--json`, `--short`) |

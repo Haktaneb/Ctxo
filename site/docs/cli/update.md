@@ -6,7 +6,7 @@ description: "Check the npm registry for newer ctxo releases and apply them."
 # ctxo update
 
 Checks `registry.npmjs.org` for newer versions of `@ctxo/cli` plus every
-installed `@ctxo/lang-*` (and community `ctxo-lang-*`) plugin, prints a table
+installed `@ctxo/lang-*` (and community `ctxo-lang-*`) plugin and `@ctxo/domain` when it is installed, prints a table
 of what is current versus available, and either runs the install or prints
 the exact command the user should run.
 

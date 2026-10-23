@@ -69,6 +69,18 @@ export function filesWithTestAnnotations(indices: readonly Pick<FileIndex, 'file
 }
 
 /**
+ * Whether any `.cs` index entry carries an annotation on any symbol. That is the evidence that the v2 C#
+ * plugin ran, so a `.cs` file without a test annotation really has none: pass it as `annotationAware`. The
+ * contexts view and the module host's test-file check both decide this way.
+ */
+export function hasCSharpAnnotations(indices: readonly FileIndex[]): boolean {
+  return indices.some(
+    (index) =>
+      index.file.endsWith('.cs') && index.symbols.some((symbol) => symbol.annotations && symbol.annotations.length > 0),
+  );
+}
+
+/**
  * Classifies test files by the default globs plus any extra (`index.tests`) globs. A path in `annotatedFiles`
  * is always a test file. With `options.annotationAware`, the name-only globs no longer decide on their own.
  */

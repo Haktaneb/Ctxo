@@ -138,6 +138,23 @@ describe('JsonIndexWriter', () => {
       expect(existsSync(snapshotPath)).toBe(true);
     });
 
+    it('refuses a JSON file carrying the ctxoArtifact marker, wherever it lives', () => {
+      const artifactPath = join(tempDir, 'index', 'domain', 'contexts.json');
+      mkdirSync(join(tempDir, 'index', 'domain'), { recursive: true });
+      writeFileSync(artifactPath, JSON.stringify({ ctxoArtifact: 'domain-contexts', version: 1 }), 'utf-8');
+
+      expect(() => writer.deleteEntryFile(artifactPath)).toThrow(/artifact/);
+      expect(existsSync(artifactPath)).toBe(true);
+    });
+
+    it('still deletes an entry under a source folder named domain/', () => {
+      writer.write(buildFileIndex({ file: 'domain/Order.ts' }));
+      const entryPath = join(tempDir, 'index', 'domain', 'Order.ts.json');
+
+      expect(writer.deleteEntryFile(entryPath)).toBe(true);
+      expect(existsSync(entryPath)).toBe(false);
+    });
+
     it('refuses a path outside the index folder', () => {
       const outside = join(tempDir, 'outside.json');
       writeFileSync(outside, '{}', 'utf-8');

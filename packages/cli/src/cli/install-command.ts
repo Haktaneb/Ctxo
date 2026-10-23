@@ -19,6 +19,8 @@ import {
 } from '../core/install/package-manager.js';
 import { runPackageManager } from '../core/install/run-package-manager.js';
 import { javaRuntimeAvailable } from '../core/detection/detect-java-runtime.js';
+import { DOMAIN_MODULE_PACKAGE } from '../adapters/modules/module-loader.js';
+import { getVersion } from './cli-paths.js';
 
 export interface InstallOptions {
   readonly languages?: readonly string[];
@@ -30,6 +32,34 @@ export interface InstallOptions {
   readonly force?: boolean;
   readonly fullTier?: boolean;
   readonly syntaxOnly?: boolean;
+}
+
+/** Non-language install targets: `ctxo install domain` installs the opt-in `@ctxo/domain` package. */
+export const INSTALL_EXTRAS: Readonly<Record<string, string>> = { domain: DOMAIN_MODULE_PACKAGE };
+
+/**
+ * Split the raw `ctxo install` arguments into language plugins, extras (`domain`) and names that are
+ * neither. Order is kept; duplicates are dropped. Pure.
+ */
+export function resolveInstallTargets(raw: readonly string[]): {
+  readonly languages: KnownLanguage[];
+  readonly extras: string[];
+  readonly unknown: string[];
+} {
+  const languages: KnownLanguage[] = [];
+  const extras: string[] = [];
+  const unknown: string[] = [];
+  for (const name of raw) {
+    const extra = Object.hasOwn(INSTALL_EXTRAS, name.toLowerCase()) ? INSTALL_EXTRAS[name.toLowerCase()] : undefined;
+    if (extra !== undefined) {
+      if (!extras.includes(extra)) extras.push(extra);
+      continue;
+    }
+    const lang = normalizeLanguage(name);
+    if (lang === null) unknown.push(name);
+    else if (!languages.includes(lang)) languages.push(lang);
+  }
+  return { languages, extras, unknown };
 }
 
 /** Decide the java package set from JRE availability + flags. Pure + unit-testable. */
@@ -48,16 +78,24 @@ export function resolveJavaPackages(opts: { jreAvailable: boolean; fullTier?: bo
  * packages via {@link resolveJavaPackages}; javascript folds into @ctxo/lang-typescript),
  * pins to `version` when supplied, and removes duplicates so a project that surfaces
  * both typescript and javascript does not request @ctxo/lang-typescript twice.
+ * `extras` (such as @ctxo/domain) are pinned to `version ?? cliVersion`, so they match the CLI.
  * Pure + unit-testable.
  */
 export function buildPluginSpecifiers(
   languages: readonly KnownLanguage[],
-  opts: { jreAvailable: boolean; fullTier?: boolean; syntaxOnly?: boolean; version?: string },
+  opts: {
+    jreAvailable: boolean;
+    fullTier?: boolean;
+    syntaxOnly?: boolean;
+    version?: string;
+    extras?: readonly string[];
+    cliVersion?: string;
+  },
 ): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
-  const add = (pkg: string): void => {
-    const spec = opts.version ? `${pkg}@${opts.version}` : pkg;
+  const add = (pkg: string, version: string | undefined = opts.version): void => {
+    const spec = version ? `${pkg}@${version}` : pkg;
     if (seen.has(spec)) return;
     seen.add(spec);
     out.push(spec);
@@ -70,6 +108,8 @@ export function buildPluginSpecifiers(
       add(officialPluginFor(lang));
     }
   }
+
+  for (const pkg of opts.extras ?? []) add(pkg, opts.version ?? opts.cliVersion);
 
   return out;
 }
@@ -88,8 +128,9 @@ export class InstallCommand {
   constructor(private readonly projectRoot: string) {}
 
   async run(options: InstallOptions = {}): Promise<void> {
-    const resolvedLangs = this.resolveLanguages(options);
-    if (resolvedLangs.length === 0) {
+    const { languages: resolvedLangs, extras } = this.resolveLanguages(options);
+    if (resolvedLangs.length === 0 && extras.length === 0) {
+      if (process.exitCode === 1) return;
       console.error('[ctxo] Nothing to install. Specify a language (e.g. "ctxo install python") or add one to your project.');
       process.exitCode = 0;
       return;
@@ -107,10 +148,12 @@ export class InstallCommand {
       return;
     }
 
-    if (!options.global && !existsSync(join(this.projectRoot, 'package.json'))) {
-      console.error('[ctxo] No package.json in the current project. Re-run with --global or create a package.json first.');
-      process.exitCode = 1;
-      return;
+    // Without a package.json there is no project to install into: install globally, so the MCP
+    // server, the hooks and the CLI share one copy (K15).
+    const noManifest = !options.global && !existsSync(join(this.projectRoot, 'package.json'));
+    const installGlobal = (options.global ?? false) || noManifest;
+    if (noManifest) {
+      console.error('[ctxo] No package.json here: installing globally, so the MCP server, hooks and CLI share one copy.');
     }
 
     if (!options.force && !options.global && isLockedCI(process.env)) {
@@ -131,6 +174,8 @@ export class InstallCommand {
         fullTier: options.fullTier,
         syntaxOnly: options.syntaxOnly,
         version: options.version,
+        extras,
+        cliVersion: getVersion(),
       });
     } catch (err) {
       console.error(`[ctxo] ${(err as Error).message}`);
@@ -139,8 +184,8 @@ export class InstallCommand {
     }
 
     const invocation = buildInstallCommand(resolution.manager, specifiers, {
-      global: options.global,
-      workspaceRoot: !options.global && isWorkspaceRoot(this.projectRoot),
+      global: installGlobal,
+      workspaceRoot: !installGlobal && isWorkspaceRoot(this.projectRoot),
     });
 
     const plan: InstallPlan = {
@@ -148,7 +193,7 @@ export class InstallCommand {
       packages: specifiers,
       manager: resolution.manager,
       managerSource: resolution.source,
-      global: options.global ?? false,
+      global: installGlobal,
       command: invocation.command,
       args: [...invocation.args],
     };
@@ -172,35 +217,31 @@ export class InstallCommand {
     console.error(`[ctxo] Installed ${plan.packages.join(', ')}`);
   }
 
-  private resolveLanguages(options: InstallOptions): KnownLanguage[] {
+  private resolveLanguages(options: InstallOptions): { languages: KnownLanguage[]; extras: string[] } {
     const requested = options.languages ?? [];
     if (requested.length > 0) {
-      const out: KnownLanguage[] = [];
-      for (const raw of requested) {
-        const lang = normalizeLanguage(raw);
-        if (!lang) {
-          console.error(
-            `[ctxo] Unknown language "${raw}". Known: ${KNOWN_LANGUAGES.join(', ')}. Community plugins: see the ctxo-lang-template scaffolding guide.`,
-          );
-          process.exitCode = 1;
-          return [];
-        }
-        if (!out.includes(lang)) out.push(lang);
+      const { languages, extras, unknown } = resolveInstallTargets(requested);
+      if (unknown.length > 0) {
+        console.error(
+          `[ctxo] Unknown language "${unknown[0]}". Known: ${[...KNOWN_LANGUAGES, ...Object.keys(INSTALL_EXTRAS)].join(', ')}. Community plugins: see the ctxo-lang-template scaffolding guide.`,
+        );
+        process.exitCode = 1;
+        return { languages: [], extras: [] };
       }
-      return out;
+      return { languages, extras };
     }
 
     // No explicit languages — detect missing.
     const detection = detectLanguages(this.projectRoot);
     const needed = decideNeededLanguages(detection);
-    if (needed.length === 0) return [];
+    if (needed.length === 0) return { languages: [], extras: [] };
     const missing = needed.filter((lang) => !isPluginInstalled(lang));
     if (missing.length === 0) {
       console.error('[ctxo] All detected languages already have plugins installed.');
-      return [];
+      return { languages: [], extras: [] };
     }
     console.error(`[ctxo] Detected missing plugins for: ${missing.join(', ')}`);
-    return missing;
+    return { languages: missing, extras: [] };
   }
 }
 

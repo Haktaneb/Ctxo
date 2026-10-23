@@ -5,7 +5,7 @@ description: "Bootstrap a project: rules, skills, safe-edit guard, MCP config, g
 
 # ctxo init
 
-Bootstraps a project for ctxo. It installs six parts, always in this order:
+Bootstraps a project for ctxo. It installs six parts, always in this order (a seventh, `domain`, is opt-in: see [the domain part](#the-domain-part)):
 
 1. `config`: ensures `.ctxo/index/` and `.ctxo/config.yaml` exist and adds
    `.ctxo/.cache/` to `.gitignore`.
@@ -42,6 +42,7 @@ ctxo init [options]
 | `rules` | One rules file per selected tool: `CLAUDE.md`, `.cursor/rules/ctxo.mdc`, `AGENTS.md` and the rest (see [What it writes](#what-it-writes)) |
 | `mcp` | One MCP config per selected tool: `.mcp.json`, `.vscode/mcp.json`, `.amazonq/mcp.json`, `.gemini/settings.json`, `.continue/mcpServers/ctxo.json` |
 | `git-hooks` | `post-commit` and `post-merge` in the hooks directory git resolves |
+| `domain` | Opt-in, needs `@ctxo/domain`: `.ctxo/config.yaml` (`domain:` defaults), the registry skeleton, loader rules, `.claude/settings.json` (fold guard hooks), `.claude/skills/ctxo-domain-fold/SKILL.md`, `.cursor/rules/ctxo-domain-fold.mdc` |
 
 `--only` and `--skip` take a comma-separated list of these names
 (`--only rules,skills,guard` or `--only=rules,skills,guard`); repeating the flag merges
@@ -57,6 +58,8 @@ the lists.
 | `--skip <parts>` | | | Install every part except these. The plugin step still runs (subject to `--no-install`) |
 | `--no-guard` | | `false` | Does not install the safe-edit guard and never asks about it. Combines with `--only` and `--skip`. Without a guard on disk, Claude Code gets the full rules block |
 | `--rules` | | `false` | Deprecated: the same as `--skip git-hooks,guard`, and it still skips the plugin step. Prints a deprecation notice; use `--only` or `--skip` instead |
+| `--domain` | | `false` | Also run the opt-in `domain` part. Same as naming `domain` in `--only`; `--skip domain` still removes it |
+| `--boundaries <mode>` | | asked | `by-rung` or `report`: the boundary mode the `domain` part writes, without the prompt |
 | `--no-install` | | `false` | Skip the language-plugin detection prompt (and the implicit install under `--yes`) |
 | `--dry-run` | | `false` | Lists every file init would create or change, and writes nothing. See [Dry run](#dry-run) |
 
@@ -119,6 +122,36 @@ A rules file linked to a held one is held too (an `AGENTS.md` that is `CLAUDE.md
 - **Version markers.** Each bundled skill ends with a line such as `<!-- ctxo-skill v0.13 -->`: the skills template version, the ctxo minor in which the skills last changed.
 - **Newer skills are left alone.** A skill whose marker is newer than the one this ctxo bundles (a teammate upgraded first) is left unchanged with a warning, and doctor does not call it outdated.
 - **Older skills are replaced.** A skill with no marker, an older marker, or text that differs from the bundled copy is replaced by `ctxo init` and by `ctxo doctor --fix`. Differences in formatting only (line endings, a BOM, trailing whitespace, blank lines, table padding, line wrapping) do not count. To customise a skill, copy it under another name.
+
+## The domain part
+
+`domain` is the seventh part and the only one a plain `ctxo init` leaves out. Select it with `--domain`, or
+name it: `--only domain`, `--only rules,domain`. `--skip domain` removes it again. It sets up the
+[domain knowledge layer](/concepts/domain-knowledge):
+
+1. `@ctxo/domain` itself: when it is missing, init asks to install it (`--yes` accepts, `--no-install`
+   never installs). Without the package the part is skipped with a warning and the run exits 1; install it
+   with `ctxo install domain` and run `ctxo init --only domain`.
+2. The `domain:` defaults in `.ctxo/config.yaml`, after asking for the boundary mode (`--boundaries`
+   answers it). Existing values are never changed and comments are kept.
+3. The registry skeleton `docs/domain/contexts.yaml` (`version: 1`, no contexts, no cards) when there is no
+   file.
+4. Convention discovery: init shows what `ctxo domain discover` proposes (tracker prefixes, rule trait keys,
+   test folders) and asks before merging it into the config; `--yes` accepts.
+5. The generated loader rules, when a context has a card.
+6. For Claude Code, the fold guard hooks `SessionStart`, `Stop` and `TaskCompleted`
+   (`ctxo domain-guard-hook`) in `.claude/settings.json`, and the `ctxo-domain-fold` skill for Claude Code
+   and Cursor.
+
+```shell
+ctxo init --domain                          # everything above, with prompts
+ctxo init --domain --boundaries report -y   # non-interactive
+ctxo init --only domain --dry-run           # list the files, write nothing
+```
+
+When init runs from a global install in a project without `@ctxo/cli` in its `package.json`, it writes MCP entries that call the global `ctxo` binary instead of
+`npx -y @ctxo/cli` (it replaces only ctxo's own default npx entry). See
+[`ctxo install`](./install.md#global-installs).
 
 ## Safe-edit guard prompt
 
@@ -254,7 +287,7 @@ ctxo init --dry-run
 | Code | Meaning |
 | --- | --- |
 | `0` | Setup completed, the dry run printed, or nothing was left to install |
-| `1` | Not a git repository, an unknown tool id passed to `--tools`, an unknown part, `--only` or `--skip` without a value, or `--only` combined with `--skip` or `--rules` |
+| `1` | Not a git repository, an unknown tool id passed to `--tools`, an unknown part, `--only` or `--skip` without a value, `--only` combined with `--skip` or `--rules`, or the `domain` part requested while `@ctxo/domain` is not installed and not installed by this run |
 
 ## See also
 

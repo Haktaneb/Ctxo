@@ -21,7 +21,7 @@ jobs:
   release:
     name: Version & Publish
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     # Skip on the bot's own "Version Packages" PR merge commit chain; the action
     # handles re-runs internally and we don't want an infinite trigger loop.
     if: github.repository == 'alperhankendi/Ctxo'

@@ -5,7 +5,7 @@ description: "The _meta wrapper and truncation rules."
 
 # Response Envelope
 
-Every Ctxo MCP tool response is wrapped in a uniform envelope before it is returned to the client. The envelope adds a `_meta` field with item counts and truncation state, and it enforces a byte-size cap that protects LLM context windows.
+Every Ctxo MCP tool response, `get_why_context` included, is wrapped in a uniform envelope before it is returned to the client. The envelope adds a `_meta` field with item counts and truncation state, and it enforces a byte-size cap that protects LLM context windows.
 
 ## Transport shape
 

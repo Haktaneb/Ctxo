@@ -1,5 +1,3 @@
-import type { CanonicalCommit } from '../history/change-log.js';
-
 /** A duration such as `12m`: the unit is days, weeks, calendar months or calendar years. */
 export interface CoChangeSince {
   readonly amount: number;
@@ -68,8 +66,19 @@ function daysInUtcMonth(date: Date): number {
 }
 
 /**
+ * The cutoff of a co-change window: its `since` setting counted back from HEAD's committer date with
+ * `sinceCutoff`, or `undefined` (no cutoff) when there is no `since` or it does not parse. The one place
+ * this rule lives, for the matrix of `ctxo index` and for the window the module host hands out.
+ */
+export function windowCutoff(coChange: { readonly since?: string }, headCommittedAt: number): number | undefined {
+  const since = coChange.since !== undefined ? parseCoChangeSince(coChange.since) : undefined;
+  return since !== undefined ? sinceCutoff(headCommittedAt, since) : undefined;
+}
+
+/**
  * Picks the commits a co-change matrix is built from. `commits` must be newest first, as the change
- * log returns them.
+ * log returns them. Any commit with a committer date works: canonical commits for the matrix, raw
+ * change sets (renames intact) for the module host. The commits come back unchanged.
  *
  * `maxCommits` applies first and takes the newest N in log order ('all' takes every commit). `cutoff`
  * (a unix second from `sinceCutoff`) then keeps the commits whose committer date is at or after it.
@@ -79,11 +88,11 @@ function daysInUtcMonth(date: Date): number {
  * A `maxCommits` below 1 or NaN selects nothing and a fractional value rounds down, so a bad value
  * can only narrow the window, never widen it.
  */
-export function selectWindow(
-  commits: readonly CanonicalCommit[],
+export function selectWindow<T extends { readonly committedAt: number }>(
+  commits: readonly T[],
   maxCommits: number | 'all',
   cutoff?: number,
-): CanonicalCommit[] {
+): T[] {
   const newest = maxCommits === 'all' ? [...commits] : commits.slice(0, wholeCommitCount(maxCommits));
   return cutoff === undefined ? newest : newest.filter((commit) => commit.committedAt >= cutoff);
 }

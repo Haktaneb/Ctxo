@@ -110,6 +110,10 @@ If the symbol is missing from the index:
 { "found": false, "hint": "Symbol not found. Run \"ctxo index\" to build the codebase index." }
 ```
 
+## Named contexts
+
+With `@ctxo/domain` and a registry, the response carries `contextDrift` for the named context that owns the symbol's file: `crossShare` (`current`, `previous`, `delta`: the share of the context's edges that cross into other contexts), a `trend` over recent commits, `movedFiles` (files that moved into or out of the context through renames), `distinctCommits` and a `confidence` of `low`, `medium` or `high`. Absent for unowned and multiply owned files, when there is no history yet, and without a registry.
+
 ## Reading the signal
 
 - **`antiPatternWarnings` is non-empty** — someone already tried something

@@ -1,6 +1,6 @@
 # Domain Knowledge Layer
 
-> Phase 1 of [#156](https://github.com/alperhankendi/Ctxo/issues/156): data coupling, plugin protocol v2 and `@ctxo/lang-sql`. Later phases (named contexts, rules, facts detectors) extend this document.
+> [#156](https://github.com/alperhankendi/Ctxo/issues/156). Phase 1: data coupling, plugin protocol v2, `@ctxo/lang-sql` and language parity. Phase 2: the opt-in `@ctxo/domain` package (named contexts, `contexts-touched`, the fold guard, `verify-domain`, loader rules, boundaries and drift, discovery) and "Ctxo domain conventions v1", further down. Later phases (the domain graph, fact detectors) extend this document.
 
 ## The problem this solves
 
@@ -379,6 +379,13 @@ index:
   tests: []                # extra test-file globs
 contextsView:
   weights: { dependency: 1.0, coChange: 1.0, data: 0 }
+domain:                    # only read when @ctxo/domain is installed
+  registry: docs/domain/contexts.yaml
+  coverage: { unowned: warn }
+  boundaries: { enforce: by-rung, blockingRungs: [bounded, boring] }
+  rules: { idPattern: "^[A-Z][A-Z0-9]*-\\d+$", trackerPrefixes: [] }
+  tests: { ruleTraitKeys: [Rule] }
+  guard: { enabled: true, subagents: false }   # base: <ref> is optional
 ```
 
 | Key | Default | Effect |
@@ -386,6 +393,18 @@ contextsView:
 | `index.facts` | `false` | Sets `capabilities.facts`; plugins that implement `extractFacts` write `facts` into the index JSON |
 | `contextsView.weights.data` | `0` | Weight of data edges in the contexts-view file graph |
 | `index.tests` | `[]` | Extra test-file globs; the fix for the annotation limitations above |
+| `domain.registry` | `docs/domain/contexts.yaml` | Path of the context registry, relative to the repository root |
+| `domain.coverage.unowned` | `warn` | `warn` or `error`: severity of check 4b (unowned files) |
+| `domain.boundaries.enforce` | `by-rung` | `by-rung` or `report`: severity of boundary violations |
+| `domain.boundaries.blockingRungs` | `[bounded, boring]` | Rungs whose contexts make a violation an error in `by-rung` mode |
+| `domain.rules.idPattern` | `^[A-Z][A-Z0-9]*-\d+$` | Shape of a rule ID |
+| `domain.rules.trackerPrefixes` | `[]` | Issue-tracker prefixes; for these, plain text never links to a rule |
+| `domain.tests.ruleTraitKeys` | `[Rule]` | `Trait` keys whose value is a rule ID |
+| `domain.guard.enabled` | `true` | `false` turns the fold guard off |
+| `domain.guard.base` | unset | Base ref of the branch range, before the detected one |
+| `domain.guard.subagents` | `false` | Also run the guard on `SubagentStop` |
+
+Each invalid `domain:` key falls back to its default and is reported by `verify-domain` check 1 and by `ctxo doctor`.
 
 ## Graceful degradation
 
@@ -399,6 +418,8 @@ contextsView:
 | `@ctxo/lang-sql` not installed | No SQL call-site edges in any language; no `table`, `view` or `procedure` symbols |
 | No annotations in the index | Test files are recognised by globs alone, as before |
 | An older CLI | Skips `@ctxo/lang-sql` with a warning and drops the new kinds from a newer index with a warning |
+| `@ctxo/domain` | No domain tools, fields, commands or hooks; a known domain command name prints an install hint and exits 1, `ctxo domain-guard-hook` exits 0 without output |
+| A domain registry | The domain commands print a hint and exit 0; no `context` fields appear |
 
 ## Upgrade notes
 
@@ -431,9 +452,401 @@ The `@ctxo/sql-extract` and `@ctxo/lang-sql` tests run every case on their side.
 
 **Adding a case.** Write `<case>.sql` with synthetic names (library lending: `dbo.loans`, `dbo.members`, `usp_CloseLoan`), write `<case>.expected.json` with the accesses you expect, then run `pnpm --filter @ctxo/sql-extract test` and `pnpm --filter @ctxo/lang-sql test`. With the .NET SDK installed, also run the lang-csharp tests so ScriptDom agrees. When the two parsers disagree on valid T-SQL, fix the parser, not the expectation.
 
+## Named contexts and the domain package
+
+`@ctxo/domain` is an opt-in package. It lets a team name its bounded contexts, say which paths and which markdown card each one owns, and keep cards in step with code. Ctxo supplies structure, linkage, verification and retrieval; it never writes domain text, calls an LLM or fetches external documentation (ADR-004 stands). The design record is [ADR-018](../architecture/ADR/adr-018-domain-knowledge-layer.md).
+
+```bash
+ctxo install domain      # installs @ctxo/domain at this CLI's version
+ctxo init --domain       # config defaults, registry skeleton, fold guard hooks, skill
+```
+
+Without the package the core is unchanged: no domain commands, fields or hooks. With the package and no registry, the domain commands print a hint and exit 0, and no `context` fields appear.
+
+`@ctxo/domain` and `@ctxo/cli` always share one version (a changesets `fixed` group). The CLI loads the package from the project's `node_modules`, then from next to the running CLI, and only a copy at the same `major.minor` loads. A mismatch warns and leaves the domain features off.
+
+### The registry and named contexts
+
+The registry is `docs/domain/contexts.yaml` (path configurable through `domain.registry`). It is the source of truth for context IDs, paths, cards and rungs:
+
+```yaml
+version: 1
+contexts:
+  - id: lending                       # kebab-case, unique, permanent
+    name: Lending
+    card: docs/domain/lending/domain.md   # optional only while the rung is fear
+    paths: ["src/Lending/**", "src/Holds/**"]
+    rung: pinned                      # fear | pinned | named | bounded | boring (the owner sets it)
+    rulePrefix: LEND                  # optional; rule IDs in this card must use it
+    contracts:                        # allowed crossings into other contexts
+      billing: ["src/Billing/Api/IChargeService.cs"]
+unowned:
+  allow: ["src/Host/**"]              # files allowed to belong to no context
+glossary: docs/domain/glossary.md     # default
+contextMap: docs/domain/context-map.md   # default
+```
+
+- `paths` are globs over repo-relative forward-slash paths, matched by the same matcher the CLI uses everywhere (picomatch with `dot: true`).
+- **Ownership.** Every indexed non-test source file belongs to at most one context. A file that matches two contexts is an error; a file that matches none is a warning by default and an error with `domain.coverage.unowned: error`, unless it matches `unowned.allow`.
+- **Contracts.** `contracts.<target>` lists files (globs) in the target context that this context may depend on. An edge from context A into context B is allowed when its target file matches `A.contracts.B`. Edges into unowned files are allowed. Data resources are anchored to their defining `.sql` file, so contracts cover them through file globs.
+- **Rungs** describe how far a context has come on the adoption ladder (see the end of this document). The registry is the source of truth; the context map must agree with it (check 9).
+
+### `ctxo contexts-touched`
+
+```bash
+ctxo contexts-touched [--since <ref>] [--committed | --staged] [--json] [--check]
+```
+
+Lists the named contexts that a set of changes touched, and whether each is resolved.
+
+- **Changes considered.** By default the committed range `merge-base(ref, HEAD)..HEAD` plus working-tree changes (staged, unstaged, untracked and not ignored). `--committed` restricts to the range (the guard uses it), `--staged` to the staged changes. Without `--since`, the base is `domain.guard.base`, else `merge-base(HEAD, origin/HEAD)`, else `main` or `master`.
+- **Touched.** A context is touched when its paths contain a changed non-test file (the shared test-file classifier). Changed files that belong to no context are listed under `unowned`.
+- **Statuses.** `card-changed` (the card file changed in the considered changes), `acknowledged` (a `Domain-Unchanged` trailer, see below), `unresolved`, and `no-card` (a context without a card, allowed at rung `fear`, has nothing to fold into and is never unresolved).
+- `--check` exits 1 when anything is unresolved. Exit 2 means the registry has problems, the base cannot be found (in CI, check out with `fetch-depth: 0`) or git failed. With no registry it prints a hint and exits 0.
+
+`--json` prints the report on stdout:
+
+```json
+{
+  "mode": "all",
+  "since": "origin/main", "base": "a1b2c3d", "head": "e4f5a6b",
+  "contexts": [
+    { "id": "lending", "files": ["src/Lending/LoanPolicy.cs"], "card": "docs/domain/lending/domain.md",
+      "cardChanged": false, "acknowledged": { "commit": "9f8e7d6", "reason": "refactor only" },
+      "status": "acknowledged" }
+  ],
+  "unowned": [], "unresolved": [], "warnings": []
+}
+```
+
+`mode` is `all`, `committed` or `staged`; `warnings` carries unknown trailer IDs.
+
+### The fold guard and the trailer
+
+A team keeps a card current by folding behaviour changes back into it in the same branch. When behaviour did not change, a commit says so with a trailer:
+
+```text
+Domain-Unchanged: <id>[, <id>...] [(reason)]
+```
+
+- It is read with `git log --format=%(trailers:key=Domain-Unchanged,valueonly)`. The reason is the balanced parenthesised group that ends the value; the IDs are the comma-separated text before it.
+- Only commits in the evaluated range count: the `--since` range for `contexts-touched` and `verify-domain`, the session's branch range for the guard. A trailer elsewhere in history acknowledges nothing.
+- A card change in the range also resolves a context, and wins over an acknowledgement.
+- Uncommitted work cannot be acknowledged, because a trailer lives in a commit. An empty commit that carries the trailer is fine (`git commit --allow-empty`), so an acknowledgement never needs a code change.
+- An unknown ID in a trailer gives a warning, never an error.
+
+**The guard.** `ctxo domain-guard-hook` (hidden) runs as a Claude Code hook on `SessionStart`, `Stop` and `TaskCompleted`; `ctxo init --domain` registers it. `SubagentStop` is off unless `domain.guard.subagents: true`. One command serves every event.
+
+- **Scope.** It judges only the commits of the current session: `startHead..HEAD` (recorded at `SessionStart` in `.ctxo/.cache/domain-guard/<session>.json`), intersected with the branch range (`domain.guard.base`, else the merge base with `origin/HEAD`, else `main` or `master`; on the default branch itself, the unpushed commits `@{u}..HEAD`). Uncommitted work never blocks, and neither does history from earlier sessions or from other people: that is left to CI (`verify-domain --since`).
+- **Decision.** It allows when `stop_hook_active` is true, when no context is unresolved, when the guard is disabled or the registry is missing, and when it already blocked this session for the same fingerprint (the HEAD SHA plus the sorted unresolved IDs). Otherwise it blocks once. `Stop` writes `{"decision":"block","reason":"..."}` to stdout and exits 0; `TaskCompleted` writes the reason to stderr and exits 2.
+- **Fail-open.** Any internal error, malformed input, a missing session ID or a corrupt session file allows. When `startHead` is no longer an ancestor of HEAD (rebase, amend, reset), the record is re-anchored to HEAD and the turn is allowed.
+- **Resolution.** Commit a card change, or any commit in the range carrying the trailer.
+
+The reason names the contexts, up to three changed files each, the card, and the exact trailer line:
+
+```text
+ctxo domain guard: 1 context has committed changes without a card update.
+- lending: 3 files (src/Lending/LoanPolicy.cs, ...)
+  card: docs/domain/lending/domain.md (unchanged)
+Update the card if behaviour changed (rules, decisions, contracts), then commit it.
+If behaviour did not change, add this trailer to a commit:
+  Domain-Unchanged: lending (reason)
+```
+
+Claude Code is the only client with the guard. Other clients get the `ctxo-domain-fold` skill (Cursor: `.cursor/rules/ctxo-domain-fold.mdc`), the generated loader rules and the CI gate.
+
+### `ctxo verify-domain`
+
+```bash
+ctxo verify-domain [--since <ref>] [--boundaries by-rung|report] [--json]
+```
+
+The CI gate. It checks structure, never meaning.
+
+| # | Check | Severity |
+|---|---|---|
+| 1 | Registry schema valid, IDs unique and kebab-case, rungs valid; the `domain:` config valid | error |
+| 2 | Every context with a rung above `fear` has a card; every listed card exists | error |
+| 3 | Every `paths` glob matches at least one indexed file | error |
+| 4a | No file owned by two contexts | error |
+| 4b | No unowned file outside `unowned.allow` | `domain.coverage.unowned`: `warn` (default) or `error` |
+| 5 | Cards have the five template H2 headings in order | error |
+| 6 | Rule IDs match `domain.rules.idPattern`, are unique across cards and match `rulePrefix`; IDs in structured test references exist in cards; every rule has a test link, a `Tests:` line or an `Untested:` line | error |
+| 7 | Relative links and heading anchors in cards resolve (external URLs are not fetched) | error |
+| 8 | Generated loader files match what `ctxo domain rules` would write, and no hand-written file blocks an expected path | error |
+| 9 | `context-map.md` has a table with `Context` and `Rung` columns that agrees with the registry (a missing file while contexts exist is a warning) | error |
+| 10 | Boundaries: edges outside `contracts` | error for `blockingRungs` in `by-rung` mode, else warning |
+| 11 | With `--since`: no unresolved touched contexts | error |
+
+- **Exit codes.** 0 when there are no errors (warnings allowed), 1 on errors, 2 on a missing index, a git failure (a base that cannot be found, with the `fetch-depth: 0` hint) or an internal error. With no registry it prints a hint and exits 0. CI never passes silently on an internal failure.
+- **`--json` and stdout.** The JSON report (`registry`, `checks`, `summary`, `exitCode`) is printed on stdout only when the checks run. On exit 2 and on the no-registry path stdout is empty and the message goes to stderr, so a pipeline must read the exit code, not only stdout. The human report always goes to stderr.
+- **Day one.** With the init skeleton (no contexts) or a partial registry, unowned files and a missing context map are warnings, so CI stays green until the team sets `domain.coverage.unowned: error`. Boundaries are computed from the current graph on every run; the stored artifacts are never read.
+- **In CI.** `ctxo verify-domain --since origin/main` needs the base branch's history: use `actions/checkout` with `fetch-depth: 0`. See [CI integration](../../site/docs/reference/ci-integration.md).
+
+### Generated loader rules
+
+`ctxo domain rules --write | --check` generates one pointer file per context that has a card, so the agent reads the card before it edits the context's code. The `ctxo-context-` prefix keeps them apart from user rules and from the `ctxo-domain-fold` skill.
+
+`.claude/rules/ctxo-context-lending.md`:
+
+```markdown
+---
+paths:
+  - "src/Lending/**"
+  - "src/Holds/**"
+---
+<!-- generated by ctxo domain rules; do not edit -->
+# Lending context
+Before changing code under these paths, read `docs/domain/lending/domain.md` (rules, contracts, decisions).
+If behaviour changes, update that card in the same PR. If it does not, add `Domain-Unchanged: lending (reason)` to a commit.
+```
+
+`.cursor/rules/ctxo-context-lending.mdc` carries the same text with front matter `description`, `globs: src/Lending/**,src/Holds/**` and `alwaysApply: false`; it is generated only when `.cursor/` exists.
+
+- **Marker.** A file is generated when the marker is the first line after the front matter. A quoted marker deeper in a hand-written file does not count.
+- **`--write`** creates missing files, rewrites outdated ones and deletes stale ones (generated files of a context that no longer exists). It never overwrites a file without the marker.
+- **`--check`** exits 1 when a generated file is missing, outdated or stale, and also when a hand-written file without the marker sits at a path a generated file belongs at (it is `blocked`: rename or delete it, then run `--write`). Prefixed files without the marker elsewhere are reported as `foreign` and never checked.
+- Claude Code loads a path-scoped rule when Read, Write or Edit touches a matching file (not Glob or Grep).
+
+### Boundaries and drift by named context
+
+When a registry exists, `ctxo index` runs a domain pass (Phase 2e, on every run that refreshes the product) and writes `.ctxo/index/domain/`:
+
+| File | Holds |
+|---|---|
+| `contexts.json` | The file-to-context map, unowned and multiply owned files, files that moved between contexts through renames in the co-change window |
+| `boundaries.json` | Cross-context edges by kind (allowed through a contract, or violations) and the violations under the configured mode |
+| `history/` | One entry per commit with per-context metrics, a rotating history of 10 |
+
+Each artifact carries a `ctxoArtifact` marker (`domain-contexts`, `domain-boundaries`, `domain-history`). The core index reader skips any JSON that carries one, and the writer refuses to delete one as a stale index entry. Artifacts are written only when their content changed.
+
+- **Boundary modes.** `domain.boundaries.enforce: by-rung` (default) makes an edge outside the contracts an error when either context's rung is in `domain.boundaries.blockingRungs` (default `[bounded, boring]`) and a warning otherwise; `report` makes every violation a warning. The computation is the same in both modes and linear in edges. `verify-domain --boundaries` overrides the mode once; `ctxo init --domain --boundaries <mode>` sets it without the prompt.
+- **What counts.** Edges whose source file is a test are skipped, and so are edges with an unowned or multiply owned end and unresolved name references (a data resource without an indexed definition). Both ends in one context count as internal.
+- **Drift by named context.** The per-context share of cross-context edges (`crossShare`) is tracked over the per-commit history, with `distinctCommits` and a confidence (fewer than 3 low, 3 to 6 medium, 7 or more high). Files that moved between contexts through renames are listed with the commit and date.
+
+### The `context` field and other additive fields
+
+With `@ctxo/domain` and a registry, existing tools gain fields. Every one is additive and appears only then. Each is applied before the response envelope, so masking and truncation see it, and each is skipped when `contexts.json` was built from another registry text (a stale artifact never labels).
+
+| Tool | Field |
+|---|---|
+| `search_symbols` | `context` on each result |
+| `get_blast_radius` | `context` on each impacted symbol |
+| `find_importers` | `context` on each importer |
+| `get_logic_slice` | `context` on the root symbol (each root in a batch) |
+| `get_pr_impact` | `context` on each changed symbol, and `contextBoundaryViolations`: edges that touch changed symbols and cross a boundary outside the contracts, with `from`, `to`, `edgeKind` and `severity` (capped at 50, with `contextBoundaryViolationsTotal` when cut) |
+| `get_why_context` | `contextDrift` for the symbol's context: `crossShare` (`current`, `previous`, `delta`), `trend`, `movedFiles`, `distinctCommits`, `confidence` |
+
+`context` is set only when exactly one context owns the symbol's file. A throwing enricher drops its fields, never the response. A core payload that holds a value JSON cannot represent (a `Date`, a `Map`) drops all enrichment with one warning.
+
+### `ctxo init --domain`
+
+```bash
+ctxo init --domain                       # also the domain part
+ctxo init --only domain                  # just the domain part
+ctxo init --domain --boundaries report   # boundary mode without the prompt
+ctxo init --skip domain                  # every part except domain
+```
+
+`domain` is the seventh `ctxo init` part (`rules,skills,guard,mcp,git-hooks,config,domain`). Without `--domain` or `--only domain`, init leaves the domain alone. The part:
+
+1. needs `@ctxo/domain`: when it is missing, init installs it with consent (`--yes` accepts, `--no-install` never installs); without it the part is skipped with a warning and the run exits 1;
+2. adds the `domain:` config defaults to `.ctxo/config.yaml`, asking for the boundary mode (existing values are never changed, comments are kept);
+3. creates the registry skeleton (`version: 1`, `contexts: []`, no cards) when there is no file;
+4. runs discovery, shows the proposal and asks for confirmation (`--yes` accepts);
+5. runs the loader rules write when a context has a card;
+6. registers `ctxo domain-guard-hook` for `SessionStart`, `Stop` and `TaskCompleted` in `.claude/settings.json` (Claude Code), and installs the `ctxo-domain-fold` skill for Claude Code and Cursor.
+
+`--dry-run` lists every file the part would create or change and writes nothing.
+
+### Discovery and the ID safeguards
+
+Teams arrive with their own conventions: tracker keys shaped like rule IDs (`LEND-456`), existing test tags, their own test folders. Ctxo learns them by discover, propose, confirm. The config stays the single source of truth, so behaviour never shifts silently.
+
+```bash
+ctxo domain discover [--json] [--write]
+```
+
+It prints evidence and a proposed config, and writes only with `--write` (a merge into `.ctxo/config.yaml` that adds values and removes none).
+
+- **Rule IDs:** prefixes found in card headings; tracker-like keys (`\b[A-Z][A-Z0-9]{1,9}-\d+\b`) in commit subjects of the co-change window and in branch names (local and remote-tracking names count once). A prefix seen in at least 5 commits or branches is proposed as a tracker prefix, marked when it overlaps a rule prefix.
+- **Test tagging:** annotation keys used on test methods whose values look like IDs (proposed for `domain.tests.ruleTraitKeys`).
+- **Test folders** that hold annotated tests but match no default glob (proposed for `index.tests`), Characterization and Contract folders, and ADR and spec folders.
+
+```text
+$ ctxo domain discover
+Rule IDs
+  card prefixes:      LEND (5 rules), BILL (3 rules)
+  tracker-like keys:  LEND in 183 commit subjects/branches   <- overlaps a rule prefix
+                      OPS  in 12 commit subjects/branches
+Test tagging          xUnit Trait keys in use: Category (41), Rule (3)
+Test folders          no Characterization folders; no Contract folders
+Provenance folders    docs/adr (7), docs/specs (12)
+```
+
+`ctxo doctor` re-runs discovery later and only warns, for example when a new tracker prefix overlaps a rule prefix. It never edits config.
+
+**Safeguards that hold with any config, or none:**
+
+- A link is created only to an ID that exists in a card.
+- "Unknown rule ID" errors come only from structured references (rule-key annotations, `rule:` comments and test titles that start with an ID of a known rule prefix), never from plain mentions.
+- When a rule prefix is also a tracker prefix, only structured references count for that prefix; plain text never links.
+
+### Global installs, one copy
+
+A repository without `package.json` (a .NET repository, say) has nowhere to declare a devDependency. A global install is the supported path there:
+
+```bash
+npm i -g @ctxo/cli @ctxo/domain @ctxo/lang-sql
+```
+
+- `ctxo install` without a `package.json` installs globally and says so; `ctxo install domain` pins `@ctxo/domain` to the running CLI's version. Project-local installs in repositories with `package.json` keep working.
+- When `ctxo init` runs from a global install in a project without `@ctxo/cli` in its `package.json`, it writes MCP entries that call the global `ctxo` binary instead of `npx -y @ctxo/cli`. It replaces only ctxo's own default npx entry, never a custom one.
+- **`install_copies`** (doctor check). The MCP entries and the hooks should start the same copy of ctxo. The check warns, and never fails, when the hooks call `ctxo` and none is on PATH (they never run), or when the MCP entry is an npx entry pinned to a version that differs from the global CLI the hooks run (two copies: a package added to one is missing from the other). An unpinned npx entry shares the global copy and passes. It runs on every project; its message names `@ctxo/domain` only when the package is installed.
+
+### Doctor checks
+
+With `@ctxo/domain` installed, `ctxo doctor` adds three checks, all `pass` or `warn`, never writing a file:
+
+| Check | Reports |
+|---|---|
+| `domain_registry` | Registry or `domain:` config problems; "no registry" is a pass |
+| `domain_agent_setup` | With contexts: the guard hooks missing from `.claude/settings.json` (`SubagentStop` too with `domain.guard.subagents`), a missing or outdated `ctxo-domain-fold` skill, loader rules missing, outdated, stale or blocked |
+| `domain_conventions` | A tracker prefix that overlaps a rule prefix and is not in `domain.rules.trackerPrefixes`, or discovery proposing conventions the config lacks |
+
+A repository with neither a `.claude/` nor a `.cursor/` folder is checked as a Claude Code setup, so it gets a standing `domain_agent_setup` warning until `ctxo init --only domain` registers the hooks and installs the skill. `ctxo doctor --fix` repairs the agent setup.
+
+## Ctxo domain conventions v1
+
+This is the contract a repository follows to use the domain layer. Nothing in it needs a code change: cards, a registry and, optionally, test links.
+
+### The registry schema
+
+The registry is validated against this JSON Schema (`packages/domain/schema/contexts.schema.json`, shipped in the package):
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ctxo.dev/schema/domain-contexts.schema.json",
+  "title": "Ctxo domain context registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "contexts"],
+  "properties": {
+    "version": { "const": 1 },
+    "contexts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name", "paths", "rung"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" },
+          "name": { "type": "string", "minLength": 1 },
+          "card": { "type": "string", "minLength": 1 },
+          "paths": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+          "rung": { "enum": ["fear", "pinned", "named", "bounded", "boring"] },
+          "rulePrefix": { "type": "string", "pattern": "^[A-Z][A-Z0-9]*$" },
+          "contracts": {
+            "type": "object",
+            "additionalProperties": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+          }
+        }
+      }
+    },
+    "unowned": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allow": { "type": "array", "items": { "type": "string", "minLength": 1 }, "default": [] }
+      }
+    },
+    "glossary": { "type": "string", "minLength": 1, "default": "docs/domain/glossary.md" },
+    "contextMap": { "type": "string", "minLength": 1, "default": "docs/domain/context-map.md" }
+  }
+}
+```
+
+The loader reads the YAML itself and reports problems with their path; the schema is the written contract for editors and CI. Beyond the schema, `id` values are unique, a context with a rung above `fear` has a card, and `contracts` keys name contexts that exist in the registry.
+
+### The card template
+
+A card is a markdown file with five H2 headings, in this order, and nothing else at that level:
+
+1. `## Language`
+2. `## Rules and invariants`
+3. `## Boundary contracts`
+4. `## Decisions`
+5. `## Open questions`
+
+Headings only: the checks read structure, never the prose under it. Rules are H3 headings under `Rules and invariants`:
+
+```markdown
+# Lending
+
+## Language
+- **Loan**: ...
+
+## Rules and invariants
+### LEND-03 A member holds at most five loans
+Tests: `src/Lending.Tests/LoanLimitTests.cs`
+Code: `src/Lending/LoanPolicy.cs`
+
+Free text written by people.
+
+### LEND-04 A hold expires after seven days
+Untested: covered by manual QA until the scheduler migration lands
+
+## Boundary contracts
+Free text; references to contract files.
+
+## Decisions
+- 2026-09-12: Loan limit raised from 3 to 5. [spec](../../specs/loan-limit.md), #123
+
+## Open questions
+- ...
+```
+
+- A rule heading is `### <ID> <title>`. The optional lines `Tests:`, `Code:` and `Untested:` come at the start of the rule body; their values are comma-separated backticked paths or symbol IDs. A `Tests:` value may carry a `::name` or `#name` suffix after the path; the path must exist.
+- `Untested:` states why a rule has no test; it satisfies the "every rule has a test link" requirement of check 6 for that rule. A rule must have one of: a test link found by the scan, a `Tests:` line, or an `Untested:` line.
+- Terms are list items starting with `**Term**` under `Language`; decisions are list items starting with an ISO date and a colon. Relative links point to provenance files and are checked (check 7); `#123` and URLs are external strings, never fetched.
+
+### Rule IDs
+
+- **Shape.** `domain.rules.idPattern`, default `^[A-Z][A-Z0-9]*-\d+$` (`LEND-03`). An invalid pattern is reported by check 1 and the default is used meanwhile.
+- **Permanence.** An ID is never reused or renumbered. Retire a rule by marking it in the card; give a new rule a new ID.
+- **`rulePrefix`.** A context may declare `rulePrefix: LEND` (`^[A-Z][A-Z0-9]*$`); every rule ID in its card must then start with `LEND-`. IDs are unique across all cards.
+- **Tracker overlap.** Issue trackers use the same shape (`LEND-456`). Confirm tracker prefixes in `domain.rules.trackerPrefixes` (see discovery). For a prefix that is both, only structured references link to a rule; a plain mention in a comment never does, and never raises an error.
+
+How a test is linked to a rule (a link exists only to an ID that a card defines):
+
+- **Annotations:** an xUnit `Trait` whose key is in `domain.tests.ruleTraitKeys` (default `Rule`) with a rule ID as value (`[Trait("Rule", "LEND-03")]`), and `Category`, `TestCategory` or `Tag` annotations whose value starts with a rule ID. Annotations come from the plugins' index, so any language that reports them works.
+- **The text scan** of test files (the shared test-file classifier): comments of the form `rule: LEND-03`, test titles that start with an ID (`it('LEND-03 limits loans', ...)`, `t.Run`, `@DisplayName`, `[Fact(DisplayName = ...)]`), and plain mentions. Variants `LEND-03`, `LEND03`, `Lend03` and `lend_03` match at token boundaries. A hit links to the innermost indexed symbol spanning the line, else to the file, and records the declaring test's title as the test name.
+- **The card's `Tests:` line.**
+
+Adoption never needs a code change: the test names or framework tags a team already has, or a `Tests:` line in the card, are enough.
+
+### The trailer
+
+```text
+Domain-Unchanged: <id>[, <id>...] [(reason)]
+```
+
+A commit that leaves a context's behaviour as it was carries it (details above). The loader rules, the guard reason and the skill all print the exact line to add.
+
+### The adoption ladder
+
+A team climbs one rung at a time; a context's `rung` in the registry says where it is. The ladder, verbatim:
+
+> level 0: install and index; 1: registry with paths; 2: cards; 3: rule IDs and test links, through card `Tests:` lines, test names or framework tags; 4: contracts and shadow-spec resolutions
+
+No level requires code changes. Level 4 names contracts (check 10 then guards the boundary) and shadow-spec resolutions, which belong to a later phase; until they ship, a team stops at contracts.
+
 ## See also
 
-- [ADR-017](../architecture/ADR/adr-017-plugin-protocol-v2-and-data-coupling.md): the decisions behind this phase
+- [ADR-017](../architecture/ADR/adr-017-plugin-protocol-v2-and-data-coupling.md): the decisions behind the first phase
+- [ADR-018](../architecture/ADR/adr-018-domain-knowledge-layer.md): the in-repo knowledge layer, the CLI internal API and the fold guard
+- [Domain commands](../../site/docs/cli/domain.md) and [the concept page](../../site/docs/concepts/domain-knowledge.md)
 - [Architectural intelligence](architectural-intelligence.md): communities, co-change and the contexts view
 - [SQL language page](../../site/docs/languages/sql.md) and the [C#](../../site/docs/languages/csharp.md), [TypeScript](../../site/docs/languages/typescript.md), [Java](../../site/docs/languages/java.md) and [Go](../../site/docs/languages/go.md) language pages
 - [Writing a plugin](../../site/docs/languages/writing-a-plugin.md): the v2 surface for plugin authors

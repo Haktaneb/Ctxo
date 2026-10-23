@@ -7,6 +7,8 @@ import { wrapResponse } from '../../core/response-envelope.js';
 import { SearchEngine } from '../../core/search/search-engine.js';
 import { SymbolKindSchema } from '../../core/types.js';
 import type { ISearchPort } from '../../ports/i-search-port.js';
+import type { ResponseEnricher } from '../../ports/i-ctxo-module.js';
+import { applyEnricher } from './enrich-payload.js';
 
 export const InputSchema = z.object({
   pattern: z.string().min(1),
@@ -22,6 +24,7 @@ export function handleSearchSymbols(
   staleness?: StalenessCheck,
   ctxoRoot = '.ctxo',
   searchEngine?: ISearchPort,
+  enrich?: ResponseEnricher,
 ) {
   const engine: ISearchPort = searchEngine ?? new SearchEngine();
   let lastFtsNodeCount = -1;
@@ -74,12 +77,13 @@ export function handleSearchSymbols(
           };
         });
 
-        const payload = masking.mask(JSON.stringify(wrapResponse({
+        const body = applyEnricher(enrich, {
           totalMatches: ftsResults.length,
           results,
           searchMetrics: searchResult.metrics,
           ...(searchResult.fuzzyCorrection ? { fuzzyCorrection: searchResult.fuzzyCorrection } : {}),
-        })));
+        }, parsed.data, 'search_symbols');
+        const payload = masking.mask(JSON.stringify(wrapResponse(body)));
 
         const content: Array<{ type: 'text'; text: string }> = [];
         if (staleness) {
@@ -120,10 +124,8 @@ export function handleSearchSymbols(
         endLine: node.endLine,
       }));
 
-      const payload = masking.mask(JSON.stringify(wrapResponse({
-        totalMatches: matches.length,
-        results,
-      })));
+      const body = applyEnricher(enrich, { totalMatches: matches.length, results }, parsed.data, 'search_symbols');
+      const payload = masking.mask(JSON.stringify(wrapResponse(body)));
 
       const content: Array<{ type: 'text'; text: string }> = [];
       if (staleness) {

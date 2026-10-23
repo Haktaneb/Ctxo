@@ -1,0 +1,193 @@
+import type { z, ZodRawShape } from 'zod';
+import type { CommitChangeSet, FileIndex } from '../core/types.js';
+import type { CtxoConfig } from '../core/config/config-schema.js';
+import type { LoadedConfig } from '../core/config/load-config.js';
+import type { SymbolGraph } from '../core/graph/symbol-graph.js';
+import type { Logger } from '../core/logger.js';
+import type { IHealthCheck } from '../core/diagnostics/types.js';
+import type { IGitPort } from './i-git-port.js';
+
+/**
+ * The module API: what an opt-in module such as `@ctxo/domain` registers with the CLI, and the host
+ * services it receives in return (ADR-018). Types only. A module imports these from `@ctxo/cli/internal`
+ * with `import type`; every runtime service arrives through `CtxoHost.services`. The API changes only in
+ * minor releases, and a module runs only when its `major.minor` equals the running CLI's.
+ */
+
+/** The 14 core MCP tools a module may enrich. */
+export type CoreToolName =
+  | 'get_logic_slice'
+  | 'get_why_context'
+  | 'get_change_intelligence'
+  | 'get_blast_radius'
+  | 'get_architectural_overlay'
+  | 'find_dead_code'
+  | 'get_context_for_task'
+  | 'get_ranked_context'
+  | 'search_symbols'
+  | 'get_changed_symbols'
+  | 'find_importers'
+  | 'get_class_hierarchy'
+  | 'get_symbol_importance'
+  | 'get_pr_impact';
+
+/**
+ * Adds fields to a core tool's payload before the envelope, truncation and masking see it. Additive only:
+ * it returns the payload with its fields added and never removes or rewrites the core's fields.
+ */
+export type ResponseEnricher = (
+  payload: Record<string, unknown>,
+  args: Readonly<Record<string, unknown>>,
+) => Record<string, unknown>;
+
+/** An MCP tool a module contributes. The CLI wraps the handler with the envelope, masking and recording. */
+export interface ModuleToolDefinition {
+  readonly name: string;
+  readonly description: string;
+  /** A factory that receives the host's `zod`, so the module needs no zod dependency of its own. */
+  readonly inputSchema: (zod: typeof z) => ZodRawShape;
+  handler(args: Record<string, unknown>): Promise<Record<string, unknown>> | Record<string, unknown>;
+}
+
+export interface ToolRegistrar {
+  registerTool(tool: ModuleToolDefinition): void;
+}
+
+export interface ModuleCommandContext {
+  readonly projectRoot: string;
+  readonly ctxoRoot: string;
+  readStdin(): Promise<string>;
+}
+
+/** A `ctxo <name>` command a module contributes. */
+export interface ModuleCommand {
+  readonly name: string;
+  /** Usage lines for `ctxo <name> --help` and `ctxo --help`. */
+  readonly help: readonly string[];
+  /** The full usage for `ctxo <name> --help` (flags, exit codes); `help` is printed when absent. */
+  readonly usage?: readonly string[];
+  /** Left out of `ctxo --help` (hook commands). */
+  readonly hidden?: boolean;
+  /** Resolves to the exit code. */
+  run(args: readonly string[], ctx: ModuleCommandContext): Promise<number>;
+}
+
+export interface CommandRegistrar {
+  registerCommand(command: ModuleCommand): void;
+}
+
+/** Whether a repo-relative path (either separator) is a test file. It already holds the annotated files. */
+export type TestFileCheck = (path: string) => boolean;
+
+/** The raw commits of the configured co-change window, newest first, renames intact. */
+export interface CoChangeWindowCommits {
+  /** Short SHA of HEAD. */
+  readonly head: string;
+  /** HEAD's committer date in unix seconds. */
+  readonly headCommittedAt: number;
+  readonly commits: readonly CommitChangeSet[];
+}
+
+/** What a module's index pass receives at the end of `ctxo index`. */
+export interface IndexPassContext {
+  readonly projectRoot: string;
+  readonly ctxoRoot: string;
+  readonly config: CtxoConfig;
+  /** The merged full index. */
+  readonly indices: readonly FileIndex[];
+  /** Built on first call, then reused. */
+  graph(): SymbolGraph;
+  readonly isTestFile: TestFileCheck;
+  /** Raw window commits, renames intact; absent with --skip-history or without git. */
+  readonly history?: CoChangeWindowCommits;
+}
+
+export interface InitFileResult {
+  readonly file: string;
+  readonly action: 'created' | 'updated' | 'skipped';
+  readonly warning?: string;
+}
+
+export interface ClaudeHookEntry {
+  readonly event: string;
+  readonly matcher?: string;
+  readonly command: string;
+}
+
+export interface InitPrompter {
+  confirm(message: string, initial: boolean): Promise<boolean>;
+  select<T extends string>(
+    message: string,
+    options: readonly { readonly value: T; readonly label: string }[],
+    initial: T,
+  ): Promise<T>;
+}
+
+export interface InitPartContext {
+  readonly projectRoot: string;
+  readonly toolIds: readonly string[];
+  readonly dryRun: boolean;
+  readonly yes: boolean;
+  readonly boundaries?: 'by-rung' | 'report';
+  /** Returns `initial` when not interactive or with --yes. */
+  readonly prompt: InitPrompter;
+  ensureConfigFile(): InitFileResult;
+  ensureClaudeHookEntry(entry: ClaudeHookEntry): InitFileResult;
+  installSkill(platformId: string, name: string, content: string): InitFileResult | undefined;
+}
+
+/** The part a module adds to `ctxo init`. */
+export interface InitContribution {
+  readonly part: 'domain';
+  apply(ctx: InitPartContext): Promise<readonly InitFileResult[]>;
+}
+
+/** What a module contributes. Every member is optional; the CLI uses the ones present. */
+export interface CtxoModuleRegistration {
+  readonly id: 'domain';
+  /** Capabilities `ctxo index` requests from the plugins on the module's behalf. */
+  readonly indexCapabilities?: { readonly facts?: boolean };
+  indexPass?(ctx: IndexPassContext): Promise<void>;
+  registerTools?(registrar: ToolRegistrar): void;
+  readonly enrich?: Partial<Record<CoreToolName, ResponseEnricher>>;
+  registerCommands?(registrar: CommandRegistrar): void;
+  readonly init?: InitContribution;
+  readonly doctorChecks?: readonly IHealthCheck[];
+}
+
+/** A module the CLI loaded and registered: its package name, version and registration. */
+export interface LoadedModule {
+  readonly name: string;
+  readonly version: string;
+  readonly registration: CtxoModuleRegistration;
+}
+
+/** The runtime services a module gets from the CLI instead of importing them. */
+export interface CtxoHostServices {
+  createLogger(namespace: string): Logger;
+  loadConfig(ctxoRoot: string): LoadedConfig;
+  /** The CLI's glob matcher: forward-slash normalised, dotfiles included. */
+  makeGlobMatcher(patterns: readonly string[]): (path: string) => boolean;
+  /** The classifier the contexts view uses: test globs, `index.tests`, test-framework annotations. */
+  createTestFileCheck(config: CtxoConfig, indices: readonly FileIndex[]): TestFileCheck;
+  createGit(projectRoot: string): IGitPort;
+  readIndex(ctxoRoot: string): FileIndex[];
+  buildGraph(indices: readonly FileIndex[]): SymbolGraph;
+  /** The configured co-change window (`cochange.maxCommits`, `cochange.since`); undefined without git history. */
+  readCoChangeWindow(projectRoot: string, config: CtxoConfig): Promise<CoChangeWindowCommits | undefined>;
+  /** The nearest directory at or above `dir` that holds `.git`. */
+  findGitRoot(dir: string): string | undefined;
+  /** Short names of the attributes that mark a test (`Fact`, `Test`, `TestMethod`, ...): the classifier's own list. */
+  readonly testFrameworkAnnotations: readonly string[];
+}
+
+export interface CtxoHost {
+  readonly cliVersion: string;
+  readonly mode: 'mcp' | 'cli' | 'hook';
+  readonly projectRoot: string;
+  readonly ctxoRoot: string;
+  readonly services: CtxoHostServices;
+}
+
+/** The `register` export of a module package. Resolves to undefined when the module declines to run. */
+export type CtxoModuleRegister = (host: CtxoHost) => Promise<CtxoModuleRegistration | undefined>;

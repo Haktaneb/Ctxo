@@ -1,0 +1,350 @@
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { parse } from 'yaml';
+import { allKeys, assertBuilt, cleanupWorkspaces, SampleWorkspace, type Variant } from './sample-workspace.js';
+
+/**
+ * The PR 2B acceptance tests (spec 10.10, 13.1): the synthetic library-lending sample in a C# and a TypeScript
+ * variant, driven through the built CLI and the built MCP server. Each test copies a variant to a temp
+ * repository, so none depends on another.
+ */
+
+const VARIANTS: readonly Variant[] = ['csharp', 'typescript'];
+
+const REGISTRY = 'docs/domain/contexts.yaml';
+const LOAN_LIMIT_TEST: Record<Variant, string> = {
+  csharp: 'tests/Lending.Tests/LoanLimitTests.cs',
+  typescript: 'src/lending/__tests__/loan-limit.test.ts',
+};
+const LOAN_LIMIT: Record<Variant, string> = {
+  csharp: 'src/Lending/LoanLimit.cs',
+  typescript: 'src/lending/loan-limit.ts',
+};
+const CANBORROW_ID: Record<Variant, string> = {
+  csharp: 'src/Lending/LoanLimit.cs::LibraryLending.Lending.LoanLimit::class',
+  typescript: 'src/lending/loan-limit.ts::canBorrow::function',
+};
+
+beforeAll(assertBuilt);
+afterAll(cleanupWorkspaces);
+
+/** A fresh copy of the variant with its generated loader rules committed and the index built. */
+function prepared(variant: Variant): SampleWorkspace {
+  const ws = SampleWorkspace.create(variant);
+  ws.commitLoaderRules();
+  ws.index();
+  return ws;
+}
+
+interface VerifyReport {
+  readonly checks: readonly { id: string; status: string; findings: readonly { severity: string; message: string }[] }[];
+  readonly summary: { errors: number; warnings: number };
+  readonly exitCode: number;
+}
+
+function verifyJson(ws: SampleWorkspace, ...args: string[]): { status: number | null; report: VerifyReport; messages: string[] } {
+  const result = ws.cli(['verify-domain', '--json', ...args]);
+  const report = JSON.parse(result.stdout) as VerifyReport;
+  const messages = report.checks.flatMap((check) => check.findings.map((finding) => `${check.id} ${finding.severity} ${finding.message}`));
+  return { status: result.status, report, messages };
+}
+
+/** A Lending class that reaches into a Billing internal instead of the charge service. */
+function addBillingInternalEdge(ws: SampleWorkspace, variant: Variant): void {
+  if (variant === 'csharp') {
+    ws.write(
+      'src/Lending/LateFee.cs',
+      `using LibraryLending.Billing;
+
+namespace LibraryLending.Lending;
+
+public static class LateFee
+{
+    public static int For(int payerId)
+    {
+        return new InvoiceLedger().BalanceOf(payerId);
+    }
+}
+`,
+    );
+  } else {
+    ws.write(
+      'src/lending/late-fee.ts',
+      `import { InvoiceLedger } from '../billing/invoice-ledger.js';
+
+export function lateFeeFor(payerId: number): number {
+  return new InvoiceLedger().balanceOf(payerId);
+}
+`,
+    );
+  }
+}
+
+function domainArtifacts(ws: SampleWorkspace): Map<string, string> {
+  const root = ws.path('.ctxo/index/domain');
+  const files = new Map<string, string>();
+  const walk = (dir: string, prefix: string): void => {
+    // Entry kinds come from the directory listing itself: no stat before the read (CodeQL js/file-system-race).
+    for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) walk(full, `${prefix}${entry.name}/`);
+      else files.set(`${prefix}${entry.name}`, readFileSync(full, 'utf-8'));
+    }
+  };
+  walk(root, '');
+  return files;
+}
+
+describe.each(VARIANTS)('PR 2B acceptance, %s sample', (variant) => {
+  it('the sample passes verify-domain with warnings only', () => {
+    const ws = prepared(variant);
+    const { status, report } = verifyJson(ws);
+    expect(status).toBe(0);
+    expect(report.exitCode).toBe(0);
+    expect(report.summary.errors).toBe(0);
+    const boundaries = report.checks.find((check) => check.id === '10')!;
+    expect(boundaries.findings.every((f) => f.severity === 'warning')).toBe(true);
+    ws.requireEdges();
+    if (ws.resolvesEdges) {
+      // The Catalog -> Lending edge is a warning: both rungs are non-blocking.
+      expect(report.summary.warnings).toBeGreaterThanOrEqual(1);
+      expect(boundaries.status).toBe('warn');
+      expect(boundaries.findings.some((f) => f.message.startsWith('catalog -> lending:'))).toBe(true);
+    }
+    for (const check of report.checks) expect(['pass', 'warn', 'skipped'], `check ${check.id}`).toContain(check.status);
+  });
+
+  it('verify-domain fails on a non-fear context without a card', () => {
+    const ws = prepared(variant);
+    ws.replace(REGISTRY, 'rung: fear', 'rung: named');
+    const { status, messages } = verifyJson(ws);
+    expect(status).toBe(1);
+    expect(messages).toContain('2 error catalog: rung "named" needs a card; set "card" or lower the rung to fear');
+  });
+
+  it('verify-domain fails on a glob that matches nothing', () => {
+    const ws = prepared(variant);
+    ws.replace(REGISTRY, '      - "db/migrations/lending/**"', '      - "db/migrations/lending/**"\n      - "src/Shipping/**"');
+    const { status, messages } = verifyJson(ws);
+    expect(status).toBe(1);
+    expect(messages).toContain('3 error lending: "src/Shipping/**" matches no indexed file');
+  });
+
+  it('verify-domain fails on an unknown rule ID found in a test', () => {
+    const ws = prepared(variant);
+    const file = LOAN_LIMIT_TEST[variant];
+    if (variant === 'csharp') {
+      ws.replace(
+        file,
+        '    [Fact]\n    [Trait("Rule", "LEND-03")]',
+        '    [Fact]\n    [Trait("Rule", "LEND-99")]\n    public void RefundsNothing()\n    {\n    }\n\n    [Fact]\n    [Trait("Rule", "LEND-03")]',
+      );
+    } else {
+      ws.replace(file, "  it('LEND-03 rejects", "  it('LEND-99 refunds nothing', () => {\n    expect(true).toBe(true);\n  });\n\n  it('LEND-03 rejects");
+    }
+    ws.commit('test: a rule that no card defines');
+    ws.index();
+    const { status, messages } = verifyJson(ws);
+    expect(status).toBe(1);
+    expect(messages.some((m) => m.startsWith('6 error LEND-99: referenced as "LEND-99" but no card defines it'))).toBe(true);
+    // The known rule keeps its link.
+    expect(messages.filter((m) => m.includes('LEND-03'))).toEqual([]);
+  });
+
+  it('ctxo domain rules --check passes right after --write and fails after a registry change', () => {
+    const ws = SampleWorkspace.create(variant);
+    ws.index();
+
+    const before = ws.cli(['domain', 'rules', '--check']);
+    expect(before.status).toBe(1);
+    expect(before.stderr).toContain('missing   .claude/rules/ctxo-context-lending.md');
+    expect(before.stderr).toContain('missing   .claude/rules/ctxo-context-billing.md');
+
+    const write = ws.cli(['domain', 'rules', '--write']);
+    expect(write.status, write.stderr).toBe(0);
+    expect(ws.read('.claude/rules/ctxo-context-lending.md')).toContain('Domain-Unchanged: lending (reason)');
+    // Catalog has no card, so it gets no rule.
+    expect(ws.exists('.claude/rules/ctxo-context-catalog.md')).toBe(false);
+
+    const after = ws.cli(['domain', 'rules', '--check']);
+    expect(after.status, after.stderr).toBe(0);
+    expect(after.stderr).toContain('Loader rules are up to date.');
+
+    ws.replace(REGISTRY, 'name: Lending', 'name: Lending desk');
+    const changed = ws.cli(['domain', 'rules', '--check']);
+    expect(changed.status).toBe(1);
+    expect(changed.stderr).toContain('outdated  .claude/rules/ctxo-context-lending.md');
+  });
+
+  it('boundaries: a Lending edge into a Billing internal fails by-rung and passes with --boundaries report', (context) => {
+    const ws = prepared(variant);
+    ws.requireEdges();
+    if (!ws.resolvesEdges) context.skip('C# needs the Roslyn tier (.NET SDK 8+) to resolve edges between files');
+    addBillingInternalEdge(ws, variant);
+    ws.commit('feat: lending reads the billing ledger directly');
+    ws.index();
+
+    const byRung = verifyJson(ws);
+    expect(byRung.status).toBe(1);
+    expect(byRung.messages.some((m) => m.startsWith('10 error lending -> billing:'))).toBe(true);
+
+    const report = verifyJson(ws, '--boundaries', 'report');
+    expect(report.status).toBe(0);
+    expect(report.messages.some((m) => m.startsWith('10 warning lending -> billing:'))).toBe(true);
+    expect(report.messages.some((m) => m.startsWith('10 error'))).toBe(false);
+  });
+
+  it('the same input twice gives byte-identical domain artifacts', () => {
+    const first = prepared(variant);
+    const second = prepared(variant);
+    const a = domainArtifacts(first);
+    const b = domainArtifacts(second);
+    expect([...a.keys()]).toEqual(expect.arrayContaining(['contexts.json', 'boundaries.json']));
+    expect([...b.entries()]).toEqual([...a.entries()]);
+
+    // A second run over the same workspace rewrites nothing that differs.
+    first.index();
+    expect([...domainArtifacts(first).entries()]).toEqual([...a.entries()]);
+  });
+
+  it('no registry: no new fields anywhere, and the commands print a hint and exit 0', async () => {
+    const ws = SampleWorkspace.create(variant);
+    ws.commitLoaderRules();
+    const registryText = ws.read(REGISTRY);
+    // A second commit, so get_pr_impact has a change to report.
+    ws.replace(LOAN_LIMIT[variant], variant === 'csharp' ? 'MaxLoans = 5' : 'MAX_LOANS = 5', variant === 'csharp' ? 'MaxLoans = 5 ' : 'MAX_LOANS = 5 ');
+    ws.commit('chore: touch the loan limit');
+    ws.index();
+
+    // With the registry the same tools do carry the context.
+    let session = await ws.connect();
+    try {
+      const found = (await session.call('search_symbols', { pattern: 'LoanLimit|canBorrow' })) as { results: { context?: string }[] };
+      expect(found.results.length).toBeGreaterThan(0);
+      expect(found.results.map((r) => r.context)).toContain('lending');
+    } finally {
+      await session.close();
+    }
+
+    ws.remove(REGISTRY);
+    ws.index();
+    // The artifacts go; the folder itself may stay, since other files in it are not ours to delete.
+    for (const artifact of ['contexts.json', 'boundaries.json', 'history']) expect(ws.exists(`.ctxo/index/domain/${artifact}`), artifact).toBe(false);
+
+    const symbolId = CANBORROW_ID[variant];
+    session = await ws.connect();
+    try {
+      const responses = [
+        await session.call('search_symbols', { pattern: 'LoanLimit|canBorrow' }),
+        await session.call('get_blast_radius', { symbolId }),
+        await session.call('find_importers', { symbolId }),
+        await session.call('get_logic_slice', { symbolId }),
+        await session.call('get_pr_impact', { since: 'HEAD~1' }),
+        await session.call('get_why_context', { symbolId }),
+      ];
+      responses.forEach((response, i) => {
+        expect(response['error'], `response ${i}`).toBeUndefined();
+        const keys = allKeys(response);
+        for (const key of ['context', 'contextBoundaryViolations', 'contextDrift']) expect(keys.has(key), `response ${i} has ${key}`).toBe(false);
+      });
+      expect((responses[0] as { results: unknown[] }).results.length).toBeGreaterThan(0);
+    } finally {
+      await session.close();
+    }
+
+    for (const args of [['verify-domain'], ['contexts-touched'], ['domain', 'rules', '--check']]) {
+      const result = ws.cli(args);
+      expect(result.status, args.join(' ')).toBe(0);
+      expect(result.stderr, args.join(' ')).toContain('No domain registry at docs/domain/contexts.yaml. Create one with "ctxo init --domain".');
+    }
+
+    // Restored and re-indexed, the tags are back.
+    ws.write(REGISTRY, registryText);
+    ws.index();
+    session = await ws.connect();
+    try {
+      const found = (await session.call('search_symbols', { pattern: 'LoanLimit|canBorrow' })) as { results: { context?: string }[] };
+      expect(found.results.map((r) => r.context)).toContain('lending');
+    } finally {
+      await session.close();
+    }
+  });
+
+  it.skipIf(variant !== 'csharp')('the guard blocks a sample session and lets it finish after a trailer commit', () => {
+    const ws = SampleWorkspace.create(variant);
+    ws.git('checkout', '-q', '-b', 'feat');
+
+    const start = ws.guardHook({ session_id: 'acceptance-1', hook_event_name: 'SessionStart', source: 'startup' });
+    expect(start).toMatchObject({ status: 0, stdout: '', stderr: '' });
+
+    ws.replace(LOAN_LIMIT[variant], 'MaxLoans = 5', 'MaxLoans = 6');
+    ws.commit('feat: allow a sixth loan');
+    const blocked = ws.guardHook({ session_id: 'acceptance-1', hook_event_name: 'Stop', stop_hook_active: false });
+    expect(blocked.status).toBe(0);
+    const decision = JSON.parse(blocked.stdout) as { decision: string; reason: string };
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('- lending: 1 file (src/Lending/LoanLimit.cs)');
+    expect(decision.reason).toContain('card: docs/domain/lending/domain.md (unchanged)');
+    expect(decision.reason).toContain('Domain-Unchanged: lending (reason)');
+
+    // A further code commit without the trailer is blocked again: the guard is not just "once per session".
+    ws.replace('src/Billing/InvoiceLedger.cs', 'CentsPerDay = 2', 'CentsPerDay = 3');
+    ws.write('src/Lending/Account.cs', `${ws.read('src/Lending/Account.cs')}\n// reviewed\n`);
+    ws.commit('chore: tidy the account');
+    const again = ws.guardHook({ session_id: 'acceptance-1', hook_event_name: 'Stop', stop_hook_active: false });
+    const second = JSON.parse(again.stdout) as { decision: string; reason: string };
+    expect(second.decision).toBe('block');
+    expect(second.reason).toContain('ctxo domain guard: 2 contexts have committed changes without a card update.');
+
+    // The trailer resolves both contexts, so the session can finish.
+    ws.commit('refactor: no behaviour change', '--allow-empty', '-m', 'Domain-Unchanged: lending, billing (constants and comments only)');
+    const done = ws.guardHook({ session_id: 'acceptance-1', hook_event_name: 'Stop', stop_hook_active: false });
+    expect(done).toMatchObject({ status: 0, stdout: '', stderr: '' });
+  });
+
+  it.skipIf(variant !== 'typescript')(
+    'discovery proposes trackerPrefixes [LEND] from LEND-<n> commit subjects; once confirmed, a LEND-01 comment no longer links the rule',
+    () => {
+      const ws = SampleWorkspace.create(variant);
+      ws.commitLoaderRules();
+      for (const n of [101, 102, 103, 104, 105]) ws.commit(`LEND-${n} adjust the loan desk`, '--allow-empty');
+      ws.index();
+
+      const discover = ws.cli(['domain', 'discover', '--json']);
+      expect(discover.status, discover.stderr).toBe(0);
+      const found = JSON.parse(discover.stdout) as {
+        evidence: { trackerKeys: { prefix: string; occurrences: number; overlapsRulePrefix: boolean }[] };
+        proposal: { trackerPrefixes: string[] };
+      };
+      expect(found.proposal.trackerPrefixes).toEqual(['LEND']);
+      expect(found.evidence.trackerKeys).toEqual([{ prefix: 'LEND', occurrences: 5, overlapsRulePrefix: true }]);
+      // Nothing is written until it is confirmed.
+      expect(ws.exists('.ctxo/config.yaml') ? ws.read('.ctxo/config.yaml') : '').not.toContain('trackerPrefixes');
+
+      // LEND-01 loses its Untested line and is only mentioned in a test comment. Before the prefix is confirmed
+      // the mention links the rule, so check 6 passes; after, a tracker-prefix mention no longer links.
+      ws.replace(
+        'docs/domain/lending/domain.md',
+        '### LEND-01 A loan lasts fourteen days\nUntested: the due date is set by the loan service and has no test yet\n',
+        '### LEND-01 A loan lasts fourteen days\n',
+      );
+      ws.replace(LOAN_LIMIT_TEST[variant], "describe('loan limit'", "// LEND-01 flaky on the build server\ndescribe('loan limit'");
+      ws.commit('test: note the ticket on the loan limit test');
+      ws.index();
+
+      const before = verifyJson(ws);
+      expect(before.status, before.messages.join('\n')).toBe(0);
+      expect(before.report.checks.find((check) => check.id === '6')!.status).toBe('pass');
+
+      const write = ws.cli(['domain', 'discover', '--write']);
+      expect(write.status, write.stderr).toBe(0);
+      const config = parse(ws.read('.ctxo/config.yaml')) as { domain: { rules: { trackerPrefixes: string[] } } };
+      expect(config.domain.rules.trackerPrefixes).toEqual(['LEND']);
+
+      const after = verifyJson(ws);
+      expect(after.status).toBe(1);
+      expect(after.messages).toContain('6 error LEND-01: no test link, no "Tests:" line and no "Untested:" line');
+    },
+  );
+});

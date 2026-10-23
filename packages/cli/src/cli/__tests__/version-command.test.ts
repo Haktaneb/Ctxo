@@ -1,13 +1,18 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import type { CtxoLanguagePlugin } from '@ctxo/plugin-api';
 import type { DiscoveredPlugin } from '../../adapters/language/plugin-discovery.js';
 import {
+  collectModuleReports,
   gatherVersionInfo,
   formatShort,
   formatVerbose,
   formatJson,
   type VersionInfo,
 } from '../version-command.js';
+import { writeStubDomainPackage } from './helpers/stub-domain-package.js';
 
 function makePlugin(over: Partial<CtxoLanguagePlugin> = {}): CtxoLanguagePlugin {
   return {
@@ -101,6 +106,7 @@ describe('formatShort', () => {
       ctxo: '0.7.0-alpha.0',
       pluginApiVersion: '2',
       pluginApiVersions: ['1', '2'],
+      modules: [],
       plugins: [],
       runtime: { node: 'v20.0.0', platform: 'linux', arch: 'x64' },
     };
@@ -114,6 +120,7 @@ describe('formatVerbose', () => {
       ctxo: '0.7.0-alpha.0',
       pluginApiVersion: '2',
       pluginApiVersions: ['1', '2'],
+      modules: [],
       plugins: [],
       runtime: { node: 'v20.0.0', platform: 'linux', arch: 'x64' },
     };
@@ -130,6 +137,7 @@ describe('formatVerbose', () => {
       ctxo: '0.7.0-alpha.0',
       pluginApiVersion: '2',
       pluginApiVersions: ['1', '2'],
+      modules: [],
       plugins: [
         {
           name: '@ctxo/lang-typescript',
@@ -153,6 +161,7 @@ describe('formatVerbose', () => {
       ctxo: '0.7.0-alpha.0',
       pluginApiVersion: '2',
       pluginApiVersions: ['1', '2'],
+      modules: [],
       plugins: [
         {
           name: '@ctxo/lang-future',
@@ -175,6 +184,7 @@ describe('formatJson', () => {
       ctxo: '0.7.0-alpha.0',
       pluginApiVersion: '2',
       pluginApiVersions: ['1', '2'],
+      modules: [],
       plugins: [
         {
           name: '@ctxo/lang-typescript',
@@ -191,6 +201,7 @@ describe('formatJson', () => {
       ctxo: '0.7.0-alpha.0',
       pluginApiVersion: '2',
       pluginApiVersions: ['1', '2'],
+      modules: [],
       runtime: { node: 'v20.0.0', platform: 'linux', arch: 'x64' },
       plugins: [
         {
@@ -209,6 +220,7 @@ describe('formatJson', () => {
       ctxo: '0.7.0-alpha.0',
       pluginApiVersion: '2',
       pluginApiVersions: ['1', '2'],
+      modules: [],
       plugins: [],
       runtime: { node: 'v20.0.0', platform: 'linux', arch: 'x64' },
     };
@@ -238,5 +250,94 @@ describe('gatherVersionInfo performance', () => {
 
     expect(elapsedMs).toBeLessThan(200);
     expect(info.plugins).toHaveLength(3);
+  });
+});
+
+describe('modules in the version report', () => {
+  const base = {
+    ctxo: '1.2.3',
+    pluginApiVersion: '2',
+    pluginApiVersions: ['1', '2'],
+    plugins: [],
+    runtime: { node: 'v20.0.0', platform: 'linux' as const, arch: 'x64' },
+  };
+
+  it('gatherVersionInfo defaults modules to an empty list', () => {
+    expect(gatherVersionInfo([]).modules).toEqual([]);
+  });
+
+  it('formatVerbose lists modules with their status', () => {
+    const info: VersionInfo = {
+      ...base,
+      modules: [{ name: '@ctxo/domain', status: 'active', version: '1.2.0', source: 'project' }],
+    };
+    expect(formatVerbose(info)).toContain('Modules:    @ctxo/domain 1.2.0 (active)');
+  });
+
+  it('formatVerbose names a version mismatch and leaves out a module that is not installed', () => {
+    const mismatch: VersionInfo = {
+      ...base,
+      modules: [{ name: '@ctxo/domain', status: 'version-mismatch', version: '1.3.0' }],
+    };
+    expect(formatVerbose(mismatch)).toContain('Modules:    @ctxo/domain 1.3.0 (version-mismatch)');
+    const absent: VersionInfo = { ...base, modules: [{ name: '@ctxo/domain', status: 'not-installed' }] };
+    expect(formatVerbose(absent)).not.toContain('Modules:');
+  });
+
+  it('the JSON output carries modules', () => {
+    const info: VersionInfo = {
+      ...base,
+      modules: [{ name: '@ctxo/domain', status: 'active', version: '1.2.0', source: 'cli' }],
+    };
+    const parsed = JSON.parse(formatJson(info)) as VersionInfo;
+    expect(parsed.modules).toEqual(info.modules);
+  });
+});
+
+describe('collectModuleReports', () => {
+  const dirs: string[] = [];
+
+  function tempDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'ctxo-version-modules-'));
+    dirs.push(dir);
+    return dir;
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+
+  it('reports not-installed without building a module host when no copy exists', async () => {
+    const hostModule = await import('../module-host.js');
+    const createHost = vi.spyOn(hostModule, 'createModuleHost');
+
+    // The CLI anchor is an empty directory too, so the result does not depend on what packages/cli can resolve.
+    const reports = await collectModuleReports(tempDir(), { cliAnchor: tempDir() });
+
+    expect(reports).toEqual([{ name: '@ctxo/domain', status: 'not-installed' }]);
+    expect(createHost).not.toHaveBeenCalled();
+  });
+
+  it('reports the copy next to the CLI anchor', async () => {
+    const anchor = tempDir();
+    writeStubDomainPackage(anchor, "export async function register() { return { id: 'domain' }; }\n");
+
+    const reports = await collectModuleReports(tempDir(), { cliAnchor: anchor });
+
+    expect(reports).toEqual([expect.objectContaining({ name: '@ctxo/domain', status: 'active', source: 'cli' })]);
+  });
+
+  it('reports load-failed instead of throwing when the module host cannot be built', async () => {
+    const project = tempDir();
+    writeStubDomainPackage(project, "export async function register() { return { id: 'domain' }; }\n");
+    const hostModule = await import('../module-host.js');
+    vi.spyOn(hostModule, 'createModuleHost').mockImplementation(() => {
+      throw new Error('host exploded');
+    });
+
+    const reports = await collectModuleReports(project);
+
+    expect(reports).toEqual([{ name: '@ctxo/domain', status: 'load-failed', reason: 'host exploded' }]);
   });
 });

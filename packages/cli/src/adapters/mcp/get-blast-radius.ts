@@ -12,6 +12,8 @@ import { filterByIntent } from '../../core/intent-filter.js';
 import type { CommunitySnapshot } from '../../core/types.js';
 import type { StalenessCheck } from './get-logic-slice.js';
 import { getGraphAndFiles } from './get-logic-slice.js';
+import type { ResponseEnricher } from '../../ports/i-ctxo-module.js';
+import { applyEnricher } from './enrich-payload.js';
 
 interface ClusterBreakdown {
   readonly byCluster: Record<string, number>;
@@ -61,6 +63,7 @@ export function handleGetBlastRadius(
   git?: IGitPort,
   clusterLabelMasker?: ClusterLabelMasker,
   coChange?: ICoChangePort,
+  enrich?: ResponseEnricher,
 ) {
   const calculator = new BlastRadiusCalculator();
   const getGraph = () => getGraphAndFiles(ctxoRoot, storage);
@@ -137,7 +140,8 @@ export function handleGetBlastRadius(
 
       const stalenessMeta = git ? await buildSnapshotStaleness(storage, git) : undefined;
       const extras = stalenessMeta ? { snapshotStaleness: stalenessMeta } : undefined;
-      const payload = masking.mask(JSON.stringify(wrapResponse(body, extras)));
+      const enriched = applyEnricher(enrich, body, parsed.data, 'get_blast_radius');
+      const payload = masking.mask(JSON.stringify(wrapResponse(enriched, extras)));
 
       const content: Array<{ type: 'text'; text: string }> = [];
       if (staleness) {

@@ -3,7 +3,7 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import type { FileIndex, CoChangeMatrix } from '../../core/types.js';
 import { atomicWrite } from './atomic-write.js';
-import { COMMUNITY_HISTORY_DIR, INDEX_ARTIFACT_FILES } from './json-index-reader.js';
+import { COMMUNITY_HISTORY_DIR, INDEX_ARTIFACT_FILES, isMarkedArtifact } from './json-index-reader.js';
 
 export class JsonIndexWriter {
   private readonly indexDir: string;
@@ -70,7 +70,8 @@ export class JsonIndexWriter {
    * an artifact's included. Returns true when a file was deleted and false when there was none.
    *
    * Throws for a path outside the index folder, and for the artifacts that live there but are not entries
-   * (the co-change matrix, the community snapshot and its history, the architecture artifacts).
+   * (the co-change matrix, the community snapshot and its history, the architecture artifacts, and any JSON
+   * carrying the `ctxoArtifact` marker of a module artifact).
    */
   deleteEntryFile(jsonPath: string): boolean {
     const resolved = resolve(jsonPath);
@@ -82,8 +83,30 @@ export class JsonIndexWriter {
     if (INDEX_ARTIFACT_FILES.includes(inIndex) || inIndex.startsWith(`${COMMUNITY_HISTORY_DIR}/`)) {
       throw new Error(`Refusing to delete the index artifact ${inIndex}`);
     }
-    if (!existsSync(resolved)) return false;
-    unlinkSync(resolved);
+    // Read once (no exists check first): a missing file is nothing to delete, and a file carrying the
+    // ctxoArtifact marker is a module artifact, which the reader skips too (PF18).
+    let text: string;
+    try {
+      text = readFileSync(resolved, 'utf-8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw err;
+    }
+    let data: unknown;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = undefined; // Not JSON: a broken entry, which may go.
+    }
+    if (isMarkedArtifact(data)) {
+      throw new Error(`Refusing to delete the index artifact ${inIndex}`);
+    }
+    try {
+      unlinkSync(resolved);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw err;
+    }
     return true;
   }
 

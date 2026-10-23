@@ -8,7 +8,11 @@ import type {
   CommitChangeSet,
   FileChange,
   FileChangeStatus,
+  GitRange,
+  GitRefs,
+  RangeCommit,
 } from '../../core/types.js';
+import { compareCodepoint } from '../../core/compare-codepoint.js';
 import { createLogger } from '../../core/logger.js';
 
 const log = createLogger('ctxo:git');
@@ -111,6 +115,81 @@ function parseChangeLog(raw: string): CommitChangeSet[] {
   }
   return commits;
 }
+
+/** One record per commit: hash, parents, subject and the requested trailer values, then the name-status tokens. */
+function rangeLogFormat(trailerKey: string | undefined): string {
+  const trailers = trailerKey === undefined ? '' : `%(trailers:key=${trailerKey},valueonly)`;
+  return `--format=%x1e%H%x1f%P%x1f%s%x1f${trailers}%x1f`;
+}
+
+/** Parses `git log` output produced with rangeLogFormat, `--name-status` and `-z`. */
+function parseRangeLog(raw: string): RangeCommit[] {
+  const commits: RangeCommit[] = [];
+  for (const record of raw.split(RECORD_SEPARATOR)) {
+    const [header = '', ...tokens] = record.split(NUL);
+    const [hash, parents, subject, trailerText] = header.split(FIELD_SEPARATOR);
+    if (!hash || parents === undefined || subject === undefined) continue;
+
+    const isMerge = parents.trim().split(' ').filter((p) => p.length > 0).length > 1;
+    commits.push({
+      hash,
+      subject,
+      isMerge,
+      trailers: (trailerText ?? '').split('\n').map((t) => t.trim()).filter((t) => t.length > 0),
+      changes: isMerge ? [] : parseNameStatus(tokens),
+    });
+  }
+  return commits;
+}
+
+/**
+ * Parses `git status --porcelain=v1 -z`: records of `XY <path>`, where a rename or copy in either column
+ * is followed by its source path as a separate token.
+ */
+function parseStatus(raw: string): FileChange[] {
+  const tokens = raw.split(NUL);
+  const changes: FileChange[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const entry = tokens[i] ?? '';
+    if (entry.length < 4) continue;
+    const x = entry.charAt(0);
+    const y = entry.charAt(1);
+    const path = toForwardSlashes(entry.slice(3));
+    if (x === 'R' || x === 'C' || y === 'R' || y === 'C') {
+      const oldPath = tokens[++i];
+      if (oldPath === undefined) continue;
+      const status: FileChangeStatus = x === 'R' || y === 'R' ? 'R' : 'C';
+      changes.push({ status, path, oldPath: toForwardSlashes(oldPath) });
+    } else if (x === '?') {
+      changes.push({ status: 'A', path });
+    } else if (x === 'D' || y === 'D') {
+      changes.push({ status: 'D', path });
+    } else if (x === 'A' || y === 'A') {
+      changes.push({ status: 'A', path });
+    } else {
+      changes.push({ status: 'M', path });
+    }
+  }
+  return changes;
+}
+
+/** Short ref names in `for-each-ref --format=%(refname)` output, local and remote-tracking apart (codepoint order). */
+function parseBranchNames(raw: string): { local: string[]; remote: string[]; all: string[] } {
+  const local = new Set<string>();
+  const remote = new Set<string>();
+  for (const line of raw.split('\n')) {
+    const ref = line.trim();
+    if (ref.startsWith('refs/heads/')) {
+      local.add(ref.slice('refs/heads/'.length));
+    } else if (ref.startsWith('refs/remotes/') && !/^refs\/remotes\/[^/]+\/HEAD$/.test(ref)) {
+      remote.add(ref.slice('refs/remotes/'.length));
+    }
+  }
+  const sorted = (set: Set<string>): string[] => [...set].sort(compareCodepoint);
+  return { local: sorted(local), remote: sorted(remote), all: sorted(new Set([...local, ...remote])) };
+}
+
+const TRAILER_KEY = /^[A-Za-z0-9][A-Za-z0-9-]*$/;
 
 export class SimpleGitAdapter implements IGitPort {
   private readonly git: SimpleGit;
@@ -254,6 +333,133 @@ export class SimpleGitAdapter implements IGitPort {
         .filter((path) => path.length > 0)
         .map(toForwardSlashes),
     );
+  }
+
+  async resolveCommit(ref: string): Promise<string | undefined> {
+    if (this.refuseOptionLike('resolve', [ref])) return undefined;
+    try {
+      const sha = (await this.git.raw([...STABLE_OUTPUT_CONFIG, 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`])).trim();
+      return sha.length > 0 ? sha : undefined;
+    } catch (err) {
+      log.debug(`Cannot resolve ${ref}: ${(err as Error).message}`);
+      return undefined;
+    }
+  }
+
+  async mergeBase(a: string, b: string): Promise<string | undefined> {
+    if (this.refuseOptionLike('merge-base', [a, b])) return undefined;
+    try {
+      const sha = (await this.git.raw([...STABLE_OUTPUT_CONFIG, 'merge-base', a, b])).trim();
+      return sha.length > 0 ? sha : undefined;
+    } catch (err) {
+      log.debug(`No merge base for ${a} and ${b}: ${(err as Error).message}`);
+      return undefined;
+    }
+  }
+
+  async isAncestor(ancestor: string, descendant: string): Promise<boolean | undefined> {
+    if (this.refuseOptionLike('is-ancestor', [ancestor, descendant])) return undefined;
+    // Exit code 0: an ancestor; 1: not; anything else is a failure.
+    const result = spawnSync('git', [...STABLE_OUTPUT_CONFIG, 'merge-base', '--is-ancestor', ancestor, descendant], {
+      cwd: this.projectRoot,
+      encoding: 'utf-8',
+    });
+    if (result.error === undefined && result.status === 0) return true;
+    if (result.error === undefined && result.status === 1) return false;
+    log.debug(`Cannot tell whether ${ancestor} is an ancestor of ${descendant}`);
+    return undefined;
+  }
+
+  async getRangeLog(
+    range: GitRange,
+    options?: { readonly trailerKey?: string },
+  ): Promise<RangeCommit[] | undefined> {
+    if (this.refuseOptionLike('range log', [range.head, ...range.exclude])) return undefined;
+    const trailerKey = options?.trailerKey;
+    if (trailerKey !== undefined && !TRAILER_KEY.test(trailerKey)) {
+      log.error(`Refusing to read trailers for invalid key ${JSON.stringify(trailerKey)}`);
+      return undefined;
+    }
+
+    try {
+      const raw = await this.git.raw([
+        ...STABLE_OUTPUT_CONFIG,
+        'log', '-M', '--name-status', '-z', rangeLogFormat(trailerKey),
+        range.head, ...range.exclude.map((ref) => `^${ref}`), '--',
+      ]);
+      return parseRangeLog(raw);
+    } catch (err) {
+      log.error(`Failed to read range log of ${range.head}: ${(err as Error).message}`);
+      return undefined;
+    }
+  }
+
+  async getWorkingTreeChanges(scope: 'all' | 'staged'): Promise<FileChange[] | undefined> {
+    try {
+      if (scope === 'staged') {
+        const raw = await this.git.raw([...STABLE_OUTPUT_CONFIG, 'diff', '--cached', '-M', '--name-status', '-z']);
+        return parseNameStatus(raw.split(NUL));
+      }
+      // status.renames=true: rename detection must not depend on the user's diff.renames setting.
+      const raw = await this.git.raw([...STABLE_OUTPUT_CONFIG, '-c', 'status.renames=true', 'status','--porcelain=v1', '-z', '--untracked-files=all']);
+      return parseStatus(raw);
+    } catch (err) {
+      log.error(`Failed to read ${scope} working-tree changes: ${(err as Error).message}`);
+      return undefined;
+    }
+  }
+
+  async getRefs(): Promise<GitRefs | undefined> {
+    let names: ReturnType<typeof parseBranchNames>;
+    try {
+      names = parseBranchNames(
+        await this.git.raw([...STABLE_OUTPUT_CONFIG, 'for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/remotes']),
+      );
+    } catch (err) {
+      log.error(`Failed to list branches: ${(err as Error).message}`);
+      return undefined;
+    }
+
+    const currentBranch = await this.tryRaw(['symbolic-ref', '--quiet', '--short', 'HEAD']);
+    const upstream = await this.tryRaw(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+    const originHead = await this.tryRaw(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD']);
+    return {
+      ...(currentBranch !== undefined ? { currentBranch } : {}),
+      ...(upstream !== undefined ? { upstream } : {}),
+      ...(originHead !== undefined ? { originHead } : {}),
+      branches: names.all,
+      localBranches: names.local,
+      remoteBranches: names.remote,
+    };
+  }
+
+  async listTrackedFiles(): Promise<string[] | undefined> {
+    try {
+      const raw = await this.git.raw([...STABLE_OUTPUT_CONFIG, 'ls-files', '-z']);
+      return raw.split(NUL).filter((path) => path.length > 0).map(toForwardSlashes);
+    } catch (err) {
+      log.error(`Failed to list tracked files: ${(err as Error).message}`);
+      return undefined;
+    }
+  }
+
+  /** Runs one git call whose failure only means "no such fact"; logged at debug, not error. */
+  private async tryRaw(args: string[]): Promise<string | undefined> {
+    try {
+      const out = (await this.git.raw([...STABLE_OUTPUT_CONFIG, ...args])).trim();
+      return out.length > 0 ? out : undefined;
+    } catch (err) {
+      log.debug(`git ${args[0]} unavailable: ${(err as Error).message}`);
+      return undefined;
+    }
+  }
+
+  /** A ref is never an option; true (and logged) when one would be parsed as such. */
+  private refuseOptionLike(what: string, refs: readonly string[]): boolean {
+    const bad = refs.find((ref) => ref.startsWith('-'));
+    if (bad === undefined) return false;
+    log.error(`Refusing ${what} for option-like ref ${bad}`);
+    return true;
   }
 
   async getCommitFileChanges(rev: string): Promise<FileChange[] | undefined> {

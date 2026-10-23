@@ -8,6 +8,8 @@ import { DetailFormatter } from '../../core/detail-levels/detail-formatter.js';
 import { DetailLevelSchema, type FileIndex } from '../../core/types.js';
 import { wrapResponse } from '../../core/response-envelope.js';
 import { filterByIntent } from '../../core/intent-filter.js';
+import type { ResponseEnricher } from '../../ports/i-ctxo-module.js';
+import { applyEnricher } from './enrich-payload.js';
 
 export const InputSchema = z.object({
   symbolId: z.string().min(1).optional(),
@@ -102,6 +104,7 @@ export function handleGetLogicSlice(
   masking: IMaskingPort,
   staleness?: StalenessCheck,
   ctxoRoot = '.ctxo',
+  enrich?: ResponseEnricher,
 ) {
   const query = new LogicSliceQuery();
   const formatter = new DetailFormatter();
@@ -146,8 +149,9 @@ export function handleGetLogicSlice(
       // Single symbol: return directly. Batch: return array.
       const responseData = ids.length === 1 ? results[0] : { batch: true, results };
 
-      // Apply masking
-      const payload = masking.mask(JSON.stringify(wrapResponse(responseData as Record<string, unknown>)));
+      // A module's enricher sees the single slice or the { batch, results } object; then envelope and masking.
+      const body = applyEnricher(enrich, responseData as Record<string, unknown>, parsed.data, 'get_logic_slice');
+      const payload = masking.mask(JSON.stringify(wrapResponse(body)));
 
       // Check staleness
       const content: Array<{ type: 'text'; text: string }> = [];

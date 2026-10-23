@@ -117,6 +117,13 @@ If the diff is empty:
 { "since": "HEAD~1", "changedFiles": 0, "changedSymbols": 0, "totalImpact": 0, "riskLevel": "low", "files": [], "summary": { "confirmedTotal": 0, "likelyTotal": 0, "potentialTotal": 0, "highRiskSymbols": [] } }
 ```
 
+## Named contexts
+
+With `@ctxo/domain` and a registry, two fields are added:
+
+- `context` on each changed symbol: the id of the one named context that owns its file.
+- `contextBoundaryViolations`: the cross-context edges that touch a changed symbol and fall outside the source context's `contracts`. Each entry has `from` and `to` (`symbolId`, `file`, `context`), `edgeKind` and `severity` (`error` or `warning`, from `domain.boundaries.enforce` and the contexts' rungs). Capped at 50, with `contextBoundaryViolationsTotal` when more existed. Absent when no edge qualifies, and without a registry.
+
 ## Reading the verdict
 
 - **`riskLevel`** — `high` if any changed symbol has `riskScore > 0.7`,

@@ -1,14 +1,34 @@
 import { describe, it, expect } from 'vitest';
 import {
   INIT_PARTS,
+  OPT_IN_PARTS,
   parseInitParts,
   pluginStepEnabled,
   resolveInitParts,
 } from '../init-parts.js';
 
 describe('init-parts', () => {
-  it('lists the six parts in pipeline order', () => {
-    expect([...INIT_PARTS]).toEqual(['rules', 'skills', 'guard', 'mcp', 'git-hooks', 'config']);
+  it('lists the seven parts in help order', () => {
+    expect([...INIT_PARTS]).toEqual(['rules', 'skills', 'guard', 'mcp', 'git-hooks', 'config', 'domain']);
+  });
+
+  /** Every part `ctxo init` selects without flags: all but the opt-in ones. */
+  const DEFAULT_PARTS = INIT_PARTS.filter((part) => !OPT_IN_PARTS.has(part));
+
+  it('INIT_PARTS includes domain, which stays out of the default selection', () => {
+    expect(INIT_PARTS).toContain('domain');
+    expect([...OPT_IN_PARTS]).toEqual(['domain']);
+    expect(resolveInitParts({}).has('domain')).toBe(false);
+  });
+
+  it('--domain adds domain to the default parts; --only domain selects it alone; --skip domain removes it', () => {
+    expect([...resolveInitParts({ domain: true })]).toEqual([...INIT_PARTS]);
+    expect([...resolveInitParts({ only: ['domain'] })]).toEqual(['domain']);
+    expect(resolveInitParts({ domain: true, skip: ['domain'] }).has('domain')).toBe(false);
+    expect(resolveInitParts({ domain: true, skip: ['git-hooks'] })).toEqual(
+      new Set(['rules', 'skills', 'guard', 'mcp', 'config', 'domain']),
+    );
+    expect(parseInitParts('domain,rules').parts).toEqual(['domain', 'rules']);
   });
 
   it('parseInitParts trims, drops empties and de-duplicates', () => {
@@ -32,9 +52,9 @@ describe('init-parts', () => {
     expect(parseInitParts(' , ,')).toEqual({ parts: [], unknown: [] });
   });
 
-  it('resolveInitParts returns every part by default', () => {
-    expect(resolveInitParts({})).toEqual(new Set(INIT_PARTS));
-    expect([...resolveInitParts({})]).toEqual([...INIT_PARTS]);
+  it('resolveInitParts returns every default part by default', () => {
+    expect(resolveInitParts({})).toEqual(new Set(DEFAULT_PARTS));
+    expect([...resolveInitParts({})]).toEqual([...DEFAULT_PARTS]);
   });
 
   it('resolveInitParts with only selects exactly those parts', () => {
@@ -55,7 +75,7 @@ describe('init-parts', () => {
     expect(resolveInitParts({ only: ['rules', 'guard'], noGuard: true })).toEqual(new Set(['rules']));
     const all = resolveInitParts({ noGuard: true });
     expect(all.has('guard')).toBe(false);
-    expect(all.size).toBe(INIT_PARTS.length - 1);
+    expect(all.size).toBe(DEFAULT_PARTS.length - 1);
   });
 
   it('rulesOnly equals skip git-hooks,guard', () => {

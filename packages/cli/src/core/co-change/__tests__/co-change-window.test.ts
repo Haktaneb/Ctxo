@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { parseCoChangeSince, selectWindow, sinceCutoff } from '../co-change-window.js';
+import { parseCoChangeSince, selectWindow, sinceCutoff, windowCutoff } from '../co-change-window.js';
 import type { CanonicalCommit } from '../../history/change-log.js';
+import type { CommitChangeSet } from '../../types.js';
 
 /** Unix seconds of an ISO instant. */
 function unix(iso: string): number {
@@ -191,5 +192,49 @@ describe('selectWindow', () => {
     const frozen = Object.freeze(log.map((c) => Object.freeze({ ...c })));
     expect(() => selectWindow(frozen, 3, 250)).not.toThrow();
     expect(hashes(frozen)).toEqual(['c5', 'c4', 'c3', 'c2', 'c1']);
+  });
+});
+
+describe('windowCutoff', () => {
+  const head = unix('2024-03-31T12:00:00Z');
+
+  it('is undefined without a since setting', () => {
+    expect(windowCutoff({}, head)).toBeUndefined();
+  });
+
+  it('counts the since setting back from the HEAD date', () => {
+    expect(windowCutoff({ since: '2d' }, head)).toBe(head - 2 * 86_400);
+    expect(windowCutoff({ since: '1m' }, head)).toBe(unix('2024-02-29T12:00:00Z'));
+  });
+
+  it('is undefined for a since value that does not parse, so a bad value never narrows the window', () => {
+    expect(windowCutoff({ since: '12h' }, head)).toBeUndefined();
+  });
+});
+
+describe('selectWindow on raw commits', () => {
+  function raw(hash: string, committedAt: number): CommitChangeSet {
+    return {
+      hash,
+      message: `commit ${hash}`,
+      date: new Date(committedAt * 1000).toISOString(),
+      author: 'Dev',
+      committedAt,
+      changes: [{ status: 'R', path: `src/${hash}-new.ts`, oldPath: `src/${hash}-old.ts` }],
+    };
+  }
+
+  it('the raw window keeps the newest maxCommits and applies the since cutoff', () => {
+    const day = 86_400;
+    const headAt = 10 * day;
+    // Newest first, like the change log; c4 carries a skewed older date and c1 falls outside maxCommits.
+    const log = [raw('c5', headAt), raw('c4', 2 * day), raw('c3', 8 * day), raw('c2', 7 * day), raw('c1', 9 * day)];
+
+    const window = selectWindow(log, 4, windowCutoff({ since: '3d' }, headAt));
+
+    expect(window.map((commit) => commit.hash)).toEqual(['c5', 'c3', 'c2']);
+    // The commits come back as they went in: renames keep their old path.
+    expect(window[0]).toBe(log[0]);
+    expect(window[1]!.changes).toEqual([{ status: 'R', path: 'src/c3-new.ts', oldPath: 'src/c3-old.ts' }]);
   });
 });

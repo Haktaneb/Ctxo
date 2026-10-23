@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import type { IHealthCheck } from '../core/diagnostics/types.js';
+import type { LoadedModule } from '../adapters/modules/module-loader.js';
 import { JsonIndexReader } from '../adapters/storage/json-index-reader.js';
 import { HealthChecker } from '../adapters/diagnostics/health-checker.js';
 import { DoctorReporter } from '../adapters/diagnostics/doctor-reporter.js';
@@ -11,6 +12,7 @@ import { JavaTierCheck } from '../adapters/diagnostics/checks/java-tier-check.js
 import { CSharpTierCheck } from '../adapters/diagnostics/checks/csharp-tier-check.js';
 import { GitBinaryCheck, GitRepoCheck, GitHooksCheck } from '../adapters/diagnostics/checks/git-check.js';
 import { AiRulesCheck, SkillsCheck, ClaudeGuardHookCheck } from '../adapters/diagnostics/checks/agent-setup-check.js';
+import { InstallCopiesCheck } from '../adapters/diagnostics/checks/install-copies-check.js';
 import {
   IndexDirectoryCheck,
   IndexFreshnessCheck,
@@ -24,6 +26,7 @@ import { SqliteCacheCheck } from '../adapters/diagnostics/checks/storage-check.j
 import { ConfigFileCheck } from '../adapters/diagnostics/checks/config-check.js';
 import { DiskUsageCheck } from '../adapters/diagnostics/checks/disk-check.js';
 import { applyFixes, formatFixReport } from './doctor-fix.js';
+import { getVersion } from './cli-paths.js';
 
 export interface DoctorOptions {
   json?: boolean;
@@ -31,6 +34,8 @@ export interface DoctorOptions {
   fix?: boolean;
   dryRun?: boolean;
   yes?: boolean;
+  /** Loaded opt-in modules (@ctxo/domain); their doctor checks run after the core checks. */
+  modules?: readonly LoadedModule[];
 }
 
 export class DoctorCommand {
@@ -43,7 +48,6 @@ export class DoctorCommand {
   }
 
   async run(options: DoctorOptions = {}): Promise<void> {
-    const { getVersion } = await import('./cli-router.js');
     console.error(`ctxo v${getVersion()} — health check\n`);
 
     const checks: IHealthCheck[] = [
@@ -55,6 +59,7 @@ export class DoctorCommand {
       new AiRulesCheck(),
       new SkillsCheck(),
       new ClaudeGuardHookCheck(),
+      new InstallCopiesCheck(),
       new IndexDirectoryCheck(),
       new IndexFreshnessCheck(),
       new SqliteCacheCheck(),
@@ -70,6 +75,8 @@ export class DoctorCommand {
       new OrphanedFilesCheck(),
       new CoChangesCacheCheck(),
       new SchemaVersionCheck(),
+      // Module checks last, so the core report reads the same with or without a module.
+      ...(options.modules ?? []).flatMap((module) => module.registration.doctorChecks ?? []),
     ];
 
     // Pre-load index once — shared by all index-related checks (avoids 5x redundant readAll)

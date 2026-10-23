@@ -1,4 +1,4 @@
-import type { CommitRecord, ChurnData, ChangeLog, FileChange } from '../core/types.js';
+import type { CommitRecord, ChurnData, ChangeLog, FileChange, GitRange, GitRefs, RangeCommit } from '../core/types.js';
 
 export interface IGitPort {
   getCommitHistory(filePath: string, maxCount?: number): Promise<CommitRecord[]>;
@@ -40,4 +40,26 @@ export interface IGitPort {
    * undefined when git fails.
    */
   getIgnoredPaths?(paths: readonly string[]): Promise<ReadonlySet<string> | undefined>;
+  /**
+   * The methods below return undefined when git fails, and refuse any ref that starts with `-`.
+   */
+  /** Full SHA of `<ref>^{commit}`. */
+  resolveCommit?(ref: string): Promise<string | undefined>;
+  /** Full SHA of the merge base of two refs. */
+  mergeBase?(a: string, b: string): Promise<string | undefined>;
+  /** Whether `ancestor` is reachable from `descendant`. */
+  isAncestor?(ancestor: string, descendant: string): Promise<boolean | undefined>;
+  /**
+   * Commits reachable from `range.head` and from none of `range.exclude`, newest first. Merge commits
+   * carry no changes. `trailerKey` collects that trailer's values per commit.
+   */
+  getRangeLog?(range: GitRange, options?: { readonly trailerKey?: string }): Promise<RangeCommit[] | undefined>;
+  /**
+   * 'all': staged, unstaged and untracked (not ignored) changes against HEAD; 'staged': only the index.
+   */
+  getWorkingTreeChanges?(scope: 'all' | 'staged'): Promise<FileChange[] | undefined>;
+  /** Current branch, upstream, origin/HEAD and the branch list. */
+  getRefs?(): Promise<GitRefs | undefined>;
+  /** Tracked paths (git ls-files -z), repo-relative, forward slashes. */
+  listTrackedFiles?(): Promise<string[] | undefined>;
 }
