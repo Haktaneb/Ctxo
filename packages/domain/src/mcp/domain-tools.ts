@@ -27,12 +27,20 @@ function fileOfSymbolId(id: string): string | undefined {
   return parts.length >= 3 && parts[0] !== '' ? parts[0] : undefined;
 }
 
-/** Backslashes become `/`, an absolute path inside the project becomes repo-relative, a leading `./` is dropped. */
-function repoPath(projectRoot: string, raw: string): string {
+/**
+ * A repo-relative path, or undefined when the path lies outside the project (`../...`, another drive). Backslashes
+ * become `/`, an absolute path inside the project becomes repo-relative, a leading `./` and trailing `/` are dropped.
+ */
+function repoPath(projectRoot: string, raw: string): string | undefined {
   const trimmed = raw.trim();
-  let path = isAbsolute(trimmed) ? relative(projectRoot, trimmed) : trimmed;
-  path = path.replace(/\\/g, '/');
+  const drive = /^[A-Za-z]:[\\/]/.test(trimmed);
+  // A drive path names no POSIX project file.
+  if (drive && process.platform !== 'win32') return undefined;
+  let path = (isAbsolute(trimmed) || drive ? relative(projectRoot, trimmed) : trimmed).replace(/\\/g, '/');
   while (path.startsWith('./')) path = path.slice(2);
+  path = path.replace(/\/+$/, '');
+  // `relative` gives `../...` above the root, and an absolute path for another drive.
+  if (path === '..' || path.startsWith('../') || isAbsolute(path) || /^[A-Za-z]:/.test(path)) return undefined;
   return path;
 }
 
@@ -52,7 +60,8 @@ function answer(state: DomainState, view: (snapshot: DomainSnapshot) => Payload)
     if (!loaded.ok) return { found: false, hint: loaded.hint };
     return withStale(loaded.snapshot, view(loaded.snapshot));
   } catch (err) {
-    return { found: false, hint: `The domain graph could not be read: ${(err as Error).message}` };
+    // An unexpected failure is an error, never a miss: `found: false` means no registry, graph, rule or context.
+    return { error: true, message: `The domain graph could not be read: ${(err as Error).message}` };
   }
 }
 
@@ -68,18 +77,20 @@ export function domainTools(host: CtxoHost, state: DomainState): ModuleToolDefin
       answer(state, (snapshot) => {
         const symbolId = text(args['symbolId']);
         const path = text(args['path']);
-        let target: string;
+        let raw: string;
         if (symbolId !== undefined) {
           const file = fileOfSymbolId(symbolId.trim());
           if (file === undefined) {
             return { found: false, hint: `${symbolId} names no file; pass a symbol ID of the form file::name::kind, or a path.` };
           }
-          target = repoPath(host.projectRoot, file);
+          raw = file;
         } else if (path !== undefined) {
-          target = repoPath(host.projectRoot, path);
+          raw = path;
         } else {
           return contextsOverview(snapshot);
         }
+        const target = repoPath(host.projectRoot, raw);
+        if (target === undefined) return { found: false, hint: `${raw.trim()} is outside the project.` };
         const lookup = contextForPath(snapshot, target);
         return 'hint' in lookup ? { found: false, hint: lookup.hint } : contextView(snapshot, lookup.context);
       }),

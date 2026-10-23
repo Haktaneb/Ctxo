@@ -268,6 +268,20 @@ describe('domain views', () => {
     expect(ruleView(SNAPSHOT, 'LEND-03')['decisionsTotal']).toBeUndefined();
   });
 
+  it('ruleView provenance comes only from the decisions it lists', () => {
+    const sixty = Array.from({ length: 60 }, (_, i) => `- 2026-01-01: LEND-03 note ${i + 1}. #${1001 + i}`).join('\n');
+    const rule = ruleView(snapshot({ lending: LENDING_TEXT.replace('## Decisions\n', `## Decisions\n${sixty}\n`) }), 'LEND-03');
+
+    const listed = new Set(list(rule['decisions']).map((d) => d['id']));
+    const provenance = list(rule['provenance']);
+    expect(listed.size).toBe(50);
+    expect(provenance.every((p) => listed.has(p['decision']))).toBe(true);
+    // The 48 listed same-day decisions carry #1001 to #1048; #1049 to #1060 belong to decisions past the cap.
+    const values = provenance.map((p) => p['value']);
+    expect(values).toContain('#1048');
+    expect(values).not.toContain('#1049');
+  });
+
   it('contracts list outbound and inbound registry contracts with the card text and references', () => {
     expect(contextView(SNAPSHOT, 'lending')['contracts']).toEqual({
       outbound: [{ target: 'billing', files: ['src/billing/ChargeService.cs'] }],

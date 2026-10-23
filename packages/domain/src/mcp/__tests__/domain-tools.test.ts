@@ -240,6 +240,34 @@ describe('domain tools', () => {
     expect(await call(all.get(GET_RULE), { ruleId: 'LEND-03' })).toEqual({ found: false, hint: 'No domain graph yet; run "ctxo index".' });
   });
 
+  it('an unexpected failure is an error, not a miss', async () => {
+    const throwing = { load: () => { throw new Error('disk on fire'); } };
+    const all = new Map(domainTools(newHost(), throwing).map((tool) => [tool.name, tool]));
+    const expected = { error: true, message: 'The domain graph could not be read: disk on fire' };
+
+    expect(await call(all.get(GET_DOMAIN_CONTEXT), { path: 'src/Lending/Loan.ts' })).toEqual(expected);
+    expect(await call(all.get(GET_RULE), { ruleId: 'LEND-03' })).toEqual(expected);
+  });
+
+  it('a path outside the project gets its own hint, and a trailing slash still matches', async () => {
+    await setUp();
+    const tool = tools().get(GET_DOMAIN_CONTEXT);
+    const outside = join(dirname(root), 'elsewhere', 'Loan.ts');
+
+    expect(await call(tool, { path: '../other/Loan.ts' })).toEqual({ found: false, hint: '../other/Loan.ts is outside the project.' });
+    expect(await call(tool, { path: '..\\other\\Loan.ts' })).toEqual({ found: false, hint: '..\\other\\Loan.ts is outside the project.' });
+    expect(await call(tool, { path: outside })).toEqual({ found: false, hint: `${outside} is outside the project.` });
+    expect(await call(tool, { symbolId: '../other/Loan.ts::Loan::class' })).toEqual({ found: false, hint: '../other/Loan.ts is outside the project.' });
+    if (process.platform === 'win32') {
+      const otherDrive = `${root[0]!.toUpperCase() === 'Z' ? 'Y' : 'Z'}:\\elsewhere\\Loan.ts`;
+      expect(await call(tool, { path: otherDrive })).toEqual({ found: false, hint: `${otherDrive} is outside the project.` });
+    }
+
+    for (const path of ['src/Lending/', 'src\\Lending\\','./src/Lending//']) {
+      expect((await call(tool, { path }))['context'], path).toMatchObject({ id: 'lending' });
+    }
+  });
+
   it('get_rule adds stale and the hint after a card edit', async () => {
     await setUp();
     const all = tools();

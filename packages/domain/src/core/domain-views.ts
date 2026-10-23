@@ -154,9 +154,10 @@ export function ruleView(snapshot: DomainSnapshot, ruleId: string): Payload {
     .sort(byNewest);
   const capped = cappedDecisions(snapshot, decisions);
 
+  // Only the listed decisions give provenance, so every `decision` reference resolves in the payload.
   const provenance: (ProvenanceView & { readonly decision: string })[] = [];
   const seen = new Set<string>();
-  for (const decision of decisions) {
+  for (const decision of decisions.slice(0, ADDITIVE_CAP)) {
     for (const view of decisionView(index, decision).provenance) {
       const key = view.kind === 'file' ? `file\n${view.path}` : `external\n${view.value}`;
       if (seen.has(key)) continue;
