@@ -203,7 +203,7 @@ domain:                        # read only when @ctxo/domain is installed (ADR-0
   registry: docs/domain/contexts.yaml
   coverage: { unowned: warn }  # warn | error
   boundaries: { enforce: by-rung, blockingRungs: [bounded, boring] }   # by-rung | report
-  rules: { idPattern: "^[A-Z][A-Z0-9]*-\d+$", trackerPrefixes: [] }
+  rules: { idPattern: "^[A-Z][A-Z0-9]*-\\d+$", trackerPrefixes: [] }
   tests: { ruleTraitKeys: [Rule] }
   guard: { enabled: true, subagents: false }   # base: <ref> is optional
 ```

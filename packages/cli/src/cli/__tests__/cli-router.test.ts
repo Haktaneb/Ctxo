@@ -541,6 +541,18 @@ export async function register() {
           return 4;
         },
       });
+      for (const name of ['contexts-touched', 'domain']) {
+        registrar.registerCommand({
+          name,
+          help: ['ctxo ' + name + '   stub'],
+          usage: ['Usage: ctxo ' + name + ' [flags]', '', 'Exit codes: 0 ok.'],
+          hidden: true,
+          async run(args) {
+            (globalThis.__ctxoRouterRuns ??= []).push(args);
+            return 0;
+          },
+        });
+      }
       registrar.registerCommand({
         name: 'domain-guard-hook',
         help: ['ctxo domain-guard-hook   Stub hook entry'],
@@ -695,6 +707,19 @@ export async function register() {
     await routerFor(project).route(['verify-domain', flag]);
 
     expect(printed()).toContain('Usage: ctxo verify-domain [--json]');
+    expect(printed()).toContain('Exit codes');
+    expect(printed()).not.toContain('ctxo --help');
+    expect(runs()).toEqual([]);
+    expect(process.exitCode ?? 0).toBe(0);
+  });
+
+  it.each(['contexts-touched', 'domain'])('ctxo %s --help prints the full command usage and runs nothing', async (name) => {
+    const project = tempDir();
+    writeStubDomainPackage(project, STUB);
+
+    await routerFor(project).route([name, '--help']);
+
+    expect(printed()).toContain(`Usage: ctxo ${name} [flags]`);
     expect(printed()).toContain('Exit codes');
     expect(printed()).not.toContain('ctxo --help');
     expect(runs()).toEqual([]);
