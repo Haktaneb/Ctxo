@@ -26,12 +26,12 @@ Ctxo is a Model Context Protocol (MCP) server that delivers Logic-Slices to AI c
 
 - [Overview](https://alperhankendi.github.io/Ctxo/docs/cli/overview): All commands at a glance.
 - [ctxo install](https://alperhankendi.github.io/Ctxo/docs/cli/install): Install language plugins (`ctxo install sql`, alias `tsql`, for T-SQL).
-- [ctxo init](https://alperhankendi.github.io/Ctxo/docs/cli/init): Bootstrap a project (rules, plugins, versioned git hooks).
+- [ctxo init](https://alperhankendi.github.io/Ctxo/docs/cli/init): Bootstrap a project (tiered rules blocks, skills, the safe-edit guard, MCP config, versioned git hooks, plugins); pick parts with `--only`, `--skip` and `--no-guard`.
 - [ctxo index](https://alperhankendi.github.io/Ctxo/docs/cli/index): Build the codebase index; `--files` and `--commit` re-index part of it; co-change window flags.
 - [ctxo watch](https://alperhankendi.github.io/Ctxo/docs/cli/watch): Incremental re-index.
 - [ctxo sync](https://alperhankendi.github.io/Ctxo/docs/cli/sync): Rebuild SQLite from JSON.
 - [ctxo status](https://alperhankendi.github.io/Ctxo/docs/cli/status): Index manifest.
-- [ctxo doctor](https://alperhankendi.github.io/Ctxo/docs/cli/doctor): Health check + `--fix` (including the `git_hooks` check and the `csharp_tier` check, which warns when the Roslyn helper cannot restore its NuGet packages).
+- [ctxo doctor](https://alperhankendi.github.io/Ctxo/docs/cli/doctor): Health check + `--fix` (including the `git_hooks` check, the `ai_rules`, `skills` and `claude_guard_hook` agent-setup checks, and the `csharp_tier` check, which warns when the Roslyn helper cannot restore its NuGet packages).
 - [ctxo contexts](https://alperhankendi.github.io/Ctxo/docs/cli/contexts): Candidate bounded contexts, with shared tables between them; `--json` for the full artifact.
 - [ctxo visualize](https://alperhankendi.github.io/Ctxo/docs/cli/visualize): Interactive graph HTML.
 - [config.yaml](https://alperhankendi.github.io/Ctxo/docs/cli/config-yaml): Project config file.

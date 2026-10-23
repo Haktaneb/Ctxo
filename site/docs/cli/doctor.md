@@ -41,7 +41,7 @@ ctxo doctor [options]
 | Index directory | `.ctxo/index/` exists and is readable |
 | Index freshness | JSON index matches source hashes |
 | SQLite cache | `.ctxo/.cache/symbols.db` present and usable |
-| Config file | `.ctxo/config.yaml` is valid YAML and conforms to the schema; invalid `index.*` and `cochange.include` / `cochange.exclude` globs are warned about |
+| Config file | `.ctxo/config.yaml` is valid YAML and conforms to the schema; invalid `index.*`, `cochange.include` / `cochange.exclude`, `contextsView.exclude` and `contextsView.hubs.paths` globs are warned about |
 | ts-morph, tree-sitter | Runtime parsers load |
 | Language coverage | Every detected language has a registered plugin (at least 5 `.sql` files that are also at least 2% of all files suggest `@ctxo/lang-sql`) |
 | Java analysis tier (`java_tier`) | Which Java tier is active |

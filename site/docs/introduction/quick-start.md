@@ -9,7 +9,7 @@ Five steps, five minutes. At the end you will have a committed index of your
 repo and an agent making dependency-aware queries against it.
 
 ::: info Prerequisites
-Node.js >= 20, git, and a repo with TypeScript, Go, C#, or Java code. See
+Node.js >= 20, git, and a repo with TypeScript, Go, C#, Java or T-SQL code. See
 [Installation](/introduction/installation) for details.
 :::
 
@@ -32,15 +32,36 @@ From the root of your repo:
 ctxo init
 ```
 
-Expected output (abridged):
+The interactive run asks which AI tools to set up, offers a plugin for each
+detected language that has none, and asks whether to install the git hooks and
+(when Claude Code is selected) the safe-edit guard. The same setup without
+prompts, for Claude Code:
+
+```bash
+ctxo init --tools claude-code -y
+```
+
+Expected output on a fresh repo:
 
 ```
-[ctxo] Detected languages: typescript
-[ctxo] Installing @ctxo/lang-typescript@^0.7.0-alpha.0 (devDependency)...
-[ctxo] Wrote .ctxo/config.yaml
-[ctxo] Installed git hooks: post-commit, post-merge, post-checkout
-[ctxo] Done. Run `ctxo index` next.
+[ctxo] ✓ .ctxo/index/ (created)
+[ctxo] ✓ .ctxo/config.yaml (created)
+[ctxo] ✓ .gitignore (created)
+[ctxo] ✓ .claude/skills/ctxo-understand/SKILL.md (created)
+[ctxo] ✓ .claude/skills/ctxo-safe-edit/SKILL.md (created)
+[ctxo] ✓ .claude/skills/ctxo-review-pr/SKILL.md (created)
+[ctxo] ✓ .claude/settings.json (created)
+[ctxo] ✓ CLAUDE.md (created)
+[ctxo] ✓ .mcp.json (created)
+[ctxo] ✓ .git/hooks/post-commit (created)
+[ctxo] ✓ .git/hooks/post-merge (created)
 ```
+
+Each line is `[ctxo] ✓ <file> (<created|updated|unchanged>)`; a re-run reports
+`unchanged` for files that are already current. When a detected language has
+no plugin yet, `-y` also installs it (`[ctxo] Installing missing plugins: ...`).
+Use `--only`, `--skip` or `--no-guard` to pick the parts, and `--dry-run` to
+see what init would write.
 
 ## 2. Build the index
 
@@ -53,11 +74,10 @@ with git commit intent. Expect a few seconds on small repos, a minute or two
 on large ones.
 
 ```
-[ctxo] Indexing 342 files across 1 workspace...
-[ctxo] typescript: 312 files, 4,812 symbols, 11,507 edges
-[ctxo] Wrote .ctxo/index/ (312 JSON files)
-[ctxo] Rebuilt .ctxo/.cache/ctxo.sqlite
-[ctxo] Done in 8.2s
+[ctxo] Building codebase index... Found 312 source files
+[ctxo] Community detection: 18 clusters (modularity 0.712)
+[ctxo] Index complete: 312 files indexed
+[ctxo]   TypeScript/JS: 312 files (full tier)
 ```
 
 ::: tip Fast re-index
@@ -72,18 +92,23 @@ ctxo status
 ```
 
 ```
-[ctxo] Index: .ctxo/index/ (312 files, last built 12s ago)
-[ctxo] Cache: .ctxo/.cache/ctxo.sqlite (4.2 MB)
-[ctxo] Plugins: @ctxo/lang-typescript v0.7.0-alpha.0
-[ctxo] Health: OK
+[ctxo] Index Status
+  Schema version: 1.0.0
+  Indexed files:  312
+  Total symbols:  4812
+  Total edges:    11507
+  SQLite cache:   present
 ```
+
+A per-file list (timestamp, symbol and edge counts) follows.
 
 If anything looks off, run `ctxo doctor` for a detailed health report.
 
 ## 4. Wire up an MCP client
 
-Add Ctxo to your client's MCP config. For Claude Code, create or edit
-`.mcp.json` in your repo root:
+`ctxo init` already wrote the MCP config of every tool you selected. To add it
+by hand, edit your client's MCP config. For Claude Code, `.mcp.json` in your
+repo root:
 
 ```json
 {
@@ -137,7 +162,9 @@ Expected response shape:
   - interactive graph of the repo you just indexed
 
 ::: tip Keep it fresh
-The git hooks installed by `ctxo init` re-index on commit, merge, and
-checkout. For active editing sessions, run `ctxo watch` in a spare
-terminal for incremental re-indexing on save.
+The post-commit hook installed by `ctxo init` runs `ctxo index --commit HEAD`,
+which re-indexes the files each commit changed; the post-merge hook runs
+`ctxo sync` to rebuild the SQLite cache from the pulled index. For active
+editing sessions, run `ctxo watch` in a spare terminal for incremental
+re-indexing on save.
 :::

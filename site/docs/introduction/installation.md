@@ -9,7 +9,7 @@ description: "Install @ctxo/cli, then run ctxo init and ctxo doctor."
 
 - **Node.js** >= 20
 - **git** (any recent version)
-- A supported language: **TypeScript / JavaScript**, **Go**, **C#**, or **Java**
+- A supported language: **TypeScript / JavaScript**, **Go**, **C#**, **Java**, or **SQL (T-SQL)**
 
 ## Install
 
@@ -47,8 +47,15 @@ From the root of the repo you want to index:
 ctxo init
 ```
 
-This detects your languages, installs the right `@ctxo/lang-*` plugins, adds
-git hooks, and creates a starter `.ctxo/config.yaml`.
+This detects your languages and installs the right `@ctxo/lang-*` plugins,
+writes a ctxo rules block into each AI tool's rules file (`CLAUDE.md`,
+`AGENTS.md`, `.cursor/rules/ctxo.mdc` and the rest), installs the three ctxo
+skills (Claude Code and Cursor) and, for Claude Code, the safe-edit guard hook, registers the MCP server
+in each tool's MCP config, adds the git hooks (post-commit runs
+`ctxo index --commit HEAD`) and creates a starter `.ctxo/config.yaml`. Pick
+parts with `--only` or `--skip` (`rules`, `skills`, `guard`, `mcp`,
+`git-hooks`, `config`), leave the guard out with `--no-guard`, and preview with
+`--dry-run`. See [`ctxo init`](/cli/init).
 
 (If you have not installed globally and not yet added `@ctxo/cli` as a project
 dependency, use `npx -y @ctxo/cli init` here — it does the same thing.)
@@ -79,7 +86,7 @@ the fact, install the plugin package directly:
 
 ```bash [pnpm]
 pnpm add -D @ctxo/lang-typescript
-# or: @ctxo/lang-go, @ctxo/lang-csharp, @ctxo/lang-java
+# or: @ctxo/lang-go, @ctxo/lang-csharp, @ctxo/lang-java, @ctxo/lang-sql
 ```
 
 ```bash [npm]
@@ -96,7 +103,8 @@ Available plugins on npm:
 [`@ctxo/lang-typescript`](https://www.npmjs.com/package/@ctxo/lang-typescript),
 [`@ctxo/lang-go`](https://www.npmjs.com/package/@ctxo/lang-go),
 [`@ctxo/lang-csharp`](https://www.npmjs.com/package/@ctxo/lang-csharp),
-[`@ctxo/lang-java`](https://www.npmjs.com/package/@ctxo/lang-java).
+[`@ctxo/lang-java`](https://www.npmjs.com/package/@ctxo/lang-java),
+[`@ctxo/lang-sql`](https://www.npmjs.com/package/@ctxo/lang-sql) (`ctxo install sql`).
 
 :::tip Java — Full tier setup and automatic JAR selection
 

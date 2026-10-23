@@ -76,6 +76,23 @@ describe('ConfigFileCheck', () => {
     expect(result.fix).toContain('cochange.exclude');
   });
 
+  it('warns on invalid index.tests and contextsView globs and names every glob key in the fix hint', async () => {
+    const tooLong = 'a'.repeat(65_537);
+    writeFileSync(
+      join(ctxoRoot, 'config.yaml'),
+      `index:\n  tests:\n    - "${tooLong}"\ncontextsView:\n  exclude:\n    - "${tooLong}"\n  hubs:\n    paths:\n      - "${tooLong}"\n`,
+    );
+    const result = await check.run(ctx);
+    expect(result.status).toBe('warn');
+    expect(result.message).toContain('3 invalid glob pattern(s)');
+    expect(result.message).toContain('index.tests:');
+    expect(result.message).toContain('contextsView.exclude:');
+    expect(result.message).toContain('contextsView.hubs.paths:');
+    for (const key of ['index.tests', 'contextsView.exclude', 'contextsView.hubs.paths']) {
+      expect(result.fix, key).toContain(key);
+    }
+  });
+
   it('fails and names the key for a typo under contextsView.hubs', async () => {
     writeFileSync(join(ctxoRoot, 'config.yaml'), 'contextsView:\n  hubs:\n    minDependent: 5\n');
     const result = await check.run(ctx);

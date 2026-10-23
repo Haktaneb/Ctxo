@@ -1,13 +1,13 @@
 # Ctxo MCP Server — Full Reference
 
 > AI agents don't fail because they can't code. They fail because they code blind. Ctxo gives them the full picture before they write a single line.
-> npm: @ctxo/cli (v0.7.0-alpha.0) | GitHub: https://github.com/alperhankendi/Ctxo
+> npm: @ctxo/cli | GitHub: https://github.com/alperhankendi/Ctxo
 
 ## Setup
 
 ```bash
 npm install -g @ctxo/cli      # One-time global install (gives you the `ctxo` command)
-ctxo init                     # Detect languages + install plugins + wire MCP
+ctxo init                     # Rules, skills, guard, MCP config, git hooks, plugins
 ctxo index                    # Build codebase index (required once)
 ctxo index --check            # CI gate: fail if index stale (writes nothing, records no snapshot)
 ctxo index --commit HEAD      # Re-index the files one commit changed (what the post-commit hook runs)
@@ -310,7 +310,7 @@ All symbols use deterministic IDs: `"<relativePath>::<name>::<kind>"`
 
 ---
 
-## Co-change, Incremental Indexing and Snapshots (#157)
+## Co-change, Incremental Indexing and Snapshots (v0.13, #157)
 
 Co-change (files that change together in git history) feeds every blast-radius path: get_blast_radius, get_pr_impact, get_context_for_task, `ctxo blast-radius`, the gate hook and `ctxo gate --preview`.
 
@@ -492,7 +492,7 @@ Three model-invoked skill files installed to `.claude/skills/` (Claude Code) and
 | Cursor | No (no blocking pre-edit hook in v3.6) | Yes | Yes |
 | Other platforms | No | Where supported | Yes |
 
-### Tiered rules (#159)
+### Tiered rules (v0.13, #159)
 
 `ctxo init` writes one ctxo block into each AI tool's rules file, between `<!-- ctxo-rules-start v<version> -->` and `<!-- ctxo-rules-end -->`. The version is the rules template version, the CLI minor in which the rules text last changed.
 
@@ -504,7 +504,7 @@ Three model-invoked skill files installed to `.claude/skills/` (Claude Code) and
 - Held blocks: init (real run, dry run, `--only rules`, `--rules`) and `ctxo doctor --fix` leave `CLAUDE.md` or `.cursor/rules/ctxo.mdc` unchanged when its block is pre-tier or compact, the user has not declined the guard or skills (`--no-guard`, the guard question answered no, `gate.enabled: false`, `--skip skills`), and after the skills and guard steps they are still not on disk (an unreadable `.claude/settings.json` counts as no guard). Init warns `<file>: left unchanged until the guard and skills are installed; run "ctxo init --only rules,skills,guard" or "ctxo doctor --fix"`; the dry run prints `unchanged (held)`. A file linked to a held one is held too. A file without a ctxo block is never held.
 - Skills carry a version marker, `<!-- ctxo-skill v<version> -->` (SKILLS_TEMPLATE_VERSION). An installed skill with a newer marker is left alone with a warning and is not outdated; no marker or an older one is outdated and replaced.
 
-### Granular init (#159)
+### Granular init (v0.13, #159)
 
 - Parts, run in this order: `config` (`.ctxo/config.yaml`, `.gitignore` entry, `.ctxo/index/`), `skills`, `guard`, `rules`, `mcp`, `git-hooks`.
 - `ctxo init --only <parts>` installs exactly those parts (and skips the plugin step); `ctxo init --skip <parts>` installs the rest (the plugin step still runs); `ctxo init --no-guard` does not install the guard and never asks. `-y` without `--tools` sets up all nine tools, the same set the dry run previews. `--only` cannot be combined with `--skip` or `--rules`; an unknown part exits 1.
@@ -513,7 +513,7 @@ Three model-invoked skill files installed to `.claude/skills/` (Claude Code) and
 - `ctxo init --dry-run` lists every file init would create or change (`would create`, `would update`, `unchanged`) and writes nothing.
 - Init output: `[ctxo] ✓ <file> (<created|updated|unchanged>)`, warnings as `[ctxo] ⚠ <text>`.
 
-### Agent-setup doctor checks (#159)
+### Agent-setup doctor checks (v0.13, #159)
 
 - `ai_rules`: an outdated block (unversioned, older template, or edited), a `CLAUDE.md` block that expects the guard while it is missing, a current block in the wrong tier, several blocks in one file, a start marker without an end marker, an end marker without a start marker. A block from a newer ctxo passes, and so does a file with no ctxo block. Linked files are reported once.
 - `skills`: missing or outdated ctxo skills for Claude Code and Cursor, where expected (one ctxo skill installed, or the rules block is pre-tier or compact). Formatting is ignored, and a skill from a newer ctxo is not reported.

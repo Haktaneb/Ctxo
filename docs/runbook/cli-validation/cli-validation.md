@@ -3,7 +3,7 @@
 > **Purpose:** Repeatable end-to-end validation of all `ctxo` CLI commands.
 > **When to run:** After any CLI change, new command, or before release.
 > **Expected duration:** ~3 minutes
-> **Version:** v0.8.0 (architectural intelligence)
+> **Version:** v0.13 (co-change and incremental indexing, contexts view and T-SQL, tiered agent rules)
 > **Prerequisite:** Index must exist (run `ctxo index` first, or follow [MCP Validation Runbook](../mcp-validation/mcp-validation.md) Steps 1-2)
 
 All commands assume the monorepo root as cwd. `.ctxo/` is per-project; when validating the ctxo repo itself it lives at the workspace root. `--file src/X.ts` is interpreted relative to the cwd.
@@ -18,7 +18,9 @@ All commands assume the monorepo root as cwd. `.ctxo/` is per-project; when vali
 | `ctxo sync` | Rebuild SQLite from JSON index | — |
 | `ctxo status` | Show index manifest | — |
 | `ctxo verify-index` | CI gate: fail if index stale | — |
-| `ctxo init` | Install git hooks (post-commit v2 runs `ctxo index --commit HEAD`) | - |
+| `ctxo init` | Rules, skills, safe-edit guard, MCP config, git hooks (post-commit v2 runs `ctxo index --commit HEAD`), config, plugins | `--tools a,b`, `-y`, `--only <parts>`, `--skip <parts>`, `--no-guard`, `--dry-run`, `--no-install` |
+| `ctxo install` | Install language plugins (`sql`, alias `tsql`, for T-SQL) | `--dry-run`, `-y`, `--global` |
+| `ctxo contexts` | Candidate contexts as a table (stderr) | `--json` (full `contexts-view.json` to stdout) |
 | `ctxo watch` | File watcher for incremental re-index | — |
 | `ctxo stats` | Show usage statistics | `--json`, `--days N`, `--clear` |
 | `ctxo doctor` | Health check all subsystems | `--json`, `--quiet`, `--fix` |
@@ -262,6 +264,23 @@ node packages/cli/dist/index.js index --cochange-since 12 2>&1; echo "Exit: $?"
 * [ ] The first two show `--cochange-commits requires a positive integer or "all"`, the third `--cochange-since requires a duration such as 30d, 2w, 12m or 1y`
 * [ ] All three exit 1 and index nothing
 
+### 2.10 Contexts View and `ctxo contexts`
+
+```bash
+pnpm --filter @ctxo/cli exec tsx src/index.ts index
+pnpm --filter @ctxo/cli exec tsx src/index.ts contexts
+pnpm --filter @ctxo/cli exec tsx src/index.ts contexts --json > /tmp/contexts-view.json
+pnpm --filter @ctxo/cli exec tsx src/index.ts index --skip-community
+```
+
+**Verify:**
+
+* [ ] `ctxo index` writes `.ctxo/index/contexts-view.json`
+* [ ] `ctxo contexts` prints to stderr only: a first line `[ctxo] Contexts view at <sha>: N candidates cover X/Y files (P%), N hubs, N unclustered, N collisions, N shared tables`, then one `#<id>  <n> files  cohesion <c>  <label>  terms: ...` line per candidate, then `hub ...` and `shared ...` lines
+* [ ] `ctxo contexts --json` prints the same content as `.ctxo/index/contexts-view.json` to stdout (`jq '.candidates | length' /tmp/contexts-view.json` matches the candidate count of the table)
+* [ ] `--skip-community` does not rewrite `contexts-view.json` (its modification time and contents stay the same)
+* [ ] In a repository without `.ctxo/index/contexts-view.json`, `ctxo contexts` prints `No contexts view. Run ctxo index (without --skip-community).` and `ctxo contexts --json` prints `{"found":false,"hint":"No contexts view. Run ctxo index (without --skip-community)."}`
+
 ***
 
 ## Step 3: `ctxo sync`
@@ -399,6 +418,46 @@ pnpm --filter @ctxo/cli exec tsx src/index.ts init
 cat .git/hooks/post-commit
 cat .git/hooks/post-merge
 ```
+
+### 6.1 Init Parts: `--only`, `--skip`, `--no-guard`
+
+> Run in a scratch repository, never in the ctxo checkout. `CTXO` is the built CLI.
+
+```bash
+rm -rf /tmp/ctxo-init-parts && mkdir /tmp/ctxo-init-parts && cd /tmp/ctxo-init-parts && git init -q
+CTXO="node /path/to/ctxo/packages/cli/dist/index.js"
+$CTXO init --tools claude-code -y --dry-run
+$CTXO init --tools claude-code -y --no-guard
+$CTXO init --tools claude-code -y --only rules,skills,guard
+$CTXO init --tools claude-code -y
+$CTXO init --tools claude-code -y --skip git-hooks
+$CTXO init --only rules --skip mcp; echo "Exit: $?"
+$CTXO init --only nope; echo "Exit: $?"
+$CTXO init --skip rules,skills,guard,mcp,git-hooks,config --no-install
+```
+
+**Verify:**
+
+* [ ] The dry run prints `[ctxo] Dry run: nothing is written. Files init would touch:` and one row per file (`would create`, `would update` or `unchanged`); `git status --short` is still empty afterwards
+* [ ] `--no-guard`: no `.claude/settings.json`, and `CLAUDE.md` holds the full block between `<!-- ctxo-rules-start v<version> -->` and `<!-- ctxo-rules-end -->`
+* [ ] `--only rules,skills,guard` prints rows only for the three skills, `.claude/settings.json` and `CLAUDE.md`: `.claude/settings.json` now registers `ctxo gate-hook`, and `CLAUDE.md` holds the compact block (`## ctxo` and 4 lines)
+* [ ] The plain run prints one `[ctxo] ✓ <file> (<created|updated|unchanged>)` line per file, `unchanged` for every file the earlier runs already wrote, including `.git/hooks/post-commit` and `.git/hooks/post-merge`
+* [ ] `--skip git-hooks` writes no line for `.git/hooks/`
+* [ ] `--only rules --skip mcp` prints `[ctxo] --only cannot be combined with --skip or --rules` and exits 1
+* [ ] `--only nope` prints `[ctxo] Unknown init part: nope. Valid parts: ...` and exits 1
+* [ ] Skipping every part with `--no-install` prints `[ctxo] Nothing to install: every part is excluded.` and writes nothing
+
+### 6.2 `ctxo install sql`
+
+```bash
+pnpm --filter @ctxo/cli exec tsx src/index.ts install sql --dry-run
+pnpm --filter @ctxo/cli exec tsx src/index.ts install tsql --dry-run
+```
+
+**Verify:**
+
+* [ ] Both print `[ctxo] Plan: install @ctxo/lang-sql...`, the package manager line and `[ctxo] Command: ...`, then `[ctxo] --dry-run set; not executing.`; nothing is installed
+* [ ] `tsql` resolves to the same package as `sql`
 
 ***
 
@@ -714,6 +773,40 @@ pnpm --filter @ctxo/cli exec tsx src/index.ts doctor --json | jq '.checks[] | se
 * [ ] With a global or system `core.hooksPath` that already holds exactly one current (v2) block added by hand: `pass`
 * [ ] Outside a git repository the check passes ("Not a git repository"); `git_repo` carries the failure
 
+### 9.7 Agent-setup Checks: `ai_rules`, `skills`, `claude_guard_hook`
+
+> Use the scratch repository from Step 6.1 after its plain `init --tools claude-code -y` run (guard, skills and compact block in place).
+
+```bash
+cd /tmp/ctxo-init-parts
+$CTXO doctor --json | jq '.checks[] | select(.name == "ai_rules" or .name == "skills" or .name == "claude_guard_hook")'
+```
+
+**Verify:**
+
+* [ ] All three `pass`; the `ai_rules` message names `CLAUDE.md v<version> compact`, the `skills` message includes `Claude Code: current`, and `claude_guard_hook` reads `installed`
+* [ ] Delete `.claude/skills/ctxo-review-pr/`: `skills` warns `Claude Code: missing ctxo-review-pr` with the fix `Run "ctxo doctor --fix" or "ctxo init --only rules,skills,guard"`
+* [ ] Edit one line inside a skill: `skills` warns `Claude Code: outdated <skill>`; reformatting it (blank lines, trailing whitespace, CRLF) is not reported
+* [ ] Remove the `ctxo gate-hook` entry from `.claude/settings.json`: `claude_guard_hook` warns `safe-edit guard hook missing from .claude/settings.json`, and `ai_rules` warns `CLAUDE.md: rules present, guard missing`
+* [ ] Write invalid JSON into `.claude/settings.json`: `claude_guard_hook` warns that it is not valid JSON or not a settings object, with the fix `Repair .claude/settings.json by hand; ctxo never overwrites it`
+* [ ] Delete the `<!-- ctxo-rules-end -->` line of `CLAUDE.md`: the `ai_rules` warning includes `CLAUDE.md: start marker without end marker`, and its fix says to repair the file by hand
+* [ ] All three only ever `warn`, never `fail`; a versioned full block (from `init --no-guard`) and `gate.enabled: false` pass as opt-outs
+* [ ] After restoring valid JSON in `.claude/settings.json` and the end marker in `CLAUDE.md`, `$CTXO doctor --fix --yes` installs the missing skill and the guard, re-renders the `CLAUDE.md` block in the compact tier, and the three checks pass again
+
+### 9.8 `csharp_tier` Check
+
+```bash
+pnpm --filter @ctxo/cli exec tsx src/index.ts doctor --json | jq '.checks[] | select(.name == "csharp_tier")'
+```
+
+**Verify:**
+
+* [ ] In a repository without C# sources: `pass`, `no C# sources detected`
+* [ ] With C# sources and no .NET 8+ SDK: `pass`, `syntax tier (install the .NET 8+ SDK for the full tier)`
+* [ ] With C# sources and `@ctxo/lang-csharp` not resolvable from the project: `pass`, `syntax tier (@ctxo/lang-csharp not installed)`
+* [ ] With the SDK and the plugin, when the Roslyn helper restores: `pass`, `full tier (.NET SDK <version>, Roslyn helper restores)`
+* [ ] With a NuGet source that cannot serve `Microsoft.SqlServer.TransactSql.ScriptDom` (for example an offline `nuget.config`): `warn`, `syntax tier: the Roslyn helper could not restore (<first error line>)`, and `ctxo index` reports the C# files in the syntax tier
+
 ***
 
 ## Step 10: Cross-Command Integration
@@ -788,18 +881,18 @@ pnpm --filter @ctxo/cli exec vitest run src/adapters/stats/__tests__/ 2>&1 | tai
 | # | Command | Tested | Pass |
 |---|---------|--------|------|
 | 1 | `ctxo --help` | Help output, subcommand --help runs nothing, unknown command | [ ] |
-| 2 | `ctxo index` | Full, --check, --skip-history, --max-history, --files/--file, --commit, snapshot per commit, co-change window, invalid input | [ ] |
+| 2 | `ctxo index` | Full, --check, --skip-history, --max-history, --files/--file, --commit, snapshot per commit, co-change window, invalid input, contexts view and `ctxo contexts` | [ ] |
 | 3 | `ctxo sync` | Fresh sync, re-sync | [ ] |
 | 4 | `ctxo status` | Normal, without index | [ ] |
 | 5 | `ctxo verify-index` | Fresh, stale | [ ] |
-| 6 | `ctxo init` | Hook creation, v2 block, in-place upgrade, shared hooks directory | [ ] |
+| 6 | `ctxo init` | Hook creation, v2 block, in-place upgrade, shared hooks directory, `--only`/`--skip`/`--no-guard`, `ctxo install sql` | [ ] |
 | 7 | `ctxo watch` | Startup, clean exit | [ ] |
 | 8 | `ctxo stats` | Default, --json, --days, --clear, empty, disabled | [ ] |
-| 9 | `ctxo doctor` | Default, --json, --quiet, missing index, exit codes, git_hooks check and --fix | [ ] |
+| 9 | `ctxo doctor` | Default, --json, --quiet, missing index, exit codes, git_hooks check and --fix, ai_rules / skills / claude_guard_hook, csharp_tier | [ ] |
 | 10 | Cross-command | Index→Status→Verify, Index→Sync→Status, MCP→Stats | [ ] |
 | 11 | Unit tests | CLI + stats + diagnostics adapter tests | [ ] |
 
-**Total checks: 59** (plus the checks added for #157 in Steps 1.1b, 2.5, 2.5b, 2.7, 2.9, 6 and 9.6)
+**Total checks: 59** (plus the checks added for #157 in Steps 1.1b, 2.5, 2.5b, 2.7, 2.9, 6 and 9.6, for #156 in Steps 2.10, 6.2 and 9.8, and for #159 in Steps 6.1 and 9.7)
 
 ***
 

@@ -33,9 +33,17 @@ index:
   tests: []               # extra test-file globs, added to the shared defaults
   facts: false            # true asks plugins for code facts (protocol v2)
 
+masking:
+  clusterLabels: []       # globs; matching cluster labels become [masked-cluster-N]
+
+watch:
+  snapshotMinFileChanges: 5
+
 gate:
   enabled: true
   sensitivity: balanced
+  # minDependents: 3      # optional; overrides the sensitivity's floor
+  # percentile: 15        # optional; overrides the sensitivity's top N%
 
 cochange:
   maxCommits: 2000        # number or "all"
@@ -69,8 +77,12 @@ contextsView:             # candidate contexts (file level)
 | `index.ignoreProjects` | string[] | `[]` | Picomatch globs applied to workspace roots. Skipped workspaces are never enumerated. |
 | `index.tests` | string[] | `[]` | Extra test-file globs added to the shared default list. Test files are never nodes of the contexts view. Test-framework annotations also mark test files; see [Test files](#test-files). |
 | `index.facts` | boolean | `false` | Ask plugins for code facts (protocol v2). Sets `capabilities.facts`, so `ctxo index` and `ctxo watch` call `extractFacts` on plugins that implement it and write the results into the file's index JSON under `facts`. JSON only; SQLite is unchanged. No official plugin implements `extractFacts` yet. |
+| `masking.clusterLabels` | string[] | `[]` | Picomatch globs matched against community and candidate-context labels. A matching label is replaced with `[masked-cluster-N]` in the responses of `get_architectural_overlay`, `get_blast_radius`, `get_pr_impact` and `get_why_context`, so sensitive folder names never reach the agent. |
+| `watch.snapshotMinFileChanges` | integer >= 1 | `5` | `ctxo watch` recomputes the community snapshot only after this many distinct files were re-indexed since the last one. Raise it on large repositories, where a recompute blocks for about a second. |
 | `gate.enabled` | boolean | `true` | Enable or disable the safe-edit guard PreToolUse hook. `false` also makes `ctxo init` write the full rules block for Claude Code, and `ctxo doctor` stops expecting the guard. |
-| `gate.sensitivity` | `strict` \| `balanced` \| `lenient` | `balanced` | How aggressively the guard flags high-impact symbols. |
+| `gate.sensitivity` | `strict` \| `balanced` \| `lenient` | `balanced` | How aggressively the guard flags high-impact symbols. Sets `minDependents` and `percentile` (see [the levels](#gate-sensitivity-levels)). |
+| `gate.minDependents` | integer >= 0 | from `sensitivity` (`3` for `balanced`) | Minimum confirmed + likely dependents before the guard can fire. Overrides the sensitivity's floor. |
+| `gate.percentile` | integer 1 to 100 | from `sensitivity` (`15` for `balanced`) | The symbol must be in the top N% of the repository by PageRank. Overrides the sensitivity's percentile. |
 | `cochange.maxCommits` | positive integer or `"all"` | `2000` | Co-change window: the last N non-merge commits from HEAD. Independent of `ctxo index --max-history`. |
 | `cochange.since` | string (`30d`, `2w`, `12m`, `1y`) | unset | Also limit the window by age, counted back from HEAD's committer date (never the wall clock). Applies together with `maxCommits`. |
 | `cochange.maxFilesPerCommit` | positive integer | `30` | A commit touching more analysed files than this is skipped as a mass change and counted in `massSkipped`. |
@@ -150,7 +162,7 @@ index:
 
 Run `ctxo gate --preview` after changing `sensitivity` to see which symbols would be flagged.
 
-Unknown fields at the root are ignored for forward compatibility. Unknown fields **inside** the `stats`, `index`, `gate`, `cochange`, `communities` or `contextsView` sections (and inside `contextsView.weights` and `contextsView.hubs`) are rejected as schema violations (typos surface immediately).
+Unknown fields at the root are ignored for forward compatibility. Unknown fields **inside** the `stats`, `index`, `masking`, `watch`, `gate`, `cochange`, `communities` or `contextsView` sections (and inside `contextsView.weights` and `contextsView.hubs`) are rejected as schema violations (typos surface immediately).
 
 ## Glob matching rules
 
@@ -180,6 +192,13 @@ stats:
 index:
   ignore: []
   ignoreProjects: []
+masking:
+  clusterLabels: []
+watch:
+  snapshotMinFileChanges: 5
+gate:
+  enabled: true
+  sensitivity: balanced
 cochange:
   maxCommits: 2000
   maxFilesPerCommit: 30
@@ -188,7 +207,7 @@ cochange:
   exclude: []
 ```
 
-`communities` and `contextsView` have no entry in the loaded defaults; their defaults are applied where they are read (see the table above), and `index.tests` is empty.
+`communities` and `contextsView` have no entry in the loaded defaults; their defaults are applied where they are read (see the table above), and `index.tests` is empty. `gate.minDependents` and `gate.percentile` come from `gate.sensitivity` unless they are set.
 
 ## Error handling
 
@@ -196,7 +215,7 @@ cochange:
 | --- | --- |
 | File missing | Silent; defaults used. |
 | YAML parse error | `ctxo doctor` emits a **warning**; defaults used. |
-| Schema violation (unknown field in `stats`/`index`/`gate`/`cochange`/`communities`/`contextsView`, wrong type, `maxCommits` that is not a positive integer or `"all"`, a `since` that is not a duration) | `ctxo doctor` emits a **fail**; defaults used. |
+| Schema violation (unknown field in `stats`/`index`/`masking`/`watch`/`gate`/`cochange`/`communities`/`contextsView`, wrong type, `maxCommits` that is not a positive integer or `"all"`, a `since` that is not a duration) | `ctxo doctor` emits a **fail**; defaults used. |
 | Invalid glob pattern (`index.*`, `cochange.include`/`exclude`, `contextsView.exclude` or `contextsView.hubs.paths`) | `ctxo doctor` emits a **warning**; the bad pattern is dropped, valid siblings still apply. |
 
 All failure modes follow the warn-and-continue rule: indexing never aborts because of a config problem. The loaded config is available to core code as a `LoadedConfig` record with `errors` and `invalidGlobs` arrays for diagnostic consumers.

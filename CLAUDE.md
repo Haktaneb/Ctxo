@@ -6,7 +6,7 @@ Ctxo is a **Model Context Protocol (MCP) server** that gives AI coding assistant
 
 * **Type:** npm package / CLI tool / MCP server (stdio transport)
 * **Author:** Alper Hankendi
-* **Status:** v0.7.0-alpha.0 - 14 MCP tools, pnpm monorepo with 9 packages, 987+ tests
+* **Status:** 14 MCP tools, pnpm monorepo with 9 packages, 987+ tests
 * **Language:** TypeScript (ESM-first, `"type": "module"`)
 * **Runtime:** Node.js >= 20
 
@@ -109,7 +109,8 @@ packages/
 packages/cli/src/
   index.ts                     # composition root + StdioServerTransport
   ports/                       # interfaces only (ILanguageAdapter, IStoragePort, IGitPort, IMaskingPort)
-  core/                        # pure domain (graph, logic-slice, blast-radius, overlay, why-context, change-intelligence, masking, detail-levels)
+  core/                        # pure domain (graph, logic-slice, blast-radius, overlay, why-context, change-intelligence, masking, detail-levels,
+                               # co-change, contexts-view, data-coupling, test-files, gate, agent-rules, config, history, search, importance, dead-code)
     detection/detect-languages.ts
     install/package-manager.ts
   adapters/
@@ -120,11 +121,14 @@ packages/cli/src/
     watcher/                   # chokidar file watcher
     workspace/single-package-workspace.ts
     diagnostics/checks/        # config, disk, git, index, runtime, storage,
-                               # versions-check.ts, language-coverage-check.ts
+                               # versions-check.ts, language-coverage-check.ts,
+                               # agent-setup-check.ts (ai_rules, skills, claude_guard_hook),
+                               # csharp-tier-check.ts, java-tier-check.ts
     mcp/                       # MCP tool handlers (14 tools)
-  cli/                         # index, init, sync, status, verify, watch, visualize,
+  cli/                         # index, init, sync, status, verify, watch, visualize, contexts,
+                               # blast-radius, gate, gate-hook, stats, update, doctor,
                                # version-command.ts, install-command.ts,
-                               # plugin-loader.ts, doctor-fix.ts
+                               # plugin-loader.ts, doctor-fix.ts, ai-rules.ts, git-hooks.ts, init-parts.ts
 ```
 
 ### Storage (ADR-STORAGE-01)
@@ -153,6 +157,15 @@ index:
     - "examples/*"
   tests: []                    # extra test-file globs (added to the shared defaults)
   facts: false                 # true asks plugins for code facts (protocol v2, index JSON only)
+masking:
+  clusterLabels: []            # globs; matching cluster labels become [masked-cluster-N] in MCP responses
+watch:
+  snapshotMinFileChanges: 5    # files re-indexed before ctxo watch recomputes the community snapshot
+gate:                          # safe-edit guard, see below
+  enabled: true
+  sensitivity: balanced        # strict | balanced | lenient
+  # minDependents: 3           # optional; overrides the sensitivity's floor
+  # percentile: 15             # optional; overrides the sensitivity's top N%
 cochange:                      # co-change matrix window (independent of --max-history)
   maxCommits: 2000             # last N non-merge commits from HEAD, or "all"
   # since: 12m                 # also limit by age (d, w, m, y), counted back from HEAD's committer date
@@ -179,7 +192,7 @@ contextsView:                  # candidate contexts (file level), see ADR-016 ad
 * `communities` and `contextsView`: see the ADR-016 addendum. `ctxo index` writes `.ctxo/index/contexts-view.json` (skipped by `--skip-community`, not refreshed by `ctxo watch`), including `dataResources` and per-candidate `sharedTables` (ADR-017).
 * `index.facts`: sets `capabilities.facts`, so plugins that implement `extractFacts` write `facts` into the index JSON. No official plugin implements it yet.
 * `index.tests`: test files are also recognised by test-framework annotations (`Fact`, `Test`, `TestMethod` and 8 more); see [domain knowledge](docs/features/domain-knowledge.md).
-* Invalid globs (`index.*`, `cochange.include`, `cochange.exclude`) surface as warnings via `ctxo doctor`; schema violations surface as fails. The loader falls back to defaults on any error (warn-and-continue).
+* Invalid globs (`index.*`, `cochange.include`, `cochange.exclude`, `contextsView.exclude`, `contextsView.hubs.paths`) surface as warnings via `ctxo doctor`; schema violations surface as fails. The loader falls back to defaults on any error (warn-and-continue).
 
 ### Safe-Edit Guard
 
@@ -237,10 +250,10 @@ Language support ships as separate plugin packages discovered at runtime by scan
 // consumer project package.json
 {
   "devDependencies": {
-    "@ctxo/cli": "^0.7.0-alpha.0",
-    "@ctxo/lang-typescript": "^0.7.0-alpha.0",
-    "@ctxo/lang-go": "^0.7.0-alpha.0",
-    "@ctxo/lang-csharp": "^0.7.0-alpha.0"
+    "@ctxo/cli": "^0.13.0",
+    "@ctxo/lang-typescript": "^0.8.1",
+    "@ctxo/lang-go": "^0.9.1",
+    "@ctxo/lang-csharp": "^0.9.0"
   }
 }
 ```
