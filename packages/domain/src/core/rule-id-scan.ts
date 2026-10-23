@@ -31,11 +31,11 @@ export interface RuleLinks {
   readonly unknown: readonly RuleRef[];
 }
 
-const RULE_COMMENT = /(?:\/\/|\/\*|#|--|^\s*\*)\s*rule:\s*([A-Za-z][A-Za-z0-9]*[-_]?\d+)/gim;
+const RULE_COMMENT = /(?:\/\/|\/\*|#|--|^\s*\*)\s*rule:\s*([A-Za-z][A-Za-z0-9]*[-_]?\d+)(?![A-Za-z0-9])/gim;
 const TEST_DECLARATION =
   /(?:\b(?:it|test|describe)(?:\.(?:only|skip))?\s*\(|\bt\.Run\s*\(|@DisplayName\s*\(|\[(?:Fact|Theory)\s*\(\s*DisplayName\s*=)\s*(['"`])((?:\\.|(?!\1).)*)\1/g;
 const SHAPED_TOKEN = /^([A-Za-z][A-Za-z0-9]*?)[-_]?(\d+)$/;
-const SHAPED_TOKEN_AT_START = /^\s*([A-Za-z][A-Za-z0-9]*[-_]?\d+)/;
+const SHAPED_TOKEN_AT_START = /^\s*([A-Za-z][A-Za-z0-9]*[-_]?\d+)(?![A-Za-z0-9])/;
 const CATEGORY_NAMES: ReadonlySet<string> = new Set(['Category', 'TestCategory', 'Tag']);
 const KIND_ORDER: Record<RuleRefKind, number> = { annotation: 0, 'rule-comment': 1, 'test-title': 2, category: 3, mention: 4 };
 

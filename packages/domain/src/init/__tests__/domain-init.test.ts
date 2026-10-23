@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -152,6 +152,13 @@ describe('domainInit', () => {
     writeFileSync(join(custom, '.ctxo', 'config.yaml'), 'domain:\n  registry: domain/registry.yaml\n');
     await domainInit(host).apply(recording(custom).ctx);
     expect(readFileSync(join(custom, 'domain', 'registry.yaml'), 'utf-8')).toBe(REGISTRY_SKELETON);
+
+    // A folder whose name starts with two dots is inside the project (M2).
+    const dotted = project();
+    mkdirSync(join(dotted, '.ctxo'));
+    writeFileSync(join(dotted, '.ctxo', 'config.yaml'), 'domain:\n  registry: ..docs/contexts.yaml\n');
+    await domainInit(host).apply(recording(dotted).ctx);
+    expect(readFileSync(join(dotted, '..docs', 'contexts.yaml'), 'utf-8')).toBe(REGISTRY_SKELETON);
 
     const outside = project();
     mkdirSync(join(outside, '.ctxo'));
@@ -345,6 +352,26 @@ unowned:
 
     const again = await domainInit(host).apply(recording(root, { yes: true }).ctx);
     expect(again.map((row) => row.file)).not.toContain('.claude/rules/ctxo-context-lending.md');
+  });
+
+  it('deletes the stale loader rules when the last card is removed (M6)', async () => {
+    const root = domainRepo();
+    await domainInit(host).apply(recording(root, { yes: true }).ctx);
+    const rule = join(root, '.claude', 'rules', 'ctxo-context-lending.md');
+    expect(existsSync(rule)).toBe(true);
+
+    put(root, 'docs/domain/contexts.yaml', REGISTRY.replace(/^\s*card:.*\n/gm, ''));
+    const rows = await domainInit(host).apply(recording(root, { yes: true }).ctx);
+
+    expect(existsSync(rule)).toBe(false);
+    expect(rows).toContainEqual({ file: '.claude/rules/ctxo-context-lending.md (deleted)', action: 'updated' });
+  });
+
+  it('init writes .ctxo/config.yaml through a temp file that does not stay behind (M7)', async () => {
+    const root = domainRepo();
+    await domainInit(host).apply(recording(root, { yes: true }).ctx);
+    expect(readdirSync(join(root, '.ctxo')).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+    expect(existsSync(join(root, '.ctxo', 'config.yaml'))).toBe(true);
   });
 
   it('writes no loader rules for a registry without cards', async () => {

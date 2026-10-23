@@ -42,4 +42,14 @@ describe('readRegistry', () => {
     expect(loaded?.registry).toBeUndefined();
     expect(loaded?.problems).toHaveLength(1);
   });
+
+  it('reads a registry in a folder whose name merely starts with two dots (M2)', () => {
+    mkdirSync(join(root, '..docs'), { recursive: true });
+    writeFileSync(join(root, '..docs', 'contexts.yaml'), VALID);
+
+    const loaded = readRegistry(root, '..docs/contexts.yaml');
+
+    expect(loaded?.problems).toEqual([]);
+    expect(loaded?.registry?.contexts.map((c) => c.id)).toEqual(['billing']);
+  });
 });

@@ -20,8 +20,8 @@ const USAGE = [
 ];
 
 const HELP_LINES = [
-  '  ctxo domain rules --write|--check   Generate or check the path-scoped loader rules per context',
-  '  ctxo domain discover [--json] [--write]   Propose domain conventions found in the repository',
+  'ctxo domain rules --write|--check   Generate or check the path-scoped loader rules per context',
+  'ctxo domain discover [--json] [--write]   Propose domain conventions found in the repository',
 ];
 
 const BLOCKED_NOTE = 'exists without the generated marker; rename it or delete it, then run --write';

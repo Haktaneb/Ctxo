@@ -1,10 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { parse } from 'yaml';
 import type { CtxoHost, InitContribution, InitFileResult, InitPartContext } from '@ctxo/cli/internal';
 import { mergeDiscoveryProposal, mergeDomainDefaults } from '../adapters/config-writer.js';
 import { gatherDiscoveryInput, readConfigText as readConfigFile, writeConfigText } from '../adapters/discovery-sources.js';
 import { applyLoaderRules, loaderPlatforms, readExistingLoaderRules } from '../adapters/loader-rules-files.js';
+import { leavesProject } from '../adapters/repo-files.js';
 import { readRegistry } from '../adapters/registry-reader.js';
 import { discoverConventions, formatDiscovery, proposalAddsSomething } from '../core/discovery.js';
 import { diffLoaderRules, renderLoaderRules } from '../core/loader-rules.js';
@@ -93,7 +94,7 @@ async function applyConfig(ctx: InitPartContext): Promise<{ readonly row: InitFi
     const warning = `${CONFIG_FILE}: cannot add the domain defaults (${(err as Error).message}); left unchanged`;
     return { row: { file: CONFIG_FILE, action: 'skipped', warning }, config: resolveDomainConfig(undefined).config };
   }
-  if (merged.changed && !ctx.dryRun) writeFileSync(join(ctx.projectRoot, '.ctxo', 'config.yaml'), merged.text, 'utf-8');
+  if (merged.changed && !ctx.dryRun) writeConfigText(join(ctx.projectRoot, '.ctxo', 'config.yaml'), merged.text);
   const action = ensured.action === 'created' ? 'created' : merged.changed ? 'updated' : 'skipped';
   return { row: { file: CONFIG_FILE, action }, config: resolveDomainConfig(domainSection(merged.text)).config };
 }
@@ -103,7 +104,7 @@ function applyRegistry(ctx: InitPartContext, registryPath: string): InitFileResu
   const file = registryPath.replace(/\\/g, '/');
   const absolute = resolve(ctx.projectRoot, registryPath);
   const rel = relative(resolve(ctx.projectRoot), absolute);
-  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
+  if (rel === '' || leavesProject(rel)) {
     return { file, action: 'skipped', warning: `${file}: the registry path must stay inside the project; not created` };
   }
   if (ctx.dryRun) return { file, action: existsSync(absolute) ? 'skipped' : 'created' };
@@ -154,10 +155,11 @@ function applyRules(ctx: InitPartContext, registryPath: string): readonly InitFi
     const loaded = readRegistry(ctx.projectRoot, registryPath);
     const registry = loaded?.registry;
     if (registry === undefined || loaded!.problems.length > 0) return [];
-    if (!registry.contexts.some((context) => context.card !== undefined)) return [];
-
     const expected = renderLoaderRules(registry, loaderPlatforms(ctx.projectRoot));
     const diff = diffLoaderRules(expected, readExistingLoaderRules(ctx.projectRoot));
+    // Nothing to write, and no stale or blocked file to report: skip. Stale files are deleted even when the
+    // last card is gone (verify-domain check 8 would fail on them in CI).
+    if (expected.length === 0 && diff.stale.length === 0 && diff.blocked.length === 0) return [];
     const rows: InitFileResult[] = [];
     if (ctx.dryRun) {
       for (const file of diff.missing) rows.push({ file, action: 'created' });

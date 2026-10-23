@@ -75,6 +75,18 @@ describe('rule-id-scan', () => {
     expect(refs.some((r) => r.line === 7)).toBe(false);
   });
 
+  it('a rule: comment or a title ID followed by more id characters is a different ID, not LEND-03 (M5)', () => {
+    const text = ['// rule: LEND-03a', `it('LEND-03a holds', () => {});`, '// rule: LEND-030', `it('LEND-030 holds', () => {});`].join('\n');
+    const refs = scanTestText(FILE, text, undefined, options());
+    const structured = refs.filter((r) => r.kind === 'rule-comment' || r.kind === 'test-title');
+    expect(structured.map((r) => r.id)).not.toContain('LEND-03');
+    const { links } = resolveRuleRefs(refs, options());
+    expect(links.has('LEND-03')).toBe(false);
+
+    const exact = scanTestText(FILE, ['// rule: LEND-03.', `it('LEND-03: holds', () => {});`].join('\n'), undefined, options());
+    expect(exact.filter((r) => r.id === 'LEND-03').map((r) => r.kind).sort()).toEqual(['rule-comment', 'test-title']);
+  });
+
   it('a title starting with an ID is structured, a title merely mentioning one is not', () => {
     const trackers = options({ trackerPrefixes: new Set(['LEND']) });
     const refs = scanTestText(FILE, [`it('LEND-03 holds', () => {});`, `it('see LEND-04', () => {});`].join('\n'), undefined, trackers);

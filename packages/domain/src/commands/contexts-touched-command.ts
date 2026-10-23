@@ -17,7 +17,7 @@ const USAGE = [
   '  --check        Exit 1 when a touched context has no card change and no Domain-Unchanged trailer',
 ];
 
-const HELP_LINE = '  ctxo contexts-touched     Named contexts changed since a ref (--since, --committed, --staged, --json, --check)';
+const HELP_LINE = 'ctxo contexts-touched     Named contexts changed since a ref (--since, --committed, --staged, --json, --check)';
 
 const sha7 = (sha: string): string => sha.slice(0, 7);
 

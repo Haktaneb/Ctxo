@@ -264,7 +264,7 @@ describe('contexts-touched', () => {
     const command = contextsTouchedCommand(createModuleHost({ projectRoot: repo.dir, mode: 'cli' }));
 
     expect(command.name).toBe('contexts-touched');
-    expect(command.help).toContain('  ctxo contexts-touched     Named contexts changed since a ref (--since, --committed, --staged, --json, --check)');
+    expect(command.help).toContain('ctxo contexts-touched     Named contexts changed since a ref (--since, --committed, --staged, --json, --check)');
     expect(await run(repo, '--help')).toBe(0);
     expect(await run(repo, '-h')).toBe(0);
     expect(stderr.join('\n')).toContain('ctxo contexts-touched [--since <ref>] [--committed | --staged] [--json] [--check]');
