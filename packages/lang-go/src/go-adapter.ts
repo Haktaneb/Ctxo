@@ -8,6 +8,7 @@ import type { FactOptions } from './facts/fact-types.js';
 import { collectTreeSitterEvidence } from './facts/tree-sitter-evidence.js';
 import { finishFacts } from './facts/finish-facts.js';
 import { decodeGoStringLiteral } from './facts/go-string-literal.js';
+import { receiverTypeName } from './receiver-type.js';
 
 const log = createLogger('ctxo:lang-go');
 
@@ -163,10 +164,7 @@ export class GoAdapter extends TreeSitterAdapter {
       if (param.type === 'parameter_declaration') {
         // Find type identifier — may be pointer (*Type) or plain (Type)
         const typeNode = param.childForFieldName('type');
-        if (typeNode) {
-          const text = typeNode.text;
-          return text.replace(/^\*/, '');
-        }
+        if (typeNode) return receiverTypeName(typeNode.text);
       }
     }
     return undefined;

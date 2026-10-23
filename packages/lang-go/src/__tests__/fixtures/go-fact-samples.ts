@@ -234,6 +234,31 @@ func Limits(n int, ratio float64, name string, cfg Config) {
 	_ = time.Duration(5) * time.Minute
 }
 `,
+  // Generic receivers, with one type parameter and with several: both tiers drop the type parameters from the
+  // method ID (List.Get, Pair.Swap).
+  generic: `package app
+
+type List[T any] struct{ items []T }
+
+func (l *List[T]) Get(i int) T {
+	if i > 9 {
+		return l.items[0]
+	}
+	return l.items[i]
+}
+
+type Pair[K comparable, V any] struct {
+	key K
+	val V
+}
+
+func (p Pair[K, V]) Swap(n int) bool {
+	if n == 42 {
+		return true
+	}
+	return false
+}
+`,
 };
 
 /**
@@ -276,18 +301,6 @@ var router *gin.Engine
 var mux *http.ServeMux
 
 const remotePath = "/remote"
-`,
-  // A generic receiver: the syntax tier's own method ID keeps the type parameters.
-  generic: `package app
-
-type List[T any] struct{ items []T }
-
-func (l *List[T]) Get(i int) T {
-	if i > 9 {
-		return l.items[0]
-	}
-	return l.items[i]
-}
 `,
   // Identifier keys of a named map type: the syntax tier cannot tell them from struct fields.
   namedMap: `package app

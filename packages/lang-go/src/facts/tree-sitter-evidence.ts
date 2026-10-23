@@ -12,6 +12,7 @@ import type { SyntaxNode } from 'tree-sitter';
 import type { SymbolNode } from '@ctxo/plugin-api';
 import type { DurationUnit, FactEvidence, FactOptions, LiteralKind } from './fact-types.js';
 import { hasRetryTimeoutFragment, matchesNormalizationPattern } from './fact-rules.js';
+import { receiverTypeName } from '../receiver-type.js';
 
 /** The most evidence records collected for one file, as in the analyzer (Q21). */
 export const MAX_EVIDENCE_PER_FILE = 2000;
@@ -563,7 +564,8 @@ function declarationId(decl: SyntaxNode, file: string, symbols: readonly SymbolN
   const name = decl.childForFieldName('name')?.text ?? '';
   if (decl.type === 'method_declaration') {
     const param = children(decl.childForFieldName('receiver')).find((c) => c.type === 'parameter_declaration');
-    const receiver = param?.childForFieldName('type')?.text.replace(/^\*/, '');
+    const typeText = param?.childForFieldName('type')?.text;
+    const receiver = typeText === undefined ? undefined : receiverTypeName(typeText);
     if (receiver) return `${file}::${receiver}.${name}::method`;
   }
   return `${file}::${name}::function`;

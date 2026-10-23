@@ -26,7 +26,6 @@ function writeSampleModule(root: string): void {
   write(root, 'stubs/gin/gin.go', GIN_STUB);
   for (const [name, body] of Object.entries(AGREEING_SAMPLES)) write(root, sampleFile(name), body);
   write(root, sampleFile('fakeMux'), DIFFERING_SAMPLES['fakeMux']!);
-  write(root, sampleFile('generic'), DIFFERING_SAMPLES['generic']!);
   write(root, sampleFile('namedMap'), DIFFERING_SAMPLES['namedMap']!);
   write(root, 'samples/elsewhere/app.go', DIFFERING_SAMPLES['elsewhere']!);
   write(root, 'samples/elsewhere/decls.go', DIFFERING_SAMPLES['elsewhereDecls']!);
@@ -114,7 +113,7 @@ describe.skipIf(!detectGoToolchain().available)('Go fact tier agreement', () => 
     const samples = mkdtempSync(join(tmpdir(), 'ctxo-go-differ-'));
     dirs.push(samples);
     writeSampleModule(samples);
-    const files = [sampleFile('fakeMux'), sampleFile('elsewhere'), sampleFile('generic'), sampleFile('namedMap')];
+    const files = [sampleFile('fakeMux'), sampleFile('elsewhere'), sampleFile('namedMap')];
     const results = await bothTiers(samples, files);
     const texts = (rowsOf: Row[]) => rowsOf.map((r) => `${r.line} ${r.text} @${r.symbolId.slice(r.symbolId.indexOf('::') + 2)}`);
 
@@ -124,10 +123,7 @@ describe.skipIf(!detectGoToolchain().available)('Go fact tier agreement', () => 
     // 2. A gin router and a path constant declared in another file: the analyzer only.
     expect(texts(results.get(sampleFile('elsewhere'))!.full)).toEqual(['3 GET /far @Register::function', '4 ANY /remote @Register::function']);
     expect(texts(results.get(sampleFile('elsewhere'))!.syntax)).toEqual([]);
-    // 3. A generic receiver: same fact, each tier's own method ID.
-    expect(texts(results.get(sampleFile('generic'))!.full)).toEqual(['5 i > 9 @List.Get::method']);
-    expect(texts(results.get(sampleFile('generic'))!.syntax)).toEqual(['5 i > 9 @List[T].Get::method']);
-    // 4. Identifier keys of a named map type: taken for struct fields in the syntax tier.
+    // 3. Identifier keys of a named map type: taken for struct fields in the syntax tier.
     expect(texts(results.get(sampleFile('namedMap'))!.full)).toEqual([]);
     expect(texts(results.get(sampleFile('namedMap'))!.syntax)).toEqual(['7 retryKey = 3 @Build::function']);
   }, 300_000);

@@ -177,10 +177,16 @@ func Register(e *echo.Echo) {
     expect(await methods([])).toEqual([]);
   });
 
+  it('generic receivers drop their type parameters from the method ID', async () => {
+    expect(rows(await syntaxFacts('app.go', AGREEING_SAMPLES['generic']!))).toEqual([
+      [5, 'literal-comparison', 'i > 9', 'List.Get::method'],
+      [17, 'literal-comparison', 'n == 42', 'Pair.Swap::method'],
+    ]);
+  });
+
   it('the accepted differences give the syntax tier\'s facts', async () => {
     expect(rows(await syntaxFacts('app.go', DIFFERING_SAMPLES['fakeMux']!))).toEqual([[9, 'endpoint', 'ANY /fake', 'Register::function']]);
     expect(await syntaxFacts('app.go', DIFFERING_SAMPLES['elsewhere']!)).toEqual([]);
-    expect(rows(await syntaxFacts('app.go', DIFFERING_SAMPLES['generic']!))).toEqual([[5, 'literal-comparison', 'i > 9', 'List[T].Get::method']]);
     expect(rows(await syntaxFacts('app.go', DIFFERING_SAMPLES['namedMap']!))).toEqual([[7, 'retry-timeout', 'retryKey = 3', 'Build::function']]);
   });
 
