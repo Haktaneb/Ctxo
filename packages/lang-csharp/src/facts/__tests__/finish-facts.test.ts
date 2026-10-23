@@ -3,6 +3,7 @@ import type { SymbolNode } from '@ctxo/plugin-api';
 import type { FactEvidence } from '../fact-types.js';
 import { DEFAULT_FACT_OPTIONS } from '../fact-options.js';
 import { finishFacts, moduleSymbolId } from '../finish-facts.js';
+import { decodeCsharpRawString } from '../csharp-raw-string.js';
 
 const FILE = 'src/Loans/LoanPolicy.cs';
 const M = `${FILE}::Lending.LoanPolicy.CanBorrow::method`;
@@ -43,6 +44,14 @@ describe('finishFacts', () => {
     const short = '"a  b"';
     const [kept] = finish([{ kind: 'comparison', symbolId: M, line: 4, text: 'x == "a  b"', operator: '==', literal: short, literalKind: 'string' }]);
     expect(kept!.detail!['literal']).toBe(short);
+  });
+
+  it('the raw-string decoder hook reaches the trivial-literal check', () => {
+    const evidence: FactEvidence[] = [
+      { kind: 'comparison', symbolId: M, line: 1, text: 'note == """\n"""', operator: '==', literal: '"""\n"""', literalKind: 'string' },
+    ];
+    expect(finishFacts(FILE, evidence, [], DEFAULT_FACT_OPTIONS)).toHaveLength(1);
+    expect(finishFacts(FILE, evidence, [], DEFAULT_FACT_OPTIONS, decodeCsharpRawString)).toEqual([]);
   });
 
   it('a call is kept only when a normalization pattern matches', () => {

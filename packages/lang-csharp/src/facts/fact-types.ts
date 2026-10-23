@@ -57,6 +57,13 @@ export type FactEvidence =
       readonly route: string;
     };
 
+/**
+ * A language's raw-string decoder (C# raw strings, Java text blocks): gets a literal starting with
+ * `"""` (prefixes such as `$` or `@` removed) and returns its content, or undefined when it is not a
+ * well-formed raw string. The shared rules decode no `"""` literal on their own.
+ */
+export type RawStringDecoder = (literal: string) => string | undefined;
+
 /** A literal value the detectors treat as trivial: numbers, strings, booleans and `null`. */
 export type TrivialLiteral = number | string | boolean | null;
 

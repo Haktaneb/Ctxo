@@ -1,7 +1,7 @@
 // Shared fact rules (PR 4, issue #156, Fact contract FC-2 and FC-4 to FC-8). Copied unchanged into
 // every official language plugin and @ctxo/domain; only import paths may differ. The rules are
 // pinned by packages/plugin-api/conformance/fact-vectors.json.
-import type { LiteralKind, TrivialLiteral } from './fact-types.js';
+import type { LiteralKind, RawStringDecoder, TrivialLiteral } from './fact-types.js';
 
 /** Name fragments of `retry-timeout` bindings, matched on identifier-token boundaries (FC-5). */
 export const RETRY_TIMEOUT_FRAGMENTS: readonly string[] = ['retry', 'retries', 'attempt', 'timeout', 'delay', 'backoff', 'ttl', 'expir'];
@@ -167,31 +167,11 @@ export function canonicalNumber(expression: string): string | undefined {
 const ESCAPES: Readonly<Record<string, string>> = { '"': '"', "'": "'", '\\': '\\', n: '\n', t: '\t', r: '\r' };
 
 /**
- * C# raw string literal content (raw-string decoding is language-specific; Java text blocks get
- * their own rule): a delimiter of 3 or more quotes; a single-line literal is taken as written; in a
- * multi-line literal the opening line and the closing line (with the line break before it) are
- * dropped, and the closing line's leading whitespace is removed from every content line. Lines are
- * joined with `\n`, so CRLF and LF sources agree. Undefined when the text is not a raw string.
+ * Decoded content of a string or char literal; undefined when the text is not one. A `"""` literal
+ * goes to the language's raw-string decoder (C# raw strings, Java text blocks); without a decoder it
+ * is not a string constant.
  */
-function rawStringContent(text: string): string | undefined {
-  let quotes = 0;
-  while (text[quotes] === '"') quotes++;
-  if (quotes < 3 || text.length < 2 * quotes) return undefined;
-  if (!text.endsWith('"'.repeat(quotes))) return undefined;
-  const body = text.slice(quotes, text.length - quotes);
-  if (!/[\r\n]/.test(body)) return body;
-
-  const lines = body.split(/\r?\n/);
-  const closing = lines[lines.length - 1]!;
-  if (lines[0]!.trim() !== '' || closing.trim() !== '') return undefined;
-  return lines
-    .slice(1, -1)
-    .map(line => (line.startsWith(closing) ? line.slice(closing.length) : line.trim() === '' ? '' : line))
-    .join('\n');
-}
-
-/** Decoded content of a string or char literal; undefined when the text is not one. */
-function stringContent(literal: string): string | undefined {
+function stringContent(literal: string, decodeRawString: RawStringDecoder | undefined): string | undefined {
   let text = literal.trim();
   let verbatim = false;
   while (text.length > 0 && (text[0] === '@' || text[0] === '$')) {
@@ -200,7 +180,7 @@ function stringContent(literal: string): string | undefined {
   }
   if (text.endsWith('u8')) text = text.slice(0, -2);
 
-  if (text.startsWith('"""')) return rawStringContent(text);
+  if (text.startsWith('"""')) return decodeRawString ? decodeRawString(text) : undefined;
   const quote = text[0];
   if (text.length < 2 || (quote !== '"' && quote !== "'" && quote !== '`') || text[text.length - 1] !== quote) return undefined;
   const body = text.slice(1, -1);
@@ -211,10 +191,16 @@ function stringContent(literal: string): string | undefined {
 
 /**
  * FC-6: true when the literal equals an entry of the trivial list of the same type: numbers when
- * the evaluated double (FC-7) equals the list's number exactly, strings and chars by decoded content, `null`/`nil`/`None` with `null`, booleans
- * case-insensitively.
+ * the evaluated double (FC-7) equals the list's number exactly, strings and chars by decoded
+ * content, `null`/`nil`/`None` with `null`, booleans case-insensitively. Each language supplies its
+ * own `decodeRawString` for `"""` literals; without it such a literal is never trivial.
  */
-export function isTrivialLiteral(literal: string, kind: LiteralKind, trivial: readonly TrivialLiteral[]): boolean {
+export function isTrivialLiteral(
+  literal: string,
+  kind: LiteralKind,
+  trivial: readonly TrivialLiteral[],
+  decodeRawString?: RawStringDecoder,
+): boolean {
   switch (kind) {
     case 'number': {
       const value = evaluate(literal);
@@ -222,7 +208,7 @@ export function isTrivialLiteral(literal: string, kind: LiteralKind, trivial: re
     }
     case 'string':
     case 'char': {
-      const content = stringContent(literal);
+      const content = stringContent(literal, decodeRawString);
       return content !== undefined && trivial.some(t => typeof t === 'string' && t === content);
     }
     case 'null':

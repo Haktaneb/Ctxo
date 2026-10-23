@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { LiteralKind, TrivialLiteral } from '../fact-types.js';
 import { DEFAULT_FACT_OPTIONS } from '../fact-options.js';
+import { decodeCsharpRawString } from '../csharp-raw-string.js';
 import {
   canonicalNumber,
   capFactValue,
@@ -107,7 +108,12 @@ describe('fact conformance vectors', () => {
   });
 
   it.each(vectors.languageSpecific.csharp.isTrivialLiteral)('C# isTrivialLiteral($input.literal) with $input.trivialLiterals is $expected', ({ input, expected }) => {
-    expect(isTrivialLiteral(input.literal, input.kind, input.trivialLiterals)).toBe(expected);
+    expect(isTrivialLiteral(input.literal, input.kind, input.trivialLiterals, decodeCsharpRawString)).toBe(expected);
+  });
+
+  it('without a raw-string decoder a """ literal is never trivial', () => {
+    expect(isTrivialLiteral('"""\nraw\n"""', 'string', ['raw'])).toBe(false);
+    expect(isTrivialLiteral('"""\nraw\n"""', 'string', ['raw'], decodeCsharpRawString)).toBe(true);
   });
 
   it.each(vectors.joinRoute)('joinRoute($input) is $expected', ({ input, expected }) => {
