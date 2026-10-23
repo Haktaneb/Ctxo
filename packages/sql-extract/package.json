@@ -1,6 +1,6 @@
 {
   "name": "@ctxo/sql-extract",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Zero-dependency T-SQL tokenizer and data-access recognizers shared by Ctxo language plugins",
   "type": "module",
   "engines": {
