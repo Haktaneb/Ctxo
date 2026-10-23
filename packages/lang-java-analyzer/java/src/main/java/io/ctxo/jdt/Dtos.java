@@ -2,6 +2,7 @@ package io.ctxo.jdt;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /** Plain data carriers serialized to JSONL by Gson. Field names ARE the JSON keys. */
 public final class Dtos {
@@ -15,10 +16,26 @@ public final class Dtos {
     public int endLine;
     public Integer startOffset;
     public Integer endOffset;
+    /** Annotations in source order; null when there are none, so Gson omits the key. */
+    public List<Ann> annotations;
     public Sym(String symbolId, String name, String kind, int startLine, int endLine, int startOffset, int endOffset) {
       this.symbolId = symbolId; this.name = name; this.kind = kind;
       this.startLine = startLine; this.endLine = endLine;
       this.startOffset = startOffset; this.endOffset = endOffset;
+    }
+  }
+
+  /**
+   * One Java annotation (protocol v2 {@code SymbolAnnotation}): the simple name, the {@code value}
+   * member in {@code args}, the other members in {@code named} (a LinkedHashMap in source order).
+   * {@code args} and {@code named} are null when empty, so Gson omits them.
+   */
+  public static final class Ann {
+    public String name;
+    public List<String> args;
+    public Map<String, String> named;
+    public Ann(String name, List<String> args, Map<String, String> named) {
+      this.name = name; this.args = args; this.named = named;
     }
   }
 

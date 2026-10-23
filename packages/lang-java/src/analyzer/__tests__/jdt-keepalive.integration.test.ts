@@ -1,20 +1,16 @@
-import { describe, it, expect } from 'vitest';
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { detectJavaRuntime } from '../toolchain-detect.js';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { JavaCompositeAdapter } from '../../composite-adapter.js';
+import { CAN_RUN_JDT, JDT_FIXTURE, testAnalyzerJar } from '../../__tests__/helpers/analyzer-jar.js';
 
-const jar = process.env.CTXO_JDT_ANALYZER_JAR
-  ?? resolve(import.meta.dirname, '../../../../lang-java-analyzer/jar/ctxo-jdt-analyzer.jar');
-const fixture = resolve(import.meta.dirname, '../../../../lang-java-analyzer/java/src/test/resources/fixture');
-const java = detectJavaRuntime();
-const canRun = java.available && existsSync(jar) && existsSync(fixture);
+describe.skipIf(!CAN_RUN_JDT)('Java watch keep-alive (real jar)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
 
-describe.skipIf(!canRun)('Java watch keep-alive (real jar)', () => {
   it('reindexFile returns resolved edges + tree-sitter complexity for one file', async () => {
-    process.env.CTXO_JDT_ANALYZER_JAR = jar;
+    vi.stubEnv('CTXO_JDT_ANALYZER_JAR', testAnalyzerJar()!);
     const composite = new JavaCompositeAdapter();
-    await composite.initialize(fixture);
+    await composite.initialize(JDT_FIXTURE);
     const cap = composite.getIncrementalReindex();
     expect(cap).not.toBeNull();
     expect(cap!.isReady()).toBe(true);

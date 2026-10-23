@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { JavaAdapter } from './java-adapter.js';
 import { JdtAnalyzerAdapter } from './analyzer/jdt-adapter.js';
+import { toSymbolNode } from './analyzer/jdt-mapping.js';
 import { createLogger } from './logger.js';
 
 const log = createLogger('ctxo:lang-java');
@@ -86,12 +87,7 @@ export class JavaCompositeAdapter implements ILanguageAdapter {
           complexity = await treeSitter.extractComplexity(relativePath, source);
         } catch { /* unreadable mid-edit - empty complexity */ }
         return {
-          symbols: raw.symbols.filter((s) => FULL.test(s.symbolId)).map((s) => ({
-            symbolId: s.symbolId, name: s.name, kind: s.kind as ReindexResult['symbols'][0]['kind'],
-            startLine: s.startLine, endLine: s.endLine,
-            ...(s.startOffset != null ? { startOffset: s.startOffset } : {}),
-            ...(s.endOffset != null ? { endOffset: s.endOffset } : {}),
-          })),
+          symbols: raw.symbols.filter((s) => FULL.test(s.symbolId)).map(toSymbolNode),
           edges: raw.edges.filter((e) => FULL.test(e.from) && e.to.length > 0).map((e) => ({
             from: e.from, to: e.to, kind: e.kind as ReindexResult['edges'][0]['kind'],
           })),

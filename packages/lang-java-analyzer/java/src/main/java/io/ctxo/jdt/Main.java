@@ -13,6 +13,7 @@ import java.util.stream.Collectors;
 public final class Main {
   private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
   private static final PrintStream OUT = System.out;
+  private static final char[] HEX = "0123456789abcdef".toCharArray();
 
   public static void main(String[] args) {
     List<String> positional = new ArrayList<>();
@@ -38,12 +39,12 @@ public final class Main {
     List<String> files = discoverJavaFiles(root);
     progress("Analyzing " + files.size() + " files");
     List<Dtos.FileResult> results = analyzer.analyze(files);
-    for (Dtos.FileResult fr : results) OUT.println(GSON.toJson(fr));
+    for (Dtos.FileResult fr : results) OUT.println(json(fr));
     JsonObject done = new JsonObject();
     done.addProperty("type", "done");
     done.addProperty("totalFiles", results.size());
     done.addProperty("elapsed", String.format("%.1fs", (System.nanoTime() - start) / 1e9));
-    OUT.println(GSON.toJson(done));
+    OUT.println(json(done));
   }
 
   private static void runKeepAlive(String root, Analyzer analyzer) {
@@ -68,7 +69,7 @@ public final class Main {
     ready.addProperty("type", "ready");
     ready.addProperty("projectCount", 1);
     ready.addProperty("fileCount", allFiles.size());
-    OUT.println(GSON.toJson(ready));
+    OUT.println(json(ready));
     try (BufferedReader in = new BufferedReader(new InputStreamReader(System.in))) {
       String line;
       while ((line = in.readLine()) != null) {
@@ -89,13 +90,17 @@ public final class Main {
           String normRel = rel.replace('\\', '/');
           Dtos.FileResult target = r.stream().filter(fr -> fr.file.equals(normRel)).findFirst()
               .orElse(new Dtos.FileResult(normRel));
-          OUT.println(GSON.toJson(target));
+          OUT.println(json(target));
         } catch (Exception e) { err("keep-alive error: " + e.getMessage()); }
       }
     } catch (IOException e) { err("stdin closed: " + e.getMessage()); }
   }
 
-  private static List<String> discoverJavaFiles(String root) {
+  /**
+   * Every .java file under the project root, test sources such as src/test/java included;
+   * build and tool folders are skipped. Package-private for the tests.
+   */
+  static List<String> discoverJavaFiles(String root) {
     Set<String> skip = Set.of("target", "build", ".git", "node_modules", ".gradle", "bin", "out");
     try (var s = Files.walk(Paths.get(root))) {
       return s.filter(p -> p.toString().endsWith(".java"))
@@ -104,12 +109,35 @@ public final class Main {
     } catch (IOException e) { err("discover failed: " + e.getMessage()); return List.of(); }
   }
 
+  /**
+   * One JSONL line with every non-ASCII character as a JSON unicode escape (a backslash, {@code u}
+   * and four hex digits; a surrogate pair takes two). stdout uses the
+   * platform encoding (Cp1252, Cp1254 and the like on Windows) while the plugin reads UTF-8, so
+   * annotation values, names and paths outside ASCII would otherwise reach the index garbled.
+   * Gson writes non-ASCII characters only inside strings, so the escaped line is the same JSON.
+   */
+  static String json(Object value) {
+    String text = GSON.toJson(value);
+    StringBuilder out = null;
+    for (int i = 0; i < text.length(); i++) {
+      char c = text.charAt(i);
+      if (c < 0x80) {
+        if (out != null) out.append(c);
+        continue;
+      }
+      if (out == null) out = new StringBuilder(text.length() + 16).append(text, 0, i);
+      out.append("\\u").append(HEX[(c >> 12) & 0xF]).append(HEX[(c >> 8) & 0xF])
+          .append(HEX[(c >> 4) & 0xF]).append(HEX[c & 0xF]);
+    }
+    return out == null ? text : out.toString();
+  }
+
   private static String[] splitPath(String v) {
     return Arrays.stream(v.split("[;" + File.pathSeparator + "]")).filter(s -> !s.isBlank()).toArray(String[]::new);
   }
   private static void progress(String msg) {
     JsonObject o = new JsonObject(); o.addProperty("type", "progress"); o.addProperty("message", msg);
-    OUT.println(GSON.toJson(o));
+    OUT.println(json(o));
   }
   private static void err(String msg) { System.err.println("[ctxo-jdt-analyzer] " + msg); }
 }

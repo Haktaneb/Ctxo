@@ -4,6 +4,13 @@ import { createLogger } from '../logger.js';
 
 const log = createLogger('ctxo:lang-java');
 
+/** A Java annotation as the analyzer reports it; `args` and `named` are absent when empty. */
+export interface JdtAnnotation {
+  name: string;
+  args?: string[];
+  named?: Record<string, string>;
+}
+
 export interface JdtSymbol {
   symbolId: string;
   name: string;
@@ -12,6 +19,8 @@ export interface JdtSymbol {
   endLine: number;
   startOffset?: number;
   endOffset?: number;
+  /** Source order, capped by the analyzer; absent when the declaration has none. */
+  annotations?: JdtAnnotation[];
 }
 
 export interface JdtEdge {

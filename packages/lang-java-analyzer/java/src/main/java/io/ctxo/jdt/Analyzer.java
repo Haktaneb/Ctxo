@@ -87,10 +87,12 @@ public final class Analyzer {
 
     private int line0(int pos) { return Math.max(0, cu.getLineNumber(pos) - 1); }
     private String symId(String name, String kind) { return file + "::" + name + "::" + kind; }
-    private void addType(String name, String kind, ASTNode node) {
-      out.symbols.add(new Dtos.Sym(symId(name, kind), name, kind,
+    private void addType(String name, String kind, AbstractTypeDeclaration node) {
+      Dtos.Sym sym = new Dtos.Sym(symId(name, kind), name, kind,
           line0(node.getStartPosition()), line0(node.getStartPosition() + node.getLength()),
-          node.getStartPosition(), node.getStartPosition() + node.getLength()));
+          node.getStartPosition(), node.getStartPosition() + node.getLength());
+      sym.annotations = Annotations.of(node.modifiers());
+      out.symbols.add(sym);
     }
 
     @Override public boolean visit(TypeDeclaration node) {
@@ -142,20 +144,26 @@ public final class Analyzer {
 
     @Override public boolean visit(MethodDeclaration node) {
       String name = node.getName().getIdentifier();
-      out.symbols.add(new Dtos.Sym(symId(name, "method"), name, "method",
+      Dtos.Sym sym = new Dtos.Sym(symId(name, "method"), name, "method",
           line0(node.getStartPosition()), line0(node.getStartPosition() + node.getLength()),
-          node.getStartPosition(), node.getStartPosition() + node.getLength()));
+          node.getStartPosition(), node.getStartPosition() + node.getLength());
+      sym.annotations = Annotations.of(node.modifiers());
+      out.symbols.add(sym);
       if (node.getReturnType2() != null) addUses(node.getReturnType2());
       return true;
     }
 
     @Override public boolean visit(FieldDeclaration node) {
+      // Every fragment (`int a, b;`) gets the declaration's annotations.
+      List<Dtos.Ann> annotations = Annotations.of(node.modifiers());
       for (Object o : node.fragments()) {
         VariableDeclarationFragment f = (VariableDeclarationFragment) o;
         String name = f.getName().getIdentifier();
-        out.symbols.add(new Dtos.Sym(symId(name, "variable"), name, "variable",
+        Dtos.Sym sym = new Dtos.Sym(symId(name, "variable"), name, "variable",
             line0(node.getStartPosition()), line0(node.getStartPosition() + node.getLength()),
-            node.getStartPosition(), node.getStartPosition() + node.getLength()));
+            node.getStartPosition(), node.getStartPosition() + node.getLength());
+        sym.annotations = annotations;
+        out.symbols.add(sym);
       }
       addUses(node.getType());
       return true;

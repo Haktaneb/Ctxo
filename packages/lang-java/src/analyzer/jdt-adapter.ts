@@ -1,6 +1,7 @@
-import type { ComplexityMetrics, GraphEdge, ILanguageAdapter, SymbolKind, SymbolNode } from '@ctxo/plugin-api';
+import type { ComplexityMetrics, GraphEdge, ILanguageAdapter, SymbolNode } from '@ctxo/plugin-api';
 import { createLogger } from '../logger.js';
 import { resolveAnalyzerJar, analyzerPackageVersion, baseVersionMismatch, PLUGIN_VERSION } from './jar-resolve.js';
+import { toSymbolNode } from './jdt-mapping.js';
 import { runBatchIndex, JdtKeepAlive, type JdtFileResult } from './jdt-process.js';
 import { detectJavaRuntime } from './toolchain-detect.js';
 
@@ -54,17 +55,7 @@ export class JdtAnalyzerAdapter implements ILanguageAdapter {
     await this.ensureBatch();
     const file = this.cache.get(this.norm(filePath));
     if (!file) return [];
-    return file.symbols
-      .filter((s) => FULL_SYMBOL_ID.test(s.symbolId))
-      .map((s) => ({
-        symbolId: s.symbolId,
-        name: s.name,
-        kind: s.kind as SymbolKind,
-        startLine: s.startLine,
-        endLine: s.endLine,
-        ...(s.startOffset != null ? { startOffset: s.startOffset } : {}),
-        ...(s.endOffset != null ? { endOffset: s.endOffset } : {}),
-      }));
+    return file.symbols.filter((s) => FULL_SYMBOL_ID.test(s.symbolId)).map(toSymbolNode);
   }
 
   async extractEdges(filePath: string, _source: string): Promise<GraphEdge[]> {
