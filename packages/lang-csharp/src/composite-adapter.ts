@@ -1,6 +1,7 @@
-import type { SymbolNode, GraphEdge, ComplexityMetrics, SymbolKind, ILanguageAdapter, IIncrementalReindex } from '@ctxo/plugin-api';
+import type { CodeFact, SymbolNode, GraphEdge, ComplexityMetrics, SymbolKind, ILanguageAdapter, IIncrementalReindex } from '@ctxo/plugin-api';
 import { RoslynAdapter } from './roslyn/roslyn-adapter.js';
 import { CSharpAdapter } from './csharp-adapter.js';
+import type { FactOptions } from './facts/fact-types.js';
 import { createLogger } from './logger.js';
 
 const log = createLogger('ctxo:lang-csharp');
@@ -8,6 +9,8 @@ const log = createLogger('ctxo:lang-csharp');
 export interface CSharpCompositeAdapterOptions {
   /** Ask the Roslyn helper for SQL call-site edges (the host's `sqlCallSites` capability). */
   readonly sqlCallSites?: boolean;
+  /** Fact detector options (the host's `facts` capability with `config.facts`); absent: no facts. */
+  readonly facts?: FactOptions;
 }
 
 /**
@@ -26,6 +29,8 @@ export interface CSharpCompositeAdapterOptions {
 export class CSharpCompositeAdapter implements ILanguageAdapter {
   /** The `sqlCallSites` option as constructed, whatever tier is active. */
   readonly sqlCallSites: boolean;
+  /** The fact detector options as constructed, whatever tier is active; undefined when facts are off. */
+  readonly facts: FactOptions | undefined;
 
   private delegate: ILanguageAdapter | null = null;
   private roslyn: RoslynAdapter | null = null;
@@ -35,11 +40,12 @@ export class CSharpCompositeAdapter implements ILanguageAdapter {
 
   constructor(options: CSharpCompositeAdapterOptions = {}) {
     this.sqlCallSites = options.sqlCallSites === true;
+    this.facts = options.facts;
   }
 
   async initialize(rootDir: string): Promise<void> {
     try {
-      const roslyn = new RoslynAdapter({ sqlCallSites: this.sqlCallSites });
+      const roslyn = new RoslynAdapter({ sqlCallSites: this.sqlCallSites, ...(this.facts ? { facts: this.facts } : {}) });
       await roslyn.initialize(rootDir);
       if (roslyn.isReady()) {
         this.roslyn = roslyn;
@@ -79,6 +85,12 @@ export class CSharpCompositeAdapter implements ILanguageAdapter {
   extractComplexity(filePath: string, source: string): Promise<ComplexityMetrics[]> {
     this.fallBackIfRoslynFailed();
     return this.delegate ? this.delegate.extractComplexity(filePath, source) : Promise.resolve([]);
+  }
+
+  /** Forwards to the active delegate; `[]` without one or when the delegate has no fact detectors. */
+  extractFacts(filePath: string, source: string): Promise<CodeFact[]> {
+    this.fallBackIfRoslynFailed();
+    return this.delegate?.extractFacts ? this.delegate.extractFacts(filePath, source) : Promise.resolve([]);
   }
 
   isSupported(filePath: string): boolean {

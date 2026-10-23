@@ -1,5 +1,6 @@
 import type { CtxoLanguagePlugin, PluginContext, ILanguageAdapter } from '@ctxo/plugin-api';
 import { CSharpCompositeAdapter } from './composite-adapter.js';
+import { readFactOptions } from './facts/fact-options.js';
 
 export { CSharpCompositeAdapter } from './composite-adapter.js';
 export { CSharpAdapter } from './csharp-adapter.js';
@@ -19,7 +20,9 @@ export const plugin: CtxoLanguagePlugin = {
   tier: 'full',
   createAdapter(ctx: PluginContext): ILanguageAdapter {
     // SQL call-site edges only when a SQL plugin is loaded (protocol v2 capability; absent on v1 cores).
-    return new CSharpCompositeAdapter({ sqlCallSites: ctx.capabilities?.sqlCallSites === true });
+    // Facts only when the host asks for them; their options come from the host-reserved `config.facts`.
+    const facts = ctx.capabilities?.facts === true ? readFactOptions(ctx.config) : undefined;
+    return new CSharpCompositeAdapter({ sqlCallSites: ctx.capabilities?.sqlCallSites === true, ...(facts ? { facts } : {}) });
   },
 };
 

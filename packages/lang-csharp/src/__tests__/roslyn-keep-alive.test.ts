@@ -16,7 +16,8 @@ vi.mock('../roslyn/solution-discovery.js', () => discovery);
 
 import { spawn } from 'node:child_process';
 import type { IIncrementalReindex } from '@ctxo/plugin-api';
-import { CSharpCompositeAdapter } from '../composite-adapter.js';
+import { CSharpCompositeAdapter, type CSharpCompositeAdapterOptions } from '../composite-adapter.js';
+import { DEFAULT_FACT_OPTIONS, encodeFactOptions } from '../facts/fact-options.js';
 
 const ROOT = resolve(tmpdir(), 'ctxo-lending');
 const LOAN_SERVICE = 'Loans/LoanService.cs';
@@ -41,6 +42,8 @@ class FakeHelper extends EventEmitter {
   killed = false;
   /** When set, the helper exits on a request instead of answering it. */
   crashOnRequest = false;
+  /** When set, the answer carries this fact evidence. */
+  evidence: unknown[] | undefined;
   readonly kill = vi.fn(() => {
     this.killed = true;
     return true;
@@ -57,7 +60,10 @@ class FakeHelper extends EventEmitter {
   };
 
   private answer(file: string): void {
-    const result = { type: 'file', file, symbols: [ROSLYN_SYMBOL], edges: [], complexity: [] };
+    const result = {
+      type: 'file', file, symbols: [ROSLYN_SYMBOL], edges: [], complexity: [],
+      ...(this.evidence ? { factEvidence: this.evidence } : {}),
+    };
     this.stdout.emit('data', Buffer.from(`${JSON.stringify(result)}\n`));
   }
 }
@@ -85,9 +91,11 @@ function fallbackWarnings(): string[] {
 }
 
 /** A full-tier composite whose keep-alive has started. */
-async function watching(): Promise<{ composite: CSharpCompositeAdapter; keepAlive: IIncrementalReindex; first: FakeHelper }> {
+async function watching(
+  options: CSharpCompositeAdapterOptions = {},
+): Promise<{ composite: CSharpCompositeAdapter; keepAlive: IIncrementalReindex; first: FakeHelper }> {
   const first = nextHelper('starts');
-  const composite = new CSharpCompositeAdapter();
+  const composite = new CSharpCompositeAdapter(options);
   await composite.initialize(ROOT);
   const keepAlive = composite.getIncrementalReindex()!;
   expect(await keepAlive.startKeepAlive()).toBe(true);
@@ -201,6 +209,30 @@ describe('Roslyn keep-alive after ready', () => {
     expect(composite.getTier()).toBe('syntax');
     expect(fallbackWarnings()).toHaveLength(1);
     expect(fallbackWarnings()[0]).toContain('the keep-alive helper exited again after a restart');
+    await composite.dispose();
+  });
+});
+
+describe('Roslyn keep-alive facts', () => {
+  const FACT_OPTIONS = { ...DEFAULT_FACT_OPTIONS, normalizationMethods: ['Trim'] };
+  const FACTS_ARG = `--facts=${encodeFactOptions(FACT_OPTIONS)}`;
+  const EVIDENCE = [{ kind: 'call', symbolId: ROSLYN_SYMBOL.symbolId, line: 0, text: 'email.Trim()', method: 'Trim', qualifier: 'email' }];
+
+  it('the start and the restart both pass --facts=, and reindexFile refreshes the facts', async () => {
+    const { composite, keepAlive, first } = await watching({ facts: FACT_OPTIONS });
+    first.emit('close', 134);
+
+    const second = nextHelper('starts');
+    second.evidence = EVIDENCE;
+    expect(await composite.extractFacts(LOAN_SERVICE, SOURCE)).toEqual([]);
+    expect(await keepAlive.reindexFile(LOAN_SERVICE)).not.toBeNull();
+
+    const args = vi.mocked(spawn).mock.calls.map((call) => call[1] as string[]);
+    expect(args).toHaveLength(2);
+    for (const arg of args) expect(arg.slice(-2)).toEqual(['--keep-alive', FACTS_ARG]);
+    expect(await composite.extractFacts(LOAN_SERVICE, SOURCE)).toEqual([
+      { kind: 'normalization', symbolId: ROSLYN_SYMBOL.symbolId, line: 0, text: 'email.Trim()', detail: { method: 'Trim' } },
+    ]);
     await composite.dispose();
   });
 });

@@ -16,6 +16,7 @@ vi.mock('../roslyn/solution-discovery.js', () => discovery);
 import { spawn } from 'node:child_process';
 import { runBatchIndex, RoslynKeepAlive } from '../roslyn/roslyn-process.js';
 import { CSharpCompositeAdapter } from '../composite-adapter.js';
+import { DEFAULT_FACT_OPTIONS, encodeFactOptions } from '../facts/fact-options.js';
 
 /** A child process that the test drives: it emits what `dotnet run` would. */
 class FakeProcess extends EventEmitter {
@@ -52,6 +53,8 @@ async function settledWithin<T>(promise: Promise<T>, ms: number): Promise<T | ty
 
 const HELPER_DIR = '/opt/ctxo/tools/ctxo-roslyn';
 const SOLUTION = '/work/lending/Lending.sln';
+const FACT_OPTIONS = { ...DEFAULT_FACT_OPTIONS, normalizationMethods: ['Trim'] };
+const FACTS_ARG = `--facts=${encodeFactOptions(FACT_OPTIONS)}`;
 
 beforeEach(() => {
   vi.mocked(spawn).mockReset();
@@ -160,6 +163,36 @@ describe('runBatchIndex', () => {
     expect(calls.map((call) => (call[2] as { timeout?: number }).timeout)).toEqual([120_000, 120_000, 120_000]);
   });
 
+  it('runBatchIndex appends --facts= with base64 options only when facts are given', async () => {
+    for (const options of [undefined, { sqlCallSites: true }, { facts: FACT_OPTIONS }, { sqlCallSites: true, facts: FACT_OPTIONS }]) {
+      const proc = nextProcess();
+      const pending = runBatchIndex(HELPER_DIR, SOLUTION, options);
+      proc.emit('close', 0);
+      await pending;
+    }
+
+    expect(vi.mocked(spawn).mock.calls.map((call) => call[1])).toEqual([
+      ['run', '--project', HELPER_DIR, '--', SOLUTION],
+      ['run', '--project', HELPER_DIR, '--', SOLUTION, '--sql-call-sites'],
+      ['run', '--project', HELPER_DIR, '--', SOLUTION, FACTS_ARG],
+      ['run', '--project', HELPER_DIR, '--', SOLUTION, '--sql-call-sites', FACTS_ARG],
+    ]);
+    // The value is the base64 of the UTF-8 JSON normalization list.
+    expect(JSON.parse(Buffer.from(FACTS_ARG.slice('--facts='.length), 'base64').toString('utf8'))).toEqual({ normalizationMethods: ['Trim'] });
+  });
+
+  it('runBatchIndex keeps the factEvidence of a file line', async () => {
+    const proc = nextProcess();
+    const pending = runBatchIndex(HELPER_DIR, SOLUTION, { facts: FACT_OPTIONS });
+
+    const factEvidence = [{ kind: 'call', symbolId: 'Loans/Key.cs::Lending.Key.Of::method', line: 3, text: 'email.Trim()', method: 'Trim', qualifier: 'email' }];
+    const file = { type: 'file', file: 'Loans/Key.cs', symbols: [], edges: [], complexity: [], factEvidence };
+    proc.stdout.emit('data', Buffer.from(`${JSON.stringify(file)}\n`));
+    proc.emit('close', 0);
+
+    expect((await pending).files[0]!.factEvidence).toEqual(factEvidence);
+  });
+
   it('runBatchIndex reads the sql stats from the done line', async () => {
     const proc = nextProcess();
     const pending = runBatchIndex(HELPER_DIR, SOLUTION, { sqlCallSites: true, timeoutMs: 5_000 });
@@ -244,6 +277,21 @@ describe('RoslynKeepAlive', () => {
       ['run', '--project', HELPER_DIR, '--', SOLUTION, '--keep-alive'],
       ['run', '--project', HELPER_DIR, '--', SOLUTION, '--keep-alive'],
       ['run', '--project', HELPER_DIR, '--', SOLUTION, '--keep-alive', '--sql-call-sites'],
+    ]);
+  });
+
+  it('the keep-alive process gets the same argument', async () => {
+    for (const options of [undefined, { facts: FACT_OPTIONS }, { sqlCallSites: true, facts: FACT_OPTIONS }]) {
+      const proc = nextProcess();
+      const started = new RoslynKeepAlive(HELPER_DIR, SOLUTION, options).start();
+      proc.emit('close', 1);
+      expect(await settledWithin(started, 1_000)).toBe(false);
+    }
+
+    expect(vi.mocked(spawn).mock.calls.map((call) => call[1])).toEqual([
+      ['run', '--project', HELPER_DIR, '--', SOLUTION, '--keep-alive'],
+      ['run', '--project', HELPER_DIR, '--', SOLUTION, '--keep-alive', FACTS_ARG],
+      ['run', '--project', HELPER_DIR, '--', SOLUTION, '--keep-alive', '--sql-call-sites', FACTS_ARG],
     ]);
   });
 
