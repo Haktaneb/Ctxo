@@ -55,11 +55,15 @@ export async function gatherDiscoveryInput(
     commitSubjects = [];
   }
 
-  let branches: readonly string[] = [];
+  let localBranches: readonly string[] = [];
+  let remoteBranches: readonly string[] = [];
   try {
-    branches = (await git?.getRefs?.())?.branches ?? [];
+    const refs = await git?.getRefs?.();
+    localBranches = refs?.localBranches ?? refs?.branches ?? [];
+    remoteBranches = refs?.remoteBranches ?? [];
   } catch {
-    branches = [];
+    localBranches = [];
+    remoteBranches = [];
   }
 
   let trackedFiles: readonly string[] | undefined;
@@ -73,7 +77,8 @@ export async function gatherDiscoveryInput(
     cards,
     ...(registry !== undefined ? { registry } : {}),
     commitSubjects,
-    branches,
+    localBranches,
+    remoteBranches,
     indices,
     trackedFiles: trackedFiles ?? indices.map((index) => index.file),
     // Deliberately path globs only (default globs plus index.tests): annotated files outside them are what discovery reports.

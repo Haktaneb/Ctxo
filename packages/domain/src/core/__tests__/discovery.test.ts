@@ -45,7 +45,8 @@ function input(overrides: Partial<DiscoveryInput> = {}): DiscoveryInput {
   return {
     cards: [],
     commitSubjects: [],
-    branches: [],
+    localBranches: [],
+    remoteBranches: [],
     indices: [],
     trackedFiles: [],
     isPathTestFile: (path) => /\.Tests\//.test(path),
@@ -81,23 +82,43 @@ describe('discoverConventions', () => {
 
   it('branch names count', () => {
     const { proposal } = discoverConventions(
-      input({ commitSubjects: subjects('OPS', 3), branches: ['feature/OPS-12-thing', 'fix/OPS-13'] }),
+      input({ commitSubjects: subjects('OPS', 3), localBranches: ['feature/OPS-12-thing', 'fix/OPS-13'] }),
     );
     expect(proposal.trackerPrefixes).toEqual(['OPS']);
   });
 
   it('counts a local branch and its remote-tracking copy once', () => {
     const local = ['feature/OPS-1', 'feature/OPS-2', 'feature/OPS-3'];
-    const branches = [...local, ...local.map((b) => `origin/${b}`)];
-    const { evidence, proposal } = discoverConventions(input({ branches }));
+    const { evidence, proposal } = discoverConventions(
+      input({ localBranches: local, remoteBranches: local.map((b) => `origin/${b}`) }),
+    );
     expect(evidence.trackerKeys).toEqual([{ prefix: 'OPS', occurrences: 3, overlapsRulePrefix: false }]);
     expect(proposal.trackerPrefixes).toEqual([]);
   });
 
+  it('counts the same branch on two remotes once, whatever the remotes are called', () => {
+    const { evidence } = discoverConventions(input({ remoteBranches: ['fork/OPS-7', 'origin/OPS-7'] }));
+    expect(evidence.trackerKeys).toEqual([{ prefix: 'OPS', occurrences: 1, overlapsRulePrefix: false }]);
+  });
+
+  it('counts local chore/OPS-12 and OPS-12 as two branches', () => {
+    const { evidence } = discoverConventions(input({ localBranches: ['chore/OPS-12', 'OPS-12'] }));
+    expect(evidence.trackerKeys).toEqual([{ prefix: 'OPS', occurrences: 2, overlapsRulePrefix: false }]);
+  });
+
+  it('keeps a local branch literally named origin/x as it is', () => {
+    const { evidence } = discoverConventions(input({ localBranches: ['origin/OPS-1'], remoteBranches: ['origin/OPS-1'] }));
+    // local 'origin/OPS-1' and the remote-tracking 'origin/OPS-1' (name 'OPS-1') are two distinct branches
+    expect(evidence.trackerKeys).toEqual([{ prefix: 'OPS', occurrences: 2, overlapsRulePrefix: false }]);
+  });
+
   it('counts a remote-only branch once, by its name without the remote', () => {
-    const branches = ['feature/OPS-1', 'origin/feature/OPS-1', 'origin/OPS-2', 'upstream/OPS-2', 'origin/OPS-3', 'origin/OPS-4', 'origin/OPS-5'];
-    const { evidence, proposal } = discoverConventions(input({ branches }));
-    expect(evidence.trackerKeys[0]).toEqual({ prefix: 'OPS', occurrences: 5, overlapsRulePrefix: false });
+    const { proposal } = discoverConventions(
+      input({
+        localBranches: ['feature/OPS-1'],
+        remoteBranches: ['origin/feature/OPS-1', 'origin/OPS-2', 'upstream/OPS-2', 'origin/OPS-3', 'origin/OPS-4', 'origin/OPS-5'],
+      }),
+    );
     expect(proposal.trackerPrefixes).toEqual(['OPS']);
   });
 

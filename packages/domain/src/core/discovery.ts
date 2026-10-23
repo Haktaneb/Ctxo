@@ -33,7 +33,10 @@ export interface DiscoveryInput {
   readonly cards: readonly ParsedCard[];
   readonly registry?: DomainRegistry;
   readonly commitSubjects: readonly string[];
-  readonly branches: readonly string[];
+  /** Local branch names (`GitRefs.localBranches`). */
+  readonly localBranches: readonly string[];
+  /** Remote-tracking branches as `<remote>/<name>` (`GitRefs.remoteBranches`). */
+  readonly remoteBranches: readonly string[];
   readonly indices: readonly FileIndex[];
   readonly trackedFiles: readonly string[];
   readonly isPathTestFile: (path: string) => boolean;
@@ -72,24 +75,15 @@ function hasTestAnnotation(index: FileIndex, names: ReadonlySet<string>): boolea
   return index.symbols.some((symbol) => symbol.annotations?.some((annotation) => names.has(annotation.name)));
 }
 
-const KNOWN_REMOTES: readonly string[] = ['origin', 'upstream'];
-
 /**
- * One entry per branch: a remote-tracking ref `<remote>/<x>` is dropped when `x` exists locally, and a
- * remote-only one counts once by its name without the remote. A first segment is a remote when it is
- * `origin`, `upstream`, or the other ref list holds the rest of the name as a branch of its own.
+ * One entry per distinct branch name: the local names, plus each remote-tracking ref with exactly its first
+ * segment (the remote name) removed. A local branch named `origin/x` keeps that name.
  */
-export function dedupeBranches(branches: readonly string[]): string[] {
-  const all = new Set(branches);
-  const remotes = new Set(KNOWN_REMOTES);
-  for (const ref of all) {
+export function branchNames(localBranches: readonly string[], remoteBranches: readonly string[]): string[] {
+  const names = new Set(localBranches);
+  for (const ref of remoteBranches) {
     const slash = ref.indexOf('/');
-    if (slash > 0 && all.has(ref.slice(slash + 1))) remotes.add(ref.slice(0, slash));
-  }
-  const names = new Set<string>();
-  for (const ref of all) {
-    const slash = ref.indexOf('/');
-    names.add(slash > 0 && remotes.has(ref.slice(0, slash)) ? ref.slice(slash + 1) : ref);
+    names.add(slash > 0 ? ref.slice(slash + 1) : ref);
   }
   return [...names].sort(compare);
 }
@@ -109,7 +103,7 @@ function cardPrefixes(input: DiscoveryInput): DiscoveryEvidence['cardPrefixes'] 
 
 function trackerKeys(input: DiscoveryInput, rulePrefixes: ReadonlySet<string>): DiscoveryEvidence['trackerKeys'] {
   const counts = new Map<string, number>();
-  for (const text of [...input.commitSubjects, ...dedupeBranches(input.branches)]) {
+  for (const text of [...input.commitSubjects, ...branchNames(input.localBranches, input.remoteBranches)]) {
     const seen = new Set<string>();
     for (const match of text.matchAll(TRACKER_KEY_PATTERN)) seen.add(prefixOf(match[0]));
     for (const prefix of seen) counts.set(prefix, (counts.get(prefix) ?? 0) + 1);

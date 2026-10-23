@@ -354,6 +354,10 @@ export interface GitRefs {
   readonly originHead?: string;
   /** Local and remote-tracking short names without the remote HEAD aliases, in codepoint order. */
   readonly branches: readonly string[];
+  /** Local branches only (refs/heads), in codepoint order. */
+  readonly localBranches?: readonly string[];
+  /** Remote-tracking branches as `<remote>/<name>` (refs/remotes, no HEAD aliases), in codepoint order. */
+  readonly remoteBranches?: readonly string[];
 }
 
 // ── Blame Line (from git adapter) ───────────────────────────────

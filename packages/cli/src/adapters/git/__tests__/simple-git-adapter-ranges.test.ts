@@ -293,6 +293,8 @@ describe('SimpleGitAdapter.getRefs', () => {
       upstream: 'origin/main',
       originHead: 'origin/main',
       branches: ['main', 'origin/main'],
+      localBranches: ['main'],
+      remoteBranches: ['origin/main'],
     });
 
     repo.git('checkout', '-q', '--detach');
@@ -301,6 +303,30 @@ describe('SimpleGitAdapter.getRefs', () => {
     expect(detached?.upstream).toBeUndefined();
     expect(detached?.originHead).toBe('origin/main');
     expect(detached?.branches).toEqual(['main', 'origin/main']);
+    expect(detached?.localBranches).toEqual(['main']);
+    expect(detached?.remoteBranches).toEqual(['origin/main']);
+  });
+
+  it('keeps local and remote-tracking branches apart, also for a local branch named like a remote ref', async () => {
+    const repo = createRepo();
+    const remote = mkdtempSync(join(tmpdir(), 'ctxo-ranges-remote-'));
+    tempDirs.push(remote);
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main'], { cwd: remote, stdio: 'ignore' });
+    repo.write('a.ts', '1');
+    repo.commit('c1');
+    repo.git('remote', 'add', 'origin', remote);
+    repo.git('remote', 'add', 'fork', remote);
+    repo.git('push', '-q', 'origin', 'main:OPS-7');
+    repo.git('push', '-q', 'fork', 'main:OPS-7');
+    repo.git('fetch', '-q', '--all');
+    repo.git('branch', 'chore/OPS-12');
+    repo.git('branch', 'OPS-12');
+    repo.git('branch', 'origin/x');
+
+    const refs = await new SimpleGitAdapter(repo.dir).getRefs();
+
+    expect(refs?.localBranches).toEqual(['OPS-12', 'chore/OPS-12', 'main', 'origin/x']);
+    expect(refs?.remoteBranches).toEqual(['fork/OPS-7', 'origin/OPS-7']);
   });
 
   it('leaves absent fields undefined in a repository without a remote', async () => {
@@ -311,7 +337,7 @@ describe('SimpleGitAdapter.getRefs', () => {
 
     const refs = await new SimpleGitAdapter(repo.dir).getRefs();
 
-    expect(refs).toEqual({ currentBranch: 'main', branches: ['b-feature', 'main'] });
+    expect(refs).toEqual({ currentBranch: 'main', branches: ['b-feature', 'main'], localBranches: ['b-feature', 'main'], remoteBranches: [] });
   });
 });
 

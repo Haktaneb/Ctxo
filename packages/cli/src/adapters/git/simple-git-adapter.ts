@@ -173,18 +173,20 @@ function parseStatus(raw: string): FileChange[] {
   return changes;
 }
 
-/** Short ref names for the local and remote-tracking branches in `for-each-ref --format=%(refname)` output. */
-function parseBranchNames(raw: string): string[] {
-  const names = new Set<string>();
+/** Short ref names in `for-each-ref --format=%(refname)` output, local and remote-tracking apart (codepoint order). */
+function parseBranchNames(raw: string): { local: string[]; remote: string[]; all: string[] } {
+  const local = new Set<string>();
+  const remote = new Set<string>();
   for (const line of raw.split('\n')) {
     const ref = line.trim();
     if (ref.startsWith('refs/heads/')) {
-      names.add(ref.slice('refs/heads/'.length));
+      local.add(ref.slice('refs/heads/'.length));
     } else if (ref.startsWith('refs/remotes/') && !ref.endsWith('/HEAD')) {
-      names.add(ref.slice('refs/remotes/'.length));
+      remote.add(ref.slice('refs/remotes/'.length));
     }
   }
-  return [...names].sort(compareCodepoint);
+  const sorted = (set: Set<string>): string[] => [...set].sort(compareCodepoint);
+  return { local: sorted(local), remote: sorted(remote), all: sorted(new Set([...local, ...remote])) };
 }
 
 const TRAILER_KEY = /^[A-Za-z0-9][A-Za-z0-9-]*$/;
@@ -408,9 +410,9 @@ export class SimpleGitAdapter implements IGitPort {
   }
 
   async getRefs(): Promise<GitRefs | undefined> {
-    let branches: string[];
+    let names: ReturnType<typeof parseBranchNames>;
     try {
-      branches = parseBranchNames(
+      names = parseBranchNames(
         await this.git.raw([...STABLE_OUTPUT_CONFIG, 'for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/remotes']),
       );
     } catch (err) {
@@ -425,7 +427,9 @@ export class SimpleGitAdapter implements IGitPort {
       ...(currentBranch !== undefined ? { currentBranch } : {}),
       ...(upstream !== undefined ? { upstream } : {}),
       ...(originHead !== undefined ? { originHead } : {}),
-      branches,
+      branches: names.all,
+      localBranches: names.local,
+      remoteBranches: names.remote,
     };
   }
 
