@@ -45,7 +45,8 @@ function draft(evidence: FactEvidence, options: FactOptions, decodeStringLiteral
   switch (evidence.kind) {
     case 'comparison':
       if (isTrivialLiteral(evidence.literal, evidence.literalKind, options.trivialLiterals, decodeStringLiteral)) return undefined;
-      return { ...base, kind: 'literal-comparison', text: evidence.text, detail: { operator: evidence.operator, literal: capFactValue(evidence.literal) } };
+      // CRLF and CR become LF before the cap, so the committed index does not depend on a checkout's line endings.
+      return { ...base, kind: 'literal-comparison', text: evidence.text, detail: { operator: evidence.operator, literal: capFactValue(evidence.literal.replace(/\r\n?/g, '\n')) } };
     case 'call':
       if (!matchesNormalizationPattern(evidence.method, evidence.qualifier, options.normalizationMethods)) return undefined;
       return { ...base, kind: 'normalization', text: evidence.text, detail: { method: evidence.method } };

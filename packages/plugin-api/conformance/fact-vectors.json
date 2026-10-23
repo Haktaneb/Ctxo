@@ -1,5 +1,5 @@
 {
-  "$comment": "Shared fact conformance vectors (PR 4, #156). Every category is an array of { input, expected }, except languageSpecific, which is keyed by language (each language block holds arrays of the same shape, run with that language's string literal decoder). canonicalNumber: expected null means not a constant (canonicalNumber returns undefined). Not constants: names, strings, division by zero, a decimal integer literal with a leading zero other than 0 itself (017), a division of two integer operands with a non-zero remainder (7 / 2; an operand is integer when it is an integer literal or an expression of integer operands; 7.0 / 2 is a float division), results with |v| >= 2^53, and a non-zero result that rounds to 0 at 6 decimals. An integer result prints as plain digits; any other result is the exact binary double rounded to 6 decimals, as JS toFixed(6) does: 0.0000005 is the double 4.99999999999999977e-7, so it rounds to 0 and is not a constant, and 0.0000015 gives 0.000002; an exact tie (0.0078125) rounds half away from zero (0.007813, -0.007813). Trailing zeros are removed and -0 prints 0. Java copies must round with new BigDecimal(double).setScale(6, RoundingMode.HALF_UP), never String.format(\"%.6f\") or BigDecimal.valueOf; Go copies must not rely on strconv.FormatFloat for exact ties, which it rounds to even (0.007812). isTrivialLiteral: a number literal is evaluated as in canonicalNumber and the double is compared exactly with the list's numbers (0.9999999 is not 1). The shared rules decode only a plain double-quoted string literal (and a plain single-quoted char literal) with the common escapes (a backslash before a double quote, a single quote, a backslash, n, t or r); any other escape makes it not a constant. Every other string form (prefixes, suffixes, verbatim, interpolated, raw, single-quoted or template strings) goes to the language's string literal decoder; without one it is not a string constant, so it is never trivial (see isTrivialLiteralCustom). languageSpecific.<language> vectors run with that language's decoder (C#: decodeCsharpStringLiteral). hasRetryTimeoutFragment: tokens are ASCII only (A-Z, a-z, 0-9); every other character separates tokens; no Unicode case tests and no locale-dependent lowercasing. matchesNormalizationPattern: an absent qualifier means the call has no receiver (written Name(...)). Categories without a list in their input use the defaults block. normalizeFactText and capFactValue: input and expected are segment arrays, concatenated; a segment is a string or { repeat, count }.",
+  "$comment": "Shared fact conformance vectors (PR 4, #156). Every category is an array of { input, expected }, except languageSpecific, which is keyed by language (each language block holds arrays of the same shape, run with that language's string literal decoder). canonicalNumber: expected null means not a constant (canonicalNumber returns undefined). Not constants: names, strings, division by zero, a decimal integer literal with a leading zero other than 0 itself (017), a division of two integer operands with a non-zero remainder (7 / 2; an operand is integer when it is an integer literal or an expression of integer operands; 7.0 / 2 is a float division), results with |v| >= 2^53, and a non-zero result that rounds to 0 at 6 decimals. An integer result prints as plain digits; any other result is the exact binary double rounded to 6 decimals, as JS toFixed(6) does: 0.0000005 is the double 4.99999999999999977e-7, so it rounds to 0 and is not a constant, and 0.0000015 gives 0.000002; an exact tie (0.0078125) rounds half away from zero (0.007813, -0.007813). Trailing zeros are removed and -0 prints 0. Java copies must round with new BigDecimal(double).setScale(6, RoundingMode.HALF_UP), never String.format(\"%.6f\") or BigDecimal.valueOf; Go copies must not rely on strconv.FormatFloat for exact ties, which it rounds to even (0.007812). isTrivialLiteral: a number literal is evaluated as in canonicalNumber and the double is compared exactly with the list's numbers (0.9999999 is not 1). The shared rules decode only a plain double-quoted string literal (and a plain single-quoted char literal) with the common escapes (a backslash before a double quote, a single quote, a backslash, n, t or r); any other escape makes it not a constant. Every other string form (prefixes, suffixes, verbatim, interpolated, raw, single-quoted or template strings) goes to the language's string literal decoder; without one it is not a string constant, so it is never trivial (see isTrivialLiteralCustom). languageSpecific.<language> vectors run with that language's decoder (C#: decodeCsharpStringLiteral). hasRetryTimeoutFragment: tokens are ASCII only (A-Z, a-z, 0-9); every other character separates tokens; no Unicode case tests and no locale-dependent lowercasing. matchesNormalizationPattern: an absent qualifier means the call has no receiver (written Name(...)). Categories without a list in their input use the defaults block. normalizeFactText and capFactValue: input and expected are segment arrays, concatenated; a segment is a string or { repeat, count }. detailLiteral: the finisher's detail.literal for a comparison literal (same segment arrays); CRLF and CR become LF before capFactValue, so the committed index does not depend on a checkout's line endings.",
   "defaults": {
     "trivialLiterals": [
       0,
@@ -900,6 +900,67 @@
       ],
       "expected": [
         ""
+      ]
+    }
+  ],
+  "detailLiteral": [
+    {
+      "input": [
+        "\"a\r\nb\""
+      ],
+      "expected": [
+        "\"a\nb\""
+      ]
+    },
+    {
+      "input": [
+        "\"a\rb\""
+      ],
+      "expected": [
+        "\"a\nb\""
+      ]
+    },
+    {
+      "input": [
+        "\"a\r\r\nb\n\""
+      ],
+      "expected": [
+        "\"a\n\nb\n\""
+      ]
+    },
+    {
+      "input": [
+        "\"",
+        {
+          "repeat": "a\r\n",
+          "count": 100
+        }
+      ],
+      "expected": [
+        "\"",
+        {
+          "repeat": "a\n",
+          "count": 99
+        },
+        "a"
+      ]
+    },
+    {
+      "input": [
+        "\"",
+        {
+          "repeat": "a",
+          "count": 198
+        },
+        "\r\n",
+        "bc"
+      ],
+      "expected": [
+        "\"",
+        {
+          "repeat": "a",
+          "count": 198
+        }
       ]
     }
   ],

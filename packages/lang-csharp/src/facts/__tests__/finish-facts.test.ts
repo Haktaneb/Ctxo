@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { SymbolNode } from '@ctxo/plugin-api';
 import type { FactEvidence } from '../fact-types.js';
@@ -7,6 +10,14 @@ import { decodeCsharpStringLiteral } from '../csharp-string-literal.js';
 
 const FILE = 'src/Loans/LoanPolicy.cs';
 const M = `${FILE}::Lending.LoanPolicy.CanBorrow::method`;
+
+// The shared conformance vectors; detailLiteral pins the finisher's detail.literal.
+const VECTORS_PATH = join(dirname(fileURLToPath(import.meta.url)), '../../../../plugin-api/conformance/fact-vectors.json');
+type Segments = readonly (string | { readonly repeat: string; readonly count: number })[];
+const detailLiteralVectors = (JSON.parse(readFileSync(VECTORS_PATH, 'utf8')) as { detailLiteral: { input: Segments; expected: Segments }[] }).detailLiteral;
+function expand(segments: Segments): string {
+  return segments.map(segment => (typeof segment === 'string' ? segment : segment.repeat.repeat(segment.count))).join('');
+}
 
 function finish(evidence: readonly FactEvidence[], symbols: readonly SymbolNode[] = []) {
   return finishFacts(FILE, evidence, symbols, DEFAULT_FACT_OPTIONS);
@@ -44,6 +55,15 @@ describe('finishFacts', () => {
     const short = '"a  b"';
     const [kept] = finish([{ kind: 'comparison', symbolId: M, line: 4, text: 'x == "a  b"', operator: '==', literal: short, literalKind: 'string' }]);
     expect(kept!.detail!['literal']).toBe(short);
+  });
+
+  it('detail.literal turns CRLF and CR into LF before the cap (detailLiteral vectors)', () => {
+    expect(detailLiteralVectors.length).toBeGreaterThan(0);
+    for (const { input, expected } of detailLiteralVectors) {
+      const literal = expand(input);
+      const [fact] = finish([{ kind: 'comparison', symbolId: M, line: 1, text: 'x == y', operator: '==', literal, literalKind: 'string' }]);
+      expect(fact!.detail!['literal'], JSON.stringify(input)).toBe(expand(expected));
+    }
   });
 
   it('the string literal decoder hook reaches the trivial-literal check', () => {

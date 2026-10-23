@@ -52,6 +52,7 @@ describe('fact conformance vectors', () => {
       'canonicalNumber',
       'capFactValue',
       'defaults',
+      'detailLiteral',
       'hasRetryTimeoutFragment',
       'isTrivialLiteral',
       'isTrivialLiteralCustom',
