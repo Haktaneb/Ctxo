@@ -35,7 +35,8 @@ export interface RuleLinks {
   readonly unknown: readonly RuleRef[];
 }
 
-const RULE_COMMENT = /(?:\/\/|\/\*|#|--|^\s*\*)\s*rule:\s*([A-Za-z][A-Za-z0-9]*[-_]?\d+)(?![A-Za-z0-9])/gim;
+// P16: `[ \t]*`, never `\s*`, so a comment marker, `rule:` and its ID sit on one line.
+const RULE_COMMENT = /(?:\/\/|\/\*|#|--|^[ \t]*\*)[ \t]*rule:[ \t]*([A-Za-z][A-Za-z0-9]*[-_]?\d+)(?![A-Za-z0-9])/gim;
 const TEST_DECLARATION =
   /(?:\b(?:it|test|describe)(?:\.(?:only|skip))?\s*\(|\bt\.Run\s*\(|@DisplayName\s*\(|\[(?:Fact|Theory)\s*\(\s*DisplayName\s*=)\s*(['"`])((?:\\.|(?!\1).)*)\1/g;
 const SHAPED_TOKEN = /^([A-Za-z][A-Za-z0-9]*?)[-_]?(\d+)$/;
@@ -103,7 +104,11 @@ function innermostSymbol(index: FileIndex | undefined, line: number): SymbolNode
   return best;
 }
 
-/** How far below a `rule:` comment the symbol it introduces may start (F4). */
+/**
+ * How far below a `rule:` comment the symbol it introduces may start (F4). The window assumes attribute-inclusive
+ * spans, which is what Roslyn, tree-sitter and ts-morph report: a method under any number of stacked attributes or
+ * decorators starts at its first attribute, right below the comment.
+ */
 const LEADING_SYMBOL_LINES = 3;
 
 /**
@@ -203,6 +208,34 @@ function lineOf(starts: readonly number[], offset: number): number {
   return lo + 1;
 }
 
+/** The `rule:` comments of a text: 1-based line, the raw ID and its normalised form. */
+function ruleCommentMatches(text: string, starts: readonly number[], options: ScanOptions): { line: number; raw: string; id: string }[] {
+  const out: { line: number; raw: string; id: string }[] = [];
+  for (const m of text.matchAll(new RegExp(RULE_COMMENT.source, RULE_COMMENT.flags))) {
+    const raw = m[1]!;
+    const id = normaliseShaped(raw, options);
+    if (id !== undefined) out.push({ line: lineOf(starts, m.index + m[0].length - raw.length), raw, id });
+  }
+  return out;
+}
+
+/**
+ * The `rule:` comments of a production (non-test) file (F4): 'rule-comment' refs only, each linked to the symbol
+ * `leadingSymbol` picks. Nothing else in a production file is a reference.
+ */
+export function scanRuleComments(file: string, text: string, index: FileIndex | undefined, options: ScanOptions): RuleRef[] {
+  const refs: RuleRef[] = [];
+  const seen = new Set<string>();
+  for (const { line, raw, id } of ruleCommentMatches(text, lineStarts(text), options)) {
+    const key = `${line}|${id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const symbolId = leadingSymbol(index, line);
+    refs.push(symbolId === undefined ? { file, line, raw, id, kind: 'rule-comment' } : { file, line, raw, id, kind: 'rule-comment', symbolId });
+  }
+  return refs.sort((a, b) => a.line - b.line || compare(a.id, b.id));
+}
+
 /** Scans one test file's text, plus its indexed annotations, for rule references. */
 export function scanTestText(file: string, text: string, index: FileIndex | undefined, options: ScanOptions): RuleRef[] {
   const starts = lineStarts(text);
@@ -219,11 +252,7 @@ export function scanTestText(file: string, text: string, index: FileIndex | unde
     refs.push(symbolId === undefined ? { file, line, raw, id, kind } : { file, line, raw, id, kind, symbolId });
   };
 
-  for (const m of text.matchAll(new RegExp(RULE_COMMENT.source, RULE_COMMENT.flags))) {
-    const raw = m[1]!;
-    const id = normaliseShaped(raw, options);
-    if (id !== undefined) push(lineOf(starts, m.index + m[0].length - raw.length), raw, id, 'rule-comment');
-  }
+  for (const m of ruleCommentMatches(text, starts, options)) push(m.line, m.raw, m.id, 'rule-comment');
 
   for (const m of text.matchAll(new RegExp(TEST_DECLARATION.source, TEST_DECLARATION.flags))) {
     const title = m[2]!;

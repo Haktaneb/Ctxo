@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, openSync, readFileSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 
 /**
@@ -28,6 +28,69 @@ export function repoFileExists(projectRoot: string, repoPath: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** True when a regular file (not a directory) exists at the repo-relative path (never outside the project). */
+export function repoIsFile(projectRoot: string, repoPath: string): boolean {
+  const absolute = inside(projectRoot, repoPath);
+  if (absolute === undefined) return false;
+  try {
+    return statSync(absolute, { throwIfNoEntry: false })?.isFile() ?? false;
+  } catch {
+    return false;
+  }
+}
+
+/** Source files above this size are not scanned for `rule:` comments (1 MiB). */
+export const SOURCE_SCAN_MAX_BYTES = 1_048_576;
+/** A NUL byte in this many leading bytes marks a file as binary. */
+const BINARY_PROBE_BYTES = 8192;
+
+const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+/** One file's text, or undefined when it is not a regular file, too large, binary or unreadable. */
+function readSourceText(absolute: string, maxBytes: number): string | undefined {
+  let fd: number | undefined;
+  try {
+    // Size and type come from the open descriptor, so the checks and the read see the same file.
+    fd = openSync(absolute, 'r');
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > maxBytes) return undefined;
+    const buffer = readFileSync(fd);
+    if (buffer.length > maxBytes || buffer.subarray(0, BINARY_PROBE_BYTES).includes(0)) return undefined;
+    const text = buffer.toString('utf-8');
+    return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // already closed
+      }
+    }
+  }
+}
+
+/**
+ * The UTF-8 texts (BOM stripped) of repo-relative files, in codepoint order of path, each path once. Missing files,
+ * directories, paths outside the project, files over `maxBytes` and files with a NUL byte in their first 8 KiB
+ * are skipped.
+ */
+export function readRepoTexts(
+  projectRoot: string,
+  files: readonly string[],
+  maxBytes: number = SOURCE_SCAN_MAX_BYTES,
+): { readonly file: string; readonly text: string }[] {
+  const out: { readonly file: string; readonly text: string }[] = [];
+  for (const file of [...new Set(files)].sort(compare)) {
+    const absolute = inside(projectRoot, file);
+    if (absolute === undefined) continue;
+    const text = readSourceText(absolute, maxBytes);
+    if (text !== undefined) out.push({ file, text });
+  }
+  return out;
 }
 
 /** The UTF-8 text of a repo-relative file; undefined when it is missing, unreadable or outside the project. */

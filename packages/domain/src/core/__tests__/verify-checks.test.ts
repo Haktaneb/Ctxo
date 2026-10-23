@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { createModuleHost } from '@ctxo/cli/internal';
 import { parseCard, type ParsedCard } from '../card-parser.js';
 import { DEFAULT_DOMAIN_CONFIG, type DomainConfig } from '../domain-config.js';
+import type { UnresolvedRef } from '../domain-graph.js';
 import { parseRegistry, type LoadedRegistry } from '../registry.js';
+import type { RuleRef } from '../rule-id-scan.js';
 import { contextMapRows, runVerifyChecks, VERIFY_CHECKS, type CheckOutcome, type VerifyCheckId, type VerifyInput } from '../verify-checks.js';
 
 const host = createModuleHost({ cliVersion: '0.0.0', mode: 'cli', projectRoot: process.cwd() });
@@ -229,6 +231,56 @@ describe('runVerifyChecks', () => {
     const finding = out.findings.find((f) => f.message.includes('LEND-99'))!;
     expect(finding.file).toBe('src/Lending/Loan.test.ts');
     expect(finding.line).toBe(7);
+  });
+
+  const CARD_PATH = 'docs/domain/lending/domain.md';
+  const problem = (field: 'Tests' | 'Code', value: string, reason: 'missing-file' | 'not-a-symbol', line = 11): UnresolvedRef => ({
+    rule: 'LEND-01',
+    field,
+    value,
+    at: { file: CARD_PATH, line },
+    reason,
+  });
+
+  it('check 6 fails for a Code: or Tests: file that does not exist', () => {
+    const card = ruleCard('### LEND-01 X\nTests: `src/Nope.test.ts`\nCode: `./src/Nope.ts::Nope::class`\n');
+    const out = outcome(
+      base({
+        ...card,
+        cardRefProblems: [problem('Tests', 'src/Nope.test.ts', 'missing-file', 10), problem('Code', './src/Nope.ts::Nope::class', 'missing-file')],
+      }),
+      '6',
+    );
+    expect(out.status).toBe('fail');
+    expect(out.findings.map((f) => [f.severity, f.message, f.file, f.line, f.context])).toEqual([
+      ['error', 'LEND-01: Tests file "src/Nope.test.ts" does not exist', CARD_PATH, 9, 'lending'],
+      ['error', 'LEND-01: Code file "src/Nope.ts" does not exist', CARD_PATH, 11, 'lending'],
+    ]);
+  });
+
+  it('check 6 warns for an unindexed symbol ID and accepts an indexed one', () => {
+    const gone = 'src/Lending/Loan.ts::Loan.Gone::method';
+    const test = 'src/Lending/Loan.test.ts::LoanTests.Gone::method';
+    const card = ruleCard(`### LEND-01 X\nTests: \`${test}\`\nCode: \`src/Lending/Loan.ts::Loan::class\`, \`${gone}\`\n`);
+    const warned = outcome(base({ ...card, cardRefProblems: [problem('Tests', test, 'not-a-symbol', 10), problem('Code', gone, 'not-a-symbol')] }), '6');
+    expect(warned.status).toBe('warn');
+    expect(warned.findings.map((f) => [f.severity, f.message, f.file, f.line])).toEqual([
+      ['warning', `LEND-01: Tests: "${test}" is not an indexed symbol; it links to its file`, CARD_PATH, 10],
+      ['warning', `LEND-01: Code: "${gone}" is not an indexed symbol; it links to its file`, CARD_PATH, 11],
+    ]);
+    expect(outcome(base({ ...card, cardRefProblems: [] }), '6').status).toBe('pass');
+  });
+
+  it('check 6 warns for a production rule: comment with a rule prefix and ignores other prefixes', () => {
+    const mk = (file: string, line: number, id: string): RuleRef => ({ file, line, raw: id, id, kind: 'rule-comment' });
+    const out = outcome(
+      base({ codeRuleRefs: [mk('src/Lending/Loan.ts', 4, 'LEND-99'), mk('tools/lint.py', 2, 'E-501'), mk('src/Lending/Loan.ts', 4, 'LEND-99')] }),
+      '6',
+    );
+    expect(out.status).toBe('warn');
+    expect(out.findings.map((f) => [f.severity, f.message, f.file, f.line])).toEqual([
+      ['warning', 'rule: comment names unknown rule LEND-99', 'src/Lending/Loan.ts', 4],
+    ]);
   });
 
   it('check 7 skips external URLs and resolves URL-encoded paths and anchors', () => {

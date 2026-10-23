@@ -7,6 +7,7 @@ import {
   buildScanOptions,
   leadingSymbol,
   resolveRuleRefs,
+  scanRuleComments,
   scanTestFiles,
   scanTestText,
   type ScanOptions,
@@ -362,6 +363,65 @@ describe('rule-id-scan', () => {
       ['tests/LoanTests.cs', 'LEND-04', 'rule-comment'],
       ['tests/LoanTests.cs', 'LEND-03', 'annotation'],
       ['tests\\Other.cs', 'LEND-04', 'category'],
+    ]);
+  });
+
+  it('scanRuleComments finds rule: comments in //, #, --, block and * lines and ignores plain mentions', () => {
+    const text = [
+      '// rule: LEND-03',
+      '# rule: LEND-04',
+      '-- rule: LEND-03',
+      '/* rule: LEND-04 */',
+      ' * rule: LEND-03',
+      '// covers LEND-03',
+      "const title = 'LEND-04 holds';",
+      'rule: LEND-03',
+      '// rule: JIRA-12',
+    ].join('\n');
+    const refs = scanRuleComments('src/Loan.ts', text, undefined, options());
+    expect(refs.map((r) => [r.line, r.id, r.kind])).toEqual([
+      [1, 'LEND-03', 'rule-comment'],
+      [2, 'LEND-04', 'rule-comment'],
+      [3, 'LEND-03', 'rule-comment'],
+      [4, 'LEND-04', 'rule-comment'],
+      [5, 'LEND-03', 'rule-comment'],
+      [9, 'JIRA-12', 'rule-comment'],
+    ]);
+    expect(refs.every((r) => r.file === 'src/Loan.ts')).toBe(true);
+  });
+
+  it('a rule: comment with its ID on the next line links nothing (P16)', () => {
+    const text = ['// rule:', 'LEND-03 is not here', '#  rule:\t', '\tLEND-04', '//', 'rule: LEND-03'].join('\n');
+    expect(scanRuleComments('src/Loan.ts', text, undefined, options())).toEqual([]);
+    expect(scanTestText(FILE, text, undefined, options()).filter((r) => r.kind === 'rule-comment')).toEqual([]);
+  });
+
+  it('a rule: comment above three or more stacked attributes links to the method whose span starts at the first attribute', () => {
+    // Roslyn, tree-sitter and ts-morph report attribute-inclusive spans: the method starts at its first attribute.
+    const index: FileIndex = {
+      ...fileIndex([
+        { symbolId: 'src/Loan.cs::LoanPolicy::class', name: 'LoanPolicy', kind: 'class', startLine: 0, endLine: 10 },
+        { symbolId: 'src/Loan.cs::LoanPolicy.CanBorrow::method', name: 'CanBorrow', kind: 'method', startLine: 3, endLine: 8 },
+      ]),
+      file: 'src/Loan.cs',
+    };
+    const text = [
+      'public class LoanPolicy',
+      '{',
+      '    // rule: LEND-03',
+      '    [Obsolete]',
+      '    [Pure]',
+      '    [MethodImpl(MethodImplOptions.NoInlining)]',
+      '    [DebuggerStepThrough]',
+      '    public bool CanBorrow()',
+      '    {}',
+      '}',
+    ].join('\n');
+    expect(scanRuleComments(index.file, text, index, options()).map((r) => [r.line, r.symbolId])).toEqual([
+      [3, 'src/Loan.cs::LoanPolicy.CanBorrow::method'],
+    ]);
+    expect(scanTestText(index.file, text, index, options()).filter((r) => r.kind === 'rule-comment').map((r) => r.symbolId)).toEqual([
+      'src/Loan.cs::LoanPolicy.CanBorrow::method',
     ]);
   });
 });

@@ -25,14 +25,24 @@ function normaliseRef(value: string): string {
   return slashed.startsWith('./') ? slashed.slice(2) : slashed;
 }
 
-/** The file part of a card value ends at the first `::` (symbol ID) or `#` (`file#Name`, P5). */
+/** The file part of a card value ends at the first `::` (symbol ID) or `#` (`file#Name`, P5), trimmed like 2B's testPath. */
 function filePart(value: string): string {
   let end = value.length;
   const symbol = value.indexOf('::');
   const hash = value.indexOf('#');
   if (symbol >= 0) end = symbol;
   if (hash >= 0 && hash < end) end = hash;
-  return value.slice(0, end);
+  return value.slice(0, end).trim();
+}
+
+/** The repo file a card `Tests:` or `Code:` value names, normalised as `resolveCardRef` reads it. */
+export function cardRefFile(value: string): string {
+  return filePart(normaliseRef(value));
+}
+
+/** One unresolved card ref per rule, field, normalised value and location: `x` and `./x` are one finding. */
+export function unresolvedKey(ref: UnresolvedRef): string {
+  return [ref.rule, ref.field, normaliseRef(ref.value), ref.at.file, String(ref.at.line)].join('\n');
 }
 
 /** F3: a value with `::` is a symbol ID; one missing from the index falls back to its file. */
@@ -67,6 +77,7 @@ export function ruleTestLinks(input: {
   const links: DomainLink[] = [];
   const unresolved: UnresolvedRef[] = [];
   const seen = new Set<string>();
+  const seenUnresolved = new Set<string>();
   const add = (link: RuleTestLink): void => {
     const key = linkKey(link);
     if (seen.has(key)) return;
@@ -95,7 +106,12 @@ export function ruleTestLinks(input: {
     for (const value of card.tests) {
       const resolved = resolveCardRef(value, input.lookup);
       if (resolved.problem !== undefined) {
-        unresolved.push({ rule: card.ruleId, field: 'Tests', value, at, reason: resolved.problem });
+        const problem: UnresolvedRef = { rule: card.ruleId, field: 'Tests', value, at, reason: resolved.problem };
+        const key = unresolvedKey(problem);
+        if (!seenUnresolved.has(key)) {
+          seenUnresolved.add(key);
+          unresolved.push(problem);
+        }
       }
       if (resolved.target === undefined) continue;
       const symbolId = resolved.target.symbolId;

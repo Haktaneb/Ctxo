@@ -192,4 +192,21 @@ describe('rule-test-links', () => {
     expect(resolveCardRef(`./${TRAIT_SYMBOL}`, LOOKUP)).toEqual({ target: { file: CS_TEST, symbolId: TRAIT_SYMBOL } });
     expect(resolveCardRef(`${CS_TEST}::Other::method`, LOOKUP)).toEqual({ target: { file: CS_TEST }, problem: 'not-a-symbol' });
   });
+
+  it('resolveCardRef trims the file part, as 2B testPath does', () => {
+    expect(resolveCardRef(`${CS_TEST} ::LoanLimitTests.Gone::method`, LOOKUP)).toEqual({ target: { file: CS_TEST }, problem: 'not-a-symbol' });
+    expect(resolveCardRef(`${CS_TEST} #MemberHoldsAtMostFiveLoans`, LOOKUP)).toEqual({ target: { file: CS_TEST } });
+  });
+
+  it('an unresolved card ref is recorded once per rule, field, normalised value and location', () => {
+    const { unresolved } = ruleTestLinks({
+      cardRefs: [card({ tests: ['tests/Nope.cs', './tests/Nope.cs', 'tests\\Nope.cs'] }), card({ tests: ['tests/Nope.cs'], testsLine: 30 })],
+      testRefs: testRefs([]),
+      lookup: LOOKUP,
+    });
+    expect(unresolved).toEqual([
+      { rule: 'LEND-03', field: 'Tests', value: 'tests/Nope.cs', at: { file: CARD, line: 9 }, reason: 'missing-file' },
+      { rule: 'LEND-03', field: 'Tests', value: 'tests/Nope.cs', at: { file: CARD, line: 30 }, reason: 'missing-file' },
+    ]);
+  });
 });

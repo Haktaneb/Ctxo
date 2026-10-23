@@ -5,7 +5,9 @@ import { DEFAULT_DOMAIN_CONFIG, type ConfigProblem, type DomainConfig } from './
 import type { LoaderRulesDiff } from './loader-rules.js';
 import { createOwnership, type GlobMatcherFactory } from './ownership.js';
 import type { DomainContext, DomainRegistry, LoadedRegistry } from './registry.js';
-import type { RuleLinks } from './rule-id-scan.js';
+import type { UnresolvedRef } from './domain-graph.js';
+import type { RuleLinks, RuleRef } from './rule-id-scan.js';
+import { cardRefFile } from './rule-test-links.js';
 import type { TouchedReport } from './touched.js';
 
 export const VERIFY_CHECKS = ['1', '2', '3', '4a', '4b', '5', '6', '7', '8', '9', '10', '11'] as const;
@@ -40,6 +42,10 @@ export interface VerifyInput {
   /** Anchors of a markdown target; undefined when the target is not markdown or unreadable. */
   readonly headingSlugs: (repoPath: string) => ReadonlySet<string> | undefined;
   readonly ruleLinks: RuleLinks;
+  /** P20: the unresolved card refs of `ruleTestLinks` and `ruleSymbolLinks`; defaults to none. */
+  readonly cardRefProblems?: readonly UnresolvedRef[];
+  /** P20: `resolveRuleRefs(...).unknown` of `scanRuleComments` over indexed non-test files; defaults to none. */
+  readonly codeRuleRefs?: readonly RuleRef[];
   readonly loaderDiff: LoaderRulesDiff;
   readonly contextMapText?: string;
   readonly boundaries: BoundaryResult;
@@ -181,7 +187,7 @@ function testPath(value: string): string {
   return (cut === -1 ? value : value.slice(0, cut)).trim();
 }
 
-function check6(cards: readonly CardRef[], input: VerifyInput): CheckOutcome {
+function check6(registry: DomainRegistry, cards: readonly CardRef[], input: VerifyInput): CheckOutcome {
   const findings: Finding[] = [];
   const pattern = idRegExp(input.config.rules.idPattern);
   const seen = new Map<string, string>();
@@ -216,7 +222,59 @@ function check6(cards: readonly CardRef[], input: VerifyInput): CheckOutcome {
   for (const ref of unknown) {
     findings.push(error('6', `${ref.id}: referenced as "${ref.raw}" but no card defines it`, { file: ref.file, line: ref.line }));
   }
+  findings.push(...cardRefFindings(cards, input.cardRefProblems ?? []));
+  findings.push(...codeRuleFindings(registry, cards, input.codeRuleRefs ?? []));
   return outcomeOf('6', findings);
+}
+
+const prefixOf = (id: string): string => {
+  const dash = id.indexOf('-');
+  return dash < 0 ? id : id.slice(0, dash);
+};
+
+/**
+ * F3 and P5: a `Code:` file that does not exist is an error; a symbol ID missing from the index is a warning (it
+ * links to its file). A missing `Tests:` file is already reported from the card above, with 2B's wording.
+ */
+function cardRefFindings(cards: readonly CardRef[], problems: readonly UnresolvedRef[]): Finding[] {
+  const contextOf = new Map(cards.map((c) => [c.path, c.context.id]));
+  const sorted = [...problems].sort(
+    (a, b) => compare(a.at.file, b.at.file) || a.at.line - b.at.line || compare(a.field, b.field) || compare(a.value, b.value) || compare(a.rule, b.rule),
+  );
+  const findings: Finding[] = [];
+  const seen = new Set<string>();
+  for (const p of sorted) {
+    if (p.reason === 'missing-file' && p.field === 'Tests') continue;
+    const message =
+      p.reason === 'missing-file'
+        ? `${p.rule}: ${p.field} file "${cardRefFile(p.value)}" does not exist`
+        : `${p.rule}: ${p.field}: "${p.value}" is not an indexed symbol; it links to its file`;
+    const key = `${p.at.file}\n${p.at.line}\n${message}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const context = contextOf.get(p.at.file);
+    const at = { file: p.at.file, line: p.at.line, ...(context === undefined ? {} : { context }) };
+    findings.push(p.reason === 'missing-file' ? error('6', message, at) : warning('6', message, at));
+  }
+  return findings;
+}
+
+/** F4: an unknown ID in a production `rule:` comment warns only when its prefix is a rule prefix (`# rule: E501` stays silent). */
+function codeRuleFindings(registry: DomainRegistry, cards: readonly CardRef[], refs: readonly RuleRef[]): Finding[] {
+  const prefixes = new Set<string>();
+  for (const { card } of cards) for (const rule of card.rules) prefixes.add(prefixOf(rule.id));
+  for (const context of registry.contexts) if (context.rulePrefix !== undefined) prefixes.add(context.rulePrefix);
+  const sorted = [...refs].sort((a, b) => compare(a.file, b.file) || a.line - b.line || compare(a.id, b.id));
+  const findings: Finding[] = [];
+  const seen = new Set<string>();
+  for (const ref of sorted) {
+    if (!prefixes.has(prefixOf(ref.id))) continue;
+    const key = `${ref.file}\n${ref.line}\n${ref.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    findings.push(warning('6', `rule: comment names unknown rule ${ref.id}`, { file: ref.file, line: ref.line }));
+  }
+  return findings;
 }
 
 const SCHEME = /^[a-z][a-z0-9+.-]*:/i;
@@ -395,7 +453,7 @@ export function runVerifyChecks(input: VerifyInput): CheckOutcome[] {
     fourA,
     fourB,
     check5(cards),
-    check6(cards, input),
+    check6(registry, cards, input),
     check7(cards, input),
     check8(input.loaderDiff),
     check9(registry, input),
