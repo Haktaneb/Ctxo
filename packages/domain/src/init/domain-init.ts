@@ -2,7 +2,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { parse } from 'yaml';
 import type { CtxoHost, InitContribution, InitFileResult, InitPartContext } from '@ctxo/cli/internal';
-import { mergeDomainDefaults } from '../adapters/config-writer.js';
+import { mergeDiscoveryProposal, mergeDomainDefaults } from '../adapters/config-writer.js';
+import { gatherDiscoveryInput, readConfigText as readConfigFile, writeConfigText } from '../adapters/discovery-sources.js';
+import { applyLoaderRules, loaderPlatforms, readExistingLoaderRules } from '../adapters/loader-rules-files.js';
+import { readRegistry } from '../adapters/registry-reader.js';
+import { discoverConventions, formatDiscovery, proposalAddsSomething } from '../core/discovery.js';
+import { diffLoaderRules, renderLoaderRules } from '../core/loader-rules.js';
 import { resolveDomainConfig, type BoundaryMode, type DomainConfig } from '../core/domain-config.js';
 import type { HookEvent } from '../core/guard.js';
 
@@ -112,8 +117,67 @@ function applyRegistry(ctx: InitPartContext, registryPath: string): InitFileResu
   return { file, action: 'created' };
 }
 
+const PROPOSAL_QUESTION = 'Apply the proposed conventions?';
+
+/**
+ * Step 5: discovers the repository's conventions and, after a confirmation (`--yes` accepts), merges the
+ * proposal into `.ctxo/config.yaml`. Returns no row when the proposal adds nothing. A dry run only reports
+ * what would change.
+ */
+async function applyDiscovery(host: CtxoHost, ctx: InitPartContext, config: DomainConfig): Promise<readonly InitFileResult[]> {
+  try {
+    const ctxoRoot = join(ctx.projectRoot, '.ctxo');
+    const loaded = host.services.loadConfig(ctxoRoot);
+    const input = await gatherDiscoveryInput(host, ctx.projectRoot, ctxoRoot, loaded, config);
+    const { evidence, proposal } = discoverConventions(input);
+    if (!proposalAddsSomething(proposal, config, input.indexTests)) return [];
+
+    console.error(formatDiscovery(evidence, proposal));
+    if (ctx.dryRun) return [{ file: CONFIG_FILE, action: 'updated' }];
+    if (!ctx.yes && !(await ctx.prompt.confirm(PROPOSAL_QUESTION, true))) return [];
+
+    const path = join(ctxoRoot, 'config.yaml');
+    const merged = mergeDiscoveryProposal(readConfigFile(path) ?? '', proposal);
+    if (!merged.changed) return [];
+    writeConfigText(path, merged.text);
+    return [{ file: CONFIG_FILE, action: 'updated' }];
+  } catch (err) {
+    return [{ file: CONFIG_FILE, action: 'skipped', warning: `${CONFIG_FILE}: conventions not discovered (${(err as Error).message})` }];
+  }
+}
+
+const BLOCKED_WARNING = 'exists without the generated marker; rename or delete it, then run "ctxo domain rules --write"';
+
+/** Step 6: the loader rules, when the registry is valid and a context has a card. One row per written, deleted or blocked file. */
+function applyRules(ctx: InitPartContext, registryPath: string): readonly InitFileResult[] {
+  try {
+    const loaded = readRegistry(ctx.projectRoot, registryPath);
+    const registry = loaded?.registry;
+    if (registry === undefined || loaded!.problems.length > 0) return [];
+    if (!registry.contexts.some((context) => context.card !== undefined)) return [];
+
+    const expected = renderLoaderRules(registry, loaderPlatforms(ctx.projectRoot));
+    const diff = diffLoaderRules(expected, readExistingLoaderRules(ctx.projectRoot));
+    const rows: InitFileResult[] = [];
+    if (ctx.dryRun) {
+      for (const file of diff.missing) rows.push({ file, action: 'created' });
+      for (const file of diff.outdated) rows.push({ file, action: 'updated' });
+      for (const file of diff.stale) rows.push({ file: `${file} (deleted)`, action: 'updated' });
+    } else {
+      for (const result of applyLoaderRules(ctx.projectRoot, expected, diff)) {
+        if (result.action === 'deleted') rows.push({ file: `${result.file} (deleted)`, action: 'updated' });
+        else rows.push({ file: result.file, action: result.action, ...(result.warning ? { warning: result.warning } : {}) });
+      }
+    }
+    for (const file of diff.blocked) rows.push({ file, action: 'skipped', warning: `${file} ${BLOCKED_WARNING}` });
+    return rows;
+  } catch (err) {
+    return [{ file: '.claude/rules', action: 'skipped', warning: `loader rules not written (${(err as Error).message})` }];
+  }
+}
+
 /** The bundled skill text, found by walking up from this module's directory (`skills/` sits next to `dist/`). */
-function readSkill(): string {
+export function readBundledSkill(): string {
   let dir = import.meta.dirname;
   for (let i = 0; i < 10; i++) {
     const candidate = join(dir, 'skills', SKILL_NAME, 'SKILL.md');
@@ -134,7 +198,7 @@ function readSkill(): string {
  * boundary mode, the registry skeleton, the fold guard hooks for Claude Code and the `ctxo-domain-fold`
  * skill for Claude Code and Cursor. Every step honours `ctx.dryRun`.
  */
-export function domainInit(_host: CtxoHost): InitContribution {
+export function domainInit(host: CtxoHost): InitContribution {
   return {
     part: 'domain',
     async apply(ctx: InitPartContext): Promise<readonly InitFileResult[]> {
@@ -144,6 +208,8 @@ export function domainInit(_host: CtxoHost): InitContribution {
       rows.push(row);
 
       rows.push(applyRegistry(ctx, config.registry));
+      rows.push(...(await applyDiscovery(host, ctx, config)));
+      rows.push(...applyRules(ctx, config.registry));
 
       if (ctx.toolIds.includes('claude-code')) {
         const events: HookEvent[] = ['SessionStart', 'Stop', 'TaskCompleted'];
@@ -158,7 +224,7 @@ export function domainInit(_host: CtxoHost): InitContribution {
       if (platforms.length > 0) {
         let content: string | undefined;
         try {
-          content = readSkill();
+          content = readBundledSkill();
         } catch (err) {
           rows.push({ file: SKILL_NAME, action: 'skipped', warning: `${SKILL_NAME} not installed: ${(err as Error).message}` });
         }

@@ -1,6 +1,7 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import type { ClaudeHookEntry, CtxoHost, InitFileResult, InitPartContext } from '@ctxo/cli/internal';
@@ -245,5 +246,131 @@ describe('domainInit', () => {
     expect(rows[0]!.warning).toMatch(/^\.ctxo\/config\.yaml: cannot add the domain defaults/);
     expect(readFileSync(join(root, '.ctxo', 'config.yaml'), 'utf-8')).toBe('a: [\n');
     expect(readFileSync(join(root, 'docs', 'domain', 'contexts.yaml'), 'utf-8')).toBe(REGISTRY_SKELETON);
+  });
+});
+
+describe('domainInit: discovered conventions and loader rules', () => {
+  const REGISTRY = `version: 1
+contexts:
+  - id: lending
+    name: Lending
+    card: docs/domain/lending.md
+    paths: ["src/Lending/**"]
+    rung: named
+unowned:
+  allow: []
+`;
+  const CARD = '# Lending\n\n## Rules and invariants\n### LEND-01 A member holds at most five loans\nUntested: manual\n';
+
+  function put(root: string, file: string, content: string): void {
+    const full = join(root, file);
+    mkdirSync(dirname(full), { recursive: true });
+    writeFileSync(full, content, 'utf-8');
+  }
+
+  /** A git repo whose five commit subjects carry LEND keys, so discovery proposes the LEND tracker prefix. */
+  function domainRepo(withRegistry = true): string {
+    const root = project();
+    const git = (...args: string[]): void => {
+      execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=Test', '-c', 'user.email=test@test.com', ...args], {
+        cwd: root,
+        stdio: 'ignore',
+      });
+    };
+    git('init', '-q');
+    for (let i = 1; i <= 5; i++) {
+      put(root, `f${i}.txt`, `${i}\n`);
+      git('add', '.');
+      git('commit', '-q', '-m', `LEND-${i} change`);
+    }
+    if (withRegistry) {
+      put(root, 'docs/domain/contexts.yaml', REGISTRY);
+      put(root, 'docs/domain/lending.md', CARD);
+    }
+    return root;
+  }
+
+  it('--yes accepts the discovery proposal', async () => {
+    const root = domainRepo();
+    const rec = recording(root, { yes: true });
+    const rows = await domainInit(host).apply(rec.ctx);
+
+    expect(rec.questions).not.toContain('Apply the proposed conventions?');
+    expect(config(root).domain.rules.trackerPrefixes).toEqual(['LEND']);
+    expect(rows.filter((row) => row.file === '.ctxo/config.yaml').map((row) => row.action)).toContain('updated');
+  });
+
+  it('a declined proposal leaves the config unchanged', async () => {
+    const root = domainRepo();
+    const rec = recording(root, {
+      prompt: {
+        async confirm(message) {
+          rec.questions.push(message);
+          return false;
+        },
+        async select(_message, _options, initial) {
+          return initial;
+        },
+      },
+    });
+    await domainInit(host).apply(rec.ctx);
+
+    expect(rec.questions).toContain('Apply the proposed conventions?');
+    expect(config(root).domain.rules?.trackerPrefixes ?? []).toEqual([]);
+    expect(readFileSync(join(root, '.ctxo', 'config.yaml'), 'utf-8')).not.toContain('LEND');
+  });
+
+  it('an accepted proposal is applied through the prompt', async () => {
+    const root = domainRepo();
+    const rec = recording(root);
+    await domainInit(host).apply(rec.ctx);
+    expect(rec.questions).toContain('Apply the proposed conventions?');
+    expect(config(root).domain.rules.trackerPrefixes).toEqual(['LEND']);
+  });
+
+  it('asks nothing when the proposal adds nothing', async () => {
+    const root = domainRepo();
+    await domainInit(host).apply(recording(root, { yes: true }).ctx);
+    const again = recording(root);
+    await domainInit(host).apply(again.ctx);
+    expect(again.questions).not.toContain('Apply the proposed conventions?');
+  });
+
+  it('loader rules are written when contexts with cards exist', async () => {
+    const root = domainRepo();
+    const rows = await domainInit(host).apply(recording(root, { yes: true }).ctx);
+
+    expect(existsSync(join(root, '.claude', 'rules', 'ctxo-context-lending.md'))).toBe(true);
+    expect(rows).toContainEqual({ file: '.claude/rules/ctxo-context-lending.md', action: 'created' });
+
+    const again = await domainInit(host).apply(recording(root, { yes: true }).ctx);
+    expect(again.map((row) => row.file)).not.toContain('.claude/rules/ctxo-context-lending.md');
+  });
+
+  it('writes no loader rules for a registry without cards', async () => {
+    const root = domainRepo(false);
+    const rows = await domainInit(host).apply(recording(root, { yes: true }).ctx);
+    expect(rows.some((row) => row.file.includes('ctxo-context-'))).toBe(false);
+    expect(existsSync(join(root, '.claude', 'rules'))).toBe(false);
+  });
+
+  it('never overwrites an unmarked file at an expected path', async () => {
+    const root = domainRepo();
+    put(root, '.claude/rules/ctxo-context-lending.md', '# mine\n');
+    const rows = await domainInit(host).apply(recording(root, { yes: true }).ctx);
+    expect(readFileSync(join(root, '.claude', 'rules', 'ctxo-context-lending.md'), 'utf-8')).toBe('# mine\n');
+    const row = rows.find((r) => r.file === '.claude/rules/ctxo-context-lending.md');
+    expect(row?.action).toBe('skipped');
+    expect(row?.warning).toMatch(/generated marker/);
+  });
+
+  it('a dry run writes nothing', async () => {
+    const root = domainRepo();
+    put(root, '.ctxo/config.yaml', BASE_CONFIG);
+    const rows = await domainInit(host).apply(recording(root, { dryRun: true, yes: true }).ctx);
+
+    expect(readFileSync(join(root, '.ctxo', 'config.yaml'), 'utf-8')).toBe(BASE_CONFIG);
+    expect(existsSync(join(root, '.claude', 'rules'))).toBe(false);
+    expect(rows).toContainEqual({ file: '.claude/rules/ctxo-context-lending.md', action: 'created' });
   });
 });

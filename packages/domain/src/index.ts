@@ -3,6 +3,7 @@ import { contextsTouchedCommand } from './commands/contexts-touched-command.js';
 import { domainCommand } from './commands/domain-command.js';
 import { domainGuardHookCommand } from './commands/domain-guard-hook-command.js';
 import { verifyDomainCommand } from './commands/verify-domain-command.js';
+import { domainDoctorChecks } from './doctor/domain-checks.js';
 import { domainIndexPass } from './index-pass/domain-index-pass.js';
 import { domainInit } from './init/domain-init.js';
 import { createEnrichers } from './mcp/enrichers.js';
@@ -35,5 +36,6 @@ export const register: CtxoModuleRegister = async (host) => {
     },
     enrich: createEnrichers(host),
     init: domainInit(host),
+    doctorChecks: domainDoctorChecks(host),
   };
 };
