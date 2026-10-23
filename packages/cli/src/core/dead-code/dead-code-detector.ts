@@ -1,5 +1,6 @@
 import { DATA_EDGE_KINDS } from '../data-coupling/data-kinds.js';
 import type { SymbolGraph } from '../graph/symbol-graph.js';
+import { createTestFileClassifier, filesWithTestAnnotations } from '../test-files/test-file-classifier.js';
 import type { SymbolKind } from '../types.js';
 
 export type DeadCodeConfidence = 1.0 | 0.9 | 0.7;
@@ -38,8 +39,9 @@ export interface DeadCodeResult {
   readonly deadCodePercentage: number;
 }
 
-// Patterns for files to exclude from dead code analysis
-const TEST_PATTERNS = [/__tests__/, /\.test\.ts$/, /\.spec\.ts$/, /\btests\//, /\bfixtures?\//];
+// Files excluded from dead code analysis besides test files, which the shared classifier decides
+// (`DEFAULT_TEST_GLOBS` plus files a test-framework annotation marks).
+const FIXTURE_PATTERN = /\bfixtures?\//;
 const CONFIG_PATTERNS = [/\.(config|rc)\.(ts|js|json)$/, /tsconfig/, /eslint/, /\.d\.ts$/];
 // SQL objects are reached by data edges and by runtime, never reported as dead
 const SQL_PATTERN = /\.sql$/i;
@@ -74,17 +76,23 @@ export class DeadCodeDetector {
     options: { includeTests?: boolean; sourceContents?: Map<string, string> } = {},
   ): DeadCodeResult {
     const allNodes = graph.allNodes();
+    const isTestFile = createTestFileClassifier(
+      [],
+      filesWithTestAnnotations(allNodes.map((n) => ({ file: n.symbolId.split('::')[0] ?? '', symbols: [n] }))),
+    );
+    const isExcluded = (file: string): boolean =>
+      isTestFile(file) || FIXTURE_PATTERN.test(file) || this.matchesAny(file, CONFIG_PATTERNS);
 
     // Filter candidates — exclude tests/config by default
     const candidates = allNodes.filter((n) => {
       const file = n.symbolId.split('::')[0] ?? '';
       if (SQL_PATTERN.test(file)) return false;
       if (options.includeTests) return true;
-      return !this.matchesAny(file, TEST_PATTERNS) && !this.matchesAny(file, CONFIG_PATTERNS);
+      return !isExcluded(file);
     });
 
     if (candidates.length === 0) {
-      return { totalSymbols: 0, reachableSymbols: 0, deadSymbols: [], unusedExports: [], deadFiles: [], scaffolding: this.detectScaffolding(options.sourceContents), deadCodePercentage: 0 };
+      return { totalSymbols: 0, reachableSymbols: 0, deadSymbols: [], unusedExports: [], deadFiles: [], scaffolding: this.detectScaffolding(isExcluded, options.sourceContents), deadCodePercentage: 0 };
     }
 
     // Dynamic entry point detection: symbols with zero reverse edges (no one imports them)
@@ -148,7 +156,7 @@ export class DeadCodeDetector {
       if (!deadIds.has(node.symbolId)) continue;
 
       const file = node.symbolId.split('::')[0] ?? '';
-      const confidence = this.computeConfidence(graph, node.symbolId, deadIds);
+      const confidence = this.computeConfidence(graph, node.symbolId, deadIds, isExcluded);
       const cascadeDepth = cascadeDepthMap.get(node.symbolId);
 
       deadSymbols.push({
@@ -198,7 +206,7 @@ export class DeadCodeDetector {
     }
 
     // Scaffolding detection: scan source contents for TODO/FIXME/HACK patterns
-    const scaffolding = this.detectScaffolding(options.sourceContents);
+    const scaffolding = this.detectScaffolding(isExcluded, options.sourceContents);
 
     const deadCodePercentage = Math.round((deadSymbols.length / candidates.length) * 100 * 10) / 10;
 
@@ -217,6 +225,7 @@ export class DeadCodeDetector {
     graph: SymbolGraph,
     symbolId: string,
     deadIds: Set<string>,
+    isExcluded: (file: string) => boolean,
   ): DeadCodeConfidence {
     const reverseEdges = graph.getReverseEdges(symbolId);
 
@@ -228,7 +237,7 @@ export class DeadCodeDetector {
     // 0.9: Has importers but they're all from test/config files
     const allImportersExcluded = reverseEdges.every((e) => {
       const importerFile = e.from.split('::')[0] ?? '';
-      return this.matchesAny(importerFile, TEST_PATTERNS) || this.matchesAny(importerFile, CONFIG_PATTERNS);
+      return isExcluded(importerFile);
     });
     if (allImportersExcluded) {
       return 0.9;
@@ -296,14 +305,17 @@ export class DeadCodeDetector {
     return depths;
   }
 
-  private detectScaffolding(sourceContents?: Map<string, string>): ScaffoldingEntry[] {
+  private detectScaffolding(
+    isExcluded: (file: string) => boolean,
+    sourceContents?: Map<string, string>,
+  ): ScaffoldingEntry[] {
     if (!sourceContents || sourceContents.size === 0) return [];
 
     const results: ScaffoldingEntry[] = [];
 
     for (const [file, content] of sourceContents) {
       // Skip test/config files
-      if (this.matchesAny(file, TEST_PATTERNS) || this.matchesAny(file, CONFIG_PATTERNS)) continue;
+      if (isExcluded(file)) continue;
 
       const lines = content.split('\n');
       for (let i = 0; i < lines.length; i++) {

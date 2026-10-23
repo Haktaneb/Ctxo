@@ -58,7 +58,7 @@ function normalisePath(path: string): string {
 }
 
 /** The files (forward-slash paths) that hold a symbol carrying a test-framework annotation. */
-export function filesWithTestAnnotations(indices: readonly FileIndex[]): Set<string> {
+export function filesWithTestAnnotations(indices: readonly Pick<FileIndex, 'file' | 'symbols'>[]): Set<string> {
   const names = new Set(TEST_FRAMEWORK_ANNOTATIONS);
   const files = new Set<string>();
   for (const index of indices) {
