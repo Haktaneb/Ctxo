@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { parse } from 'yaml';
-import { mergeDomainDefaults } from '../config-writer.js';
+import { mergeDiscoveryProposal, mergeDomainDefaults } from '../config-writer.js';
 import { DEFAULT_DOMAIN_CONFIG, resolveDomainConfig } from '../../core/domain-config.js';
 
 const BOM = String.fromCharCode(0xfeff);
@@ -113,5 +113,63 @@ domain:
     expect(parse(merged.text).domain.boundaries.enforce).toBe('report');
     expect(() => mergeDomainDefaults('domain: 3\n', 'report')).toThrow(/domain must be a mapping/);
     expect(() => mergeDomainDefaults('a: [\n', 'report')).toThrow();
+  });
+});
+
+describe('mergeDiscoveryProposal', () => {
+  const proposal = { trackerPrefixes: ['LEND', 'OPS'], ruleTraitKeys: ['Rule', 'Req'], indexTests: ['qa/**'] };
+
+  it('mergeDiscoveryProposal adds values without dropping existing ones', () => {
+    const text = [
+      'version: "1.0"',
+      'domain:',
+      '  rules:',
+      '    trackerPrefixes: [OPS, ZED]  # mine',
+      '  tests:',
+      '    ruleTraitKeys: [Rule]',
+      'index:',
+      '  tests:',
+      '    - "old/**"',
+      '',
+    ].join('\n');
+    const out = mergeDiscoveryProposal(text, proposal);
+    expect(out.changed).toBe(true);
+    const doc = parse(out.text);
+    expect(doc.domain.rules.trackerPrefixes).toEqual(['OPS', 'ZED', 'LEND']);
+    expect(doc.domain.tests.ruleTraitKeys).toEqual(['Rule', 'Req']);
+    expect(doc.index.tests).toEqual(['old/**', 'qa/**']);
+    expect(out.text).toContain('# mine');
+  });
+
+  it('creates missing sections, also from an empty file', () => {
+    const doc = parse(mergeDiscoveryProposal('', proposal).text);
+    expect(doc.domain.rules.trackerPrefixes).toEqual(['LEND', 'OPS']);
+    expect(doc.domain.tests.ruleTraitKeys).toEqual(['Rule', 'Req']);
+    expect(doc.index.tests).toEqual(['qa/**']);
+  });
+
+  it('keeps other keys and fills null sections', () => {
+    const out = mergeDiscoveryProposal('stats:\n  enabled: false\ndomain:\nindex:\n', proposal);
+    const doc = parse(out.text);
+    expect(doc.stats.enabled).toBe(false);
+    expect(doc.domain.rules.trackerPrefixes).toEqual(['LEND', 'OPS']);
+    expect(doc.index.tests).toEqual(['qa/**']);
+  });
+
+  it('returns the text unchanged when nothing is new', () => {
+    const text = 'domain:\n  rules:\n    trackerPrefixes: [LEND, OPS]\n  tests:\n    ruleTraitKeys: [Rule, Req]\nindex:\n  tests: ["qa/**"]\n';
+    expect(mergeDiscoveryProposal(text, proposal)).toEqual({ text, changed: false });
+  });
+
+  it('keeps a BOM and CRLF line endings', () => {
+    const out = mergeDiscoveryProposal(BOM + 'version: "1.0"\r\n', proposal);
+    expect(out.text.startsWith(BOM)).toBe(true);
+    expect(out.text).toContain('\r\n');
+    expect(out.text.slice(1).replace(/\r\n/g, '')).not.toContain('\n');
+  });
+
+  it('throws on invalid YAML or a non-sequence target', () => {
+    expect(() => mergeDiscoveryProposal('a: [\n', proposal)).toThrow(/not valid YAML/);
+    expect(() => mergeDiscoveryProposal('domain:\n  rules:\n    trackerPrefixes: nope\n', proposal)).toThrow(/sequence/);
   });
 });

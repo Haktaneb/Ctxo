@@ -1,4 +1,4 @@
-import { isMap, isScalar, parseDocument, type Document, type YAMLMap } from 'yaml';
+import { isMap, isScalar, isSeq, parseDocument, type Document, type YAMLMap } from 'yaml';
 import { DEFAULT_DOMAIN_CONFIG, type BoundaryMode } from '../core/domain-config.js';
 
 const BOM = String.fromCharCode(0xfeff);
@@ -90,4 +90,66 @@ export function mergeDomainDefaults(text: string, mode: BoundaryMode): { readonl
   if (!isMap(section)) throw new Error('domain must be a mapping');
   if (!addMissing(doc, section, defaults)) return { text, changed: false };
   return { text: restore(doc.toString({ lineWidth: 0 })), changed: true };
+}
+
+export interface DiscoveryValues {
+  readonly trackerPrefixes: readonly string[];
+  readonly ruleTraitKeys: readonly string[];
+  readonly indexTests: readonly string[];
+}
+
+/** Makes sure every ancestor of `path` is a mapping (a null scalar is replaced), so `setIn` can reach the leaf. */
+function ensureParents(doc: Document, path: readonly string[]): void {
+  for (let depth = 1; depth < path.length; depth++) {
+    const parent = path.slice(0, depth);
+    const node = doc.getIn(parent, true);
+    if (node === undefined || (isScalar(node) && (node.value === null || node.value === ''))) {
+      doc.setIn(parent, doc.createNode({}));
+    } else if (!isMap(node)) {
+      throw new Error(`${parent.join('.')} must be a mapping`);
+    }
+  }
+}
+
+/** Appends the values the sequence at `path` lacks, keeping the order and the comments of what is there. */
+function unionInto(doc: Document, path: readonly string[], values: readonly string[]): boolean {
+  if (values.length === 0) return false;
+  ensureParents(doc, path);
+  const node = doc.getIn(path, true);
+  if (node === undefined || (isScalar(node) && (node.value === null || node.value === ''))) {
+    doc.setIn(path, doc.createNode([...values], { flow: true }));
+    return true;
+  }
+  if (!isSeq(node)) throw new Error(`${path.join('.')} must be a sequence`);
+  const have = new Set(node.items.map((item) => String(isScalar(item) ? item.value : item)));
+  const missing = values.filter((value) => !have.has(value));
+  for (const value of missing) node.add(doc.createNode(value));
+  return missing.length > 0;
+}
+
+/**
+ * Unions a discovery proposal into the text of `.ctxo/config.yaml`: `domain.rules.trackerPrefixes`,
+ * `domain.tests.ruleTraitKeys` and `index.tests`. Existing values stay in place and in order, new ones are
+ * appended; comments, a UTF-8 BOM and CRLF line endings are kept. Nothing new returns the text unchanged.
+ * Throws when the text is not valid YAML or a target is not a sequence.
+ */
+export function mergeDiscoveryProposal(text: string, proposal: DiscoveryValues): { readonly text: string; readonly changed: boolean } {
+  const bom = text.startsWith(BOM);
+  const raw = bom ? text.slice(BOM.length) : text;
+  const crlf = raw.includes('\r\n');
+  const body = crlf ? raw.replace(/\r\n/g, '\n') : raw;
+
+  const doc = parseDocument(body);
+  if (doc.errors.length > 0) throw new Error(`not valid YAML: ${doc.errors[0]!.message}`);
+  const root = doc.contents;
+  if (root !== null && !isMap(root) && !(isScalar(root) && (root.value === null || root.value === ''))) {
+    throw new Error('the config must be a mapping');
+  }
+
+  let changed = unionInto(doc, ['domain', 'rules', 'trackerPrefixes'], proposal.trackerPrefixes);
+  changed = unionInto(doc, ['domain', 'tests', 'ruleTraitKeys'], proposal.ruleTraitKeys) || changed;
+  changed = unionInto(doc, ['index', 'tests'], proposal.indexTests) || changed;
+  if (!changed) return { text, changed: false };
+  const out = doc.toString({ lineWidth: 0 });
+  return { text: (bom ? BOM : '') + (crlf ? out.replace(/\n/g, '\r\n') : out), changed: true };
 }

@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createModuleHost } from '@ctxo/cli/internal';
 import { DomainArtifactStore, type BoundariesArtifact, type ContextsArtifact } from '../../adapters/artifact-store.js';
 import type { BoundaryViolationRecord } from '../../core/boundaries.js';
@@ -322,5 +322,35 @@ describe('createEnrichers', () => {
     utimesSync(file, future, future);
 
     expect(run(e, 'search_symbols', payload)).toEqual(payload);
+  });
+  it('never maps a 2-part data reference to a file context', () => {
+    const e = enrichers();
+    const entry = { symbolId: 'src/Lending/Loan.ts::table' };
+    expect(run(e, 'get_blast_radius', { impactedSymbols: [{ ...entry }] })['impactedSymbols']).toEqual([entry]);
+    expect(run(e, 'get_why_context', { ...entry }, entry)).not.toHaveProperty('contextDrift');
+    // a canonical 3-part id still maps
+    const three = { symbolId: 'src/Lending/Loan.ts::Loan::class' };
+    expect(run(e, 'get_blast_radius', { impactedSymbols: [{ ...three }] })['impactedSymbols']).toEqual([{ ...three, context: 'lending' }]);
+  });
+
+  it('loads config.yaml once until its mtime or size changes', () => {
+    mkdirSync(join(dir, '.ctxo'), { recursive: true });
+    const configPath = join(dir, '.ctxo', 'config.yaml');
+    writeFileSync(configPath, 'version: "1.0"\n');
+    mkdirSync(join(dir, 'docs', 'domain'), { recursive: true });
+    writeFileSync(join(dir, 'docs', 'domain', 'contexts.yaml'), REGISTRY);
+    const base = createModuleHost({ projectRoot: dir, mode: 'cli' });
+    const loadConfig = vi.fn(base.services.loadConfig);
+    const e = createEnrichers({ ...base, services: { ...base.services, loadConfig } });
+    const payload = { results: [{ symbolId: 'a', file: 'src/Lending/Loan.ts' }] };
+
+    e.search_symbols!(structuredClone(payload), {});
+    e.search_symbols!(structuredClone(payload), {});
+    e.find_importers!({ importers: [] }, {});
+    expect(loadConfig).toHaveBeenCalledTimes(1);
+
+    writeFileSync(configPath, 'version: "1.0"\nstats:\n  enabled: false\n');
+    e.search_symbols!(structuredClone(payload), {});
+    expect(loadConfig).toHaveBeenCalledTimes(2);
   });
 });

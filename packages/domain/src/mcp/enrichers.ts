@@ -17,6 +17,15 @@ function isRecord(value: unknown): value is Payload {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/**
+ * The file of a canonical `<file>::<name>::<kind>` symbol id. Ids with fewer parts, such as the 2-part data
+ * reference `dbo.loans::table`, name no file and give undefined.
+ */
+function fileOfSymbolId(id: string): string | undefined {
+  const parts = id.split('::');
+  return parts.length >= 3 && parts[0] !== '' ? parts[0] : undefined;
+}
+
 /** A cheap change stamp for a file or folder: mtime and size, or 'missing'. */
 function stampOf(path: string): string {
   try {
@@ -60,14 +69,17 @@ export function createEnrichers(host: CtxoHost): Partial<Record<CoreToolName, Re
   const store = new DomainArtifactStore(host.ctxoRoot);
   const domainDir = join(host.ctxoRoot, 'index', 'domain');
 
+  const configCache = new Cached<ReturnType<typeof resolveDomainConfig>>();
   const hashCache = new Cached<string | undefined>();
   const contextsCache = new Cached<{ contexts: ContextsArtifact; owners: Map<string, string[]> } | undefined>();
   const boundariesCache = new Cached<BoundariesArtifact | undefined>();
   const historyCache = new Cached<readonly ContextHistoryEntry[]>();
 
   function currentHash(): string | undefined {
-    const loaded = host.services.loadConfig(host.ctxoRoot);
-    const { config } = resolveDomainConfig((loaded.config as unknown as Record<string, unknown>)['domain']);
+    const { config } = configCache.get(stampOf(join(host.ctxoRoot, 'config.yaml')), () => {
+      const loaded = host.services.loadConfig(host.ctxoRoot);
+      return resolveDomainConfig((loaded.config as unknown as Record<string, unknown>)['domain']);
+    });
     const path = resolve(host.projectRoot, config.registry);
     return hashCache.get(`${path}|${stampOf(path)}`, () => {
       const registry = readRegistry(host.projectRoot, config.registry);
@@ -116,9 +128,7 @@ export function createEnrichers(host: CtxoHost): Partial<Record<CoreToolName, Re
   function fileOf(entry: Payload): string | undefined {
     if (typeof entry['file'] === 'string') return entry['file'];
     const id = entry['symbolId'];
-    if (typeof id !== 'string') return undefined;
-    const at = id.indexOf('::');
-    return at > 0 ? id.slice(0, at) : undefined;
+    return typeof id === 'string' ? fileOfSymbolId(id) : undefined;
   }
 
   function tag(entry: unknown, domain: DomainView): void {
@@ -185,8 +195,8 @@ export function createEnrichers(host: CtxoHost): Partial<Record<CoreToolName, Re
     get_why_context: withDomain((payload, args, domain) => {
       const symbolId = args['symbolId'];
       if (typeof symbolId !== 'string') return;
-      const at = symbolId.indexOf('::');
-      const context = domain.contextOf(at > 0 ? symbolId.slice(0, at) : symbolId);
+      const file = fileOfSymbolId(symbolId) ?? (symbolId.includes('::') ? undefined : symbolId);
+      const context = file === undefined ? undefined : domain.contextOf(file);
       if (context === undefined) return;
       const drift = contextDrift(context, domain.history(), domain.contexts.movedFiles, domain.hash);
       if (drift !== undefined) payload['contextDrift'] = drift;

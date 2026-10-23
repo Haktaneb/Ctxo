@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -172,5 +173,78 @@ describe('ctxo domain rules', () => {
       '.claude/rules/ctxo-context-fold.md',
       '.claude/rules/ctxo-context-lending.md',
     ]);
+  });
+});
+
+describe('ctxo domain discover', () => {
+  function gitRepo(subjectsList: string[]): string {
+    const dir = project(null);
+    const git = (...args: string[]): void => {
+      execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=Test', '-c', 'user.email=test@test.com', ...args], {
+        cwd: dir,
+        stdio: 'ignore',
+      });
+    };
+    git('init', '-q');
+    subjectsList.forEach((subject, i) => {
+      put(dir, `f${i}.txt`, `${i}\n`);
+      git('add', '.');
+      git('commit', '-q', '-m', subject);
+    });
+    return dir;
+  }
+
+  const five = ['LEND-1 a', 'LEND-2 b', 'LEND-3 c', 'LEND-4 d', 'LEND-5 e'];
+  let stdout: string[];
+  beforeEach(() => {
+    stdout = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
+      stdout.push(String(chunk));
+      return true;
+    });
+  });
+
+  it('prints the evidence to stderr and writes nothing without --write', async () => {
+    const dir = gitRepo(five);
+    expect(await run(dir, 'discover')).toBe(0);
+    const text = stderr.join('\n');
+    expect(text).toContain('Rule IDs');
+    expect(text).toContain('LEND in 5');
+    expect(text).toContain('trackerPrefixes');
+    expect(existsSync(join(dir, '.ctxo', 'config.yaml'))).toBe(false);
+    expect(stdout.join('')).toBe('');
+  });
+
+  it('--json prints evidence and proposal on stdout', async () => {
+    const dir = gitRepo(five);
+    expect(await run(dir, 'discover', '--json')).toBe(0);
+    const out = JSON.parse(stdout.join('')) as { evidence: { trackerKeys: unknown[] }; proposal: { trackerPrefixes: string[] } };
+    expect(out.proposal.trackerPrefixes).toEqual(['LEND']);
+    expect(out.evidence.trackerKeys).toEqual([{ prefix: 'LEND', occurrences: 5, overlapsRulePrefix: false }]);
+    expect(existsSync(join(dir, '.ctxo', 'config.yaml'))).toBe(false);
+  });
+
+  it('--write merges the proposal into .ctxo/config.yaml and lists the added values', async () => {
+    const dir = gitRepo(five);
+    put(dir, '.ctxo/config.yaml', 'version: "1.0"\n# keep me\n');
+    expect(await run(dir, 'discover', '--write')).toBe(0);
+    const written = readFileSync(join(dir, '.ctxo', 'config.yaml'), 'utf-8');
+    expect(written).toContain('# keep me');
+    expect(written).toMatch(/trackerPrefixes:\s*\[\s*LEND\s*\]/);
+    expect(stderr.join('\n')).toContain('LEND');
+    stderr.length = 0;
+    expect(await run(dir, 'discover', '--write')).toBe(0);
+    expect(readFileSync(join(dir, '.ctxo', 'config.yaml'), 'utf-8')).toBe(written);
+    expect(stderr.join('\n')).toContain('nothing to add');
+  });
+
+  it('works without a registry and without git history', async () => {
+    const dir = project(null);
+    expect(await run(dir, 'discover')).toBe(0);
+    expect(stderr.join('\n')).toContain('Rule IDs');
+  });
+
+  it('rejects an unknown flag', async () => {
+    expect(await run(project(null), 'discover', '--bogus')).toBe(1);
   });
 });
