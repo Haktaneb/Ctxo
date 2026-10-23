@@ -44,6 +44,19 @@ describe.skipIf(!HAS_DOTNET)('C# fact tier agreement', () => {
     expect(FILES).toEqual(['Endpoints.cs', 'LoanPolicy.cs', 'LoansController.cs', 'Program.cs', 'RenewalRules.cs', 'RetryNames.cs', 'ShelfController.cs']);
   });
 
+  it('accepted difference: an explicit implementation of an interface from another namespace, written by its simple name', async () => {
+    const path = 'CsharpV2Sample/KnownDifferences/ExternalRenewal.cs';
+    const full = await roslyn.extractFacts(path, '');
+    const syntax = await new CSharpAdapter({ facts: DEFAULT_FACT_OPTIONS })
+      .extractFacts(path, readFileSync(resolve(FIXTURE_DIR, path), 'utf-8'));
+    expect(full.map(f => `${f.text} ${f.symbolId}`)).toEqual([
+      `days > 21 ${path}::Lending.Facts.Differences.ExternalRenewal.Lending.Facts.Contracts.IExtendable.Extend::method`,
+    ]);
+    expect(syntax.map(f => `${f.text} ${f.symbolId}`)).toEqual([
+      `days > 21 ${path}::Lending.Facts.Differences.ExternalRenewal.Lending.Facts.Differences.IExtendable.Extend::method`,
+    ]);
+  });
+
   it.each(FILES)('both tiers give the same facts: %s', async (file) => {
     const path = `${FACTS_DIR}/${file}`;
     const full = await roslyn.extractFacts(path, '');

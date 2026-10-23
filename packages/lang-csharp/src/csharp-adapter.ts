@@ -30,6 +30,8 @@ const SIMPLE_ESCAPES: Record<string, string> = {
 export class CSharpAdapter extends TreeSitterAdapter {
   readonly extensions = ['.cs'] as const;
 
+  /** Namespaces of the plain `using` directives of the file whose edges are being extracted. */
+  private usings: readonly string[] = [];
   /** Fact detector options; undefined when facts are off. */
   readonly facts: FactOptions | undefined;
 
@@ -58,6 +60,7 @@ export class CSharpAdapter extends TreeSitterAdapter {
       const firstSymbol = symbols.length > 0 ? symbols[0]!.symbolId : undefined;
       if (!firstSymbol) return edges;
 
+      this.usings = usingNamespaces(tree.rootNode);
       this.visitEdges(tree.rootNode, filePath, firstSymbol, '', edges);
       return edges;
     } catch (err) {
@@ -343,17 +346,43 @@ export class CSharpAdapter extends TreeSitterAdapter {
     return false;
   }
 
+  /**
+   * A base type's symbol id from the registry, in the order C# looks names up: (a) the file's own
+   * namespace, (b) each namespace of a `using` directive, (c) the global namespace, then (d) a name
+   * ending in `.<Base>` that only one registry symbol has. Anything else (also an ambiguous suffix)
+   * falls back to `<namespace>.<Base>::<Base>::<kind>`.
+   */
   private resolveBaseType(baseName: string, namespace: string, defaultKind: SymbolKind): string {
-    // Check symbol registry first
-    const prefix = namespace ? `${namespace}.${baseName}` : baseName;
-    for (const [id] of this.symbolRegistry) {
-      if (id.includes(`::${prefix}::`)) return id;
-      if (id.includes(`::${baseName}::`)) return id;
+    const candidates = [
+      namespace ? `${namespace}.${baseName}` : baseName,
+      ...this.usings.map(using => `${using}.${baseName}`),
+      baseName,
+    ];
+    for (const name of candidates) {
+      for (const [id] of this.symbolRegistry) {
+        if (id.includes(`::${name}::`)) return id;
+      }
     }
+    const suffixMatches = [...this.symbolRegistry.keys()].filter(id => {
+      const name = id.split('::')[1] ?? '';
+      return name.endsWith(`.${baseName}`);
+    });
+    if (suffixMatches.length === 1) return suffixMatches[0]!;
     // Fallback: assume same namespace
     const qualifiedName = namespace ? `${namespace}.${baseName}` : baseName;
     return `${qualifiedName}::${baseName}::${defaultKind}`;
   }
+}
+
+/** Namespaces named by plain `using X.Y;` directives anywhere in the file (not aliases, not `using static`). */
+function usingNamespaces(root: SyntaxNode): string[] {
+  const namespaces: string[] = [];
+  for (const directive of root.descendantsOfType('using_directive')) {
+    if (directive.children.some(c => c.type === '=' || c.type === 'static')) continue;
+    const name = directive.children.find(c => c.type === 'identifier' || c.type === 'qualified_name');
+    if (name) namespaces.push(name.text.replace(/\s+/g, ''));
+  }
+  return namespaces;
 }
 
 /**

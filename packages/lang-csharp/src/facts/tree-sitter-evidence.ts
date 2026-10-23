@@ -836,7 +836,9 @@ function accessorBodiesOf(declaration: SyntaxNode): SyntaxNode[] {
  * The `<Interface>.` prefix of an explicit interface implementation (`bool IRenewable.CanRenew()`),
  * as Roslyn names the member: the interface's qualified name. The syntax tier knows only the written
  * name, so a simple name is taken to live in the member's namespace; a written qualified name is
- * kept as written. Empty for any other member.
+ * kept as written. Empty for any other member. Accepted difference (pinned by
+ * KnownDifferences/ExternalRenewal.cs): an interface from another namespace written by its simple
+ * name, or a partly qualified name, gives another ID than Roslyn's.
  */
 function explicitInterface(member: SyntaxNode, namespace: string): string {
   const specifier = member.namedChildren.find(c => c.type === 'explicit_interface_specifier');

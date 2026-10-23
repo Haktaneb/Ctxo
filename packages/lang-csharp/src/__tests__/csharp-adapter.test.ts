@@ -438,3 +438,83 @@ describe('CSharpAdapter - file-scoped namespaces', () => {
     for (const fact of facts) expect(symbols.has(fact.symbolId), fact.symbolId).toBe(true);
   });
 });
+
+describe('CSharpAdapter - base types across namespaces', () => {
+  const HOLDS = [
+    'using Lending.Shared;',
+    '',
+    'namespace Lending.Holds;',
+    '',
+    'public class HoldService : HoldBase',
+    '{',
+    '}',
+    '',
+  ].join('\n');
+
+  async function registryOf(adapter: CSharpAdapter, files: Record<string, string>): Promise<Map<string, SymbolKind>> {
+    const registry = new Map<string, SymbolKind>();
+    for (const [file, source] of Object.entries(files)) {
+      for (const symbol of await adapter.extractSymbols(file, source)) registry.set(symbol.symbolId, symbol.kind);
+    }
+    return registry;
+  }
+
+  it('resolves a base type through a using directive to the id Roslyn gives', async () => {
+    const adapter = new CSharpAdapter();
+    adapter.setSymbolRegistry(await registryOf(adapter, {
+      'Shared/HoldBase.cs': 'namespace Lending.Shared;\n\npublic class HoldBase { }\n',
+      'Other/HoldBase.cs': 'namespace Lending.Other;\n\npublic class HoldBase { }\n',
+    }));
+    const edges = await adapter.extractEdges('Holds/HoldService.cs', HOLDS);
+    expect(edges).toContainEqual({
+      from: 'Holds/HoldService.cs::Lending.Holds.HoldService::class',
+      to: 'Shared/HoldBase.cs::Lending.Shared.HoldBase::class',
+      kind: 'extends',
+    });
+  });
+
+  it('prefers the file\'s own namespace, then usings, then the global namespace', async () => {
+    const adapter = new CSharpAdapter();
+    adapter.setSymbolRegistry(await registryOf(adapter, {
+      'Global/HoldBase.cs': 'public class HoldBase { }\n',
+      'Shared/HoldBase.cs': 'namespace Lending.Shared;\n\npublic class HoldBase { }\n',
+      'Holds/HoldBase.cs': 'namespace Lending.Holds;\n\npublic class HoldBase { }\n',
+    }));
+    const edges = await adapter.extractEdges('Holds/HoldService.cs', HOLDS);
+    expect(edges.find(e => e.kind === 'extends')?.to).toBe('Holds/HoldBase.cs::Lending.Holds.HoldBase::class');
+  });
+
+  it('a unique suffix match resolves a base type no using names', async () => {
+    const adapter = new CSharpAdapter();
+    adapter.setSymbolRegistry(await registryOf(adapter, {
+      'Deep/HoldBase.cs': 'namespace Lending.Deep.Core;\n\npublic class HoldBase { }\n',
+    }));
+    const edges = await adapter.extractEdges('Holds/HoldService.cs', 'namespace Lending.Holds;\n\npublic class HoldService : HoldBase { }\n');
+    expect(edges.find(e => e.kind === 'extends')?.to).toBe('Deep/HoldBase.cs::Lending.Deep.Core.HoldBase::class');
+  });
+
+  it('an ambiguous suffix match stays unresolved', async () => {
+    const adapter = new CSharpAdapter();
+    adapter.setSymbolRegistry(await registryOf(adapter, {
+      'A/HoldBase.cs': 'namespace Lending.A;\n\npublic class HoldBase { }\n',
+      'B/HoldBase.cs': 'namespace Lending.B;\n\npublic class HoldBase { }\n',
+    }));
+    const edges = await adapter.extractEdges('Holds/HoldService.cs', 'namespace Lending.Holds;\n\npublic class HoldService : HoldBase { }\n');
+    expect(edges.find(e => e.kind === 'extends')?.to).toBe('Lending.Holds.HoldBase::HoldBase::class');
+  });
+});
+
+describe('CSharpAdapter - a block namespace after a file-scoped one (invalid C#)', () => {
+  const FILE = 'Broken/Mixed.cs';
+  const SOURCE = 'namespace Lending.Outer;\n\nnamespace Inner\n{\n    public class Shelf { public void Fill() { } }\n}\n';
+
+  it('does not crash and keeps today\'s ids', async () => {
+    const adapter = new CSharpAdapter({ facts: DEFAULT_FACT_OPTIONS });
+    expect((await adapter.extractSymbols(FILE, SOURCE)).map(s => s.symbolId)).toEqual([
+      `${FILE}::Lending.Outer.Inner.Shelf::class`,
+      `${FILE}::Lending.Outer.Inner.Shelf.Fill(0)::method`,
+    ]);
+    expect(await adapter.extractEdges(FILE, SOURCE)).toEqual([]);
+    expect(await adapter.extractFacts(FILE, SOURCE)).toEqual([]);
+  });
+});
