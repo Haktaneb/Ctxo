@@ -32,6 +32,7 @@ Then read the files ctxo points you to. Reading a file to see its contents needs
 | Find a symbol by name or regex                  | `search_symbols`                                                                                   |
 | Find code for a natural-language question       | `get_ranked_context`                                                                               |
 | Layer map of the project                        | `get_architectural_overlay`                                                                        |
+| Candidate bounded contexts / context map        | `get_architectural_overlay(mode: "contexts")`, then `candidate: <id>`                              |
 | Most central symbols                            | `get_symbol_importance`                                                                            |
 
 <!-- ctxo-skill v0.13 -->

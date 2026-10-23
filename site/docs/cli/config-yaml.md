@@ -18,9 +18,15 @@ index:
     - "examples/*"
   tests: []               # extra test-file globs
   facts: false            # true asks plugins for code facts (protocol v2)
+masking:
+  clusterLabels: []       # globs; matching cluster labels become [masked-cluster-N] in MCP responses
+watch:
+  snapshotMinFileChanges: 5   # files re-indexed before ctxo watch recomputes the community snapshot
 gate:
   enabled: true
   sensitivity: balanced   # strict | balanced (DEFAULT) | lenient
+  # minDependents: 3      # optional; overrides the sensitivity's floor
+  # percentile: 15        # optional; overrides the sensitivity's top N%
 cochange:
   maxCommits: 2000        # number or "all"
   # since: 12m            # optional; d, w, m, y; counted back from HEAD's committer date
@@ -53,6 +59,8 @@ The `gate:` block controls the safe-edit guard. `sensitivity` sets how aggressiv
 | `balanced` | top 15% | 3 |
 | `lenient` | top 5% | 5 |
 
-Set `gate.enabled: false` to turn the guard off entirely.
+`gate.minDependents` and `gate.percentile` override the level's floor and percentile one at a time. Set `gate.enabled: false` to turn the guard off entirely.
+
+The `masking:` block hides sensitive folder names: community and candidate-context labels that match a `clusterLabels` glob are replaced with `[masked-cluster-N]` in MCP tool responses. The `watch:` block sets how many distinct files `ctxo watch` re-indexes before it recomputes the community snapshot (default `5`).
 
 Full schema reference: [Config schema](/reference/config-schema).

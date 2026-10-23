@@ -38,6 +38,7 @@ Examples below assume `ctxo` is on your PATH from a global install (or a local `
 | [`ctxo visualize`](./visualize.md) | Generate an interactive dependency graph HTML |
 | [`ctxo blast-radius`](./blast-radius.md) | Blast radius for one symbol, JSON to stdout |
 | [`ctxo gate --preview`](./gate.md) | Preview which symbols the safe-edit guard would block |
+| [`ctxo contexts`](./contexts.md) | Candidate bounded contexts as a table; `--json` prints the full `contexts-view.json` |
 | `ctxo verify-index` | CI gate: fail if index drifts from source |
 | `ctxo stats` | Show MCP usage statistics (`--json`, `--days N`, `--clear`) |
 | `ctxo version` | Verbose version report (`--json`, `--short`) |

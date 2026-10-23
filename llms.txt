@@ -8,7 +8,7 @@ Ctxo is a Model Context Protocol (MCP) server that gives AI agents structured co
 
 ```
 npm install -g @ctxo/cli   # One-time global install (gives you the `ctxo` command)
-ctxo init                  # Detect languages, install plugins, wire MCP
+ctxo init                  # Rules, skills, guard, MCP config, git hooks, plugins
 ctxo index                 # Build codebase index
 ctxo                       # Start MCP server (stdio)
 ```
@@ -55,7 +55,9 @@ Language adapters ship as separate npm packages and are discovered by scanning t
 - Safe to delete? -> find_importers
 - Preparing a context map? -> get_architectural_overlay(mode: "contexts")
 
-## New: tiered agent rules, granular init, agent-setup doctor checks (#159)
+## New in v0.13
+
+### Tiered agent rules, granular init, agent-setup doctor checks (#159)
 
 - Two rules tiers inside versioned markers (`<!-- ctxo-rules-start v<version> -->` / `<!-- ctxo-rules-end -->`). Claude Code gets a compact block (4 lines in `CLAUDE.md`) when the safe-edit guard hook, all three skills and an enabled gate (`gate.enabled` not false) are in place; every other client, and Claude Code without them, gets the full block. The full block's first rule is narrowed: "For structural questions (dependencies, impact, history), use ctxo tools first; reading a file to see its contents needs no index call."
 - The rules writer replaces the ctxo block in place in every rules file (versioned, unversioned or the old unmarked body), collapses duplicates, keeps everything outside the block (BOM and line endings included), and leaves a block from a newer ctxo or a damaged block (a start or end marker without its partner) unchanged with a warning. `ctxo-understand` carries a question-to-tool table for all 14 tools.
@@ -66,15 +68,7 @@ Language adapters ship as separate npm packages and are discovered by scanning t
 - `ctxo init` parts: `rules`, `skills`, `guard`, `mcp`, `git-hooks`, `config`. New flags `--only <parts>`, `--skip <parts>`, `--no-guard` (does not install the guard); `--rules` is a deprecated alias for `--skip git-hooks,guard`. `-y` without `--tools` sets up all nine tools. `--dry-run` lists every file init would create or change. A corrupt or oddly shaped `.claude/settings.json` is never overwritten.
 - New doctor checks `ai_rules`, `skills` and `claude_guard_hook` (warn only). `ctxo doctor --fix` installs the skills and the guard, then re-renders the rules blocks; it holds a block by the same rule as init, installs nothing the user declined (a versioned full block or `gate.enabled: false`), and replaces edited ctxo skills with the bundled copy.
 
-## New: co-change engine, incremental indexing, one snapshot per commit (#157)
-
-- Co-change is built from one `git log` pass with its own window, independent of `--max-history` (which controls per-file intent depth only). Config: `cochange:` in `.ctxo/config.yaml` (maxCommits 2000 or "all", since, maxFilesPerCommit 30, minShared 2, include, exclude). Overrides: `ctxo index --cochange-commits <n|all>`, `--cochange-since <duration>`. Merge commits are excluded; commits above `maxFilesPerCommit` are skipped and counted (`massSkipped`); renames are followed.
-- Every blast-radius path uses co-change: get_blast_radius, get_pr_impact, get_context_for_task, `ctxo blast-radius`, the safe-edit gate hook and `ctxo gate --preview`. `likely` includes co-change-upgraded dependents, `coChangeFrequency` is filled, and get_blast_radius adds `coChangedFiles` (up to 10 files, informational). The gate may fire somewhat more often.
-- Incremental indexing: `ctxo index --files <path...>` (alias `--file`) and `ctxo index --commit <rev>` re-index part of the index and recompute everything global from the merged index. The v2 post-commit hook runs `ctxo index --commit HEAD` once per commit, guarded by `[ -d .ctxo ]`. `ctxo init` and `ctxo doctor --fix` upgrade old hook blocks in place and refuse to write into a global or system `core.hooksPath`. New `git_hooks` doctor check.
-- One community snapshot per commit. Drift and boundary confidence count `distinctCommits` (low below 3, medium 3-6, high 7+). `ctxo index --check` records no snapshot.
-- `ctxo <command> --help` prints help and runs nothing.
-
-## New in v0.13
+### Contexts view, plugin protocol v2 and T-SQL data coupling (#156)
 
 - **Contexts view (#156)** - `ctxo index` writes `.ctxo/index/contexts-view.json`: candidate bounded contexts from file-level clustering of dependency and co-change edges, with hub files damped. Each candidate has a suggested label, cohesion, top terms, cross-candidate edges and co-change pairs; type names with different shapes in different candidates are listed as collisions. Recomputed on every index run that re-indexes files (and every post-commit hook run); skipped by `--skip-community`; not refreshed by `ctxo watch`.
 - `get_architectural_overlay` `mode: "contexts"` returns a summary of all candidates (hubs and collisions capped at 50); `candidate: <id>` returns one candidate in full. `mode` (overlay), `searchMode` (get_ranked_context) and `mode` (search_symbols) are now registered, so clients can send them. The unused `fuzzy` parameter is gone (typo correction is automatic in `fts` mode).
@@ -90,6 +84,14 @@ Language adapters ship as separate npm packages and are discovered by scanning t
 - **Annotations in MCP output** - get_logic_slice includes node `annotations` at L4 only; L1-L3 and get_context_for_task omit them.
 - **Test files by annotation** - `Fact`, `Theory`, `SkippableFact`, `SkippableTheory`, `Test`, `TestCase`, `TestCaseSource`, `TestFixture`, `TestMethod`, `DataTestMethod`, `TestClass` mark test files; name-only `*Test.cs` / `*Tests.cs` matches need one once C# annotations exist. Attributes derived from `Fact` or `Theory` and bare capital `Tests/` folders are not recognised: add `index.tests`. Run a full `ctxo index` after upgrading `@ctxo/lang-csharp`.
 - **`csharp_tier` doctor check** - warns when the Roslyn helper cannot restore its NuGet packages (ScriptDom); the C# plugin then falls back to tree-sitter. The helper declares `RollForward` `Major`, so it can run on a newer .NET runtime when no .NET 8 runtime is installed. `ctxo watch` restarts an idle or crashed Roslyn keep-alive once and falls back to tree-sitter if that fails, instead of writing a C# file with zero symbols.
+
+### Co-change engine, incremental indexing, one snapshot per commit (#157)
+
+- Co-change is built from one `git log` pass with its own window, independent of `--max-history` (which controls per-file intent depth only). Config: `cochange:` in `.ctxo/config.yaml` (maxCommits 2000 or "all", since, maxFilesPerCommit 30, minShared 2, include, exclude). Overrides: `ctxo index --cochange-commits <n|all>`, `--cochange-since <duration>`. Merge commits are excluded; commits above `maxFilesPerCommit` are skipped and counted (`massSkipped`); renames are followed.
+- Every blast-radius path uses co-change: get_blast_radius, get_pr_impact, get_context_for_task, `ctxo blast-radius`, the safe-edit gate hook and `ctxo gate --preview`. `likely` includes co-change-upgraded dependents, `coChangeFrequency` is filled, and get_blast_radius adds `coChangedFiles` (up to 10 files, informational). The gate may fire somewhat more often.
+- Incremental indexing: `ctxo index --files <path...>` (alias `--file`) and `ctxo index --commit <rev>` re-index part of the index and recompute everything global from the merged index. The v2 post-commit hook runs `ctxo index --commit HEAD` once per commit, guarded by `[ -d .ctxo ]`. `ctxo init` and `ctxo doctor --fix` upgrade old hook blocks in place and refuse to write into a global or system `core.hooksPath`. New `git_hooks` doctor check.
+- One community snapshot per commit. Drift and boundary confidence count `distinctCommits` (low below 3, medium 3-6, high 7+). `ctxo index --check` records no snapshot.
+- `ctxo <command> --help` prints help and runs nothing.
 
 ## New in v0.8
 

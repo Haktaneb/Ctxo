@@ -162,6 +162,8 @@ A PR review signal that catches **new cross-cluster edges**:
 
 ### 5. Candidate contexts - `get_architectural_overlay({ mode: "contexts" })`
 
+> Introduced in v0.13 (#156).
+
 The symbol-level clusters above answer "which symbols move together". A context map needs one level up: "which **files** form a candidate bounded context". Louvain over symbols tends to put a shared interface and hundreds of symbols in one community, so the contexts view clusters **files** instead, blends two signals, and damps the files everybody depends on. It never names a domain: the label is a suggestion, the terms and collisions are input for a glossary session.
 
 How it is built (on every index run that re-indexes files, written to `.ctxo/index/contexts-view.json`):

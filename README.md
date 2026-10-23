@@ -36,7 +36,7 @@ It's not a skill gap. It's a **sensory gap**. The agent is navigating your codeb
 
 The core shift: your agent stops reacting to files it stumbles into and starts planning from a complete map. **Blast radius before the edit. Git intent before the bug fix. Importer list before the rename.**
 
-Ctxo indexes your repo once kept fresh by file watchers and git hooks into a deterministic graph: every symbol, every edge (imports, calls, extends, implements), every relevant git commit with intent classified, every anti-pattern. All exposed through 14 semantic MCP tools.
+Ctxo indexes your repo once, kept fresh by file watchers and git hooks, into a deterministic graph: every symbol, every edge (imports, calls, extends, implements, uses, and the data edges reads, writes and executes), every relevant git commit with intent classified, every anti-pattern. All exposed through 14 semantic MCP tools.
 
 One `get_blast_radius` call replaces an entire ripgrep/read spiral. One `get_pr_impact` replaces a full review session of "wait, what calls this?"
 
@@ -129,6 +129,17 @@ ctxo doctor --fix                                        # upgrades an old hook 
 ```
 
 The file you forget to touch is usually the one no import points at. Files that keep changing together are coupled anyway: `get_blast_radius` promotes a dependent that co-changes with your target from `potential` to `likely`, and lists the files with no dependency path at all as `coChangedFiles`. `ctxo index --max-history` only controls how many commits each file keeps for `get_why_context`; the co-change window has its own settings.
+
+## Where the boundaries really are
+
+Folder names say one thing; imports and commit history often say another. `ctxo index` also writes candidate bounded contexts: files clustered by dependency and co-change edges, with hub files damped, each with a suggested label, a cohesion score, top terms and the edges that cross into other candidates. With `@ctxo/lang-sql` installed, tables, views and procedures join the graph: a table's readers and writers show up in its blast radius, and each candidate lists the tables it shares with other candidates.
+
+```shell
+ctxo contexts          # candidates as a table
+ctxo contexts --json   # the full contexts-view.json
+```
+
+Agents get the same view from `get_architectural_overlay(mode: "contexts")`, and one candidate in full with `candidate: <id>`.
 
 ## Supported Languages
 
