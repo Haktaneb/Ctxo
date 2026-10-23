@@ -64,14 +64,23 @@ describe('Release Packaging', () => {
     // incremental --files/--commit runs, stale-entry pruning) raised the limit to 1400KB, and the
     // rest of PR 0 (one snapshot per commit, co-change in every blast-radius caller, hook v2 with
     // its shared-directory guard, `--help` for every subcommand, docs shipped in the tarball) to
-    // 1450KB (measured 1420.70KB). PR 2A (#159: tiered rules block and its parser, init parts
+    // 1450KB (measured 1420.70KB).
+    // PR 1A contexts view (file graph, clustering, overlay, CLI) → 1600KB (measured 1564.51KB).
+    // PR 1B (plugin protocol v2, @ctxo/lang-sql registration, UTF-16 sources, the doctor C# tier
+    // check) → 1700KB (measured 1606.42KB; 1592.09KB before the C# tier check). The rest of PR 1B
+    // measured 1667.57KB (contexts-view data coupling, docs) and 1684.11KB (data-resource tie-break,
+    // R4 attribution); its final-review fixes (one data-resource identity for the impact tools, the
+    // linear R4 pass, annotations only at L4, the review carries) crossed the limit at 1711.62KB,
+    // so it is 1800KB. The tarball also carries the root README.md and llms*.txt, so docs count too.
+    // On its own branch (from 1450KB), PR 2A (#159: tiered rules block and its parser, init parts
     // pipeline, agent-setup doctor checks and fixes, about 49KB of new source shipped as JS plus
     // source maps, and the longer docs) raised it to 1550KB (measured 1530.42KB after the rebase).
     // The PR 2A final fix (formatter-stable blocks and normalised comparison, linked rules files,
     // versioned skills, one hold rule shared by init, the dry run and --fix, and its JSDoc, shipped
     // as JS and again in the source maps) raised it to 1650KB (measured 1574.88KB: the next 50KB
-    // step, 1600KB, plus 50KB of headroom). The owner set 2000KB ahead of the stack merge with PR 1B
-    // (#156), which projects to about 1870KB together; PR 2A alone measured 1587.18KB at this change.
+    // step, 1600KB, plus 50KB of headroom). The owner set 2000KB ahead of the stack merge: PR 1B
+    // (#156, 1712.86KB) plus PR 2A (tiered agent rules, about 1870KB together) would cross 1800KB;
+    // PR 2A alone measured 1587.18KB at that change.
     expect(sizeKB).toBeLessThan(2000);
     expect(sizeKB).toBeGreaterThan(1); // Sanity: not empty (dist/ may not exist in CI pre-build)
   });
