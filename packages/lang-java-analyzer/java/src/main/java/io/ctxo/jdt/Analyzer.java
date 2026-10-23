@@ -225,6 +225,12 @@ public final class Analyzer {
       String prev = enclosingTypeId; enclosingTypeId = symId(name, "type");
       for (Object o : node.superInterfaceTypes())
         out.edges.add(new Dtos.Edge(enclosingTypeId, typeId((Type) o, "interface"), "implements"));
+      // The class bodies of the constants (`GOLD { void q() {} }`): their members are symbols, as in
+      // the syntax tier, since the fact evidence names them as owners. The arguments are not walked.
+      for (Object o : node.enumConstants()) {
+        AnonymousClassDeclaration body = ((EnumConstantDeclaration) o).getAnonymousClassDeclaration();
+        if (body != null) body.accept(this);
+      }
       node.bodyDeclarations().forEach(b -> ((ASTNode) b).accept(this));
       enclosingTypeId = prev;
       return false;

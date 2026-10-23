@@ -147,10 +147,7 @@ describe.skipIf(!CAN_RUN_JDT)('Java fact tier agreement (JDT full tier vs tree-s
     rmSync(generated, { recursive: true, force: true });
   });
 
-  it('both tiers give the same symbol ids, except members of enum constant bodies', async () => {
-    // EmitVisitor visits an enum's body declarations but not its constants, so a method in an enum
-    // constant body owns facts in both tiers yet is a symbol only in the syntax tier.
-    const enumConstantMembers: Record<string, string[]> = { 'src/gen/Shapes.java': ['src/gen/Shapes.java::q::method'] };
+  it('both tiers give the same symbol ids', async () => {
     for (const [name, dir] of roots) {
       const jdt = full.get(`default:${name}`)!;
       for (const file of javaFiles(dir)) {
@@ -160,7 +157,7 @@ describe.skipIf(!CAN_RUN_JDT)('Java fact tier agreement (JDT full tier vs tree-s
         const syntaxIds = await ids(new JavaAdapter());
         const jdtIds = await ids(jdt);
         expect([...jdtIds].filter((id) => !syntaxIds.has(id)), `${name}/${file} missing`).toEqual([]);
-        expect([...syntaxIds].filter((id) => !jdtIds.has(id)), `${name}/${file} extra`).toEqual(enumConstantMembers[file] ?? []);
+        expect([...syntaxIds].filter((id) => !jdtIds.has(id)), `${name}/${file} extra`).toEqual([]);
       }
     }
   }, 300_000);
