@@ -107,6 +107,9 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (ten packages today). Per-pack
   domain command name without the package (`verify-domain`, `contexts-touched`, `domain`) prints an
   install hint and exits 1, so CI never passes silently; `ctxo domain-guard-hook` exits 0 without output.
 - `get_why_context` responses gain the `_meta` envelope the other tools already carry.
+- `get_pr_impact` with an empty `git diff <since>` goes through the module enrichers, the `_meta`
+  envelope and masking like every other `get_pr_impact` response; it gains `_meta`, and its other fields
+  are unchanged.
 - `ctxo install <name>` with an unknown name still exits 1; its message now lists `domain` among the
   known names.
 - `pnpm-workspace.yaml` sets `hoistWorkspacePackages: false`, so a workspace package is never resolved

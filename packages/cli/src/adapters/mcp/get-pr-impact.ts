@@ -66,8 +66,11 @@ export function handleGetPrImpact(
       // Step 1: Get changed files
       const changedPaths = await git.getChangedFiles(since);
       if (changedPaths.length === 0) {
+        // Same pipeline as the main path (enricher, envelope, masking), so module fields and `_meta` appear here too.
+        const empty: Record<string, unknown> = { since, changedFiles: 0, changedSymbols: 0, totalImpact: 0, riskLevel: 'low', files: [], summary: { confirmedTotal: 0, likelyTotal: 0, potentialTotal: 0, highRiskSymbols: [] } };
+        const enrichedEmpty = await applyEnricherAsync(enrich, empty, parsed.data, 'get_pr_impact');
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ since, changedFiles: 0, changedSymbols: 0, totalImpact: 0, riskLevel: 'low', files: [], summary: { confirmedTotal: 0, likelyTotal: 0, potentialTotal: 0, highRiskSymbols: [] } }) }],
+          content: [{ type: 'text' as const, text: masking.mask(JSON.stringify(wrapResponse(enrichedEmpty))) }],
         };
       }
 
