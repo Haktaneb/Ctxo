@@ -13,6 +13,12 @@ const LENDING = join(import.meta.dirname, '..', '..', 'test-fixtures', 'lending-
 
 const sampleFile = (name: string) => `samples/${name}/app.go`;
 
+/**
+ * Agreeing samples that are meant to give no facts: `nilAndStrings` holds only trivial comparisons (with nil and
+ * true) and code inside string literals; `shadow` declares its own nil and true, so nothing is a literal.
+ */
+const EMPTY_SAMPLES: ReadonlySet<string> = new Set(['nilAndStrings', 'shadow']);
+
 function write(root: string, rel: string, body: string): void {
   const path = join(root, ...rel.split('/'));
   mkdirSync(dirname(path), { recursive: true });
@@ -104,6 +110,10 @@ describe.skipIf(!detectGoToolchain().available)('Go fact tier agreement', () => 
     for (const name of names) {
       const { full, syntax } = results.get(sampleFile(name))!;
       total += full.length;
+      // An empty agreement proves nothing: every sample must give facts in the full tier, except the ones that
+      // are meant to be empty.
+      if (EMPTY_SAMPLES.has(name)) expect(full, name).toEqual([]);
+      else expect(full.length, name).toBeGreaterThan(0);
       expect(syntax, name).toEqual(full);
     }
     expect(total).toBeGreaterThan(40);
