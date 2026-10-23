@@ -18,8 +18,41 @@ import {
 } from '@ctxo/plugin-api';
 
 import { classAnnotations, methodAnnotations } from './decorators.js';
+import { findTestBlocks, testBlockSymbol } from './test-blocks.js';
 
 const SUPPORTED_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx'] as const;
+
+/** Source ranges `[start, end]`, sorted by start, none inside another. */
+type Ranges = ReadonlyArray<readonly [number, number]>;
+
+function rangesOf(nodes: readonly Node[]): Ranges {
+  const sorted = nodes.map((n) => [n.getStart(), n.getEnd()] as const).sort((a, b) => a[0] - b[0] || b[1] - a[1]);
+  const merged: Array<readonly [number, number]> = [];
+  for (const range of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && range[1] <= last[1]) continue;
+    merged.push(range);
+  }
+  return merged;
+}
+
+function isInside(node: Node, ranges: Ranges): boolean {
+  if (ranges.length === 0) return false;
+  const start = node.getStart();
+  let lo = 0;
+  let hi = ranges.length - 1;
+  let candidate = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (ranges[mid]![0] <= start) {
+      candidate = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return candidate >= 0 && node.getEnd() <= ranges[candidate]![1];
+}
 
 export class TsMorphAdapter implements ILanguageAdapter {
   readonly extensions = SUPPORTED_EXTENSIONS;
@@ -82,6 +115,7 @@ export class TsMorphAdapter implements ILanguageAdapter {
       this.extractInterfaces(sourceFile, filePath, symbols);
       this.extractTypeAliases(sourceFile, filePath, symbols);
       this.extractVariables(sourceFile, filePath, symbols);
+      symbols.push(...findTestBlocks(sourceFile, filePath).map(testBlockSymbol));
 
       return symbols;
     } catch (err) {
@@ -103,6 +137,7 @@ export class TsMorphAdapter implements ILanguageAdapter {
       this.extractInheritanceEdges(sourceFile, filePath, edges);
       this.extractCallEdges(sourceFile, filePath, edges);
       this.extractReferenceEdges(sourceFile, filePath, edges);
+      this.extractTestBlockEdges(sourceFile, filePath, edges);
 
       return edges;
     } catch (err) {
@@ -457,12 +492,8 @@ export class TsMorphAdapter implements ILanguageAdapter {
     }
   }
 
-  private extractReferenceEdges(
-    sourceFile: SourceFile,
-    filePath: string,
-    edges: GraphEdge[],
-  ): void {
-    // Build map of all named imports from local modules: importedName → resolved symbolId
+  /** Named and default imports from local modules: importedName → resolved symbolId. */
+  private buildLocalImportMap(sourceFile: SourceFile, filePath: string): Map<string, string> {
     const importMap = new Map<string, string>();
     for (const imp of sourceFile.getImportDeclarations()) {
       const mod = imp.getModuleSpecifierValue();
@@ -476,6 +507,15 @@ export class TsMorphAdapter implements ILanguageAdapter {
         importMap.set(defaultImport.getText(), this.resolveImportTarget(targetFile, defaultImport.getText()));
       }
     }
+    return importMap;
+  }
+
+  private extractReferenceEdges(
+    sourceFile: SourceFile,
+    filePath: string,
+    edges: GraphEdge[],
+  ): void {
+    const importMap = this.buildLocalImportMap(sourceFile, filePath);
     if (importMap.size === 0) return;
 
     // Scan each exported symbol's body for identifier references to imports
@@ -498,14 +538,50 @@ export class TsMorphAdapter implements ILanguageAdapter {
     }
   }
 
+  /**
+   * Test blocks (test files only): each block's `calls` and `uses` edges come from its own callback minus
+   * the callbacks of the blocks inside it, resolved as for exported functions; one `calls` edge per target.
+   */
+  private extractTestBlockEdges(
+    sourceFile: SourceFile,
+    filePath: string,
+    edges: GraphEdge[],
+  ): void {
+    const blocks = findTestBlocks(sourceFile, filePath);
+    if (blocks.length === 0) return;
+    const importMap = this.buildLocalImportMap(sourceFile, filePath);
+
+    for (const block of blocks) {
+      const exclude = rangesOf(block.nested);
+      const callees = [
+        ...block.body.getDescendantsOfKind(SyntaxKind.CallExpression),
+        ...block.body.getDescendantsOfKind(SyntaxKind.NewExpression),
+      ];
+      const called = new Set<string>();
+      for (const call of callees) {
+        if (isInside(call, exclude)) continue;
+        const calledName = call.getExpression().getText().split('.').pop();
+        if (!calledName) continue;
+        const resolved = this.resolveLocalCallTarget(sourceFile, filePath, calledName);
+        if (!resolved || called.has(resolved)) continue;
+        called.add(resolved);
+        edges.push({ from: block.symbolId, to: resolved, kind: 'calls' });
+      }
+      if (importMap.size > 0) this.emitUsesEdges(block.body, block.symbolId, importMap, edges, block.nested);
+    }
+  }
+
   private emitUsesEdges(
     node: Node,
     fromId: string,
     importMap: Map<string, string>,
     edges: GraphEdge[],
+    exclude: readonly Node[] = [],
   ): void {
+    const excluded = rangesOf(exclude);
     const seen = new Set<string>();
     for (const id of node.getDescendantsOfKind(SyntaxKind.Identifier)) {
+      if (isInside(id, excluded)) continue;
       const name = id.getText();
       if (seen.has(name)) continue;
       const target = importMap.get(name);

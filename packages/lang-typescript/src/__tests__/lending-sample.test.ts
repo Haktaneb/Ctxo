@@ -26,3 +26,47 @@ describe('lending sample decorators', () => {
     ]);
   });
 });
+
+describe('lending sample test blocks', () => {
+  it('the policy test yields test-block symbols with calls into the sample', async () => {
+    const files = readLendingSample();
+    const testFile = 'src/__tests__/loan-policy.test.ts';
+    const adapter = new TsMorphAdapter();
+
+    const policy = await adapter.extractSymbols('src/loan-policy.ts', files.get('src/loan-policy.ts')!);
+    const blocks = await adapter.extractSymbols(testFile, files.get(testFile)!);
+
+    expect(blocks.map((s) => s.name)).toEqual([
+      'LoanPolicy',
+      'LoanPolicy > LEND-03 a member holds at most five loans',
+      'LoanPolicy > renewal',
+      'LoanPolicy > renewal > extends by seven days',
+    ]);
+    expect(blocks.every((s) => s.kind === 'function' && s.annotations?.[0]?.name === 'test')).toBe(true);
+
+    adapter.loadProjectSources(files);
+    const edges = await adapter.extractEdges(testFile, files.get(testFile)!);
+    const policyIds = new Set(policy.map((s) => s.symbolId));
+    const blockIds = new Set(blocks.map((s) => s.symbolId));
+    const calls = edges.filter((e) => e.kind === 'calls' && blockIds.has(e.from));
+
+    expect(calls).toEqual([
+      {
+        from: `${testFile}::LoanPolicy > LEND-03 a member holds at most five loans::function`,
+        to: 'src/loan-policy.ts::canBorrow::function',
+        kind: 'calls',
+      },
+      {
+        from: `${testFile}::LoanPolicy > renewal > extends by seven days::function`,
+        to: 'src/loan-policy.ts::renewalDue::function',
+        kind: 'calls',
+      },
+    ]);
+    expect(calls.every((e) => policyIds.has(e.to))).toBe(true);
+    expect(edges).toContainEqual({
+      from: `${testFile}::LoanPolicy > LEND-03 a member holds at most five loans::function`,
+      to: 'src/loan-policy.ts::MAX_LOANS::variable',
+      kind: 'uses',
+    });
+  });
+});
