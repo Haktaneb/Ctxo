@@ -19,7 +19,7 @@ This tool is registered only when the opt-in [`@ctxo/domain`](/concepts/domain-k
 
 | Name     | Type   | Required | Description |
 | -------- | ------ | -------- | ----------- |
-| `ruleId` | string | yes      | A rule ID as written in a card heading, for example `LEND-03`. The variants `LEND03`, `Lend03` and `lend_03` find the same rule |
+| `ruleId` | string | yes      | A rule ID as written in a card heading, for example `LEND-03`. The variants `LEND03`, `Lend03` and `lend_03` find the same rule, and so does the `id` of a domain-scope hit of `get_ranked_context` (`rule:LEND-03`) |
 
 ## Example
 

@@ -215,6 +215,15 @@ describe('domain graph queries', () => {
     expect(canonicalRuleId(INDEX, 'loan limit')).toBeUndefined();
   });
 
+  it('canonicalRuleId strips a rule: node-id prefix, so a domain-scope hit id passes as is (I3)', () => {
+    expect(canonicalRuleId(INDEX, 'rule:LEND-03')).toBe('LEND-03');
+    expect(canonicalRuleId(INDEX, ' Rule: lend03 ')).toBe('LEND-03');
+    expect(canonicalRuleId(INDEX, 'RULE:Lend_03')).toBe('LEND-03');
+    expect(canonicalRuleId(INDEX, 'rule:LEND-99')).toBeUndefined();
+    expect(canonicalRuleId(INDEX, 'term:LEND-03')).toBeUndefined();
+    expect(canonicalRuleId(INDEX, 'rule:rule:LEND-03')).toBeUndefined();
+  });
+
   it('decisionsForContext puts decisions about preferred rules first, then newest, and limits to five', () => {
     const ids = (preferred: string[], limit?: number): string[] =>
       decisionsForContext(INDEX, 'lending', new Set(preferred), limit).map((d) => `${d.date}-${d.n}`);

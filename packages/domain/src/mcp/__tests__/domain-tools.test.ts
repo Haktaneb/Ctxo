@@ -197,13 +197,13 @@ describe('domain tools', () => {
     });
   });
 
-  it('get_rule accepts LEND03 and lend_03', async () => {
+  it('get_rule accepts LEND03, lend_03 and the rule:LEND-03 id of a domain-scope hit (I3)', async () => {
     await setUp();
     const tool = tools().get(GET_RULE);
 
     const canonical = await call(tool, { ruleId: 'LEND-03' });
     expect(canonical['rule']).toMatchObject({ ruleId: 'LEND-03', text: 'Five is the limit.', context: { id: 'lending', name: 'Lending', rung: 'bounded' } });
-    for (const raw of ['LEND03', 'lend_03', 'Lend03', ' lend-03 ']) expect(await call(tool, { ruleId: raw }), raw).toEqual(canonical);
+    for (const raw of ['LEND03', 'lend_03', 'Lend03', ' lend-03 ', 'rule:LEND-03']) expect(await call(tool, { ruleId: raw }), raw).toEqual(canonical);
   });
 
   it('get_rule returns the Trait-linked test with source annotation and the card Tests: link', async () => {
@@ -328,7 +328,7 @@ describe('domain tools', () => {
       'string.optional()',
       'string.describe("Repo-relative file path, or a context\'s card path")',
       'string.min(1)',
-      'string.describe("Rule ID as written in the card, e.g. LEND-03 (LEND03, Lend03 and lend_03 also match)")',
+      'string.describe("Rule ID as written in the card, e.g. LEND-03 (LEND03, Lend03, lend_03 and a domain-scope hit id such as rule:LEND-03 also match)")',
     ]);
   });
 });

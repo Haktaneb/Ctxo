@@ -233,9 +233,15 @@ export function rulesForSymbols(index: GraphIndex, symbolIds: readonly string[])
 
 const RULE_ID_VARIANT = /^([A-Za-z][A-Za-z0-9]*?)[-_]?(\d+)$/;
 
-/** `lend03`, `Lend_03` and `LEND-03` all give `LEND-03`, when that is a rule; else undefined. */
+/** A leading node-id prefix (`rule:`), as domain-scope hits of `get_ranked_context` carry it. */
+const RULE_NODE_PREFIX = /^rule:[ 	]*/i;
+
+/**
+ * `lend03`, `Lend_03` and `LEND-03` all give `LEND-03`, when that is a rule; else undefined. A leading `rule:`
+ * (any case) is stripped first, so the `id` of a domain-scope hit (`rule:LEND-03`) passes as is.
+ */
 export function canonicalRuleId(index: GraphIndex, raw: string): string | undefined {
-  const match = RULE_ID_VARIANT.exec(raw.trim());
+  const match = RULE_ID_VARIANT.exec(raw.trim().replace(RULE_NODE_PREFIX, ''));
   if (match === null) return undefined;
   const id = `${match[1]!.toUpperCase()}-${match[2]!}`;
   return index.rules.has(id) ? id : undefined;

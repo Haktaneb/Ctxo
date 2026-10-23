@@ -100,7 +100,7 @@ export function domainTools(host: CtxoHost, state: DomainState): ModuleToolDefin
     name: GET_RULE,
     description: RULE_DESCRIPTION,
     inputSchema: (z) => ({
-      ruleId: z.string().min(1).describe('Rule ID as written in the card, e.g. LEND-03 (LEND03, Lend03 and lend_03 also match)'),
+      ruleId: z.string().min(1).describe('Rule ID as written in the card, e.g. LEND-03 (LEND03, Lend03, lend_03 and a domain-scope hit id such as rule:LEND-03 also match)'),
     }),
     handler: (args) =>
       answer(state, (snapshot) => {

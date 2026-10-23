@@ -259,7 +259,7 @@ When to use: Before changing code in a named context; to learn the rules, terms 
 One domain rule by ID.
 
 Parameters:
-- ruleId (string, required): e.g. LEND-03; LEND03, Lend03 and lend_03 also match
+- ruleId (string, required): e.g. LEND-03; LEND03, Lend03, lend_03 and the id of a domain-scope hit (rule:LEND-03) also match
 
 Returns: `rule` (ruleId, title, text, line, untested?, context, card), `tests` and `symbols` (each `{ file, symbolId?, testName?, fallback?, sources: [{ source, annotation?, file, line }] }`; test sources annotation|category|test-title|rule-comment|mention|card-tests, code sources card-code|rule-comment), `decisions` mentioning it, `provenance` (with the decision it came from) and `unresolved` card values when any. `{ found: false, hint: "No rule <ID> in any card." }` for an unknown ID.
 

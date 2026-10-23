@@ -127,7 +127,7 @@ Without the package the parameter does not exist and the tool's schema and outpu
 - `kind` is `rule`, `term`, `decision`, `section` or `provenance`; `id` is the graph node id (`rule:LEND-03`, `term:lending/loan`, `decision:lending/2026-09-12-1`, `section:<card>:<line>`, `file:<path>`). Glossary terms without a `(context: <id>)` have the context `*`.
 - `excerpt` is the text with whitespace collapsed, cut at 300 characters. Hits are ordered by the engine's final score, highest first, and packed greedily into `tokenBudget`.
 - Without a registry or a graph the response is `{ found: false, hint }`; after a card edit not yet indexed it adds `stale: true` and a hint to run `ctxo index`.
-- Follow a rule hit with [`get_rule`](/mcp-tools/get-rule), a card hit with [`get_domain_context`](/mcp-tools/get-domain-context).
+- Follow a rule hit with [`get_rule`](/mcp-tools/get-rule): the hit's `id` (`rule:LEND-03`) can be passed to `get_rule` as is. Follow a card hit with [`get_domain_context`](/mcp-tools/get-domain-context).
 
 ## When to use
 
