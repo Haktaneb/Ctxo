@@ -98,6 +98,20 @@ describe('TypeScript fact evidence', () => {
     expect((await factsOf('src/app.ts', source)).map((f) => f.text)).toEqual(['ANY /any']);
   });
 
+  it('a verb call without a handler argument is not a route', async () => {
+    const source = [
+      "import express from 'express';",
+      "import Fastify from 'fastify';",
+      'const app = express();',
+      "const env = app.get('env');",
+      'const server = Fastify();',
+      "server.get('/only-path');",
+      "app.get('/ok', (_req, res) => res.end());",
+      "server.post('/ok2', async () => ({}));",
+    ].join('\n');
+    expect((await factsOf('src/settings.ts', source)).map((f) => f.text)).toEqual(['GET /ok', 'POST /ok2']);
+  });
+
   it('top-level registrations attach to the module symbol', async () => {
     const source = ["import express from 'express';", 'const app = express();', "app.delete('/holds/:id', () => {});"].join('\n');
     expect(await factsOf('src/server.ts', source)).toEqual([

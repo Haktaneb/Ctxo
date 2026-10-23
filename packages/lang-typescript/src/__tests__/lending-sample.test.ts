@@ -202,4 +202,28 @@ describe('lending sample facts', () => {
       }
     }
   });
+
+  it('with the whole sample preloaded (fact fixtures included), the earlier files still equal the tip golden', async () => {
+    const golden = JSON.parse(readFileSync(GOLDEN, 'utf-8')) as Record<string, Record<string, unknown>>;
+    const all = readLendingSample();
+    const earlier = Object.keys(golden['default']!);
+    expect(all.size).toBeGreaterThan(earlier.length);
+
+    for (const facts of [undefined, DEFAULT_FACT_OPTIONS]) {
+      for (const sqlCallSites of [false, true]) {
+        const adapter = new TsMorphAdapter({ sqlCallSites, ...(facts ? { facts } : {}) });
+        const perFile: Record<string, { symbols: unknown; complexity: unknown; edges?: unknown }> = {};
+        for (const [path, source] of all) {
+          perFile[path] = { symbols: await adapter.extractSymbols(path, source), complexity: await adapter.extractComplexity(path, source) };
+        }
+        // As ctxo index runs it: edges, then facts, both while every file is preloaded.
+        adapter.loadProjectSources(all);
+        for (const [path, source] of all) perFile[path]!.edges = await adapter.extractEdges(path, source);
+        for (const [path, source] of all) await adapter.extractFacts(path, source);
+        adapter.clearProjectSources();
+        const earlierOnly = Object.fromEntries(earlier.map((path) => [path, perFile[path]]));
+        expect(JSON.stringify(earlierOnly, null, 2)).toBe(JSON.stringify(golden[sqlCallSites ? 'sqlCallSites' : 'default'], null, 2));
+      }
+    }
+  });
 });

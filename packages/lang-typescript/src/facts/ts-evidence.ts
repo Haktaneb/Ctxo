@@ -237,10 +237,12 @@ class Collector {
       this.push(call, { kind: 'call', line: lineOf(call), text: call.getText(), method, qualifier: receiver.getText() });
     }
 
-    // G7: Express and Fastify routes; the receiver must trace to a route module.
+    // G7: Express and Fastify routes: a literal path and a handler (Express `app.get('env')` reads a setting);
+    // the receiver must trace to a route module.
     const verb = ROUTE_VERBS[method];
     const path = stringValueOf(args[0]);
     if (verb !== undefined && path !== undefined) {
+      if (args.length < 2) return;
       if (receiverModule(receiver, this.resolver, ROUTE_MODULES) !== undefined) {
         this.push(call, { kind: 'route', line: lineOf(call), verb, route: path });
       }
