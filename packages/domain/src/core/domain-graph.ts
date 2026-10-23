@@ -126,6 +126,8 @@ export type DomainLink =
       readonly to: ProvenanceTarget;
       readonly source: 'card-link' | 'card-text';
       readonly at: Location;
+      /** The position in the decision text (UTF-16 units; the text length when not found): the text order. */
+      readonly offset: number;
       readonly label?: string;
     }
   | { readonly kind: 'decision-rule'; readonly from: string; readonly to: string; readonly source: 'card-text'; readonly at: Location }

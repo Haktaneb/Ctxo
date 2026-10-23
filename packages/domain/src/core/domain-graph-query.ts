@@ -24,6 +24,8 @@ export type ProvenanceLink = Extract<DomainLink, { readonly kind: 'decision-prov
 export interface GraphIndex {
   /** By rule ID (`LEND-03`). */
   readonly rules: ReadonlyMap<string, RuleNode>;
+  /** Rule node id (`rule:LEND-03`) to rule ID. */
+  readonly ruleIdByNode: ReadonlyMap<string, string>;
   /** By registry context id. */
   readonly contexts: ReadonlyMap<string, ContextNode>;
   /**
@@ -74,23 +76,6 @@ function push<K, V>(map: Map<K, V[]>, key: K, value: V): void {
   const list = map.get(key);
   if (list === undefined) map.set(key, [value]);
   else list.push(value);
-}
-
-/** Blanks every `[label](target)` so a search in the remaining text never lands inside a link. */
-function maskLinks(text: string): string {
-  return text.replace(/!?\[[^\]]*\]\([^)]*\)/g, (match) => ' '.repeat(match.length));
-}
-
-/** Where a provenance link sits in its decision text; the end of the text when it cannot be found. */
-function provenancePosition(link: ProvenanceLink, text: string, masked: string): number {
-  let index = -1;
-  if (link.source === 'card-link') {
-    if (link.label !== undefined) index = text.indexOf(`[${link.label}](`);
-    if (index === -1 && link.to.kind === 'external') index = text.indexOf(`](${link.to.value}`);
-  } else {
-    index = masked.indexOf(link.to.kind === 'external' ? link.to.value : link.to.path);
-  }
-  return index === -1 ? text.length : index;
 }
 
 export function indexGraph(graph: DomainGraph): GraphIndex {
@@ -152,25 +137,13 @@ export function indexGraph(graph: DomainGraph): GraphIndex {
   for (const list of decisionRules.values()) list.sort(compare);
 
   const decisionsByContext = new Map<string, DecisionNode[]>();
-  const decisionText = new Map<string, string>();
-  for (const decision of graph.decisions) {
-    push(decisionsByContext, decision.context, decision);
-    decisionText.set(decision.id, decision.text);
-  }
+  for (const decision of graph.decisions) push(decisionsByContext, decision.context, decision);
   for (const list of decisionsByContext.values()) list.sort(byNewest);
 
+  // Text order from the stored offsets; the sort is stable, so equal offsets keep the graph order.
+  const offsetOf = (link: ProvenanceLink): number => (Number.isFinite(link.offset) ? link.offset : Number.MAX_SAFE_INTEGER);
   const decisionProvenance = new Map<string, ProvenanceLink[]>();
-  for (const [id, links] of provenance) {
-    const text = decisionText.get(id) ?? '';
-    const masked = maskLinks(text);
-    // Array sort is stable: links at one position keep the graph order.
-    const placed = links.map((link) => ({ link, at: provenancePosition(link, text, masked) }));
-    placed.sort((a, b) => a.at - b.at);
-    decisionProvenance.set(
-      id,
-      placed.map((p) => p.link),
-    );
-  }
+  for (const [id, links] of provenance) decisionProvenance.set(id, [...links].sort((x, y) => offsetOf(x) - offsetOf(y)));
 
   const termsByContext = new Map<string, TermNode[]>();
   const termIdentifiers = new Map<string, string[]>();
@@ -197,6 +170,7 @@ export function indexGraph(graph: DomainGraph): GraphIndex {
 
   return {
     rules,
+    ruleIdByNode: ruleIdOfNode,
     contexts,
     rulesByContext,
     ruleContextByCard,
@@ -244,8 +218,8 @@ export function rulesForSymbols(index: GraphIndex, symbolIds: readonly string[])
     const links = [...(index.codeLinksBySymbol.get(symbolId) ?? []), ...(file === undefined ? [] : (index.fileLinksByFile.get(file) ?? []))];
     const kinds = new Map<string, Set<'code' | 'test'>>();
     for (const link of links) {
-      const ruleId = link.from.startsWith('rule:') ? link.from.slice('rule:'.length) : link.from;
-      if (!index.rules.has(ruleId)) continue;
+      const ruleId = index.ruleIdByNode.get(link.from);
+      if (ruleId === undefined) continue;
       const set = kinds.get(ruleId) ?? new Set();
       set.add(link.kind === 'rule-symbol' ? 'code' : 'test');
       kinds.set(ruleId, set);

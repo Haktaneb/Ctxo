@@ -52,6 +52,7 @@ describe('resolveProvenanceTarget', () => {
       to: { kind: 'file', path: 'docs/specs/loan-limit.md', exists: true },
       source: 'card-link',
       at: AT,
+      offset: 11,
       label: 'spec',
     });
   });
@@ -102,14 +103,15 @@ describe('decisionLinks', () => {
       'Loan limit raised from 3 to 5. [spec](../../specs/loan-limit.md), #123, [ADR-007](../../adr/adr-007-loan-limit.md)',
     );
     expect(result).toEqual([
-      { kind: 'decision-provenance', from: FROM, to: { kind: 'file', path: 'docs/specs/loan-limit.md', exists: true }, source: 'card-link', at: AT, label: 'spec' },
-      { kind: 'decision-provenance', from: FROM, to: { kind: 'external', value: '#123' }, source: 'card-text', at: AT },
+      { kind: 'decision-provenance', from: FROM, to: { kind: 'file', path: 'docs/specs/loan-limit.md', exists: true }, source: 'card-link', at: AT, offset: 38, label: 'spec' },
+      { kind: 'decision-provenance', from: FROM, to: { kind: 'external', value: '#123' }, source: 'card-text', at: AT, offset: 66 },
       {
         kind: 'decision-provenance',
         from: FROM,
         to: { kind: 'file', path: 'docs/adr/adr-007-loan-limit.md', exists: true },
         source: 'card-link',
         at: AT,
+        offset: 82,
         label: 'ADR-007',
       },
     ]);
@@ -138,7 +140,7 @@ describe('decisionLinks', () => {
       trackerPrefixes: ['LEND'],
     });
     expect(result).toEqual([
-      { kind: 'decision-provenance', from: FROM, to: { kind: 'external', value: 'LEND-456' }, source: 'card-text', at: AT },
+      { kind: 'decision-provenance', from: FROM, to: { kind: 'external', value: 'LEND-456' }, source: 'card-text', at: AT, offset: 11 },
       { kind: 'decision-rule', from: FROM, to: 'rule:LEND-03', source: 'card-text', at: AT },
     ]);
   });
@@ -146,6 +148,25 @@ describe('decisionLinks', () => {
   it('a repeated reference gives one link', () => {
     const result = links('LEND-03 and LEND-03 again, LEND-7 and LEND-7', { ruleIds: ['LEND-03'], trackerPrefixes: ['LEND'] });
     expect(result.map((l) => l.kind)).toEqual(['decision-rule', 'decision-provenance']);
+    // The repeated tracker key keeps its first offset.
+    expect(result.flatMap((l) => (l.kind === 'decision-provenance' ? [l.offset] : []))).toEqual([27]);
+  });
+
+  it('every provenance link carries its exact offset: a reference inside another, a repeated label, a trimmed label', () => {
+    const offsets = (text: string): [string, number][] =>
+      links(text).flatMap((l) => (l.kind === 'decision-provenance' ? [[l.to.kind === 'file' ? l.to.path : l.to.value, l.offset] as [string, number]] : []));
+    expect(offsets('see #123 and #12')).toEqual([
+      ['#123', 4],
+      ['#12', 13],
+    ]);
+    expect(offsets('[doc](../../b.md) then [doc](../../a.md)')).toEqual([
+      ['docs/b.md', 6],
+      ['docs/a.md', 29],
+    ]);
+    expect(offsets('[ spec ](../../z.md), #9')).toEqual([
+      ['docs/z.md', 9],
+      ['#9', 22],
+    ]);
   });
 
   it('decisions are processed in order and each link carries its own decision line', () => {

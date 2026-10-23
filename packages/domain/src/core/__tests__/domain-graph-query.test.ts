@@ -272,4 +272,41 @@ describe('domain graph queries', () => {
       ],
     });
   });
+
+  it('decisionView keeps the text order for a reference inside another, a repeated label and a trimmed label', () => {
+    const text = [
+      '# Lending',
+      '',
+      '## Decisions',
+      '- 2026-10-01: see #123 and #12',
+      '- 2026-10-02: [doc](../../b.md) then [doc](../../a.md)',
+      '- 2026-10-03: [ spec ](../../z.md), #9',
+      '',
+    ].join('\n');
+    const reg: DomainRegistry = { ...REGISTRY, contexts: [LENDING] };
+    const index = indexGraph(
+      buildDomainGraph({
+        registry: reg,
+        registryHash: '0123456789abcdef',
+        config: DEFAULT_DOMAIN_CONFIG,
+        cards: [{ context: LENDING, path: LENDING_CARD, card: parseCard(text) }],
+        cardsHash: 'fedcba9876543210',
+        indices: [],
+        isTestFile: () => false,
+        ownership: createOwnership(reg, makeGlobMatcher),
+        testRefs: { links: new Map(), unknown: [] },
+        codeRefs: { links: new Map(), unknown: [] },
+        fileExists: () => true,
+        split,
+        dataResourceKinds,
+      }),
+    );
+    const order = (date: string): string[] => {
+      const decision = index.decisionsByContext.get('lending')!.find((d) => d.date === date)!;
+      return decisionView(index, decision).provenance.map((p) => (p.kind === 'file' ? p.path : p.value));
+    };
+    expect(order('2026-10-01')).toEqual(['#123', '#12']);
+    expect(order('2026-10-02')).toEqual(['docs/b.md', 'docs/a.md']);
+    expect(order('2026-10-03')).toEqual(['docs/z.md', '#9']);
+  });
 });

@@ -178,7 +178,8 @@ describe('createDomainState', () => {
   it('reloads only after a file changes', async () => {
     setUp();
     await runPass();
-    const state = createDomainState(newHost());
+    // A clock well past every mtime, so no stamp is racy.
+    const state = createDomainState(newHost(), { now: () => Date.now() + 60_000 });
     const first = state.load();
     const second = state.load();
     if (!first.ok || !second.ok) throw new Error('expected a snapshot');
@@ -190,5 +191,30 @@ describe('createDomainState', () => {
     if (!third.ok) throw new Error('expected a snapshot');
     expect(third.snapshot.generation).toBeGreaterThan(first.snapshot.generation);
     expect(third.snapshot).not.toBe(first.snapshot);
+  });
+
+  it('does not trust a stamp whose mtime is within 2 s of the load (racy stamps)', async () => {
+    setUp();
+    await runPass();
+    const cardPath = join(root, 'docs/domain/lending/domain.md');
+    const mtime = new Date(Math.floor(statSync(cardPath).mtimeMs / 1000) * 1000);
+    utimesSync(cardPath, mtime, mtime);
+    let now = mtime.getTime() + 500;
+    const state = createDomainState(newHost(), { now: () => now });
+    const first = state.load();
+    expect(first.ok && first.snapshot.staleCards).toBe(false);
+
+    // Same size, same mtime: only the racy rule notices the edit.
+    write('docs/domain/lending/domain.md', CARD.replace('five', 'FIVE'));
+    utimesSync(cardPath, mtime, mtime);
+    const second = state.load();
+    expect(second.ok && second.snapshot.staleCards).toBe(true);
+
+    // Once the clock is past the window the stamp is trusted again and the result is cached.
+    now = mtime.getTime() + 5_000;
+    const settled = state.load();
+    const again = state.load();
+    if (!settled.ok || !again.ok) throw new Error('expected a snapshot');
+    expect(again.snapshot).toBe(settled.snapshot);
   });
 });

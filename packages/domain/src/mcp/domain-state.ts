@@ -25,15 +25,8 @@ export const STALE_CARDS_HINT = 'Cards or the glossary changed since the last "c
 const NO_GRAPH_HINT = 'No domain graph yet; run "ctxo index".';
 const STALE_REGISTRY_HINT = 'The domain registry changed since the last "ctxo index"; run it to rebuild the domain graph.';
 
-/** A cheap change stamp for a file: mtime and size, or 'missing'. */
-function stampOf(path: string): string {
-  try {
-    const stat = statSync(path);
-    return `${stat.mtimeMs}:${stat.size}`;
-  } catch {
-    return 'missing';
-  }
-}
+/** A stamp whose mtime is this close to the moment it was taken is not trusted (the racy-git rule). */
+const RACY_WINDOW_MS = 2_000;
 
 /** The card paths of a registry (each once, registry order) and its glossary: the inputs of `cardsHash`. */
 function cardFiles(registry: DomainRegistry): string[] {
@@ -43,17 +36,36 @@ function cardFiles(registry: DomainRegistry): string[] {
   return paths;
 }
 
+/** Joins the stamps of one cache key. */
+const SEP = '\n';
+
+export interface DomainStateOptions {
+  /** The clock for the racy-stamp rule; `Date.now` by default. */
+  readonly now?: () => number;
+}
+
 /**
  * The loaded domain graph with the registry, config and ownership it was read against (spec 11.2, E3). One state
  * per `register`: creating it does no I/O (P19, the hook route runs `register` on a 1 s budget); `load()` reads,
  * and caches its result by the mtime and size of the config, the registry, `graph.json`, each card and the
  * glossary. A registry the graph was not built from gives `stale-registry`; cards or a glossary edited since give a
- * snapshot with `staleCards`.
+ * snapshot with `staleCards`. A file modified within 2 s of the moment its stamp is taken (or in the future) gets a
+ * stamp that never matches, so an edit of the same size inside one coarse mtime tick is seen by the next load.
  */
-/** Joins the stamps of one cache key. */
-const SEP = '\n';
-
-export function createDomainState(host: CtxoHost): DomainState {
+export function createDomainState(host: CtxoHost, options: DomainStateOptions = {}): DomainState {
+  const now = options.now ?? Date.now;
+  let racyCount = 0;
+  /** mtime and size, 'missing', or a one-off value for a racy file. */
+  const stampOf = (path: string): string => {
+    const taken = now();
+    try {
+      const stat = statSync(path);
+      if (stat.mtimeMs > taken - RACY_WINDOW_MS) return `racy:${++racyCount}`;
+      return `${stat.mtimeMs}:${stat.size}`;
+    } catch {
+      return 'missing';
+    }
+  };
   const configPath = join(host.ctxoRoot, 'config.yaml');
   const graphPath = join(host.ctxoRoot, 'index', 'domain', 'graph.json');
   const stampRepo = (path: string): string => `${path}|${stampOf(resolve(host.projectRoot, path))}`;

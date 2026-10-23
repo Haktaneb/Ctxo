@@ -91,7 +91,7 @@ function linksOf(
       resolved.kind === 'file'
         ? { kind: 'file' as const, path: resolved.path, exists: input.fileExists(resolved.path) }
         : { kind: 'external' as const, value: resolved.value };
-    placed.push({ index, link: { kind: 'decision-provenance', from: node.id, to, source: 'card-link', at, label: link.label } });
+    placed.push({ index, link: { kind: 'decision-provenance', from: node.id, to, source: 'card-link', at, offset: index, label: link.label } });
   }
 
   for (const value of decision.externalRefs) {
@@ -100,7 +100,7 @@ function linksOf(
     if (match && SCHEME.test(value)) masked = blank(masked, match.index, match.index + value.length);
     placed.push({
       index,
-      link: { kind: 'decision-provenance', from: node.id, to: { kind: 'external', value }, source: 'card-text', at },
+      link: { kind: 'decision-provenance', from: node.id, to: { kind: 'external', value }, source: 'card-text', at, offset: index },
     });
   }
 
@@ -108,7 +108,7 @@ function linksOf(
     if (!input.trackerPrefixes.has(match[1]!) || input.ruleIds.has(match[0])) continue;
     placed.push({
       index: match.index,
-      link: { kind: 'decision-provenance', from: node.id, to: { kind: 'external', value: match[0] }, source: 'card-text', at },
+      link: { kind: 'decision-provenance', from: node.id, to: { kind: 'external', value: match[0] }, source: 'card-text', at, offset: match.index },
     });
   }
 
@@ -117,12 +117,12 @@ function linksOf(
     placed.push({ index: match.index, link: { kind: 'decision-rule', from: node.id, to: ruleNodeId(match[0]), source: 'card-text', at } });
   }
 
-  // Text order; equal positions keep the order above. A repeated reference gives one link.
+  // Text order; equal positions keep the order above. A repeated reference gives one link, at its first offset.
   placed.sort((a, b) => a.index - b.index);
   const seen = new Set<string>();
   const links: DomainLink[] = [];
   for (const { link } of placed) {
-    const key = JSON.stringify(link);
+    const key = JSON.stringify(link.kind === 'decision-provenance' ? { ...link, offset: undefined } : link);
     if (seen.has(key)) continue;
     seen.add(key);
     links.push(link);

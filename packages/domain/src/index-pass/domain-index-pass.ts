@@ -120,7 +120,10 @@ export function domainIndexPass(host: CtxoHost): (ctx: IndexPassContext) => Prom
     try {
       graph = await composeGraph(host, ctx, { registry, registryHash: hash, config, ownership, files, warn: (m) => log.warn(m) });
     } catch (err) {
-      log.warn(`The domain graph could not be built: ${(err as Error).message}; graph.json not updated`);
+      log.warn(
+        `The domain graph could not be built: ${(err as Error).message}; graph.json not updated. ` +
+          'The domain tools report a stale registry until the graph builds again.',
+      );
     }
 
     store.writeIfChanged('contexts.json', contextsArtifact);
