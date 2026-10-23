@@ -12,6 +12,20 @@ namespace Lending.Facts
         }
     }
 
+    public interface IRenewable
+    {
+        bool CanRenew(int days);
+    }
+
+    public sealed class ShelfRenewal : IRenewable
+    {
+        bool IRenewable.CanRenew(int days)
+        {
+            if (days > 30) return false;
+            return true;
+        }
+    }
+
     public sealed record RenewalOptions
     {
         public int Timeout { get; init; }

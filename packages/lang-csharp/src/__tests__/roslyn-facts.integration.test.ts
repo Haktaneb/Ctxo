@@ -172,7 +172,7 @@ describe.skipIf(!HAS_DOTNET)('Roslyn facts', () => {
     }]);
   });
 
-  it('a bad --facts= value gives no evidence and one stderr line', () => {
+  it('a bad --facts= value gives no evidence and one helper stderr line', () => {
     const run = spawnSync('dotnet', [
       'run', '--project', HELPER_DIR, '--', resolve(FIXTURE_DIR, 'CsharpV2Sample.sln'), '--facts=not-base64!',
     ], { encoding: 'utf-8', timeout: 120_000 });
@@ -180,7 +180,8 @@ describe.skipIf(!HAS_DOTNET)('Roslyn facts', () => {
     const files = run.stdout.split(/\r?\n/).filter(line => line.startsWith('{"type":"file"'));
     expect(files.length).toBeGreaterThan(0);
     for (const line of files) expect(line).not.toContain('"factEvidence"');
-    const stderr = run.stderr.split(/\r?\n/).filter(line => line.trim() !== '');
+    // Only the helper's own lines count; the .NET SDK may add notices of its own.
+    const stderr = run.stderr.split(/\r?\n/).filter(line => line.startsWith('[ctxo-roslyn]'));
     expect(stderr).toHaveLength(1);
     expect(stderr[0]).toMatch(/^\[ctxo-roslyn\] --facts= ignored: /);
   }, 120_000);

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CSharpAdapter } from '../csharp-adapter.js';
+import { DEFAULT_FACT_OPTIONS } from '../facts/fact-options.js';
 
 const FIXTURES_DIR = join(import.meta.dirname, 'fixtures');
 
@@ -389,5 +390,51 @@ describe('CSharpAdapter — isSupported', () => {
 
   it('has syntax tier', async () => {
     expect(adapter.tier).toBe('syntax');
+  });
+});
+
+describe('CSharpAdapter - file-scoped namespaces', () => {
+  const adapter = new CSharpAdapter();
+  const FILE = 'Lending/Holds.cs';
+  const SOURCE = [
+    'using Lending.Shared;',
+    '',
+    'namespace Lending.Holds;',
+    '',
+    'public class HoldService : HoldBase, IHoldPolicy',
+    '{',
+    '    public int Place(int days) { if (days > 5) return 1; return 0; }',
+    '}',
+    '',
+    'public interface IHoldPolicy { }',
+    '',
+  ].join('\n');
+
+  it('symbols carry the namespace of a file-scoped namespace declaration', async () => {
+    const ids = (await adapter.extractSymbols(FILE, SOURCE)).map(s => s.symbolId);
+    expect(ids).toEqual([
+      `${FILE}::Lending.Holds.HoldService::class`,
+      `${FILE}::Lending.Holds.HoldService.Place(1)::method`,
+      `${FILE}::Lending.Holds.IHoldPolicy::interface`,
+    ]);
+  });
+
+  it('edges start at and resolve base types in the file-scoped namespace', async () => {
+    const edges = await adapter.extractEdges(FILE, SOURCE);
+    expect(edges).toContainEqual({ from: `${FILE}::Lending.Holds.HoldService::class`, to: 'Lending.Holds.HoldBase::HoldBase::class', kind: 'extends' });
+    expect(edges).toContainEqual({ from: `${FILE}::Lending.Holds.HoldService::class`, to: 'Lending.Holds.IHoldPolicy::IHoldPolicy::interface', kind: 'implements' });
+  });
+
+  it('complexity ids match the symbol ids', async () => {
+    const metrics = await adapter.extractComplexity(FILE, SOURCE);
+    expect(metrics.map(m => m.symbolId)).toEqual([`${FILE}::Lending.Holds.HoldService.Place(1)::method`]);
+  });
+
+  it('facts in a file-scoped file name real syntax-tier symbols', async () => {
+    const withFacts = new CSharpAdapter({ facts: DEFAULT_FACT_OPTIONS });
+    const symbols = new Set((await withFacts.extractSymbols(FILE, SOURCE)).map(s => s.symbolId));
+    const facts = await withFacts.extractFacts(FILE, SOURCE);
+    expect(facts.map(f => f.text)).toEqual(['days > 5']);
+    for (const fact of facts) expect(symbols.has(fact.symbolId), fact.symbolId).toBe(true);
   });
 });

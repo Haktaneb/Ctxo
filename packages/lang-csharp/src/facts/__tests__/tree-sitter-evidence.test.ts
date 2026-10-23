@@ -140,6 +140,12 @@ describe('C# tree-sitter facts', () => {
     ]);
   });
 
+  it('an explicit interface implementation is named after its interface, as in Roslyn', async () => {
+    const facts = await syntaxFacts('RenewalRules.cs');
+    expect(facts.find(f => f.text === 'days > 30')?.symbolId)
+      .toBe(`${PREFIX}/RenewalRules.cs::Lending.Facts.ShelfRenewal.Lending.Facts.IRenewable.CanRenew::method`);
+  });
+
   it('top-level statements belong to the module symbol', async () => {
     const facts = await syntaxFacts('Program.cs');
     expect(facts).toEqual([{

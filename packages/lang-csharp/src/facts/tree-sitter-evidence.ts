@@ -309,12 +309,12 @@ class Collector {
           this.member(undefined, [child]);
           break;
         default:
-          if (TYPE_DECLARATIONS.has(child.type)) this.type(child, current);
+          if (TYPE_DECLARATIONS.has(child.type)) this.type(child, current, current);
       }
     }
   }
 
-  private type(declaration: SyntaxNode, container: string): void {
+  private type(declaration: SyntaxNode, container: string, namespace: string): void {
     const name = simpleName(declaration.childForFieldName('name'));
     if (!name) return;
     const type = qualify(container, name);
@@ -324,13 +324,13 @@ class Collector {
     for (const member of body.namedChildren) {
       if (this.full) return;
       if (TYPE_DECLARATIONS.has(member.type)) {
-        this.type(member, type);
+        this.type(member, type, namespace);
         continue;
       }
       switch (member.type) {
         case 'method_declaration': {
           const method = simpleName(member.childForFieldName('name'));
-          if (method) this.member(this.methodId(member, `${type}.${method}`), [member.childForFieldName('body')]);
+          if (method) this.member(this.methodId(member, `${type}.${explicitInterface(member, namespace)}${method}`), [member.childForFieldName('body')]);
           break;
         }
         case 'constructor_declaration': {
@@ -346,7 +346,7 @@ class Collector {
         case 'property_declaration': {
           const property = member.childForFieldName('name');
           if (!property) break;
-          const id = this.id(`${type}.${identifierText(property)}`, 'variable');
+          const id = this.id(`${type}.${explicitInterface(member, namespace)}${identifierText(property)}`, 'variable');
           const value = member.childForFieldName('value');
           const accessorBodies = accessorBodiesOf(member);
           if (value && value.type !== 'arrow_expression_clause') {
@@ -358,7 +358,7 @@ class Collector {
         }
         case 'event_declaration': {
           const event = member.childForFieldName('name');
-          if (event) this.member(this.id(`${type}.${identifierText(event)}`, 'variable'), accessorBodiesOf(member));
+          if (event) this.member(this.id(`${type}.${explicitInterface(member, namespace)}${identifierText(event)}`, 'variable'), accessorBodiesOf(member));
           break;
         }
         case 'field_declaration':
@@ -832,28 +832,26 @@ function accessorBodiesOf(declaration: SyntaxNode): SyntaxNode[] {
     .filter((body): body is SyntaxNode => body !== null);
 }
 
+/**
+ * The `<Interface>.` prefix of an explicit interface implementation (`bool IRenewable.CanRenew()`),
+ * as Roslyn names the member: the interface's qualified name. The syntax tier knows only the written
+ * name, so a simple name is taken to live in the member's namespace; a written qualified name is
+ * kept as written. Empty for any other member.
+ */
+function explicitInterface(member: SyntaxNode, namespace: string): string {
+  const specifier = member.namedChildren.find(c => c.type === 'explicit_interface_specifier');
+  const written = specifier?.namedChildren.find(c => c.type !== 'comment')?.text.replace(/\s+/g, '');
+  if (!written) return '';
+  const qualified = written.includes('.') || written.includes('::') ? written : qualify(namespace, written);
+  return `${qualified}.`;
+}
+
 function namespaceName(declaration: SyntaxNode): string {
   return (declaration.childForFieldName('name')?.text ?? '').replace(/\s+/g, '');
 }
 
 function qualify(container: string, name: string): string {
   return container ? `${container}.${name}` : name;
-}
-
-/**
- * The syntax tier's symbols as the fact collector names them. The symbol visitor reads only block
- * namespaces, so in a file with a file-scoped namespace (`namespace X;`, which precedes every type
- * of the file) each symbol gains that namespace; elsewhere the symbols are returned as they are.
- * Attribute routes built from these symbols then carry the same IDs as the method's other facts.
- */
-export function factSymbols(root: SyntaxNode, file: string, symbols: readonly SymbolNode[]): readonly SymbolNode[] {
-  const declaration = root.namedChildren.find(c => c.type === 'file_scoped_namespace_declaration');
-  if (!declaration) return symbols;
-  const namespace = namespaceName(declaration);
-  return symbols.map(symbol => {
-    const name = qualify(namespace, symbol.name);
-    return { ...symbol, name, symbolId: `${file}::${name}::${symbol.kind}` };
-  });
 }
 
 /**
@@ -866,6 +864,12 @@ export function factSymbols(root: SyntaxNode, file: string, symbols: readonly Sy
  * ID. A public method or constructor gets the syntax tier's own ID (`<Ns.Type.Method>(<n>)`),
  * every other member the full-tier shape; namespaces come from both namespace forms.
  * Attribute routes come from `annotationRouteEvidence`. At most 2,000 records, in source order.
+ * An explicit interface implementation is named `<Type>.<Ns.Interface>.<Member>`, as in Roslyn.
+ * A public method of a non-public or nested type still gets the `(n)` ID, though the syntax tier
+ * indexes no symbol for it (an accepted difference).
+ *
+ * `_symbols` is unused on purpose: every ID comes from the declarations themselves; the parameter stays
+ * because the plan fixed this signature.
  */
 export function collectTreeSitterEvidence(
   root: SyntaxNode,

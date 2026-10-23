@@ -6,7 +6,7 @@ import type { FactOptions } from './facts/fact-types.js';
 import { finishFacts } from './facts/finish-facts.js';
 import { annotationRouteEvidence } from './facts/annotation-endpoints.js';
 import { decodeCsharpStringLiteral } from './facts/csharp-string-literal.js';
-import { collectTreeSitterEvidence, factSymbols } from './facts/tree-sitter-evidence.js';
+import { collectTreeSitterEvidence } from './facts/tree-sitter-evidence.js';
 
 const CSHARP_BRANCH_TYPES = [
   'if_statement', 'for_statement', 'foreach_statement',
@@ -79,15 +79,14 @@ export class CSharpAdapter extends TreeSitterAdapter {
   }
 
   /**
-   * The file's facts in the syntax tier: tree-sitter evidence plus attribute routes (from the symbols
-   * with a file-scoped namespace applied, so every fact of a method has one ID), finished with the
+   * The file's facts in the syntax tier: tree-sitter evidence plus attribute routes, finished with the
    * C# string literal decoder. [] without the facts option.
    */
   async extractFacts(filePath: string, source: string): Promise<CodeFact[]> {
     if (!this.facts) return [];
     try {
       const tree = this.parse(source);
-      const symbols = factSymbols(tree.rootNode, filePath, await this.extractSymbols(filePath, source));
+      const symbols = await this.extractSymbols(filePath, source);
       const evidence = [...collectTreeSitterEvidence(tree.rootNode, filePath, symbols, this.facts), ...annotationRouteEvidence(symbols)];
       return finishFacts(filePath, evidence, symbols, this.facts, decodeCsharpStringLiteral);
     } catch (err) {
@@ -152,9 +151,15 @@ export class CSharpAdapter extends TreeSitterAdapter {
       return;
     }
 
-    // Recurse into compilation_unit and other containers
+    // Recurse into compilation_unit and other containers; a file-scoped namespace covers its later siblings.
+    let scope = namespace;
     for (let i = 0; i < node.childCount; i++) {
-      this.visitSymbols(node.child(i)!, filePath, namespace, symbols);
+      const child = node.child(i)!;
+      if (child.type === 'file_scoped_namespace_declaration') {
+        scope = fileScopedNamespace(child, namespace);
+        continue;
+      }
+      this.visitSymbols(child, filePath, scope, symbols);
     }
   }
 
@@ -247,8 +252,14 @@ export class CSharpAdapter extends TreeSitterAdapter {
       }
     }
 
+    let scope = namespace;
     for (let i = 0; i < node.childCount; i++) {
-      this.visitEdges(node.child(i)!, filePath, fromSymbol, namespace, edges);
+      const child = node.child(i)!;
+      if (child.type === 'file_scoped_namespace_declaration') {
+        scope = fileScopedNamespace(child, namespace);
+        continue;
+      }
+      this.visitEdges(child, filePath, fromSymbol, scope, edges);
     }
   }
 
@@ -301,8 +312,14 @@ export class CSharpAdapter extends TreeSitterAdapter {
       return;
     }
 
+    let scope = namespace;
     for (let i = 0; i < node.childCount; i++) {
-      this.visitComplexity(node.child(i)!, filePath, namespace, metrics);
+      const child = node.child(i)!;
+      if (child.type === 'file_scoped_namespace_declaration') {
+        scope = fileScopedNamespace(child, namespace);
+        continue;
+      }
+      this.visitComplexity(child, filePath, scope, metrics);
     }
   }
 
@@ -337,6 +354,15 @@ export class CSharpAdapter extends TreeSitterAdapter {
     const qualifiedName = namespace ? `${namespace}.${baseName}` : baseName;
     return `${qualifiedName}::${baseName}::${defaultKind}`;
   }
+}
+
+/**
+ * The namespace a file-scoped `namespace X;` gives every later sibling, as Roslyn does
+ * (C# allows it only before the file's type declarations).
+ */
+function fileScopedNamespace(declaration: SyntaxNode, outer: string): string {
+  const name = (declaration.childForFieldName('name')?.text ?? '').replace(/\s+/g, '');
+  return outer ? `${outer}.${name}` : name;
 }
 
 // ── Attribute annotations (syntax tier) ─────────────────────────
