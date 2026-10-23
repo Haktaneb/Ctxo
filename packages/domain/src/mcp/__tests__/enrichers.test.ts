@@ -430,6 +430,40 @@ describe('withTimeout', () => {
     expect(ENRICHER_TIMEOUT_MS).toBe(5_000);
   });
 
+  it('a rejection after the timeout stays silent', async () => {
+    vi.useFakeTimers();
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    try {
+      let rejectLate: (err: Error) => void = () => undefined;
+      const late = (): Promise<Record<string, unknown>> =>
+        new Promise((_resolve, reject) => {
+          rejectLate = reject;
+        });
+      const warn = vi.fn();
+      const pending = withTimeout('get_why_context', late, warn, 100)({ a: 1 }, {});
+      await vi.advanceTimersByTimeAsync(100);
+      await expect(pending).resolves.toEqual({ a: 1 });
+      rejectLate(new Error('too late'));
+      vi.useRealTimers();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(unhandled).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      process.off('unhandledRejection', unhandled);
+    }
+  });
+
+  it('leaves no timer after a success or a rejection in time', async () => {
+    vi.useFakeTimers();
+    const warn = vi.fn();
+    await expect(withTimeout('get_blast_radius', async (p) => ({ ...p, b: 2 }), warn)({ x: 1 }, {})).resolves.toEqual({ x: 1, b: 2 });
+    expect(vi.getTimerCount()).toBe(0);
+    await expect(withTimeout('get_blast_radius', () => Promise.reject(new Error('boom')), warn)({}, {})).rejects.toThrow('boom');
+    expect(vi.getTimerCount()).toBe(0);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it('passes a synchronous result through and a settled Promise result through', async () => {
     const warn = vi.fn();
     const sync = withTimeout('get_blast_radius', (p) => ({ ...p, a: 1 }), warn);

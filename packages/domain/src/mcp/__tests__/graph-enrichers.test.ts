@@ -99,10 +99,11 @@ describe('get_blast_radius domain fields', () => {
       impactedSymbols: [{ symbolId: ROOT }, { symbolId: SEND }],
     });
     expect((result['rulesAffected'] as { ruleId: string }[]).map((r) => r.ruleId)).toEqual(['LEND-05', 'BILL-01', 'LEND-03']);
-    // Cards once each, in card path order.
+    // Cards once each, in registry order (lending is listed first; its card path sorts after billing's).
+    expect(LENDING_CARD > BILLING_CARD).toBe(true);
     expect(result['cardsToUpdate']).toEqual([
-      { context: 'billing', card: BILLING_CARD },
       { context: 'lending', card: LENDING_CARD },
+      { context: 'billing', card: BILLING_CARD },
     ]);
   });
 

@@ -43,10 +43,8 @@ describe('buildCardExcerpt', () => {
     });
     expect(excerpt.omitted).toBe(0);
 
-    // tokens is the wrapper plus each entry, and never more than the budget.
-    const wrapper = estimateTokens({ context: 'lending', card: LENDING_CARD, rules: [], terms: [], tokens: 0, omitted: 0 });
-    const entries = [...excerpt.rules, ...excerpt.terms, excerpt.contracts].reduce((sum, e) => sum + estimateTokens(e), 0);
-    expect(excerpt.tokens).toBe(wrapper + entries);
+    // tokens is the measured size of the excerpt as sent, and never more than the budget.
+    expect(excerpt.tokens).toBe(estimateTokens(excerpt));
     expect(excerpt.tokens).toBeLessThanOrEqual(2000);
   });
 
@@ -75,6 +73,20 @@ describe('buildCardExcerpt', () => {
     const unlimited = buildCardExcerpt(SNAPSHOT, ROOT, [RENEW], Number.POSITIVE_INFINITY);
     expect(unlimited.omitted).toBe(0);
     expect(unlimited.tokens).toBeGreaterThan(60);
+  });
+
+  it('the serialized excerpt fits a tight budget with the contracts kept', () => {
+    const full = buildCardExcerpt(SNAPSHOT, ROOT, [], Number.POSITIVE_INFINITY);
+    expect(full.contracts).toBeDefined();
+    // Every budget from just below the full size up to it: the sent excerpt never exceeds the budget.
+    for (let budget = full.tokens - 3; budget <= full.tokens; budget++) {
+      const excerpt = buildCardExcerpt(SNAPSHOT, ROOT, [], budget);
+      expect(estimateTokens(excerpt)).toBeLessThanOrEqual(budget);
+      expect(excerpt.tokens).toBe(estimateTokens(excerpt));
+    }
+    const exact = buildCardExcerpt(SNAPSHOT, ROOT, [], full.tokens);
+    expect(exact.contracts).toBeDefined();
+    expect(exact.omitted).toBe(0);
   });
 
   it('a wrapper larger than the budget keeps nothing and reports every entry as omitted', () => {

@@ -64,9 +64,11 @@ type Candidate =
  * (those with an identifier among the target and neighbours first, then card order; definitions joined with ` / `
  * and capped at `EXCERPT_DEFINITION_MAX`), then the context's outbound registry contracts with the `Boundary
  * contracts` text capped at `EXCERPT_CONTRACTS_TEXT_MAX`. Each entry costs `estimateTokens(entry)`, the empty wrapper
- * `estimateTokens` of itself; `tokens` is the sum. `context` and `card` are absent when the target's file has no
- * single owner (rules still come through links). When the wrapper alone exceeds the budget, nothing is kept, every
- * entry counts in `omitted` and `tokens` is the wrapper's cost (the caller leaves such an excerpt out).
+ * `estimateTokens` of itself; then the excerpt is measured as sent and the last kept entry dropped (into `omitted`)
+ * until it fits. `tokens` is that measurement: `estimateTokens(excerpt) === excerpt.tokens`. `context` and `card` are
+ * absent when the target's file has no single owner (rules still come through links). When the wrapper alone exceeds
+ * the budget, nothing is kept, every entry counts in `omitted` and `tokens` is the wrapper's size (the caller leaves
+ * such an excerpt out).
  */
 export function buildCardExcerpt(snapshot: DomainSnapshot, target: string, neighbours: readonly string[], budget: number): CardExcerpt {
   const { index, ownership, registry } = snapshot;
@@ -120,25 +122,49 @@ export function buildCardExcerpt(snapshot: DomainSnapshot, target: string, neigh
   }
 
   const wrapper = estimateTokens({ ...head, rules: [], terms: [], tokens: 0, omitted: 0 });
-  if (wrapper > budget) return { ...head, rules: [], terms: [], tokens: wrapper, omitted: candidates.length };
+  if (wrapper > budget) return assemble(head, [], candidates.length);
 
-  const rules: ExcerptRule[] = [];
-  const terms: ExcerptTerm[] = [];
-  let contracts: ExcerptContracts | undefined;
-  let tokens = wrapper;
+  const kept: Candidate[] = [];
+  let estimate = wrapper;
   let omitted = 0;
   for (const candidate of candidates) {
     const cost = estimateTokens(candidate.value);
-    if (tokens + cost > budget) {
+    if (estimate + cost > budget) {
       omitted += 1;
       continue;
     }
-    tokens += cost;
+    estimate += cost;
+    kept.push(candidate);
+  }
+  // The estimate leaves out the JSON separators and the digits of `tokens` and `omitted`: measure the excerpt as it
+  // is sent, and drop the last kept entry until that measurement fits.
+  for (;;) {
+    const excerpt = assemble(head, kept, omitted);
+    if (excerpt.tokens <= budget || kept.length === 0) return excerpt;
+    kept.pop();
+    omitted += 1;
+  }
+}
+
+/** The excerpt of the kept entries, `tokens` set to its own measured size (`estimateTokens` of the result). */
+function assemble(head: { readonly context?: string; readonly card?: string }, kept: readonly Candidate[], omitted: number): CardExcerpt {
+  const rules: ExcerptRule[] = [];
+  const terms: ExcerptTerm[] = [];
+  let contracts: ExcerptContracts | undefined;
+  for (const candidate of kept) {
     if (candidate.kind === 'rule') rules.push(candidate.value);
     else if (candidate.kind === 'term') terms.push(candidate.value);
     else contracts = candidate.value;
   }
-  return { ...head, rules, terms, ...(contracts === undefined ? {} : { contracts }), tokens, omitted };
+  const body = { ...head, rules, terms, ...(contracts === undefined ? {} : { contracts }) };
+  // `tokens` is part of what it measures: settle on a value that equals the size of the excerpt holding it.
+  let tokens = 0;
+  for (let i = 0; i < 8; i++) {
+    const measured = estimateTokens({ ...body, tokens, omitted });
+    if (measured === tokens) break;
+    tokens = Math.max(tokens, measured);
+  }
+  return { ...body, tokens, omitted };
 }
 
 /** The `tokens` of the excerpt for the target alone with an unlimited budget: what the reservation keeps back. */

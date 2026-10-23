@@ -55,10 +55,11 @@ const withSnapshot =
 /**
  * `rulesAffected` and `cardsToUpdate` for the root (`payload.symbolId`) and the impacted symbols. Rules whose `via`
  * holds the root come first, then rule ID order; each lists its first `VIA_CAP` matched symbols and `viaCount`.
- * `cardsToUpdate` holds each card of those rules once, with the context owning its rules, in card path order.
+ * `cardsToUpdate` holds each card of those rules once, with the context owning its rules, in registry order (the
+ * order the cards appear in contexts.yaml).
  */
 export function blastRadiusDomainFields(state: DomainState): ResponseEnricher {
-  return withSnapshot(state, (payload, _args, { index }) => {
+  return withSnapshot(state, (payload, _args, { index, registry }) => {
     const rootId = typeof payload['symbolId'] === 'string' ? payload['symbolId'] : undefined;
     const symbols = [...(rootId === undefined ? [] : [rootId]), ...symbolIdsOf(payload['impactedSymbols'])];
     const matches = rulesForSymbols(index, symbols);
@@ -77,7 +78,12 @@ export function blastRadiusDomainFields(state: DomainState): ResponseEnricher {
       }));
     const cards = new Map<string, { context: string; card: string }>();
     for (const rule of rules) if (!cards.has(rule.card)) cards.set(rule.card, { context: rule.context, card: rule.card });
-    const cardList = [...cards.values()].sort((a, b) => compare(a.card, b.card) || compare(a.context, b.context));
+    // Registry order: the position of the first context naming the card in contexts.yaml.
+    const rank = (card: string): number => {
+      const at = registry.contexts.findIndex((c) => c.card === card);
+      return at === -1 ? registry.contexts.length : at;
+    };
+    const cardList = [...cards.values()].sort((a, b) => rank(a.card) - rank(b.card) || compare(a.card, b.card));
     setCapped(payload, 'rulesAffected', rules);
     setCapped(payload, 'cardsToUpdate', cardList);
   });
