@@ -696,13 +696,23 @@ export class InitCommand {
    * Upserts one hook's ctxo block. The action compares the old and the new text: a missing file is
    * `created`, a changed one `updated`, an equal one `skipped` and not rewritten. `dryRun` computes
    * the same action and touches nothing, not even the exec bit.
+   *
+   * The hook is read once, with no existence check before it (a check followed by a read is a race
+   * on the same path): `ENOENT` means there is no hook yet, and any other read error (a directory,
+   * no permission) is thrown to the caller.
    */
   private installHook(hooksDir: string, hookName: string, hookContent: string, dryRun: boolean): InstallResult {
     const hookPath = join(hooksDir, hookName);
     const file = displayPath(this.projectRoot, hookPath);
 
-    const hookExists = existsSync(hookPath);
-    const existing = hookExists ? readFileSync(hookPath, 'utf-8') : '#!/bin/sh\n';
+    let existing = '#!/bin/sh\n';
+    let hookExists = true;
+    try {
+      existing = readFileSync(hookPath, 'utf-8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      hookExists = false;
+    }
     const updated = upsertCtxoBlock(existing, hookContent);
 
     if (!hookExists || updated !== existing) {

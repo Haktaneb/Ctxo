@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, linkSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, linkSync, symlinkSync, chmodSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -511,6 +511,17 @@ describe('ensureGitignore', () => {
     const count = (content.match(/\.ctxo\/\.cache\//g) ?? []).length;
     expect(count).toBe(1);
   });
+
+  // The file is read once with no existence check first: only ENOENT means "create it".
+  it('throws when .gitignore cannot be read (a directory in its place), in a dry run too', () => {
+    const dir = makeTempDir();
+    mkdirSync(join(dir, '.gitignore'));
+
+    for (const dryRun of [true, false]) {
+      expect(() => ensureGitignore(dir, { dryRun })).toThrow(/EISDIR/);
+    }
+    expect(readdirSync(join(dir, '.gitignore'))).toEqual([]);
+  });
 });
 
 describe('ensureConfig', () => {
@@ -611,6 +622,34 @@ describe('ensureConfig', () => {
     ensureConfig(dir);
     expect(existsSync(join(dir, '.ctxo'))).toBe(true);
   });
+
+  // The real write creates the file with `wx`; EEXIST is what an existing config looks like to it.
+  it('skips and leaves alone anything already at the config path, a directory included', () => {
+    const dir = makeTempDir();
+    mkdirSync(join(dir, '.ctxo', 'config.yaml'), { recursive: true });
+
+    for (const dryRun of [true, false]) {
+      expect(ensureConfig(dir, { dryRun })).toEqual({ file: '.ctxo/config.yaml', action: 'skipped' });
+    }
+    expect(statSync(join(dir, '.ctxo', 'config.yaml')).isDirectory()).toBe(true);
+  });
+
+  // chmod does not deny writes on Windows, and root ignores it.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'throws a write error other than "already exists"',
+    () => {
+      const dir = makeTempDir();
+      const ctxoDir = join(dir, '.ctxo');
+      mkdirSync(ctxoDir);
+      chmodSync(ctxoDir, 0o555);
+      try {
+        expect(() => ensureConfig(dir)).toThrow(/EACCES/);
+        expect(existsSync(join(ctxoDir, 'config.yaml'))).toBe(false);
+      } finally {
+        chmodSync(ctxoDir, 0o755);
+      }
+    },
+  );
 });
 
 describe('getMcpConfigTargets', () => {
@@ -1387,6 +1426,32 @@ describe('resolveRulesTier', () => {
     expect(resolveRulesTier(root, 'claude-code', { skills: true })).toBe('full');
     expect(resolveRulesTier(root, 'cursor', { guard: true, skills: true })).toBe('full');
     expect(existsSync(join(root, '.claude'))).toBe(false);
+  });
+});
+
+describe('readRulesStates', () => {
+  it('gives no entry for a missing rules file or a directory in its place', () => {
+    const dir = makeTempDir();
+    expect(readRulesStates(dir)).toEqual([]);
+
+    mkdirSync(join(dir, 'CLAUDE.md'));
+    writeFileSync(join(dir, '.windsurfrules'), '# Rules\n', 'utf-8');
+
+    expect(readRulesStates(dir).map((s) => s.file)).toEqual(['.windsurfrules']);
+  });
+
+  // The file is read once with no check first: only ENOENT and EISDIR mean "no rules file".
+  // chmod does not deny reads on Windows, and root ignores it.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('throws when a rules file cannot be read', () => {
+    const dir = makeTempDir();
+    const file = join(dir, '.windsurfrules');
+    writeFileSync(file, '# Rules\n', 'utf-8');
+    chmodSync(file, 0o000);
+    try {
+      expect(() => readRulesStates(dir)).toThrow(/EACCES/);
+    } finally {
+      chmodSync(file, 0o644);
+    }
   });
 });
 

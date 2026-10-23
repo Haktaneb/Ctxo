@@ -2,12 +2,14 @@ import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } fr
 import { execFileSync } from 'node:child_process';
 import {
   appendFileSync,
+  closeSync,
   existsSync,
+  fstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   rmSync,
-  statSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -34,6 +36,16 @@ function viewPath(dir: string): string {
 
 function readView(dir: string): ContextsView {
   return JSON.parse(readFileSync(viewPath(dir), 'utf-8')) as ContextsView;
+}
+
+/** A file's bytes and mtime, taken through one descriptor so both describe the same file. */
+function snapshotFile(path: string): { readonly bytes: Buffer; readonly mtimeMs: number } {
+  const fd = openSync(path, 'r');
+  try {
+    return { bytes: readFileSync(fd), mtimeMs: fstatSync(fd).mtimeMs };
+  } finally {
+    closeSync(fd);
+  }
 }
 
 function writeConfig(dir: string, yaml: string): void {
@@ -90,14 +102,14 @@ describe('IndexCommand contexts view', () => {
   it('a second index run on the same commit leaves contexts-view.json byte-identical and unwritten', async () => {
     await new IndexCommand(project.dir).run();
     const path = viewPath(project.dir);
-    const bytes = readFileSync(path);
     utimesSync(path, 1_600_000_000, 1_600_000_000);
-    const before = statSync(path).mtimeMs;
+    const before = snapshotFile(path);
 
     await new IndexCommand(project.dir).run();
 
-    expect(readFileSync(path).equals(bytes)).toBe(true);
-    expect(statSync(path).mtimeMs).toBe(before);
+    const after = snapshotFile(path);
+    expect(after.bytes.equals(before.bytes)).toBe(true);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
   });
 
   it('--skip-community leaves an existing contexts-view.json untouched', async () => {
