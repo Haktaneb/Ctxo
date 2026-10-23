@@ -1,6 +1,6 @@
 {
   "name": "@ctxo/lang-csharp",
-  "version": "0.7.5",
+  "version": "0.8.0",
   "description": "Ctxo C# language plugin (Roslyn full tier, tree-sitter syntax fallback)",
   "type": "module",
   "engines": {

@@ -1,5 +1,16 @@
 # @ctxo/cli
 
+## 0.12.0
+
+### Minor Changes
+
+- 5e7d482: Minor release: bump all packages to a new minor version line.
+
+### Patch Changes
+
+- Updated dependencies [5e7d482]
+  - @ctxo/plugin-api@0.8.0
+
 ## 0.11.5
 
 ### Patch Changes
