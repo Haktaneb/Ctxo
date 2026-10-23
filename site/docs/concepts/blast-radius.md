@@ -42,11 +42,23 @@ The algorithm lives in
 | `potential` | `imports`                                                        | Module-level reach only. May be unused.      |
 
 The data edges (`reads`, `writes`, `executes`, from SQL bodies and from
-constant SQL at C# call sites) are `confirmed`: renaming a column or changing a
-table breaks its readers and writers directly. Run blast radius on a table such
-as `db/lending.sql::dbo.loans::table` to see every SQL object and C# method that
-reads or writes it. Because the safe-edit guard counts `confirmed + likely`
-dependents, it also guards heavily used tables and procedures.
+constant SQL at C#, TypeScript, Java and Go call sites) are `confirmed`:
+renaming a column or changing a table breaks its readers and writers directly.
+Run blast radius on a table such as `db/lending.sql::dbo.loans::table` to see
+every SQL object and method, in any of those languages, that reads or writes
+it. Because the safe-edit guard counts `confirmed + likely` dependents, it also
+guards heavily used tables and procedures.
+
+## Tests as dependents
+
+Tests are symbols with edges in all four official languages: C# and Java test
+methods, TypeScript `describe` / `it` / `test` blocks (each owning the edges of
+its own callback) and Go `_test.go` functions (full tier). A test that calls a
+symbol is therefore one of its `confirmed` dependents, and blast radius shows
+which tests exercise the code you are about to change. The flip side: the
+safe-edit gate counts those dependents too, so it may fire more often on
+well-tested symbols. Java test methods show their code dependencies at their
+class, because JDT `calls` and `uses` edges start at the enclosing type.
 
 ::: tip When to trust which tier
 - **`confirmed`** always acts on it. These break at compile time.

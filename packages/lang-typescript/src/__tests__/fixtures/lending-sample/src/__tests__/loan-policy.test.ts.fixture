@@ -1,0 +1,17 @@
+import { describe, expect, it } from 'vitest';
+import { MAX_LOANS, canBorrow, renewalDue } from '../loan-policy';
+
+describe('LoanPolicy', () => {
+  it('LEND-03 a member holds at most five loans', () => {
+    expect(MAX_LOANS).toBe(5);
+    expect(canBorrow(4)).toBe(true);
+    expect(canBorrow(5)).toBe(false);
+  });
+
+  describe('renewal', () => {
+    it('extends by seven days', () => {
+      const due = renewalDue(new Date('2026-01-01T00:00:00Z'));
+      expect(due.toISOString()).toBe('2026-01-08T00:00:00.000Z');
+    });
+  });
+});

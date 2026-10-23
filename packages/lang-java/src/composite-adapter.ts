@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { JavaAdapter } from './java-adapter.js';
 import { JdtAnalyzerAdapter } from './analyzer/jdt-adapter.js';
+import { toGraphEdges, toSymbolNode } from './analyzer/jdt-mapping.js';
 import { createLogger } from './logger.js';
 
 const log = createLogger('ctxo:lang-java');
@@ -18,13 +19,19 @@ export class JavaCompositeAdapter implements ILanguageAdapter {
   private rootDir = '';
   private incrementalCapability: IIncrementalReindex | null = null;
 
-  constructor() { this.treeSitter = new JavaAdapter(); }
+  /** SQL data edges (`reads`, `writes`, `executes`) are emitted: the host's `capabilities.sqlCallSites`. Full tier only. */
+  readonly sqlCallSites: boolean;
+
+  constructor(options: { readonly sqlCallSites?: boolean } = {}) {
+    this.sqlCallSites = options.sqlCallSites === true;
+    this.treeSitter = new JavaAdapter();
+  }
 
   async initialize(rootDir: string): Promise<void> {
     this.rootDir = rootDir;
     this.incrementalCapability = null;
     try {
-      const analyzer = new JdtAnalyzerAdapter();
+      const analyzer = new JdtAnalyzerAdapter({ sqlCallSites: this.sqlCallSites });
       await analyzer.initialize(rootDir);
       if (analyzer.isReady()) {
         this.analyzer = analyzer;
@@ -72,6 +79,7 @@ export class JavaCompositeAdapter implements ILanguageAdapter {
   private buildIncrementalCapability(analyzer: JdtAnalyzerAdapter): IIncrementalReindex {
     const treeSitter = this.treeSitter;
     const rootDir = this.rootDir;
+    const sqlCallSites = this.sqlCallSites;
     const FULL = /^.+::.+::.+$/;
     return {
       isReady: () => analyzer.isReady(),
@@ -86,15 +94,8 @@ export class JavaCompositeAdapter implements ILanguageAdapter {
           complexity = await treeSitter.extractComplexity(relativePath, source);
         } catch { /* unreadable mid-edit - empty complexity */ }
         return {
-          symbols: raw.symbols.filter((s) => FULL.test(s.symbolId)).map((s) => ({
-            symbolId: s.symbolId, name: s.name, kind: s.kind as ReindexResult['symbols'][0]['kind'],
-            startLine: s.startLine, endLine: s.endLine,
-            ...(s.startOffset != null ? { startOffset: s.startOffset } : {}),
-            ...(s.endOffset != null ? { endOffset: s.endOffset } : {}),
-          })),
-          edges: raw.edges.filter((e) => FULL.test(e.from) && e.to.length > 0).map((e) => ({
-            from: e.from, to: e.to, kind: e.kind as ReindexResult['edges'][0]['kind'],
-          })),
+          symbols: raw.symbols.filter((s) => FULL.test(s.symbolId)).map(toSymbolNode),
+          edges: toGraphEdges(raw, { sqlCallSites }),
           complexity,
         };
       },

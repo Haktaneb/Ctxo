@@ -1,0 +1,5 @@
+{
+  "description": "Constant SQL text from a const binding, + and a template with constant substitutions reads dbo.loans; a let, a parameter and a template with a parameter substitution, bus.execute, an @elastic/elasticsearch client query and RegExp exec give nothing (their tables would show up here if they did).",
+  "mode": "typescript",
+  "accesses": { "reads": ["dbo.loans"], "writes": [], "executes": [] }
+}

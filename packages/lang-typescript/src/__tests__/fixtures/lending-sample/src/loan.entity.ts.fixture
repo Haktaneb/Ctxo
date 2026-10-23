@@ -1,0 +1,12 @@
+import { Column, Entity, PrimaryGeneratedColumn } from 'typeorm';
+
+@Entity('loans')
+export class Loan {
+  @PrimaryGeneratedColumn()
+  id!: number;
+
+  @Column({ name: 'member_id', type: 'int', nullable: false })
+  memberId!: number;
+
+  note = '';
+}

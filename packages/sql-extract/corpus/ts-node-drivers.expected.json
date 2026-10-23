@@ -1,0 +1,5 @@
+{
+  "description": "Node drivers: pg query with a string and with { text }, mysql2 query and execute (one with { sql }), mssql query as a call and as a tagged template, mssql execute of procedure names, better-sqlite3 prepare and exec.",
+  "mode": "typescript",
+  "accesses": { "reads": ["dbo.holds", "dbo.loans", "dbo.members"], "writes": ["dbo.loanarchive", "dbo.loans"], "executes": ["dbo.usp_closeloan", "dbo.usp_notifymember"] }
+}

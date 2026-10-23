@@ -14,14 +14,19 @@ const log = createLogger('ctxo:lang-go');
 export class GoCompositeAdapter implements ILanguageAdapter {
   private analyzer: GoAnalyzerAdapter | null = null;
   private treeSitter: GoAdapter;
+  private fellBack = false;
 
-  constructor() {
+  /** True when the analyzer is asked for SQL call sites (`capabilities.sqlCallSites`); full tier only. */
+  readonly sqlCallSites: boolean;
+
+  constructor(options: { readonly sqlCallSites?: boolean } = {}) {
+    this.sqlCallSites = options.sqlCallSites === true;
     this.treeSitter = new GoAdapter();
   }
 
   async initialize(rootDir: string): Promise<void> {
     try {
-      const analyzer = new GoAnalyzerAdapter();
+      const analyzer = new GoAnalyzerAdapter({ sqlCallSites: this.sqlCallSites });
       await analyzer.initialize(rootDir);
       if (analyzer.isReady()) {
         this.analyzer = analyzer;
@@ -39,12 +44,23 @@ export class GoCompositeAdapter implements ILanguageAdapter {
     if (this.analyzer) await this.analyzer.dispose();
   }
 
-  extractSymbols(filePath: string, source: string): Promise<SymbolNode[]> {
-    return (this.analyzer ?? this.treeSitter).extractSymbols(filePath, source);
+  /** The analyzer while its batch run is usable; tree-sitter when there is no analyzer or its run failed. */
+  private async delegate(): Promise<ILanguageAdapter> {
+    if (!this.analyzer) return this.treeSitter;
+    if (await this.analyzer.isUsable()) return this.analyzer;
+    if (!this.fellBack) {
+      this.fellBack = true;
+      log.warn('Go plugin: ctxo-go-analyzer run failed, using the tree-sitter syntax tier for this run');
+    }
+    return this.treeSitter;
   }
 
-  extractEdges(filePath: string, source: string): Promise<GraphEdge[]> {
-    return (this.analyzer ?? this.treeSitter).extractEdges(filePath, source);
+  async extractSymbols(filePath: string, source: string): Promise<SymbolNode[]> {
+    return (await this.delegate()).extractSymbols(filePath, source);
+  }
+
+  async extractEdges(filePath: string, source: string): Promise<GraphEdge[]> {
+    return (await this.delegate()).extractEdges(filePath, source);
   }
 
   extractComplexity(filePath: string, source: string): Promise<ComplexityMetrics[]> {
@@ -62,11 +78,11 @@ export class GoCompositeAdapter implements ILanguageAdapter {
 
   /** Exposed for cli optimizations. Null when running in syntax tier. */
   getAnalyzerDelegate(): GoAnalyzerAdapter | null {
-    return this.analyzer;
+    return this.analyzer && !this.analyzer.hasBatchFailed() ? this.analyzer : null;
   }
 
   getTier(): 'full' | 'syntax' | 'unavailable' {
-    if (this.analyzer) return 'full';
+    if (this.analyzer && !this.analyzer.hasBatchFailed()) return 'full';
     if (this.treeSitter) return 'syntax';
     return 'unavailable';
   }

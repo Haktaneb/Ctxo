@@ -69,7 +69,7 @@ func (e *Extractor) Extract(pkg *packages.Package, file *ast.File) []emit.Edge {
 		if !ok || fd.Name == nil || fd.Name.Name == "_" {
 			continue
 		}
-		fromID := funcDeclSymbolID(relFile, fd)
+		fromID := symbols.FuncDeclSymbolID(relFile, fd)
 		if fromID == "" {
 			continue
 		}
@@ -262,32 +262,6 @@ func typeArgsFor(pkg *packages.Package, ident *ast.Ident) []string {
 		out[i] = inst.TypeArgs.At(i).String()
 	}
 	return out
-}
-
-func funcDeclSymbolID(relFile string, fd *ast.FuncDecl) string {
-	if fd.Recv != nil && len(fd.Recv.List) > 0 {
-		if recv := receiverASTName(fd.Recv.List[0].Type); recv != "" {
-			return symbols.SymbolID(relFile, recv+"."+fd.Name.Name, "method")
-		}
-	}
-	return symbols.SymbolID(relFile, fd.Name.Name, "function")
-}
-
-func receiverASTName(expr ast.Expr) string {
-	for {
-		switch x := expr.(type) {
-		case *ast.StarExpr:
-			expr = x.X
-		case *ast.IndexExpr:
-			expr = x.X
-		case *ast.IndexListExpr:
-			expr = x.X
-		case *ast.Ident:
-			return x.Name
-		default:
-			return ""
-		}
-	}
 }
 
 func relativeFile(fset *token.FileSet, file *ast.File, rootDir string) string {

@@ -12,8 +12,8 @@ export const plugin: CtxoLanguagePlugin = {
   version: VERSION,
   extensions: ['.ts', '.tsx', '.js', '.jsx'],
   tier: 'full',
-  createAdapter(_ctx: PluginContext): ILanguageAdapter {
-    return new TsMorphAdapter();
+  createAdapter(ctx: PluginContext): ILanguageAdapter {
+    return new TsMorphAdapter({ sqlCallSites: ctx.capabilities?.sqlCallSites === true, projectRoot: ctx.projectRoot });
   },
 };
 

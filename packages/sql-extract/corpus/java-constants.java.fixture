@@ -1,0 +1,43 @@
+package corpus;
+
+import java.util.List;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
+
+final class Tables {
+  static final String LOANS = "dbo.Loans";
+
+  private Tables() {}
+}
+
+public class JavaConstants {
+  private static final String PREFIX = "SELECT Id FROM ";
+
+  private final JdbcTemplate jdbc;
+  private final RowMapper<Long> mapper;
+
+  public JavaConstants(JdbcTemplate jdbc, RowMapper<Long> mapper) {
+    this.jdbc = jdbc;
+    this.mapper = mapper;
+  }
+
+  public List<Long> loans() {
+    return jdbc.query(PREFIX + Tables.LOANS + " WHERE ClosedAt IS NULL", mapper);
+  }
+
+  public List<Long> members() {
+    return jdbc.query("""
+        SELECT Id
+        FROM dbo.Members
+        WHERE Flag = 1""", mapper);
+  }
+
+  public List<Long> holds() {
+    String sql = "SELECT Id FROM dbo.Holds";
+    return jdbc.query(sql, mapper);
+  }
+
+  public List<Long> dynamic(String table) {
+    return jdbc.query("SELECT Id FROM " + table, mapper);
+  }
+}

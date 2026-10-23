@@ -235,7 +235,7 @@ function registerTools(
     {
       description: 'Find unreachable symbols and files that are never imported or called anywhere. Use this during cleanup, refactoring, or before deleting code to confirm it is truly unused. Symbols in .sql files are never reported. Use `intent` to filter results by keyword (e.g., "adapter", "function"). Large results are auto-truncated with `_meta`. For reverse dependency lookup of a specific symbol, use find_importers instead.',
       inputSchema: {
-        includeTests: z.boolean().optional().default(false).describe('Include test files in analysis (default: exclude)'),
+        includeTests: z.boolean().optional().default(false).describe('Include test files (default test globs and files with a test-framework annotation such as @Test) in analysis (default: exclude)'),
         intent: z.string().optional().describe('Filter dead code results by intent keywords (e.g., "adapter", "function")'),
       },
       annotations: toolAnnotations,

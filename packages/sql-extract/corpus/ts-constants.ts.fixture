@@ -1,0 +1,28 @@
+import { Pool } from 'pg';
+import { Client } from '@elastic/elasticsearch';
+import { bus } from './bus';
+
+const pool = new Pool();
+const search = new Client({ node: 'http://localhost:9200' });
+const LOANS = 'dbo.Loans';
+const ACTIVE_LOANS = 'SELECT Id FROM dbo.Loans WHERE ClosedAt IS NULL';
+const CLOSED_LOANS = 'SELECT Id FROM ' + LOANS + ' WHERE ClosedAt IS NOT NULL';
+
+export async function constants(): Promise<void> {
+  await pool.query(ACTIVE_LOANS);
+  await pool.query(CLOSED_LOANS);
+  await pool.query(`SELECT COUNT(*) FROM ${LOANS}`);
+}
+
+export async function nonConstants(note: string): Promise<void> {
+  let members = 'SELECT Id FROM dbo.Members';
+  await pool.query(members);
+  await pool.query(note);
+  await pool.query(`SELECT Id FROM dbo.Holds WHERE Note = '${note}'`);
+}
+
+export async function notDatabases(): Promise<void> {
+  await bus.execute('CloseLoan');
+  await search.query('SELECT Id FROM dbo.Reservations');
+  /x/.exec('SELECT Id FROM dbo.Fines');
+}

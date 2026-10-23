@@ -371,3 +371,117 @@ describe('DeadCodeDetector', () => {
     expect(result.unusedExports.map((u) => u.symbolId).sort()).toEqual([caller, writer, reader, executor].sort());
   });
 });
+
+describe('DeadCodeDetector test files (shared classifier)', () => {
+  const detector = new DeadCodeDetector();
+
+  // Each row: a production symbol, a test that calls it, and a test symbol with no outgoing edges.
+  const cases = [
+    {
+      language: 'TypeScript *.test.ts',
+      prod: 'src/loans.ts::activeLoans::function',
+      caller: 'src/loans.test.ts::loans > returns active loans::function',
+      lone: 'src/loans.test.ts::loans::function',
+    },
+    {
+      language: 'TypeScript *.test.js',
+      prod: 'lib/rates.js::rate::function',
+      caller: 'lib/rates.test.js::rate > rounds::function',
+      lone: 'lib/rates.test.js::rate::function',
+    },
+    {
+      language: 'TypeScript test/ folder',
+      prod: 'src/fees.ts::fee::function',
+      caller: 'test/fees.ts::fee > charges::function',
+      lone: 'test/fees.ts::fee::function',
+    },
+    {
+      language: 'Java src/test/java',
+      prod: 'src/main/java/lending/LoanDao.java::lending.LoanDao.load::method',
+      caller: 'src/test/java/lending/LoanDaoTest.java::lending.LoanDaoTest.loads::method',
+      lone: 'src/test/java/lending/LoanDaoTest.java::lending.LoanDaoTest.pending::method',
+    },
+    {
+      language: 'Go _test.go',
+      prod: 'loans/repo.go::Active::function',
+      caller: 'loans/repo_test.go::TestActive::function',
+      lone: 'itest/smoke_test.go::TestSmoke::function',
+    },
+  ];
+
+  for (const { language, prod, caller, lone } of cases) {
+    it(`${language}: a production function called only from a test is not reported dead`, () => {
+      const graph = new SymbolGraph();
+      for (const id of [prod, caller]) graph.addNode(makeNode(id));
+      graph.addEdge({ from: caller, to: prod, kind: 'calls' });
+
+      const result = detector.detect(graph);
+
+      expect(result.deadSymbols.map((d) => d.symbolId)).toEqual([]);
+      expect(result.totalSymbols).toBe(1);
+    });
+
+    it(`${language}: a test symbol without outgoing edges is not reported dead`, () => {
+      const graph = new SymbolGraph();
+      for (const id of [prod, caller, lone]) graph.addNode(makeNode(id));
+      graph.addEdge({ from: caller, to: prod, kind: 'calls' });
+
+      const result = detector.detect(graph);
+
+      expect(result.deadSymbols.map((d) => d.symbolId)).toEqual([]);
+      expect(result.deadFiles).toEqual([]);
+    });
+  }
+
+  it('a file marked by a test-framework annotation is a test file outside the test folders', () => {
+    const graph = new SymbolGraph();
+    const prod = 'src/main/java/lending/LoanDao.java::lending.LoanDao.load::method';
+    graph.addNode(makeNode(prod));
+    graph.addNode({
+      ...makeNode('src/it/java/lending/LoanDaoIT.java::lending.LoanDaoIT.smoke::method'),
+      annotations: [{ name: 'Test' }],
+    });
+
+    const result = detector.detect(graph);
+
+    expect(result.deadSymbols.map((d) => d.symbolId)).toEqual([prod]);
+    expect(result.totalSymbols).toBe(1);
+  });
+
+  it('C# name-only test globs stop deciding once .cs symbols carry annotations (as in the contexts view)', () => {
+    const graph = new SymbolGraph();
+    const abTest = 'src/Lending/LoanTest.cs::Lending.LoanTest::class';
+    graph.addNode(makeNode(abTest));
+    graph.addNode({
+      ...makeNode('src/Lending/Loan.cs::Lending.Loan::class'),
+      annotations: [{ name: 'Serializable' }],
+    });
+
+    const result = detector.detect(graph);
+
+    expect(result.totalSymbols).toBe(2);
+    expect(result.deadSymbols.map((d) => d.symbolId)).toContain(abTest);
+  });
+
+  it('fixture folders stay excluded', () => {
+    const graph = new SymbolGraph();
+    graph.addNode(makeNode('src/a.ts::A::function'));
+    graph.addNode(makeNode('packages/x/fixtures/sample.ts::sample::function'));
+
+    const result = detector.detect(graph);
+
+    expect(result.totalSymbols).toBe(1);
+  });
+
+  it('scaffolding skips Go and Java test files', () => {
+    const sources = new Map([
+      ['loans/repo_test.go', '// TODO: more cases'],
+      ['src/test/java/lending/LoanDaoTest.java', '// FIXME later'],
+      ['loans/repo.go', '// TODO: paginate'],
+    ]);
+
+    const result = detector.detect(new SymbolGraph(), { sourceContents: sources });
+
+    expect(result.scaffolding.map((s) => s.file)).toEqual(['loans/repo.go']);
+  });
+});

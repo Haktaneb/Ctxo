@@ -1,0 +1,67 @@
+package corpus;
+
+import jakarta.persistence.EntityManager;
+import java.util.List;
+import java.util.Map;
+import org.apache.ibatis.annotations.Delete;
+import org.apache.ibatis.annotations.Insert;
+import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+
+public abstract class JavaSpringJpaMybatis {
+  private final JdbcTemplate jdbc;
+  private final NamedParameterJdbcTemplate named;
+  private final EntityManager entityManager;
+
+  protected JavaSpringJpaMybatis(JdbcTemplate jdbc, NamedParameterJdbcTemplate named, EntityManager entityManager) {
+    this.jdbc = jdbc;
+    this.named = named;
+    this.entityManager = entityManager;
+  }
+
+  public List<Long> holds(RowMapper<Long> mapper) {
+    return jdbc.query("SELECT Id FROM dbo.Holds", mapper);
+  }
+
+  public Long countLoans() {
+    return jdbc.queryForObject("SELECT COUNT(*) FROM dbo.Loans", Long.class);
+  }
+
+  public int flagMembers() {
+    return jdbc.update("UPDATE dbo.Members SET Flag = 1");
+  }
+
+  public int[] sweep() {
+    return jdbc.batchUpdate("DELETE FROM dbo.Holds WHERE ExpiresAt < CURRENT_TIMESTAMP", "UPDATE dbo.Loans SET Flag = 1");
+  }
+
+  public List<Map<String, Object>> holdsOf(Map<String, ?> params) {
+    return named.queryForList("SELECT * FROM dbo.Holds WHERE MemberId = :id", params);
+  }
+
+  public int purge() {
+    return entityManager.createNativeQuery("DELETE FROM dbo.Holds WHERE ExpiresAt < CURRENT_TIMESTAMP").executeUpdate();
+  }
+
+  @Query(value = "SELECT * FROM dbo.Loans WHERE DueAt < CURRENT_TIMESTAMP", nativeQuery = true)
+  public abstract List<Long> overdue();
+
+  @Query("SELECT l FROM Loan l WHERE l.memberId = ?1")
+  public abstract List<Long> byMember(long memberId);
+
+  @Select({"SELECT * FROM dbo.Loans", "WHERE ClosedAt IS NULL"})
+  public abstract List<Long> active();
+
+  @Insert("INSERT INTO dbo.Holds (Id, MemberId) VALUES (#{id}, #{memberId})")
+  public abstract int addHold(long id, long memberId);
+
+  @Update("UPDATE dbo.Loans SET RenewedAt = CURRENT_TIMESTAMP WHERE Id = #{id}")
+  public abstract int renew(long id);
+
+  @Delete("DELETE FROM dbo.Members WHERE Id = #{id}")
+  public abstract int removeMember(long id);
+}

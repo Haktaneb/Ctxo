@@ -1,0 +1,46 @@
+package corpus;
+
+import java.sql.CallableStatement;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+
+public class JavaJdbc {
+  private final Connection connection;
+  private final Statement statement;
+
+  public JavaJdbc(Connection connection, Statement statement) {
+    this.connection = connection;
+    this.statement = statement;
+  }
+
+  public PreparedStatement activeLoans() throws SQLException {
+    return connection.prepareStatement("SELECT Id FROM dbo.Loans WHERE ClosedAt IS NULL");
+  }
+
+  public CallableStatement closeLoan() throws SQLException {
+    return connection.prepareCall("{call dbo.usp_CloseLoan(?)}");
+  }
+
+  public CallableStatement notifyMember() throws SQLException {
+    return connection.prepareCall("{? = call [dbo].[usp_NotifyMember](?)}");
+  }
+
+  public ResultSet members() throws SQLException {
+    return statement.executeQuery("SELECT Id FROM dbo.Members");
+  }
+
+  public boolean anyLoan() throws SQLException {
+    return statement.execute("SELECT TOP 1 Id FROM dbo.Loans");
+  }
+
+  public int archive() throws SQLException {
+    return statement.executeUpdate("INSERT INTO dbo.LoanArchive (Id) SELECT Id FROM dbo.Loans");
+  }
+
+  public ResultSet run(PreparedStatement ps) throws SQLException {
+    return ps.executeQuery();
+  }
+}

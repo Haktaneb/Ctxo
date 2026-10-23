@@ -25,6 +25,10 @@ jobs:
     # Skip on the bot's own "Version Packages" PR merge commit chain; the action
     # handles re-runs internally and we don't want an infinite trigger loop.
     if: github.repository == 'alperhankendi/Ctxo'
+    env:
+      # A Java test reads a non-ASCII file name (Üye.java); the JVM needs a UTF-8 locale for it.
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -49,6 +53,12 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
+
+      # The Go full-tier tests build and run the ctxo-go-analyzer.
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: packages/lang-go/tools/ctxo-go-analyzer/go.mod
+          cache-dependency-path: packages/lang-go/tools/ctxo-go-analyzer/go.sum
 
       # Fail fast if NPM_TOKEN is missing — otherwise changesets/publish would
       # error mid-flight after build with a less actionable message.

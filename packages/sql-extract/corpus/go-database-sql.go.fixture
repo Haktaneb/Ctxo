@@ -1,0 +1,43 @@
+package corpus
+
+import (
+	"context"
+	"database/sql"
+)
+
+// ActiveLoans: DB.Query with a literal.
+func ActiveLoans(db *sql.DB) (*sql.Rows, error) {
+	return db.Query("SELECT Id FROM dbo.Loans WHERE ClosedAt IS NULL")
+}
+
+// HoldOf: DB.QueryRowContext.
+func HoldOf(ctx context.Context, db *sql.DB, id int) *sql.Row {
+	return db.QueryRowContext(ctx, "SELECT Id FROM dbo.Holds WHERE Id = ?", id)
+}
+
+// Flag: Tx.ExecContext, an UPDATE reads and writes.
+func Flag(ctx context.Context, tx *sql.Tx, id int) error {
+	_, err := tx.ExecContext(ctx, "UPDATE dbo.Loans SET Flag = 1 WHERE Id = ?", id)
+	return err
+}
+
+// CloseLoan: Conn.QueryContext with a procedure call.
+func CloseLoan(ctx context.Context, conn *sql.Conn, id int) (*sql.Rows, error) {
+	return conn.QueryContext(ctx, "EXEC [dbo].[usp_CloseLoan] @id = ?", id)
+}
+
+// Prepared: DB.Prepare reads the SQL, Stmt.Exec has none.
+func Prepared(db *sql.DB) error {
+	stmt, err := db.Prepare("SELECT Id FROM dbo.Loans WHERE Id = ?")
+	if err != nil {
+		return err
+	}
+	_, err = stmt.Exec(1)
+	return err
+}
+
+// Rerun: Stmt.Exec alone gives nothing.
+func Rerun(stmt *sql.Stmt) error {
+	_, err := stmt.Exec(2)
+	return err
+}

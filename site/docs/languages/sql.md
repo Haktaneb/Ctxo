@@ -150,18 +150,28 @@ The copies still share one identity:
   folders), or the winner's body alone when no copy is production. Docs and
   test copies of a procedure that has a production copy add nothing there.
 
-## C# interplay
+## Host-language interplay
 
 When this plugin is installed, the CLI tells every plugin that `.sql` files
-are indexed (`capabilities.sqlCallSites`). The [C# plugin](/languages/csharp#sql-at-call-sites)
-then adds `reads`, `writes` and `executes` edges from C# methods to the same
-`dbo.loans::table` targets, for constant SQL at known ADO.NET, Dapper
-(including `CommandDefinition`), `SqlBulkCopy` and EF Core call sites (Roslyn
-tier, .NET SDK 8+). A C# method and the stored procedure that both touch
-`dbo.loans` then meet in the graph:
+are indexed (`capabilities.sqlCallSites`). The host-language plugins then add
+`reads`, `writes` and `executes` edges from their code to the same
+`dbo.loans::table` targets, for constant SQL at known call sites. The host
+languages are C#, TypeScript, Java and Go:
+
+| Host language | Call sites | Needs |
+| --- | --- | --- |
+| [C#](/languages/csharp#sql-at-call-sites) | ADO.NET, Dapper (including `CommandDefinition`), `SqlBulkCopy`, EF Core raw SQL | Roslyn tier (.NET SDK 8+) |
+| [TypeScript / JavaScript](/languages/typescript#sql-at-call-sites) | pg, mysql2, mssql, `knex.raw`, Prisma raw, TypeORM and Sequelize `query`, better-sqlite3 | nothing more |
+| [Java](/languages/java#sql-at-call-sites) | JDBC, Spring `JdbcTemplate`, JPA native queries, native `@Query`, MyBatis | JDT full tier (JRE and `@ctxo/lang-java-analyzer`) |
+| [Go](/languages/go#sql-at-call-sites) | `database/sql`, sqlx, pgx, gorm raw SQL | analyzer full tier (Go 1.22+) |
+
+All of them parse the SQL with the same `@ctxo/sql-extract` library this plugin
+uses (C# uses ScriptDom, held to the same corpus), so a method in any of these
+languages and the stored procedure that both touch `dbo.loans` meet in the
+graph:
 
 - [`get_blast_radius`](/mcp-tools/get-blast-radius) on a table lists its readers
-  and writers as `confirmed` dependents, in SQL and in C#.
+  and writers as `confirmed` dependents, in SQL and in every host language.
 - [`find_importers`](/mcp-tools/find-importers) with `edgeKinds: ["writes"]`
   lists every writer of a table.
 - The [contexts view](/cli/contexts) reports tables that two or more candidate
@@ -169,7 +179,7 @@ tier, .NET SDK 8+). A C# method and the stored procedure that both touch
   candidates that execute it, not for the candidate that holds the script,
   unless no candidate executes it.
 
-Without this plugin the C# plugin emits no SQL edges. A table that C# code
+Without this plugin no host language emits SQL edges. A table that host code
 references but no indexed `.sql` file defines stays an unresolved reference in
 the graph and appears as an external resource in the contexts view.
 
@@ -214,13 +224,15 @@ the graph and appears as an external resource in the contexts view.
 
 The rules are pinned by a conformance corpus in
 `packages/sql-extract/corpus` that `@ctxo/sql-extract`, this plugin and the C#
-plugin's ScriptDom parser all run, so the TypeScript and C# sides agree. The
+plugin's ScriptDom parser all run, so the TypeScript and C# sides agree. Cases
+written in TypeScript, Java and Go (`<case>.<ts|java|go>.fixture`) are run by
+the matching plugin. The
 design record is
 [ADR-017](https://github.com/alperhankendi/Ctxo/blob/master/docs/architecture/ADR/adr-017-plugin-protocol-v2-and-data-coupling.md).
 
 ## Related
 
-- [C#](/languages/csharp): SQL at call sites
+- [C#](/languages/csharp), [TypeScript](/languages/typescript), [Java](/languages/java) and [Go](/languages/go): SQL at call sites
 - [Edge kinds](/reference/edge-kinds) and [Symbol IDs](/reference/symbol-ids)
 - [`ctxo contexts`](/cli/contexts): shared tables between candidate contexts
 - [Writing a plugin](/languages/writing-a-plugin): the protocol v2 surface

@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createLogger } from '../logger.js';
+import type { SqlCallSite } from '../sql-edges.js';
 
 const log = createLogger('ctxo:lang-go');
 
@@ -11,6 +12,8 @@ export interface AnalyzerSymbol {
   endLine: number;
   startOffset?: number;
   endOffset?: number;
+  /** Raw struct field tags (struct symbols only); parsed by struct-tags.ts. */
+  tags?: Array<{ field: string; tag: string }>;
 }
 
 export interface AnalyzerEdge {
@@ -26,6 +29,8 @@ export interface AnalyzerFileResult {
   symbols: AnalyzerSymbol[];
   edges: AnalyzerEdge[];
   complexity: unknown[];
+  /** Raw SQL at known database call sites; only with `--sql-call-sites`, omitted when the file has none. */
+  sqlCallSites?: SqlCallSite[];
 }
 
 export interface AnalyzerBatchResult {
@@ -35,25 +40,42 @@ export interface AnalyzerBatchResult {
   timeout: boolean;
   totalFiles: number;
   elapsed: string;
+  /** Constant and non-constant SQL arguments counted by the run; only with `--sql-call-sites`. */
+  sql?: { constant: number; nonConstant: number };
+  /** True when the process failed to start, exited non-zero or was killed (for example by the timeout). */
+  failed?: boolean;
+}
+
+export interface GoAnalyzerRunOptions {
+  /** Pass `--sql-call-sites`: the analyzer reports raw SQL at known call sites. */
+  readonly sqlCallSites?: boolean;
+  /** Kill the analyzer after this long (default 120_000). */
+  readonly timeoutMs?: number;
+}
+
+/** The analyzer's command line for one module; `--sql-call-sites` only when the option asks for it. */
+export function buildGoAnalyzerArgs(moduleRoot: string, options: GoAnalyzerRunOptions = {}): string[] {
+  return options.sqlCallSites === true ? ['--root', moduleRoot, '--sql-call-sites'] : ['--root', moduleRoot];
 }
 
 /**
  * Spawn the analyzer binary in batch mode and parse its JSONL stream.
- * Failures resolve to an empty result so the composite adapter can fall
- * back to tree-sitter without throwing.
+ * Failures resolve to an empty result with `failed: true` so the adapter can
+ * report the analyzer as unavailable and the composite falls back to
+ * tree-sitter without throwing.
  */
 export async function runBatchAnalyze(
   binaryPath: string,
   moduleRoot: string,
-  timeoutMs = 120_000,
+  options: GoAnalyzerRunOptions = {},
 ): Promise<AnalyzerBatchResult> {
   return new Promise((resolve) => {
     const empty: AnalyzerBatchResult = {
-      files: [], dead: [], hasMain: false, timeout: false, totalFiles: 0, elapsed: '',
+      files: [], dead: [], hasMain: false, timeout: false, totalFiles: 0, elapsed: '', failed: true,
     };
-    const proc = spawn(binaryPath, ['--root', moduleRoot], {
+    const proc = spawn(binaryPath, buildGoAnalyzerArgs(moduleRoot, options), {
       stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: timeoutMs,
+      timeout: options.timeoutMs ?? 120_000,
     });
 
     const files: AnalyzerFileResult[] = [];
@@ -62,6 +84,7 @@ export async function runBatchAnalyze(
     let timeout = false;
     let totalFiles = 0;
     let elapsed = '';
+    let sql: AnalyzerBatchResult['sql'];
     let stderr = '';
     let buffer = '';
 
@@ -89,6 +112,9 @@ export async function runBatchAnalyze(
             case 'summary':
               totalFiles = Number(obj.totalFiles ?? 0);
               elapsed = String(obj.elapsed ?? '');
+              if (obj.sql && typeof obj.sql === 'object') {
+                sql = { constant: Number(obj.sql.constant ?? 0), nonConstant: Number(obj.sql.nonConstant ?? 0) };
+              }
               break;
           }
         } catch {
@@ -101,13 +127,13 @@ export async function runBatchAnalyze(
       stderr += chunk.toString();
     });
 
-    proc.on('close', (code) => {
+    proc.on('close', (code, signal) => {
       if (code !== 0) {
-        log.error(`ctxo-go-analyzer exited with code ${code}: ${stderr.trim().slice(0, 500)}`);
+        log.error(`ctxo-go-analyzer exited with code ${code}${signal ? ` (signal ${signal})` : ''}: ${stderr.trim().slice(0, 500)}`);
         resolve(empty);
         return;
       }
-      resolve({ files, dead, hasMain, timeout, totalFiles, elapsed });
+      resolve({ files, dead, hasMain, timeout, totalFiles, elapsed, ...(sql ? { sql } : {}) });
     });
 
     proc.on('error', (err) => {

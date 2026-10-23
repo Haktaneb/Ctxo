@@ -145,11 +145,11 @@ Agents get the same view from `get_architectural_overlay(mode: "contexts")`, and
 
 | Language | Plugin | Tier | Notes |
 |---|---|---|---|
-| TypeScript / JavaScript | `@ctxo/lang-typescript` | full | ts-morph; type-aware cross-file resolution |
-| Go | `@ctxo/lang-go` | syntax | tree-sitter; exported-symbol analysis |
+| TypeScript / JavaScript | `@ctxo/lang-typescript` | full | ts-morph; type-aware cross-file resolution; decorators as annotations; test blocks as symbols; SQL at known call sites (pg, mysql2, mssql, knex, Prisma, TypeORM, Sequelize, better-sqlite3 raw SQL) |
+| Go | `@ctxo/lang-go` | syntax / full | `ctxo-go-analyzer` full tier (Go 1.22+), tree-sitter fallback; struct tags as annotations; `_test.go` functions as symbols (full tier); SQL at known call sites (`database/sql`, sqlx, pgx, gorm raw; full tier) |
 | C# | `@ctxo/lang-csharp` | full | Roslyn; .NET SDK 8+ for full tier, tree-sitter fallback |
-| Java | `@ctxo/lang-java` | syntax / full | tree-sitter syntax tier built-in; full tier via `@ctxo/lang-java-analyzer` companion (JRE 11+ required, covers Java 8-21); detected by `pom.xml` / `build.gradle` |
-| SQL (T-SQL) | `@ctxo/lang-sql` | syntax | `.sql` tables, views, procedures and functions with `reads` / `writes` / `executes` edges; no database or .NET needed. With it installed, the C# plugin's Roslyn tier also links constant SQL at ADO.NET, Dapper, `SqlBulkCopy` and EF Core call sites to the same tables |
+| Java | `@ctxo/lang-java` | syntax / full | tree-sitter syntax tier built-in; full tier via `@ctxo/lang-java-analyzer` companion (JRE 11+ required, covers Java 8-21); detected by `pom.xml` / `build.gradle`; annotations in both tiers; test methods with their annotations; SQL at known call sites (JDBC, Spring `JdbcTemplate`, JPA native queries, MyBatis; full tier) |
+| SQL (T-SQL) | `@ctxo/lang-sql` | syntax | `.sql` tables, views, procedures and functions with `reads` / `writes` / `executes` edges; no database or .NET needed. With it installed, the C# plugin's Roslyn tier also links constant SQL at ADO.NET, Dapper, `SqlBulkCopy` and EF Core call sites to the same tables, and so do the TypeScript, Java and Go plugins at their known call sites |
 
 Install via the CLI shortcut:
 

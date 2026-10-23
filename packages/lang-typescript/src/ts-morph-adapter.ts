@@ -17,17 +17,72 @@ import {
   SYMBOL_KINDS,
 } from '@ctxo/plugin-api';
 
+import { classAnnotations, methodAnnotations } from './decorators.js';
+import { createLogger } from './logger.js';
+import { findTestBlocks, testBlockSymbol } from './test-blocks.js';
+import { ModuleResolver } from './sql/module-resolver.js';
+import { collectSqlCallSites, symbolScopes, type SqlStats } from './sql/sql-call-sites.js';
+import { sqlEdgesFromCallSites } from './sql/sql-edges.js';
+
 const SUPPORTED_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx'] as const;
+
+const log = createLogger('ctxo:lang-typescript');
+
+export interface TsMorphAdapterOptions {
+  /** Emit SQL call-site edges (`reads`, `writes`, `executes`): the host's `capabilities.sqlCallSites`. */
+  readonly sqlCallSites?: boolean;
+  /** Absolute project root; relative modules missing from the in-memory project are read from disk under it. */
+  readonly projectRoot?: string;
+}
+
+/** Source ranges `[start, end]`, sorted by start, none inside another. */
+type Ranges = ReadonlyArray<readonly [number, number]>;
+
+function rangesOf(nodes: readonly Node[]): Ranges {
+  const sorted = nodes.map((n) => [n.getStart(), n.getEnd()] as const).sort((a, b) => a[0] - b[0] || b[1] - a[1]);
+  const merged: Array<readonly [number, number]> = [];
+  for (const range of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && range[1] <= last[1]) continue;
+    merged.push(range);
+  }
+  return merged;
+}
+
+function isInside(node: Node, ranges: Ranges): boolean {
+  if (ranges.length === 0) return false;
+  const start = node.getStart();
+  let lo = 0;
+  let hi = ranges.length - 1;
+  let candidate = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (ranges[mid]![0] <= start) {
+      candidate = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return candidate >= 0 && node.getEnd() <= ranges[candidate]![1];
+}
 
 export class TsMorphAdapter implements ILanguageAdapter {
   readonly extensions = SUPPORTED_EXTENSIONS;
   readonly tier = 'full' as const;
 
+  /** The `sqlCallSites` option as constructed. */
+  readonly sqlCallSites: boolean;
+
   private readonly project: Project;
+  private readonly projectRoot: string | undefined;
+  private readonly sqlStats: SqlStats = { constant: 0, nonConstant: 0 };
   private symbolRegistry = new Map<string, SymbolKind>();
   private projectPreloaded = false;
 
-  constructor() {
+  constructor(options: TsMorphAdapterOptions = {}) {
+    this.sqlCallSites = options.sqlCallSites === true;
+    this.projectRoot = options.projectRoot;
     this.project = new Project({
       compilerOptions: {
         target: ScriptTarget.ES2022,
@@ -46,6 +101,14 @@ export class TsMorphAdapter implements ILanguageAdapter {
 
   setSymbolRegistry(registry: Map<string, SymbolKind>): void {
     this.symbolRegistry = registry;
+  }
+
+  /**
+   * SQL call sites seen by `extractEdges` so far, with and without a constant text. Cumulative per adapter
+   * instance and never reset: a full index run creates fresh adapters, and `ctxo watch` never reports them.
+   */
+  getSqlStats(): SqlStats {
+    return { ...this.sqlStats };
   }
 
   loadProjectSources(files: Map<string, string>): void {
@@ -80,6 +143,7 @@ export class TsMorphAdapter implements ILanguageAdapter {
       this.extractInterfaces(sourceFile, filePath, symbols);
       this.extractTypeAliases(sourceFile, filePath, symbols);
       this.extractVariables(sourceFile, filePath, symbols);
+      symbols.push(...findTestBlocks(sourceFile, filePath).map(testBlockSymbol));
 
       return symbols;
     } catch (err) {
@@ -93,6 +157,8 @@ export class TsMorphAdapter implements ILanguageAdapter {
   async extractEdges(filePath: string, source: string): Promise<GraphEdge[]> {
     const sourceFile = this.parseSource(filePath, source);
     if (!sourceFile) return [];
+    // Files the resolver reads from disk live only for this call; preloaded files stay.
+    const resolver = this.sqlCallSites ? new ModuleResolver(this.project, this.projectRoot) : undefined;
 
     try {
       const edges: GraphEdge[] = [];
@@ -101,12 +167,16 @@ export class TsMorphAdapter implements ILanguageAdapter {
       this.extractInheritanceEdges(sourceFile, filePath, edges);
       this.extractCallEdges(sourceFile, filePath, edges);
       this.extractReferenceEdges(sourceFile, filePath, edges);
+      this.extractTestBlockEdges(sourceFile, filePath, edges);
+      // Last, so files the resolver adds never change the edges above.
+      if (resolver) edges.push(...this.extractSqlEdges(sourceFile, filePath, resolver));
 
       return edges;
     } catch (err) {
       console.error(`[ctxo:ts-morph] Edge extraction failed for ${filePath}: ${(err as Error).message}`);
       return [];
     } finally {
+      resolver?.release();
       if (!this.projectPreloaded) {
         this.cleanupSourceFile(filePath);
       }
@@ -181,6 +251,7 @@ export class TsMorphAdapter implements ILanguageAdapter {
       const name = cls.getName();
       if (!name || !this.isExported(cls)) continue;
 
+      const clsAnnotations = classAnnotations(cls);
       symbols.push({
         symbolId: this.buildSymbolId(filePath, name, 'class'),
         name,
@@ -189,11 +260,13 @@ export class TsMorphAdapter implements ILanguageAdapter {
         endLine: cls.getEndLineNumber() - 1,
         startOffset: cls.getStart(),
         endOffset: cls.getEnd(),
+        ...(clsAnnotations ? { annotations: clsAnnotations } : {}),
       });
 
       // Extract methods
       for (const method of cls.getMethods()) {
         const methodName = method.getName();
+        const methodAnn = methodAnnotations(method);
         symbols.push({
           symbolId: this.buildSymbolId(filePath, `${name}.${methodName}`, 'method'),
           name: `${name}.${methodName}`,
@@ -202,6 +275,7 @@ export class TsMorphAdapter implements ILanguageAdapter {
           endLine: method.getEndLineNumber() - 1,
           startOffset: method.getStart(),
           endOffset: method.getEnd(),
+          ...(methodAnn ? { annotations: methodAnn } : {}),
         });
       }
     }
@@ -451,12 +525,8 @@ export class TsMorphAdapter implements ILanguageAdapter {
     }
   }
 
-  private extractReferenceEdges(
-    sourceFile: SourceFile,
-    filePath: string,
-    edges: GraphEdge[],
-  ): void {
-    // Build map of all named imports from local modules: importedName → resolved symbolId
+  /** Named and default imports from local modules: importedName → resolved symbolId. */
+  private buildLocalImportMap(sourceFile: SourceFile, filePath: string): Map<string, string> {
     const importMap = new Map<string, string>();
     for (const imp of sourceFile.getImportDeclarations()) {
       const mod = imp.getModuleSpecifierValue();
@@ -470,6 +540,15 @@ export class TsMorphAdapter implements ILanguageAdapter {
         importMap.set(defaultImport.getText(), this.resolveImportTarget(targetFile, defaultImport.getText()));
       }
     }
+    return importMap;
+  }
+
+  private extractReferenceEdges(
+    sourceFile: SourceFile,
+    filePath: string,
+    edges: GraphEdge[],
+  ): void {
+    const importMap = this.buildLocalImportMap(sourceFile, filePath);
     if (importMap.size === 0) return;
 
     // Scan each exported symbol's body for identifier references to imports
@@ -492,14 +571,71 @@ export class TsMorphAdapter implements ILanguageAdapter {
     }
   }
 
+  /**
+   * Test blocks (test files only): each block's `calls` and `uses` edges come from its own callback minus
+   * the callbacks of the blocks inside it, resolved as for exported functions; one `calls` edge per target.
+   */
+  private extractTestBlockEdges(
+    sourceFile: SourceFile,
+    filePath: string,
+    edges: GraphEdge[],
+  ): void {
+    const blocks = findTestBlocks(sourceFile, filePath);
+    if (blocks.length === 0) return;
+    const importMap = this.buildLocalImportMap(sourceFile, filePath);
+
+    for (const block of blocks) {
+      const exclude = rangesOf(block.nested);
+      const callees = [
+        ...block.body.getDescendantsOfKind(SyntaxKind.CallExpression),
+        ...block.body.getDescendantsOfKind(SyntaxKind.NewExpression),
+      ];
+      const called = new Set<string>();
+      for (const call of callees) {
+        if (isInside(call, exclude)) continue;
+        const calledName = call.getExpression().getText().split('.').pop();
+        if (!calledName) continue;
+        const resolved = this.resolveLocalCallTarget(sourceFile, filePath, calledName);
+        if (!resolved || called.has(resolved)) continue;
+        called.add(resolved);
+        edges.push({ from: block.symbolId, to: resolved, kind: 'calls' });
+      }
+      if (importMap.size > 0) this.emitUsesEdges(block.body, block.symbolId, importMap, edges, block.nested);
+    }
+  }
+
+  /**
+   * SQL data edges (only with `sqlCallSites`): call sites of the known APIs whose receiver traces to the listed
+   * module, with constant text, parsed by `@ctxo/sql-extract`. A failure here keeps the file's other edges.
+   */
+  private extractSqlEdges(sourceFile: SourceFile, filePath: string, resolver: ModuleResolver): GraphEdge[] {
+    try {
+      const stats: SqlStats = { constant: 0, nonConstant: 0 };
+      const scopes = symbolScopes(sourceFile, filePath, findTestBlocks(sourceFile, filePath));
+      const sites = collectSqlCallSites(sourceFile, scopes, resolver, stats);
+      this.sqlStats.constant += stats.constant;
+      this.sqlStats.nonConstant += stats.nonConstant;
+      if (stats.constant + stats.nonConstant > 0) {
+        log.debug(`sql ${filePath}: constant ${stats.constant}, nonConstant ${stats.nonConstant}`);
+      }
+      return sqlEdgesFromCallSites(sites);
+    } catch (err) {
+      log.warn(`SQL call sites skipped for ${filePath}: ${(err as Error).message}`);
+      return [];
+    }
+  }
+
   private emitUsesEdges(
     node: Node,
     fromId: string,
     importMap: Map<string, string>,
     edges: GraphEdge[],
+    exclude: readonly Node[] = [],
   ): void {
+    const excluded = rangesOf(exclude);
     const seen = new Set<string>();
     for (const id of node.getDescendantsOfKind(SyntaxKind.Identifier)) {
+      if (isInside(id, excluded)) continue;
       const name = id.getText();
       if (seen.has(name)) continue;
       const target = importMap.get(name);

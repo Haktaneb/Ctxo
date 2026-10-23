@@ -99,6 +99,28 @@ type Guarded struct {
 	}
 }
 
+func TestIncludeFiltersEmbeddingTypeFiles(t *testing.T) {
+	dir := writeFixture(t, map[string]string{
+		"go.mod": "module fixture\n\ngo 1.22\n",
+		"a.go":   "package fixture\n\ntype Base struct{}\n\ntype Child struct{ Base }\n",
+		"b.go":   "package fixture\n\ntype Other struct{ Base }\n",
+	})
+	res := load.Packages(dir)
+	if res.FatalError != nil {
+		t.Fatal(res.FatalError)
+	}
+	out := Extract(dir, res.Packages, func(rel string) bool { return rel == "b.go" })
+	if len(out["a.go"]) != 0 {
+		t.Errorf("a.go is filtered out but has edges: %v", out["a.go"])
+	}
+	if len(out["b.go"]) != 1 || out["b.go"][0].To != "a.go::Base::class" {
+		t.Errorf("b.go must keep Other -> Base: %v", out["b.go"])
+	}
+	if all := Extract(dir, res.Packages, nil); len(all["a.go"]) != 1 || len(all["b.go"]) != 1 {
+		t.Errorf("nil include must keep every edge: %v", all)
+	}
+}
+
 // ── helpers ──
 
 func extractAll(t *testing.T, dir string) map[string]bool {
@@ -108,7 +130,7 @@ func extractAll(t *testing.T, dir string) map[string]bool {
 		t.Fatal(res.FatalError)
 	}
 	out := map[string]bool{}
-	for _, list := range Extract(dir, res.Packages) {
+	for _, list := range Extract(dir, res.Packages, nil) {
 		for _, e := range list {
 			out[e.From+" -> "+e.To+" ("+e.Kind+")"] = true
 		}

@@ -1,0 +1,5 @@
+{
+  "description": "Constant SQL text from a const and from constant concatenation reads dbo.loans; a var and fmt.Sprintf give nothing (dbo.holds and dbo.members would show up here if they did).",
+  "mode": "go",
+  "accesses": { "reads": ["dbo.loans"], "writes": [], "executes": [] }
+}

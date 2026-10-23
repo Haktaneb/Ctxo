@@ -15,8 +15,8 @@ export const plugin: CtxoLanguagePlugin = {
   version: VERSION,
   extensions: ['.go'],
   tier: 'full',
-  createAdapter(_ctx: PluginContext): ILanguageAdapter {
-    return new GoCompositeAdapter();
+  createAdapter(ctx: PluginContext): ILanguageAdapter {
+    return new GoCompositeAdapter({ sqlCallSites: ctx.capabilities?.sqlCallSites === true });
   },
 };
 

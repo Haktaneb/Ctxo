@@ -68,11 +68,93 @@ Symbol IDs follow the canonical
 | `calls`      | Function and method invocations resolved via the type checker                      |
 | `extends`    | Class `extends` and interface `extends` clauses                                    |
 | `implements` | Class `implements` clauses                                                         |
-| `uses`       | Type references, generic arguments, decorators                                     |
+| `uses`       | Type references, generic arguments and other imported names a symbol mentions      |
+| `reads`, `writes`, `executes` | Constant SQL at known call sites, only with `@ctxo/lang-sql` installed ([below](#sql-at-call-sites)) |
 
 Edges are produced in a two-pass run: pass 1 builds a cross-file symbol
 registry via `setSymbolRegistry()`, pass 2 resolves call/import targets to
 the file that owns each symbol.
+
+## Annotations
+
+Decorators on classes and methods become symbol annotations (always on):
+
+- `name` is the rightmost identifier of the decorator expression:
+  `@nest.Injectable()` gives `Injectable`.
+- `args` are the string-literal and plain-template arguments; `named` holds the
+  string-valued properties of object-literal arguments, the first occurrence
+  winning. A property named `type` is dropped (`named.type` is reserved).
+- Property decorators go on the class, after the class's own decorators, with
+  the property name in `named.member`. Properties do not become symbols.
+- Caps: 20 per symbol, 10 positional and 10 named entries, 200 characters per
+  value.
+
+```ts
+@Entity('loans')
+export class Loan {
+  @Column({ name: 'member_id' }) memberId!: string;
+}
+// Loan: [{ name: 'Entity', args: ['loans'] },
+//        { name: 'Column', named: { member: 'memberId', name: 'member_id' } }]
+```
+
+## Test symbols
+
+In a test file (`**/__tests__/**`, `**/*.test.*`, `**/*.spec.*`, `**/test/**`,
+`**/tests/**`), every `describe`, `it` or `test` block becomes a `function`
+symbol named by its title path and annotated `{ name: 'test' }`. `suite`,
+`context`, `specify`, the `f` and `x` variants and modifiers such as `.only`,
+`.skip`, `.each` and `.skipIf` count too; a block without a callback
+(`it.todo`) does not.
+
+```text
+src/loans/loan-policy.test.ts::LoanPolicy > renewal > extends by seven days::function
+```
+
+- Each block's `calls` and `uses` edges come from its own callback minus nested
+  blocks, so an `it` owns its edges and a `describe` keeps its hooks. Tests are
+  therefore blast-radius dependents of the code they exercise.
+- Titles: a non-literal title keeps its source text; whitespace runs become one
+  space, runs of `:` become one and a trailing `:` is dropped; an empty title
+  becomes `(untitled)`; titles are cut at 200 characters. A repeated path gets
+  ` #2`, ` #3` in source order.
+- `index.tests` globs do not reach the plugin; only the defaults above count.
+
+## SQL at call sites
+
+With [`@ctxo/lang-sql`](/languages/sql) installed, the plugin adds `reads`,
+`writes` and `executes` edges for constant SQL at known call sites, parsed by
+`@ctxo/sql-extract`, to the same `dbo.loans::table` targets the SQL and C#
+plugins use. Without `@ctxo/lang-sql` it emits none.
+
+| Module | Members | SQL text |
+| --- | --- | --- |
+| `pg` | `query` | first argument, or `{ text }` |
+| `mysql2` | `query`, `execute` | first argument, or `{ sql }` |
+| `mssql` | `query`; `execute` | first argument or tagged template; `execute` takes a procedure name |
+| `knex` | `raw` | first argument |
+| `@prisma/client` | `$queryRaw`, `$executeRaw`; `$queryRawUnsafe`, `$executeRawUnsafe` | tagged template; first argument |
+| `typeorm`, `sequelize` | `query` | first argument |
+| `better-sqlite3` | `prepare`, `exec` | first argument |
+
+- **Constants only:** string literals, templates without substitutions, `+`
+  and templates whose parts are all constant, and `const` bindings in the same
+  file or behind a relative import. Tagged-template interpolations become the
+  placeholders `@p0`, `@p1` and so on.
+- **Receiver provenance:** without library types, a call counts only when a
+  walk of at most 8 steps ties its receiver to the module: imports, `require`,
+  type annotations and initializers, destructuring, constructor parameter
+  properties and `this` members (also through `extends`), return types,
+  `import('pg').Pool`, `export *` barrels and dynamic `import()`. A
+  `bus.execute('CloseLoan')` on some other object gives nothing.
+- **Incremental runs:** relative modules missing from the in-memory project are
+  read from disk (`.ts`, `.tsx`, `.js`, `.jsx`, inside the project root), so
+  the post-commit hook, `--files` and `ctxo watch` give the same edges as a full
+  `ctxo index`.
+- **Scope:** edges start at the innermost exported function, method of an
+  exported class, exported variable or test block.
+- ORM and query-builder calls (knex chains, Prisma model calls, TypeORM
+  repositories) are not covered.
 
 ## Monorepo handling
 
@@ -96,8 +178,14 @@ the same pass.
   duplicate downstream symbols into the re-exporting file.
 - **JSX intrinsic elements** (`<div>`) are not emitted as `uses` edges; only
   user-defined components are.
-- **Decorators** are surfaced as `uses` edges but parameter decorators on
-  constructor arguments are best-effort.
+- **Decorators** become [annotations](#annotations), not edges of their own; a
+  decorator imported from another file still gives a `uses` edge like any
+  imported name. Accessor and parameter decorators are ignored.
+- **SQL receivers** that the provenance walk cannot tie to a listed module are
+  missed: union-typed receivers (`Pool | null`), getters or methods that return
+  a pool, clients from an untyped factory or a dependency-injection container,
+  namespace imports of a relative module, and anything more than 8 steps away.
+  Numeric constants in a template make it non-constant.
 
 ## Related
 

@@ -1,0 +1,13 @@
+import { Controller, Get, HttpCode, Param } from '@nestjs/common';
+import { LoanRepository } from './loan.repository';
+
+@Controller('loans')
+export class LoanController {
+  constructor(private readonly loans: LoanRepository) {}
+
+  @Get(':id')
+  @HttpCode(200)
+  find(@Param('id') id: string) {
+    return this.loans.byMember(Number(id));
+  }
+}
