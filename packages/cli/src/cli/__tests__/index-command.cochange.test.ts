@@ -1,13 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from 'vitest';
 import {
   appendFileSync,
+  closeSync,
   cpSync,
   existsSync,
+  fstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   rmSync,
-  statSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -28,6 +30,16 @@ const GREET_AND_TYPES = ['src/greet.ts', 'src/types.ts'] as const;
 /** `count` commits that each modify src/greet.ts and src/types.ts. */
 function commitGreetAndTypes(project: TempProject, count: number): void {
   for (let n = 1; n <= count; n++) project.commitTogether(`feat: change ${n}`, GREET_AND_TYPES);
+}
+
+/** A file's bytes and mtime, taken through one descriptor so both describe the same file. */
+function snapshotFile(path: string): { readonly bytes: Buffer; readonly mtimeMs: number } {
+  const fd = openSync(path, 'r');
+  try {
+    return { bytes: readFileSync(fd), mtimeMs: fstatSync(fd).mtimeMs };
+  } finally {
+    closeSync(fd);
+  }
 }
 
 function coChangesFile(dir: string): string {
@@ -285,14 +297,14 @@ describe('IndexCommand co-change', () => {
     commitGreetAndTypes(project, 3);
     await new IndexCommand(project.dir).run();
     const file = coChangesFile(project.dir);
-    const before = readFileSync(file);
     utimesSync(file, LONG_AGO, LONG_AGO);
-    const agedMtime = statSync(file).mtimeMs;
+    const before = snapshotFile(file);
 
     await new IndexCommand(project.dir).run();
 
-    expect(statSync(file).mtimeMs).toBe(agedMtime);
-    expect(readFileSync(file).equals(before)).toBe(true);
+    const after = snapshotFile(file);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+    expect(after.bytes.equals(before.bytes)).toBe(true);
   });
 
   it('--skip-history leaves co-changes.json alone', async () => {

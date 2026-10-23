@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, mkdtempSync, openSync, readFileSync, rmSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -13,6 +13,16 @@ import { resolveContextsViewConfig } from '../../../core/config/load-config.js';
 import type { ContextsView } from '../../../core/contexts-view/contexts-view-builder.js';
 
 let ctxoRoot: string;
+
+/** A file's bytes and mtime, taken through one descriptor so both describe the same file. */
+function snapshotFile(path: string): { readonly bytes: Buffer; readonly mtimeMs: number } {
+  const fd = openSync(path, 'r');
+  try {
+    return { bytes: readFileSync(fd), mtimeMs: fstatSync(fd).mtimeMs };
+  } finally {
+    closeSync(fd);
+  }
+}
 
 beforeEach(() => {
   ctxoRoot = mkdtempSync(join(tmpdir(), 'ctxo-arch-')) + '/.ctxo';
@@ -117,15 +127,15 @@ describe('ArchitectureArtifactsWriter', () => {
     const path = join(ctxoRoot, 'index', 'contexts-view.json');
 
     expect(writer.writeContextsView(view)).toBe(true);
-    const bytes = readFileSync(path);
-    expect(bytes.toString('utf-8')).toBe(JSON.stringify(view, null, 2));
     // An old mtime that only a rewrite would change.
     utimesSync(path, 1_600_000_000, 1_600_000_000);
-    const before = statSync(path).mtimeMs;
+    const before = snapshotFile(path);
+    expect(before.bytes.toString('utf-8')).toBe(JSON.stringify(view, null, 2));
 
     expect(writer.writeContextsView(view)).toBe(false);
-    expect(readFileSync(path).equals(bytes)).toBe(true);
-    expect(statSync(path).mtimeMs).toBe(before);
+    const after = snapshotFile(path);
+    expect(after.bytes.equals(before.bytes)).toBe(true);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
 
     expect(writer.writeContextsView({ ...view, commitSha: 'def5678' })).toBe(true);
     expect(readFileSync(path, 'utf-8')).toContain('def5678');
