@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import type { FileIndex } from '@ctxo/cli/internal';
-import { annotationRefs, resolveRuleRefs, scanTestText, type ScanOptions } from '../rule-id-scan.js';
+import { DEFAULT_DOMAIN_CONFIG, type DomainConfig } from '../domain-config.js';
+import type { DomainRegistry } from '../registry.js';
+import {
+  annotationRefs,
+  buildScanOptions,
+  leadingSymbol,
+  resolveRuleRefs,
+  scanTestFiles,
+  scanTestText,
+  type ScanOptions,
+} from '../rule-id-scan.js';
 
 function options(over: Partial<ScanOptions> = {}): ScanOptions {
   return {
@@ -222,5 +232,136 @@ describe('rule-id-scan', () => {
   it('a long file with CRLF line endings keeps line numbers', () => {
     const refs = scanTestText(FILE, 'a\r\nb\r\n// rule: LEND-03\r\n', undefined, options());
     expect(refs[0]?.line).toBe(3);
+  });
+
+  it.each([
+    [{ name: 'Trait', args: ['Rule', 'LEND-03'] }, 'annotation', 'Trait'],
+    [{ name: 'Category', args: ['LEND-03'] }, 'category', 'Category'],
+    [{ name: 'TestCategory', args: ['LEND-03'] }, 'category', 'TestCategory'],
+    [{ name: 'Tag', args: ['LEND-03'] }, 'category', 'Tag'],
+  ])('annotation and category refs carry the annotation name (%o)', (annotation, kind, name) => {
+    const index = fileIndex([
+      { symbolId: 'tests/LoanTests.cs::A::method', name: 'A', kind: 'method', startLine: 1, endLine: 2, annotations: [annotation] },
+    ]);
+    const refs = annotationRefs(index, options());
+    expect(refs).toHaveLength(1);
+    expect(refs[0]).toMatchObject({ id: 'LEND-03', kind, annotation: name });
+  });
+
+  it('leadingSymbol prefers a symbol starting within three lines after the comment, else the innermost spanning symbol', () => {
+    // Index lines are 0-based and `line` is 1-based: the class covers file lines 1 to 21, the method file lines 6 to 10.
+    const index = fileIndex([
+      { symbolId: 'class', name: 'C', kind: 'class', startLine: 0, endLine: 20 },
+      { symbolId: 'method', name: 'm', kind: 'method', startLine: 5, endLine: 9 },
+    ]);
+    expect(leadingSymbol(index, 3)).toBe('method');
+    expect(leadingSymbol(index, 5)).toBe('method');
+    expect(leadingSymbol(index, 2)).toBe('class'); // the method starts four lines later
+    expect(leadingSymbol(index, 13)).toBe('class');
+    expect(leadingSymbol(index, 31)).toBeUndefined();
+    expect(leadingSymbol(undefined, 3)).toBeUndefined();
+  });
+
+  it('leadingSymbol takes the nearest start, then the smallest span, then index order', () => {
+    const index = fileIndex([
+      { symbolId: 'far', name: 'far', kind: 'method', startLine: 4, endLine: 5 },
+      { symbolId: 'wide', name: 'wide', kind: 'class', startLine: 3, endLine: 9 },
+      { symbolId: 'narrow', name: 'narrow', kind: 'method', startLine: 3, endLine: 4 },
+      { symbolId: 'narrow2', name: 'narrow2', kind: 'method', startLine: 3, endLine: 4 },
+    ]);
+    expect(leadingSymbol(index, 2)).toBe('narrow');
+  });
+
+  it('a rule: comment above a test method links to the method', () => {
+    const index = fileIndex([
+      { symbolId: 'tests/LoanTests.cs::LoanTests::class', name: 'LoanTests', kind: 'class', startLine: 0, endLine: 6 },
+      { symbolId: 'tests/LoanTests.cs::LoanTests.RejectsSixth::method', name: 'RejectsSixth', kind: 'method', startLine: 3, endLine: 5 },
+    ]);
+    const text = ['public class LoanTests', '{', '    // rule: LEND-03', '    [Fact]', '    public void RejectsSixth()', '    {}', '}'].join('\n');
+    const refs = scanTestText(index.file, text, index, options());
+    expect(refs.filter((r) => r.kind === 'rule-comment')).toEqual([
+      { file: index.file, line: 3, raw: 'LEND-03', id: 'LEND-03', kind: 'rule-comment', symbolId: 'tests/LoanTests.cs::LoanTests.RejectsSixth::method' },
+    ]);
+  });
+
+  it('a mention above a test method still links to the innermost spanning symbol', () => {
+    const index = fileIndex([
+      { symbolId: 'class', name: 'C', kind: 'class', startLine: 0, endLine: 6 },
+      { symbolId: 'method', name: 'm', kind: 'method', startLine: 3, endLine: 5 },
+    ]);
+    const text = ['class C', '{', '    // covers LEND-03', '    void m()', '    {', '    }', '}'].join('\n');
+    expect(scanTestText(index.file, text, index, options()).map((r) => [r.kind, r.symbolId])).toEqual([['mention', 'class']]);
+  });
+
+  it('buildScanOptions collects card prefixes and registry rule prefixes', () => {
+    const config: DomainConfig = {
+      ...DEFAULT_DOMAIN_CONFIG,
+      rules: { idPattern: '^[A-Z]+-\\d+$', trackerPrefixes: ['JIRA'] },
+      tests: { ruleTraitKeys: ['Rule', 'Requirement'] },
+    };
+    const context = (id: string, rulePrefix?: string) => ({
+      id,
+      name: id,
+      paths: [],
+      rung: 'core' as const,
+      contracts: {},
+      ...(rulePrefix === undefined ? {} : { rulePrefix }),
+    });
+    const registry: DomainRegistry = {
+      version: 1,
+      contexts: [context('lending', 'LEND'), context('billing', 'BILL'), context('misc')],
+      unownedAllow: [],
+      glossary: 'docs/domain/glossary.md',
+      contextMap: 'docs/domain/context-map.md',
+    };
+    const o = buildScanOptions(config, ['LEND-03', 'CAT-1', 'LEND-04'], registry);
+    expect([...o.rules.ids].sort()).toEqual(['CAT-1', 'LEND-03', 'LEND-04']);
+    expect([...o.rules.prefixes].sort()).toEqual(['BILL', 'CAT', 'LEND']);
+    expect(o.idPattern.source).toBe('^[A-Z]+-\\d+$');
+    expect([...o.trackerPrefixes]).toEqual(['JIRA']);
+    expect([...o.ruleTraitKeys]).toEqual(['Rule', 'Requirement']);
+  });
+
+  it('buildScanOptions falls back to the default ID pattern when the configured one does not compile', () => {
+    const config: DomainConfig = { ...DEFAULT_DOMAIN_CONFIG, rules: { idPattern: '([', trackerPrefixes: [] } };
+    const o = buildScanOptions(config, [], undefined);
+    expect(o.idPattern.source).toBe(new RegExp(DEFAULT_DOMAIN_CONFIG.rules.idPattern).source);
+    expect(o.rules.prefixes.size).toBe(0);
+  });
+
+  it('scanTestFiles scans every test text and adds annotation refs only for indexed test files without a text (P15)', () => {
+    const scanned = fileIndex([
+      {
+        symbolId: 'tests/LoanTests.cs::A::method',
+        name: 'A',
+        kind: 'method',
+        startLine: 1,
+        endLine: 2,
+        annotations: [{ name: 'Trait', args: ['Rule', 'LEND-03'] }],
+      },
+    ]);
+    const unread: FileIndex = {
+      ...fileIndex([
+        { symbolId: 'tests/Other.cs::B::method', name: 'B', kind: 'method', startLine: 0, endLine: 1, annotations: [{ name: 'Category', args: ['LEND-04'] }] },
+      ]),
+      file: 'tests\\Other.cs',
+    };
+    const production: FileIndex = {
+      ...fileIndex([
+        { symbolId: 'src/Loan.cs::C::method', name: 'C', kind: 'method', startLine: 0, endLine: 1, annotations: [{ name: 'Category', args: ['LEND-04'] }] },
+      ]),
+      file: 'src/Loan.cs',
+    };
+    const refs = scanTestFiles(
+      [{ file: 'tests/LoanTests.cs', text: '// rule: LEND-04\n[Trait("Rule", "LEND-03")]\n', index: scanned }],
+      [scanned, unread, production],
+      (file) => file.startsWith('tests'),
+      options(),
+    );
+    expect(refs.map((r) => [r.file, r.id, r.kind])).toEqual([
+      ['tests/LoanTests.cs', 'LEND-04', 'rule-comment'],
+      ['tests/LoanTests.cs', 'LEND-03', 'annotation'],
+      ['tests\\Other.cs', 'LEND-04', 'category'],
+    ]);
   });
 });

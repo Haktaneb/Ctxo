@@ -6,10 +6,10 @@ import { readRepoText, repoFileExists } from '../adapters/repo-files.js';
 import { readTestFiles } from '../adapters/test-file-source.js';
 import { computeBoundaries } from '../core/boundaries.js';
 import { githubSlugs, parseCard, parseMarkdownHeadings, type ParsedCard } from '../core/card-parser.js';
-import { DEFAULT_DOMAIN_CONFIG, resolveDomainConfig, type BoundaryMode } from '../core/domain-config.js';
+import { resolveDomainConfig, type BoundaryMode } from '../core/domain-config.js';
 import { diffLoaderRules, renderLoaderRules, type LoaderRulesDiff } from '../core/loader-rules.js';
 import { createOwnership } from '../core/ownership.js';
-import { annotationRefs, resolveRuleRefs, scanTestText, type RuleRef, type ScanOptions } from '../core/rule-id-scan.js';
+import { buildScanOptions, resolveRuleRefs, scanTestFiles } from '../core/rule-id-scan.js';
 import { computeTouched, type TouchedReport } from '../core/touched.js';
 import { runVerifyChecks, type CheckOutcome, type Finding } from '../core/verify-checks.js';
 
@@ -80,19 +80,6 @@ function printHuman(outcomes: readonly CheckOutcome[], errors: number, warnings:
   console.error(`[ctxo] verify-domain: ${errors} errors, ${warnings} warnings`);
 }
 
-function idRegExp(pattern: string): RegExp {
-  try {
-    return new RegExp(pattern);
-  } catch {
-    return new RegExp(DEFAULT_DOMAIN_CONFIG.rules.idPattern);
-  }
-}
-
-function prefixOf(id: string): string {
-  const dash = id.indexOf('-');
-  return dash < 0 ? id : id.slice(0, dash);
-}
-
 const MARKDOWN = /\.(?:md|markdown)$/i;
 
 /** `ctxo verify-domain`: the CI gate for the registry, the cards, rule IDs, generated rules and boundaries (spec 10.5). */
@@ -160,29 +147,11 @@ async function verify(host: CtxoHost, ctx: ModuleCommandContext, options: Option
   }
 
   // K6: rule IDs in tests, by file text and by indexed annotations.
-  const ids = new Set<string>();
-  const prefixes = new Set<string>();
-  for (const card of cards.values()) {
-    for (const rule of card?.rules ?? []) {
-      ids.add(rule.id);
-      prefixes.add(prefixOf(rule.id));
-    }
-  }
-  for (const context of registry?.contexts ?? []) if (context.rulePrefix !== undefined) prefixes.add(context.rulePrefix);
-  const scanOptions: ScanOptions = {
-    rules: { ids, prefixes },
-    idPattern: idRegExp(config.rules.idPattern),
-    trackerPrefixes: new Set(config.rules.trackerPrefixes),
-    ruleTraitKeys: new Set(config.tests.ruleTraitKeys),
-  };
+  const ruleIds = [...cards.values()].flatMap((card) => (card?.rules ?? []).map((rule) => rule.id));
+  const scanOptions = buildScanOptions(config, ruleIds, registry);
   const tracked = (await git?.listTrackedFiles?.()) ?? indexedFiles;
-  const refs: RuleRef[] = [];
-  if (registry !== undefined) {
-    for (const test of readTestFiles(projectRoot, tracked, isTestFile, indices)) {
-      refs.push(...scanTestText(test.file, test.text, test.index, scanOptions));
-    }
-    for (const index of indices) if (isTestFile(index.file)) refs.push(...annotationRefs(index, scanOptions));
-  }
+  const refs =
+    registry !== undefined ? scanTestFiles(readTestFiles(projectRoot, tracked, isTestFile, indices), indices, isTestFile, scanOptions) : [];
   const ruleLinks = resolveRuleRefs(refs, scanOptions);
 
   // Generated loader rules against disk, and the context map.
