@@ -235,7 +235,7 @@ fixture project that only depends on your plugin, then inspect
    `ctxo-lang-<id>` (community).
 2. Keep `@ctxo/plugin-api` as a `peerDependency`. The official v1 plugins
    accept `^0.7.3 || ^0.8.0 || ^0.9.0`; a v2 plugin needs the release that
-   carries protocol v2 (`@ctxo/lang-sql` accepts `^0.8.0 || ^0.9.0`).
+   carries protocol v2 (`@ctxo/lang-sql` accepts `^0.9.0`).
 3. Publish to npm with `provenance: true` if you can.
 4. Optionally open a PR to add your plugin to the CLI's `KNOWN_LANGUAGES`
    detection table so `ctxo init` can prompt for it automatically.

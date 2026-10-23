@@ -303,8 +303,8 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo with five packages. Per-packag
   with a warning when they read an index written by this version. `@ctxo/lang-sql` needs a CLI that
   accepts protocol v2.
 - The official plugins accept `@ctxo/plugin-api` `^0.7.3 || ^0.8.0 || ^0.9.0` as a peer;
-  `@ctxo/lang-sql` accepts `^0.8.0 || ^0.9.0`. Existing plugins stay on protocol v1, so upgrading one
-  never breaks an older CLI.
+  `@ctxo/lang-sql` accepts `^0.9.0`, the first protocol v2 release (plugin-api 0.8.0 is protocol v1).
+  Existing plugins stay on protocol v1, so upgrading one never breaks an older CLI.
 
 ### Removed
 

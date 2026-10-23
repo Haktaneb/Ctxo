@@ -114,7 +114,7 @@ All additive; a v1 plugin needs no change:
 - `SymbolNode.annotations`: host-language attributes, annotations and decorators (capped at 20 per symbol, 10 positional entries and 10 named entries plus the reserved `type`, 200 characters per value; a source argument named `type` is not kept).
 - `ILanguageAdapter.extractFacts` and `CodeFact` (`FACT_KINDS`): called only when the host asks for facts.
 - `PluginContext.capabilities` (`PluginCapabilities`): `facts` when `index.facts: true` is set, `sqlCallSites` when a plugin for `.sql` is installed.
-- Peer ranges: the official plugins accept `@ctxo/plugin-api` `^0.7.3 || ^0.8.0 || ^0.9.0`; `@ctxo/lang-sql` accepts `^0.8.0 || ^0.9.0`.
+- Peer ranges: the official plugins accept `@ctxo/plugin-api` `^0.7.3 || ^0.8.0 || ^0.9.0`; `@ctxo/lang-sql` accepts `^0.9.0`, the first release with protocol v2.
 - Dependency exception (ADR-017): a plugin may depend on a Ctxo-owned utility package with zero runtime dependencies. Today that is only `@ctxo/sql-extract`, which is a library, not a plugin, and is never discovered.
 
 See [domain knowledge](features/domain-knowledge.md) and [ADR-017](architecture/ADR/adr-017-plugin-protocol-v2-and-data-coupling.md).
