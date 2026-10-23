@@ -51,10 +51,11 @@ export interface BranchFacts {
 }
 
 /**
- * What to leave out of the session's commits besides `startHead` (spec 10.4 "Branch range", PF23). The
- * configured base comes first. On the default branch: its upstream (`@{u}..HEAD`, the unpushed commits),
- * or nothing without one. Elsewhere, a detached HEAD included: the merge base with the base ref
- * `resolveBaseRef` picks (origin/HEAD, `main`, `master`), or nothing when none resolves.
+ * What to leave out of the session's commits besides `startHead` (spec 10.4 "Branch range", PF23, PF33).
+ * On the default branch, before any configured base: its upstream (`@{u}..HEAD`, the unpushed commits), or
+ * nothing without one, so `startHead..HEAD` alone counts. Elsewhere, a detached HEAD included: the merge
+ * base with the ref `resolveBaseRef` picks (the configured base, origin/HEAD, `main`, `master`), or nothing
+ * when none resolves.
  */
 export function branchExclude(facts: BranchFacts): { readonly kind: 'upstream' | 'merge-base' | 'none'; readonly ref?: string } {
   const refs = {
@@ -63,7 +64,7 @@ export function branchExclude(facts: BranchFacts): { readonly kind: 'upstream' |
     ...(facts.originHead !== undefined ? { originHead: facts.originHead } : {}),
     ...(facts.upstream !== undefined ? { upstream: facts.upstream } : {}),
   };
-  if (facts.configuredBase === undefined && isOnDefaultBranch(refs)) {
+  if (isOnDefaultBranch(refs)) {
     return facts.upstream !== undefined ? { kind: 'upstream', ref: facts.upstream } : { kind: 'none' };
   }
   const ref = resolveBaseRef({ guard: facts.configuredBase !== undefined ? { base: facts.configuredBase } : {} }, refs);

@@ -59,11 +59,19 @@ describe('branchExclude', () => {
     expect(branchExclude({ currentBranch: 'feat', branches: ['feat'] })).toEqual({ kind: 'none' });
   });
 
-  it('the configured base comes first (PF23)', () => {
+  it('the configured base comes first off the default branch (PF23)', () => {
     expect(branchExclude({ currentBranch: 'feat', originHead: 'origin/main', branches: ['feat', 'main'], configuredBase: 'release' })).toEqual({
       kind: 'merge-base',
       ref: 'release',
     });
+    expect(branchExclude({ branches: ['main'], configuredBase: 'release' })).toEqual({ kind: 'merge-base', ref: 'release' });
+  });
+
+  it('the default branch overrides the configured base (PF33)', () => {
+    expect(branchExclude({ currentBranch: 'main', branches: ['main'], configuredBase: 'main' })).toEqual({ kind: 'none' });
+    expect(
+      branchExclude({ currentBranch: 'main', upstream: 'origin/main', originHead: 'origin/main', branches: ['main'], configuredBase: 'main' }),
+    ).toEqual({ kind: 'upstream', ref: 'origin/main' });
   });
 
   it('a detached HEAD uses the merge base with the default branch', () => {

@@ -307,6 +307,14 @@ describe('evaluateGuard', () => {
     expect(await guard(repo, payload('Stop'))).toEqual(ALLOW);
   });
 
+  it('on main with domain.guard.base: main and no upstream, a session commit blocks (PF33)', async () => {
+    const repo = createRepo({ branch: 'main' });
+    repo.write('.ctxo/config.yaml', 'version: "1.0"\ndomain:\n  guard:\n    base: main\n');
+    await guard(repo, payload('SessionStart'));
+    changeLending(repo);
+    expect(blockReason(await guard(repo, payload('Stop')))).toContain('- lending: 1 file (src/Lending/LoanPolicy.cs)');
+  });
+
   it('a feature branch counts only commits after the merge base', async () => {
     const repo = createRepo({ branch: 'main' });
     // A session that started before main moved on: main's own commits are outside the branch range.
