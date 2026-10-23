@@ -51,6 +51,7 @@ function input(overrides: Partial<DiscoveryInput> = {}): DiscoveryInput {
     isPathTestFile: (path) => /\.Tests\//.test(path),
     config: DEFAULT_DOMAIN_CONFIG,
     indexTests: [],
+    testFrameworkAnnotations: ['Fact', 'Theory', 'Test', 'TestMethod'],
     ...overrides,
   };
 }
@@ -82,6 +83,21 @@ describe('discoverConventions', () => {
     const { proposal } = discoverConventions(
       input({ commitSubjects: subjects('OPS', 3), branches: ['feature/OPS-12-thing', 'fix/OPS-13'] }),
     );
+    expect(proposal.trackerPrefixes).toEqual(['OPS']);
+  });
+
+  it('counts a local branch and its remote-tracking copy once', () => {
+    const local = ['feature/OPS-1', 'feature/OPS-2', 'feature/OPS-3'];
+    const branches = [...local, ...local.map((b) => `origin/${b}`)];
+    const { evidence, proposal } = discoverConventions(input({ branches }));
+    expect(evidence.trackerKeys).toEqual([{ prefix: 'OPS', occurrences: 3, overlapsRulePrefix: false }]);
+    expect(proposal.trackerPrefixes).toEqual([]);
+  });
+
+  it('counts a remote-only branch once, by its name without the remote', () => {
+    const branches = ['feature/OPS-1', 'origin/feature/OPS-1', 'origin/OPS-2', 'upstream/OPS-2', 'origin/OPS-3', 'origin/OPS-4', 'origin/OPS-5'];
+    const { evidence, proposal } = discoverConventions(input({ branches }));
+    expect(evidence.trackerKeys[0]).toEqual({ prefix: 'OPS', occurrences: 5, overlapsRulePrefix: false });
     expect(proposal.trackerPrefixes).toEqual(['OPS']);
   });
 
@@ -189,9 +205,9 @@ describe('formatDiscovery', () => {
       expect(text).toContain(label);
     }
     expect(text).toContain('LEND (2 rules)');
-    expect(text).toContain('LEND in 6');
+    expect(text).toContain('LEND in 6 commit subjects/branches');
     expect(text).toContain('<- overlaps a rule prefix');
-    expect(text).toContain('OPS  in 2');
+    expect(text).toContain('OPS  in 2 commit subjects/branches');
     expect(text).toContain('Rule (1)');
     expect(text).toContain('docs/adr (1)');
     expect(text).not.toContain(String.fromCharCode(0x2014));

@@ -168,6 +168,8 @@ export interface CtxoHostServices {
   readCoChangeWindow(projectRoot: string, config: CtxoConfig): Promise<CoChangeWindowCommits | undefined>;
   /** The nearest directory at or above `dir` that holds `.git`. */
   findGitRoot(dir: string): string | undefined;
+  /** Short names of the attributes that mark a test (`Fact`, `Test`, `TestMethod`, ...): the classifier's own list. */
+  readonly testFrameworkAnnotations: readonly string[];
 }
 
 export interface CtxoHost {

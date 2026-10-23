@@ -76,7 +76,9 @@ export async function gatherDiscoveryInput(
     branches,
     indices,
     trackedFiles: trackedFiles ?? indices.map((index) => index.file),
+    // Deliberately path globs only (default globs plus index.tests): annotated files outside them are what discovery reports.
     isPathTestFile: services.createTestFileCheck(loaded.config, []),
+    testFrameworkAnnotations: services.testFrameworkAnnotations,
     config,
     indexTests: loaded.config.index?.tests ?? [],
   };

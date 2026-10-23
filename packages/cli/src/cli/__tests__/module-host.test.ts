@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { createModuleHost } from '../module-host.js';
 import { getVersion } from '../cli-paths.js';
+import { TEST_FRAMEWORK_ANNOTATIONS } from '../../core/test-files/test-file-classifier.js';
 import { JsonIndexWriter } from '../../adapters/storage/json-index-writer.js';
 import { compareCodepoint } from '../../core/compare-codepoint.js';
 import type { FileIndex, SymbolNode } from '../../core/types.js';
@@ -120,6 +121,11 @@ describe('createModuleHost', () => {
 });
 
 describe('host services', () => {
+  it('testFrameworkAnnotations is the classifier constant', () => {
+    const { services } = createModuleHost({ projectRoot: tempDir(), mode: 'cli' });
+    expect(services.testFrameworkAnnotations).toEqual(TEST_FRAMEWORK_ANNOTATIONS);
+  });
+
   it('host services load config, match globs, classify test files and read the index', () => {
     const root = tempDir();
     const ctxoRoot = join(root, '.ctxo');

@@ -247,4 +247,19 @@ describe('ctxo domain discover', () => {
   it('rejects an unknown flag', async () => {
     expect(await run(project(null), 'discover', '--bogus')).toBe(1);
   });
+
+  it('--write exits 2 and leaves an invalid config.yaml alone', async () => {
+    const dir = gitRepo(five);
+    put(dir, '.ctxo/config.yaml', 'a: [\n');
+    expect(await run(dir, 'discover', '--write')).toBe(2);
+    expect(readFileSync(join(dir, '.ctxo', 'config.yaml'), 'utf-8')).toBe('a: [\n');
+    expect(stderr.join('\n')).toContain('domain discover failed');
+  });
+
+  it('marks a tracker prefix that overlaps a rule prefix in the human output', async () => {
+    const dir = gitRepo(five);
+    put(dir, 'docs/domain/contexts.yaml', REGISTRY.replace('src/Lending/**"]\n    rung: named', 'src/Lending/**"]\n    rung: named\n    rulePrefix: LEND'));
+    expect(await run(dir, 'discover')).toBe(0);
+    expect(stderr.join('\n')).toMatch(/LEND in 5 commit subjects\/branches\s+<- overlaps a rule prefix/);
+  });
 });

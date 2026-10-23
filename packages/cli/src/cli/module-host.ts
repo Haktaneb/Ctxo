@@ -6,6 +6,7 @@ import { indexTestPatterns, loadConfig, makeGlobMatcher, resolveCoChangeConfig }
 import { selectWindow, windowCutoff } from '../core/co-change/co-change-window.js';
 import { createLogger } from '../core/logger.js';
 import {
+  TEST_FRAMEWORK_ANNOTATIONS,
   createTestFileClassifier,
   filesWithTestAnnotations,
   hasCSharpAnnotations,
@@ -56,6 +57,7 @@ const HOST_SERVICES: CtxoHostServices = Object.freeze({
   buildGraph: buildGraphFromIndices,
   readCoChangeWindow,
   findGitRoot: (dir: string) => locateGitRoot(dir) ?? undefined,
+  testFrameworkAnnotations: TEST_FRAMEWORK_ANNOTATIONS,
 });
 
 export interface CreateModuleHostOptions {

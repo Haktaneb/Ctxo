@@ -39,25 +39,9 @@ export interface DiscoveryInput {
   readonly isPathTestFile: (path: string) => boolean;
   readonly config: DomainConfig;
   readonly indexTests: readonly string[];
+  /** The host's test-framework annotation names (`host.services.testFrameworkAnnotations`). */
+  readonly testFrameworkAnnotations: readonly string[];
 }
-
-/**
- * The short annotation names that mark a test (xUnit, NUnit, MSTest). Mirrors the CLI's
- * `TEST_FRAMEWORK_ANNOTATIONS`, which the module API does not export (R63: discovery reads annotations only).
- */
-const TEST_ANNOTATIONS: ReadonlySet<string> = new Set([
-  'Fact',
-  'Theory',
-  'SkippableFact',
-  'SkippableTheory',
-  'Test',
-  'TestCase',
-  'TestCaseSource',
-  'TestFixture',
-  'TestMethod',
-  'DataTestMethod',
-  'TestClass',
-]);
 
 const CHARACTERIZATION_NAMES: ReadonlySet<string> = new Set(['Characterization']);
 const CONTRACT_NAMES: ReadonlySet<string> = new Set(['Contract', 'Contracts', 'Contracts.Tests']);
@@ -84,8 +68,30 @@ function prefixOf(id: string): string {
   return dash < 0 ? id : id.slice(0, dash);
 }
 
-function hasTestAnnotation(index: FileIndex): boolean {
-  return index.symbols.some((symbol) => symbol.annotations?.some((annotation) => TEST_ANNOTATIONS.has(annotation.name)));
+function hasTestAnnotation(index: FileIndex, names: ReadonlySet<string>): boolean {
+  return index.symbols.some((symbol) => symbol.annotations?.some((annotation) => names.has(annotation.name)));
+}
+
+const KNOWN_REMOTES: readonly string[] = ['origin', 'upstream'];
+
+/**
+ * One entry per branch: a remote-tracking ref `<remote>/<x>` is dropped when `x` exists locally, and a
+ * remote-only one counts once by its name without the remote. A first segment is a remote when it is
+ * `origin`, `upstream`, or the other ref list holds the rest of the name as a branch of its own.
+ */
+export function dedupeBranches(branches: readonly string[]): string[] {
+  const all = new Set(branches);
+  const remotes = new Set(KNOWN_REMOTES);
+  for (const ref of all) {
+    const slash = ref.indexOf('/');
+    if (slash > 0 && all.has(ref.slice(slash + 1))) remotes.add(ref.slice(0, slash));
+  }
+  const names = new Set<string>();
+  for (const ref of all) {
+    const slash = ref.indexOf('/');
+    names.add(slash > 0 && remotes.has(ref.slice(0, slash)) ? ref.slice(slash + 1) : ref);
+  }
+  return [...names].sort(compare);
 }
 
 function cardPrefixes(input: DiscoveryInput): DiscoveryEvidence['cardPrefixes'] {
@@ -103,7 +109,7 @@ function cardPrefixes(input: DiscoveryInput): DiscoveryEvidence['cardPrefixes'] 
 
 function trackerKeys(input: DiscoveryInput, rulePrefixes: ReadonlySet<string>): DiscoveryEvidence['trackerKeys'] {
   const counts = new Map<string, number>();
-  for (const text of [...input.commitSubjects, ...input.branches]) {
+  for (const text of [...input.commitSubjects, ...dedupeBranches(input.branches)]) {
     const seen = new Set<string>();
     for (const match of text.matchAll(TRACKER_KEY_PATTERN)) seen.add(prefixOf(match[0]));
     for (const prefix of seen) counts.set(prefix, (counts.get(prefix) ?? 0) + 1);
@@ -113,10 +119,10 @@ function trackerKeys(input: DiscoveryInput, rulePrefixes: ReadonlySet<string>): 
     .sort((a, b) => b.occurrences - a.occurrences || compare(a.prefix, b.prefix));
 }
 
-function traitKeys(input: DiscoveryInput, idPattern: RegExp): DiscoveryEvidence['traitKeys'] {
+function traitKeys(input: DiscoveryInput, idPattern: RegExp, annotated: ReadonlySet<string>): DiscoveryEvidence['traitKeys'] {
   const stats = new Map<string, { count: number; idLikeValues: number }>();
   for (const index of input.indices) {
-    if (!input.isPathTestFile(index.file) && !hasTestAnnotation(index)) continue;
+    if (!input.isPathTestFile(index.file) && !hasTestAnnotation(index, annotated)) continue;
     for (const symbol of index.symbols) {
       for (const annotation of symbol.annotations ?? []) {
         const key = annotation.name === 'Trait' ? annotation.args?.[0] : undefined;
@@ -135,11 +141,11 @@ function traitKeys(input: DiscoveryInput, idPattern: RegExp): DiscoveryEvidence[
 }
 
 /** Directories of annotated test files that the path check rejects; nested ones fold into their topmost listed parent. */
-function uncoveredTestFolders(input: DiscoveryInput): FolderCount[] {
+function uncoveredTestFolders(input: DiscoveryInput, annotated: ReadonlySet<string>): FolderCount[] {
   const perDir = new Map<string, number>();
   for (const index of input.indices) {
     const file = norm(index.file);
-    if (input.isPathTestFile(file) || !hasTestAnnotation(index)) continue;
+    if (input.isPathTestFile(file) || !hasTestAnnotation(index, annotated)) continue;
     const slash = file.lastIndexOf('/');
     if (slash <= 0) continue;
     const dir = file.slice(0, slash);
@@ -179,8 +185,9 @@ export function discoverConventions(input: DiscoveryInput): { readonly evidence:
   const cards = cardPrefixes(input);
   const rulePrefixes = new Set(cards.map((c) => c.prefix));
   const tracker = trackerKeys(input, rulePrefixes);
-  const traits = traitKeys(input, idPattern);
-  const uncovered = uncoveredTestFolders(input);
+  const annotated = new Set(input.testFrameworkAnnotations);
+  const traits = traitKeys(input, idPattern, annotated);
+  const uncovered = uncoveredTestFolders(input, annotated);
   const tracked = [...new Set(input.trackedFiles)];
 
   const evidence: DiscoveryEvidence = {
@@ -227,7 +234,7 @@ export function formatDiscovery(evidence: DiscoveryEvidence, proposal: Discovery
   } else {
     const width = Math.max(...evidence.trackerKeys.map((t) => t.prefix.length));
     evidence.trackerKeys.forEach((t, i) => {
-      const text = `${t.prefix.padEnd(width)} in ${t.occurrences}${t.overlapsRulePrefix ? '   <- overlaps a rule prefix' : ''}`;
+      const text = `${t.prefix.padEnd(width)} in ${t.occurrences} commit subjects/branches${t.overlapsRulePrefix ? '   <- overlaps a rule prefix' : ''}`;
       lines.push(row(i === 0 ? '  tracker-like keys:' : '', text).trimEnd());
     });
   }
