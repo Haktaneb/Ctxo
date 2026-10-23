@@ -1,6 +1,7 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { parseCard } from '../card-parser.js';
-import { decisionLinks, resolveProvenanceTarget } from '../decision-links.js';
+import { leavesProject } from '../../adapters/repo-files.js';
+import { decisionLinks, leavesRepository, resolveProvenanceTarget } from '../decision-links.js';
 import { decisionNodeId, type DecisionNode, type DomainLink } from '../domain-graph.js';
 
 const CARD = 'docs/domain/lending/domain.md';
@@ -21,13 +22,14 @@ function decision(text: string, card = CARD) {
 
 function links(
   text: string,
-  options: { ruleIds?: string[]; trackerPrefixes?: string[]; fileExists?: (p: string) => boolean } = {},
+  options: { ruleIds?: string[]; trackerPrefixes?: string[]; fileExists?: (p: string) => boolean; isDirectory?: (p: string) => boolean } = {},
 ): DomainLink[] {
   return decisionLinks({
     ...decision(text),
     ruleIds: new Set(options.ruleIds ?? []),
     trackerPrefixes: new Set(options.trackerPrefixes ?? []),
     fileExists: options.fileExists ?? (() => true),
+    ...(options.isDirectory ? { isDirectory: options.isDirectory } : {}),
   });
 }
 
@@ -176,5 +178,43 @@ describe('decisionLinks', () => {
     expect(result).toHaveLength(4);
     await Promise.resolve();
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('a link to the repository root or a directory is not provenance', () => {
+    expect(resolveProvenanceTarget(CARD, '../../..')).toEqual({ kind: 'directory' });
+    expect(resolveProvenanceTarget(CARD, '/')).toEqual({ kind: 'directory' });
+    expect(resolveProvenanceTarget('README.md', './')).toEqual({ kind: 'directory' });
+    expect(resolveProvenanceTarget(CARD, '../../specs/')).toEqual({ kind: 'directory' });
+    const fileExists = vi.fn((_: string) => true);
+    const result = links('[root](../../..) [slash](/) [dir](../../specs/) [folder](../../specs) [file](../../specs/a.md)', {
+      fileExists,
+      isDirectory: (path) => path === 'docs/specs',
+    });
+    expect(result.map((l) => l.to)).toEqual([{ kind: 'file', path: 'docs/specs/a.md', exists: true }]);
+    expect(fileExists.mock.calls).toEqual([['docs/specs/a.md']]);
+  });
+});
+
+describe('leaving the repository', () => {
+  it.each([
+    ['..', true],
+    ['../x', true],
+    ['/abs', true],
+    ['..hidden', false],
+    ['..hidden/x.md', false],
+    ['docs/../x', false],
+  ] as const)('%s: the core check agrees with leavesProject (%s)', (path, leaves) => {
+    expect(leavesProject(path)).toBe(leaves);
+    expect(leavesRepository(path)).toBe(leaves);
+  });
+
+  it.each([
+    ['..', { kind: 'external', value: '..' }],
+    ['../x', { kind: 'external', value: '../x' }],
+    // In a card link a leading slash is the repository root (GitHub's reading), so it stays inside.
+    ['/abs', { kind: 'file', path: 'abs' }],
+    ['..hidden', { kind: 'file', path: '..hidden' }],
+  ] as const)('resolveProvenanceTarget from the root README: %s', (path, expected) => {
+    expect(resolveProvenanceTarget('README.md', path)).toEqual(expected);
   });
 });

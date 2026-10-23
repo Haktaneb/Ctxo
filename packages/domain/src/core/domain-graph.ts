@@ -1,6 +1,14 @@
 import { createHash } from 'node:crypto';
+import type { FileIndex, TestFileCheck } from '@ctxo/cli/internal';
 import type { CardDecision, GlossaryItem, ParsedCard } from './card-parser.js';
+import { decisionLinks } from './decision-links.js';
+import type { DomainConfig } from './domain-config.js';
+import type { Ownership } from './ownership.js';
 import type { DomainContext, DomainRegistry, Rung } from './registry.js';
+import type { RuleLinks, RuleRef } from './rule-id-scan.js';
+import { ruleSymbolLinks } from './rule-symbol-links.js';
+import { ruleTestLinks, type RefLookup } from './rule-test-links.js';
+import { termIdentifierLinks, type SplitIdentifier, type TermCandidate } from './term-links.js';
 
 /**
  * The domain graph model (spec 11.2, designer calls F1 and F2): node types, node IDs, the nodes built from the
@@ -214,6 +222,11 @@ function sectionNodeId(card: string, line: number): string {
   return `section:${card}:${line}`;
 }
 
+/** `a`, `a and b`, `a, b and c`. */
+function listText(items: readonly string[]): string {
+  return items.length <= 1 ? (items[0] ?? '') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]!}`;
+}
+
 interface TermDraft {
   readonly context: string;
   readonly key: string;
@@ -240,20 +253,36 @@ export function buildGraphNodes(input: {
 
   const present = input.cards.filter((c): c is CardInput & { readonly card: ParsedCard } => c.card !== undefined);
 
+  // A card shared by several contexts is warned once; its rules belong to the first of them by id.
+  const cardContexts = new Map<string, Set<string>>();
+  for (const c of present) {
+    const ids = cardContexts.get(c.path);
+    if (ids === undefined) cardContexts.set(c.path, new Set([c.context.id]));
+    else ids.add(c.context.id);
+  }
+  const ruleOwner = new Map<string, string>();
+  for (const [path, ids] of [...cardContexts].sort((a, b) => compare(a[0], b[0]))) {
+    const sorted = [...ids].sort(compare);
+    ruleOwner.set(path, sorted[0]!);
+    if (sorted.length > 1) warn(`card ${path} is shared by contexts ${listText(sorted)}; its rules belong to ${sorted[0]!}`);
+  }
+
   // Rules: a duplicate ID keeps the first by card path, then line.
   const candidates = present
+    .filter((c) => ruleOwner.get(c.path) === c.context.id)
     .flatMap((c) => c.card.rules.map((rule) => ({ input: c, rule })))
     .sort((a, b) => compare(a.input.path, b.input.path) || compareNumber(a.rule.line, b.rule.line));
   const kept = new Map<string, string>();
   const rules: RuleNode[] = [];
   const cardRefs: CardRuleRefs[] = [];
   for (const { input: c, rule } of candidates) {
+    const where = `${c.path} (${c.context.id})`;
     const first = kept.get(rule.id);
     if (first !== undefined) {
-      warn(`rule ${rule.id} is defined in ${first} and ${c.path}; keeping the first`);
+      warn(`rule ${rule.id} is defined in ${first} and ${where}; keeping the first`);
       continue;
     }
-    kept.set(rule.id, c.path);
+    kept.set(rule.id, where);
     rules.push({
       id: ruleNodeId(rule.id),
       ruleId: rule.id,
@@ -415,8 +444,9 @@ export function sortGraph(graph: DomainGraph): DomainGraph {
     rules: [...graph.rules].sort(byId),
     terms: [...graph.terms].sort(byId),
     decisions: [...graph.decisions].sort(byId),
-    sections: [...graph.sections].sort((a, b) => byCardLine(a, b) || compare(a.id, b.id)),
-    openQuestions: [...graph.openQuestions].sort((a, b) => byCardLine(a, b) || compare(a.text, b.text)),
+    // A card shared by two contexts gives equal card, line and id; the context breaks that tie.
+    sections: [...graph.sections].sort((a, b) => byCardLine(a, b) || compare(a.id, b.id) || compare(a.context, b.context)),
+    openQuestions: [...graph.openQuestions].sort((a, b) => byCardLine(a, b) || compare(a.text, b.text) || compare(a.context, b.context)),
     links: [...graph.links].sort(compareLinks),
     unresolved: [...graph.unresolved].sort(
       (a, b) =>
@@ -428,4 +458,112 @@ export function sortGraph(graph: DomainGraph): DomainGraph {
         compare(a.reason, b.reason),
     ),
   };
+}
+
+function compareRefs(a: RuleRef, b: RuleRef): number {
+  return (
+    compare(a.file, b.file) ||
+    compareNumber(a.line, b.line) ||
+    compare(a.id, b.id) ||
+    compare(a.kind, b.kind) ||
+    compare(a.symbolId ?? '', b.symbolId ?? '') ||
+    compare(a.annotation ?? '', b.annotation ?? '') ||
+    compare(a.testTitle ?? '', b.testTitle ?? '') ||
+    compare(a.raw, b.raw)
+  );
+}
+
+/** The same links with rule IDs and each rule's refs in codepoint order. */
+function sortedRefs(links: RuleLinks): RuleLinks {
+  const sorted = [...links.links].sort((a, b) => compare(a[0], b[0])).map(([id, refs]) => [id, [...refs].sort(compareRefs)] as const);
+  return { links: new Map(sorted), unknown: links.unknown };
+}
+
+/** What `buildDomainGraph` composes. Pure data and functions: the caller does every read. */
+export interface DomainGraphInput {
+  readonly registry: DomainRegistry;
+  readonly registryHash: string;
+  readonly config: DomainConfig;
+  readonly cards: readonly CardInput[];
+  readonly glossary?: { readonly path: string; readonly items: readonly GlossaryItem[] };
+  readonly cardsHash: string;
+  readonly indices: readonly FileIndex[];
+  readonly isTestFile: TestFileCheck;
+  readonly ownership: Ownership;
+  /** Resolved test references (`scanTestFiles`, then `resolveRuleRefs`). */
+  readonly testRefs: RuleLinks;
+  /** Resolved `rule:` comments of production files (`scanRuleComments`, then `resolveRuleRefs`). */
+  readonly codeRefs: RuleLinks;
+  /** A file-only check: a directory is not a file (card refs and provenance). */
+  readonly fileExists: (repoPath: string) => boolean;
+  /** A provenance link to a path this accepts is not provenance. */
+  readonly isDirectory?: (repoPath: string) => boolean;
+  readonly split: SplitIdentifier;
+  /** The host's `dataResourceKinds` (P14). */
+  readonly dataResourceKinds: readonly string[];
+  readonly warn?: (message: string) => void;
+}
+
+/**
+ * The domain graph (spec 11.2): the nodes, the four link families (rule to test, rule to symbol, decision, term to
+ * identifier) and the unresolved card references, in the canonical order of `sortGraph`. The same input in any
+ * order gives the same graph.
+ */
+export function buildDomainGraph(input: DomainGraphInput): DomainGraph {
+  const nodes = buildGraphNodes({
+    registry: input.registry,
+    cards: input.cards,
+    ...(input.glossary === undefined ? {} : { glossary: input.glossary }),
+    ...(input.warn === undefined ? {} : { warn: input.warn }),
+  });
+
+  // Indices and refs in one order first, so a duplicate (one symbol ID twice, two refs on one link key) keeps the
+  // same entry whatever order the caller passes.
+  const indices = [...input.indices].sort((a, b) => compare(a.file, b.file));
+  const symbolNames = new Map<string, string>();
+  for (const index of indices) {
+    for (const symbol of index.symbols) if (!symbolNames.has(symbol.symbolId)) symbolNames.set(symbol.symbolId, symbol.name);
+  }
+  const lookup: RefLookup = {
+    hasSymbol: (symbolId) => symbolNames.has(symbolId),
+    symbolName: (symbolId) => symbolNames.get(symbolId),
+    fileExists: input.fileExists,
+  };
+
+  const tests = ruleTestLinks({ cardRefs: nodes.cardRefs, testRefs: sortedRefs(input.testRefs), lookup });
+  const code = ruleSymbolLinks({ cardRefs: nodes.cardRefs, codeRefs: sortedRefs(input.codeRefs), lookup });
+  const decisions = decisionLinks({
+    decisions: nodes.decisions,
+    parsed: nodes.parsedDecisions,
+    ruleIds: new Set(nodes.rules.map((rule) => rule.ruleId)),
+    trackerPrefixes: new Set(input.config.rules.trackerPrefixes),
+    fileExists: input.fileExists,
+    ...(input.isDirectory === undefined ? {} : { isDirectory: input.isDirectory }),
+  });
+
+  // Term candidates: the symbols of non-test files, each with the file's one owning context. Test files are left
+  // out here; `termIdentifierLinks` keeps its own isTest guard.
+  const candidates: TermCandidate[] = [];
+  for (const index of indices) {
+    const file = index.file.replace(/\\/g, '/');
+    if (input.isTestFile(file)) continue;
+    const context = input.ownership.ownerOf(file);
+    for (const symbol of index.symbols) candidates.push(context === undefined ? { symbol, file } : { symbol, file, context });
+  }
+  const terms = termIdentifierLinks(nodes.terms, candidates, input.split, input.dataResourceKinds);
+
+  return sortGraph({
+    ctxoArtifact: DOMAIN_GRAPH_ARTIFACT,
+    version: 1,
+    registryHash: input.registryHash,
+    cardsHash: input.cardsHash,
+    contexts: nodes.contexts,
+    rules: nodes.rules,
+    terms: nodes.terms.map((term) => ({ ...term, identifierCount: terms.counts.get(term.id) ?? 0 })),
+    decisions: nodes.decisions,
+    sections: nodes.sections,
+    openQuestions: nodes.openQuestions,
+    links: [...tests.links, ...code.links, ...decisions, ...terms.links],
+    unresolved: [...tests.unresolved, ...code.unresolved],
+  });
 }

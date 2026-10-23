@@ -55,6 +55,15 @@ describe('term tokens', () => {
     expect(tokensMatch(['loaner'], ['loan'])).toBeUndefined();
     expect(tokensMatch(['loan'], [])).toBeUndefined();
   });
+
+  it('plural folding runs both ways: a plural term matches a singular identifier', () => {
+    expect(tokensMatch(['late', 'fee'], ['late', 'fees'])).toBe('exact');
+    expect(tokensMatch(['policy'], ['policies'])).toBe('exact');
+    expect(tokensMatch(['box'], ['boxes'])).toBe('exact');
+    expect(tokensMatch(['loan', 'policy'], ['loans'])).toBe('partial');
+    expect(tokensMatch(['loan'], ['loaners'])).toBeUndefined();
+    expect(tokensMatch(['fee'], ['feet'])).toBeUndefined();
+  });
 });
 
 describe('termIdentifierLinks', () => {
@@ -71,6 +80,10 @@ describe('termIdentifierLinks', () => {
     ['Lending', 'LibraryLending.Lending.LoanPolicy', 'class', undefined],
     ['ID', 'Id', 'variable', undefined],
     ['ID', 'MemberId', 'variable', undefined],
+    ['Late fees', 'LateFee', 'class', { match: 'exact', source: 'symbol-name' }],
+    ['Late fees', 'LateFeeCalculator', 'class', { match: 'partial', source: 'symbol-name' }],
+    ['Policies', 'Policy', 'class', { match: 'exact', source: 'symbol-name' }],
+    ['Policies', 'LoanPolicy', 'class', { match: 'partial', source: 'symbol-name' }],
   ] as const)('%s against %s (%s)', (termText, name, kind, expected) => {
     expect(matchOf(termText, name, kind)).toEqual(expected);
   });
@@ -140,6 +153,29 @@ describe('termIdentifierLinks', () => {
 
   it('the kind order puts types before members', () => {
     expect(TERM_KIND_ORDER).toEqual(['class', 'interface', 'type', 'table', 'view', 'procedure', 'function', 'method', 'variable']);
+  });
+
+  it('Account in two contexts: each term links only the symbols of its own context', () => {
+    const candidates = [
+      candidate('MemberAccount', 'class', { file: 'src/Lending/MemberAccount.cs', context: 'lending' }),
+      candidate('AccountLedger', 'class', { file: 'src/Billing/AccountLedger.cs', context: 'billing' }),
+      candidate('Account', 'class', { file: 'src/Billing/Account.cs', context: 'billing' }),
+      candidate('AccountHelper', 'class', { file: 'src/Shared/AccountHelper.cs', context: null }),
+    ];
+    const lending = term('Account', 'lending');
+    const billing = term('Account', 'billing');
+    const { links, counts } = termIdentifierLinks([billing, lending], [...candidates].reverse(), split, dataResourceKinds);
+    const targets = (id: string) => links.filter((l) => l.from === id).map((l) => (l.kind === 'term-identifier' ? l.to.symbolId : ''));
+    expect(targets(lending.id)).toEqual(['src/Lending/MemberAccount.cs::MemberAccount::class']);
+    expect(targets(billing.id)).toEqual(['src/Billing/Account.cs::Account::class', 'src/Billing/AccountLedger.cs::AccountLedger::class']);
+    expect(counts.get(lending.id)).toBe(1);
+    expect(counts.get(billing.id)).toBe(2);
+  });
+
+  it('a term of a context without symbols links nothing and counts 0', () => {
+    const { links, counts } = termIdentifierLinks([term('Loan', 'reporting')], [candidate('LoanPolicy')], split, dataResourceKinds);
+    expect(links).toEqual([]);
+    expect(counts.get(term('Loan', 'reporting').id)).toBe(0);
   });
 
   it('a symbol listed twice is linked once', () => {

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { BoundaryViolationRecord, CrossContextSummary } from '../core/boundaries.js';
 import type { ContextHistoryEntry, MovedFile } from '../core/context-metrics.js';
 import type { BoundaryMode } from '../core/domain-config.js';
+import type { DomainGraph } from '../core/domain-graph.js';
 import { RUNGS, type Rung } from '../core/registry.js';
 
 /** `.ctxo/index/domain/contexts.json`: the file-to-context map of the current registry (E1, E2). */
@@ -28,7 +29,9 @@ export interface BoundariesArtifact {
   readonly violations: readonly BoundaryViolationRecord[];
 }
 
-type ArtifactName = 'contexts.json' | 'boundaries.json';
+type ArtifactName = 'contexts.json' | 'boundaries.json' | 'graph.json';
+
+const GRAPH_ARRAYS = ['contexts', 'rules', 'terms', 'decisions', 'sections', 'openQuestions', 'links', 'unresolved'] as const;
 
 const HISTORY_DIR = 'history';
 const DEFAULT_KEEP = 10;
@@ -109,6 +112,18 @@ function isBoundaries(v: unknown): v is BoundariesArtifact {
   );
 }
 
+/** The marker, version 1, both hashes and every array; the entries themselves are the index pass's own output. */
+function isGraph(v: unknown): v is DomainGraph {
+  return (
+    isRecord(v) &&
+    v['ctxoArtifact'] === 'domain-graph' &&
+    v['version'] === 1 &&
+    isString(v['registryHash']) &&
+    isString(v['cardsHash']) &&
+    GRAPH_ARRAYS.every((key) => Array.isArray(v[key]))
+  );
+}
+
 function isHistoryEntry(v: unknown): v is ContextHistoryEntry {
   return (
     isRecord(v) &&
@@ -160,7 +175,7 @@ export class DomainArtifactStore {
   }
 
   /** Writes the artifact unless the file already holds the same JSON (after CRLF and BOM normalisation). */
-  writeIfChanged(name: ArtifactName, artifact: ContextsArtifact | BoundariesArtifact): boolean {
+  writeIfChanged(name: ArtifactName, artifact: ContextsArtifact | BoundariesArtifact | DomainGraph): boolean {
     const target = join(this.dir, name);
     const content = serialize(artifact);
     const existing = this.readText(target);
@@ -209,6 +224,12 @@ export class DomainArtifactStore {
     return isBoundaries(value) ? value : undefined;
   }
 
+  /** `graph.json`: undefined unless it carries the `domain-graph` marker, version 1 and every array. */
+  readGraph(): DomainGraph | undefined {
+    const value = this.readJson(join(this.dir, 'graph.json'));
+    return isGraph(value) ? value : undefined;
+  }
+
   /** Valid history entries, newest first by committer date. */
   readHistory(): ContextHistoryEntry[] {
     const out: ContextHistoryEntry[] = [];
@@ -220,14 +241,16 @@ export class DomainArtifactStore {
   }
 
   /**
-   * Deletes the domain artifacts: `contexts.json`, `boundaries.json` and the history entries, each only when it
-   * carries the matching `ctxoArtifact` marker (ADR-018 C3). The folder also holds the index entries of a source
-   * folder named `domain/`, which are never touched. An emptied `history/` folder is removed.
+   * Deletes the domain artifacts: `contexts.json`, `boundaries.json`, `graph.json` and the history entries, each
+   * only when it carries the matching `ctxoArtifact` marker (ADR-018 C3). The folder also holds the index entries of
+   * a source folder named `domain/` (`domain/graph` has its entry at `graph.json`), which are never touched. An
+   * emptied `history/` folder is removed.
    */
   removeAll(): void {
     for (const [name, marker] of [
       ['contexts.json', 'domain-contexts'],
       ['boundaries.json', 'domain-boundaries'],
+      ['graph.json', 'domain-graph'],
     ] as const) {
       const path = join(this.dir, name);
       if (this.isMarked(path, marker)) rmSync(path, { force: true });

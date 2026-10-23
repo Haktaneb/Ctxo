@@ -11,14 +11,16 @@ import { ruleNodeId, type DecisionNode, type DomainLink, type Location } from '.
 export type ResolvedTarget =
   | { readonly kind: 'file'; readonly path: string }
   | { readonly kind: 'external'; readonly value: string }
-  | { readonly kind: 'anchor' };
+  | { readonly kind: 'anchor' }
+  /** The repository root or a path written as a folder (`dir/`): not provenance. */
+  | { readonly kind: 'directory' };
 
 const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
 const TRACKER_KEY = /\b([A-Z][A-Z0-9]{1,9})-\d+\b/g;
 const RULE_ID = /(?<![A-Za-z0-9])[A-Z][A-Z0-9]*-\d+(?![A-Za-z0-9])/g;
 
 /** The same test as `leavesProject` (adapters/repo-files.ts), on a posix-normalised path; core cannot import it. */
-function leavesRepository(rel: string): boolean {
+export function leavesRepository(rel: string): boolean {
   return rel === '..' || rel.startsWith('../') || posix.isAbsolute(rel);
 }
 
@@ -41,6 +43,7 @@ export function resolveProvenanceTarget(cardPath: string, target: string): Resol
     ? posix.normalize(raw.replace(/^\/+/, ''))
     : posix.normalize(posix.join(posix.dirname(cardPath), raw));
   if (leavesRepository(path)) return { kind: 'external', value: target };
+  if (path === '.' || path.endsWith('/')) return { kind: 'directory' };
   return { kind: 'file', path };
 }
 
@@ -60,7 +63,12 @@ interface Placed {
 function linksOf(
   node: DecisionNode,
   decision: CardDecision,
-  input: { readonly ruleIds: ReadonlySet<string>; readonly trackerPrefixes: ReadonlySet<string>; readonly fileExists: (repoPath: string) => boolean },
+  input: {
+    readonly ruleIds: ReadonlySet<string>;
+    readonly trackerPrefixes: ReadonlySet<string>;
+    readonly fileExists: (repoPath: string) => boolean;
+    readonly isDirectory?: (repoPath: string) => boolean;
+  },
 ): DomainLink[] {
   const at: Location = { file: node.card, line: node.line };
   const text = decision.text;
@@ -77,7 +85,8 @@ function linksOf(
       cursor = found + link.target.length;
     }
     const resolved = resolveProvenanceTarget(node.card, link.target);
-    if (resolved.kind === 'anchor') continue;
+    if (resolved.kind === 'anchor' || resolved.kind === 'directory') continue;
+    if (resolved.kind === 'file' && input.isDirectory?.(resolved.path) === true) continue;
     const to =
       resolved.kind === 'file'
         ? { kind: 'file' as const, path: resolved.path, exists: input.fileExists(resolved.path) }
@@ -121,13 +130,18 @@ function linksOf(
   return links;
 }
 
-/** Per decision in the given order: inline links, external references, tracker keys and rule IDs, in text order. */
+/**
+ * Per decision in the given order: inline links, external references, tracker keys and rule IDs, in text order.
+ * `fileExists` should be a file-only check; a link to the repository root, to a path written as a folder, or to a
+ * path `isDirectory` accepts is not provenance and gives no link.
+ */
 export function decisionLinks(input: {
   readonly decisions: readonly DecisionNode[];
   readonly parsed: ReadonlyMap<string, CardDecision>;
   readonly ruleIds: ReadonlySet<string>;
   readonly trackerPrefixes: ReadonlySet<string>;
   readonly fileExists: (repoPath: string) => boolean;
+  readonly isDirectory?: (repoPath: string) => boolean;
 }): DomainLink[] {
   const links: DomainLink[] = [];
   for (const node of input.decisions) {

@@ -38,13 +38,16 @@ export function identifierTokens(name: string, split: SplitIdentifier): string[]
   return normalise([last], split);
 }
 
-function tokenMatches(identifier: string, term: string): boolean {
+/** `plural` is `singular` with `s`, `es`, or `y` turned into `ies`. */
+function isPluralOf(plural: string, singular: string): boolean {
   return (
-    identifier === term ||
-    identifier === `${term}s` ||
-    identifier === `${term}es` ||
-    (term.endsWith('y') && identifier === `${term.slice(0, -1)}ies`)
+    plural === `${singular}s` || plural === `${singular}es` || (singular.endsWith('y') && plural === `${singular.slice(0, -1)}ies`)
   );
+}
+
+/** Equal, or one the plural of the other: plural folding runs both ways (`Loan` matches `Loans`, `Late fees` matches `LateFee`). */
+function tokenMatches(identifier: string, term: string): boolean {
+  return identifier === term || isPluralOf(identifier, term) || isPluralOf(term, identifier);
 }
 
 /** The term tokens as a contiguous run of identifier tokens; `exact` when the run is the whole identifier. */
@@ -101,6 +104,14 @@ export function termIdentifierLinks(
     unique.set(candidate.symbol.symbolId, candidate);
   }
   const tokenized = [...unique.values()].map((candidate) => ({ candidate, tokens: identifierTokens(candidate.symbol.name, split) }));
+  // Candidates by context, so a context term only walks its own symbols; a repo-wide term walks them all.
+  const byContext = new Map<string, typeof tokenized>();
+  for (const entry of tokenized) {
+    if (entry.candidate.context === undefined) continue;
+    const list = byContext.get(entry.candidate.context);
+    if (list === undefined) byContext.set(entry.candidate.context, [entry]);
+    else list.push(entry);
+  }
 
   const links: DomainLink[] = [];
   const counts = new Map<string, number>();
@@ -108,8 +119,8 @@ export function termIdentifierLinks(
     const tokens = termTokens(term.term, split);
     const matches: Match[] = [];
     if (tokens.some((t) => t.length >= MIN_TOKEN_LENGTH)) {
-      for (const { candidate, tokens: identifier } of tokenized) {
-        if (term.context !== REPO_WIDE_CONTEXT && candidate.context !== term.context) continue;
+      const pool = term.context === REPO_WIDE_CONTEXT ? tokenized : (byContext.get(term.context) ?? []);
+      for (const { candidate, tokens: identifier } of pool) {
         const match = tokensMatch(identifier, tokens);
         if (match) matches.push({ candidate, match });
       }
