@@ -181,7 +181,7 @@ function parseBranchNames(raw: string): { local: string[]; remote: string[]; all
     const ref = line.trim();
     if (ref.startsWith('refs/heads/')) {
       local.add(ref.slice('refs/heads/'.length));
-    } else if (ref.startsWith('refs/remotes/') && !ref.endsWith('/HEAD')) {
+    } else if (ref.startsWith('refs/remotes/') && !/^refs\/remotes\/[^/]+\/HEAD$/.test(ref)) {
       remote.add(ref.slice('refs/remotes/'.length));
     }
   }

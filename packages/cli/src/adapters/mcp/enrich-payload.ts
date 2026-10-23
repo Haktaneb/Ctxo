@@ -1,5 +1,4 @@
-import type { CoreToolName, ResponseEnricher } from '../../ports/i-ctxo-module.js';
-import type { LoadedModule } from '../modules/module-loader.js';
+import type { CoreToolName, LoadedModule, ResponseEnricher } from '../../ports/i-ctxo-module.js';
 import { createLogger } from '../../core/logger.js';
 import { describeError } from '../../core/describe-error.js';
 

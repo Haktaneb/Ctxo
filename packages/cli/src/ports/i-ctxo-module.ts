@@ -155,6 +155,13 @@ export interface CtxoModuleRegistration {
   readonly doctorChecks?: readonly IHealthCheck[];
 }
 
+/** A module the CLI loaded and registered: its package name, version and registration. */
+export interface LoadedModule {
+  readonly name: string;
+  readonly version: string;
+  readonly registration: CtxoModuleRegistration;
+}
+
 /** The runtime services a module gets from the CLI instead of importing them. */
 export interface CtxoHostServices {
   createLogger(namespace: string): Logger;

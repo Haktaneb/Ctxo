@@ -7,8 +7,10 @@ import { DOMAIN_MODULE_PACKAGE } from '../../modules/module-loader.js';
 
 /*
  * install_copies: the MCP entries and the hooks of a project should start the same ctxo copy.
- * "npx -y @ctxo/cli" in the MCP config next to hooks that run "ctxo" from PATH is two copies, so a
- * package added to one (such as @ctxo/domain) is missing from the other. Only warns, never fails.
+ * An unpinned "npx -y @ctxo/cli" runs the global copy when it satisfies the spec, so it is one copy with
+ * hooks that run "ctxo" from PATH. A pinned "npx -y @ctxo/cli@<version>" that differs from the global
+ * version is two copies, so a package added to one (such as @ctxo/domain) is missing from the other.
+ * Only warns, never fails.
  */
 
 /** Client files that register the ctxo MCP server, and the key that holds their server map. */

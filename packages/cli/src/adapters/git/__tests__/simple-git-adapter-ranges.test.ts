@@ -329,6 +329,27 @@ describe('SimpleGitAdapter.getRefs', () => {
     expect(refs?.remoteBranches).toEqual(['fork/OPS-7', 'origin/OPS-7']);
   });
 
+  it('drops the origin/HEAD pointer but keeps a real remote branch named like release/HEAD (M4)', async () => {
+    const repo = createRepo();
+    const remote = mkdtempSync(join(tmpdir(), 'ctxo-ranges-remote-'));
+    tempDirs.push(remote);
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main'], { cwd: remote, stdio: 'ignore' });
+    repo.write('a.ts', '1');
+    repo.commit('c1');
+    repo.git('remote', 'add', 'origin', remote);
+    repo.git('push', '-q', '-u', 'origin', 'main');
+    repo.git('push', '-q', 'origin', 'main:release/HEAD');
+    repo.git('remote', 'set-head', 'origin', 'main');
+    repo.git('fetch', '-q', 'origin');
+    repo.git('branch', 'feat/HEAD');
+
+    const refs = await new SimpleGitAdapter(repo.dir).getRefs();
+
+    expect(refs?.remoteBranches).toEqual(['origin/main', 'origin/release/HEAD']);
+    expect(refs?.remoteBranches).not.toContain('origin/HEAD');
+    expect(refs?.localBranches).toEqual(['feat/HEAD', 'main']);
+  });
+
   it('leaves absent fields undefined in a repository without a remote', async () => {
     const repo = createRepo();
     repo.write('a.ts', '1');

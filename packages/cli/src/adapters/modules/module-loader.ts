@@ -1,4 +1,4 @@
-import type { CtxoHost, CtxoModuleRegister, CtxoModuleRegistration } from '../../ports/i-ctxo-module.js';
+import type { CtxoHost, CtxoModuleRegister, CtxoModuleRegistration, LoadedModule } from '../../ports/i-ctxo-module.js';
 import { createLogger } from '../../core/logger.js';
 import { resolvePackageCandidates, type ResolvedPackage } from '../language/plugin-discovery.js';
 
@@ -16,11 +16,7 @@ export interface ModuleReport {
   readonly reason?: string;
 }
 
-export interface LoadedModule {
-  readonly name: string;
-  readonly version: string;
-  readonly registration: CtxoModuleRegistration;
-}
+export type { LoadedModule };
 
 export interface ModuleLoadResult {
   readonly modules: readonly LoadedModule[];

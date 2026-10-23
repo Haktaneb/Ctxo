@@ -1,7 +1,6 @@
 import type { z, ZodRawShape } from 'zod';
 import type { IMaskingPort } from '../../ports/i-masking-port.js';
-import type { CoreToolName, ModuleToolDefinition } from '../../ports/i-ctxo-module.js';
-import type { LoadedModule } from '../modules/module-loader.js';
+import type { CoreToolName, LoadedModule, ModuleToolDefinition } from '../../ports/i-ctxo-module.js';
 import type { StalenessCheck } from './get-logic-slice.js';
 import { wrapResponse } from '../../core/response-envelope.js';
 import { createLogger } from '../../core/logger.js';

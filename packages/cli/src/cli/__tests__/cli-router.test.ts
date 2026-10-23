@@ -736,6 +736,9 @@ export async function register() {
     expect(help).toContain('Usage:');
     expect(help).toContain('Domain commands (@ctxo/domain):');
     expect(help).toContain('  ctxo verify-domain [--json]   Check the domain registry (stub)');
+    // One two-space indent under the heading, matching the core lines; never four (M3).
+    expect(help).toMatch(/^ {2}ctxo verify-domain /m);
+    expect(help).not.toMatch(/^ {3,}ctxo verify-domain /m);
     expect(help).not.toContain('Stub hook entry');
     expect(help).not.toContain('Domain commands need @ctxo/domain');
   });
