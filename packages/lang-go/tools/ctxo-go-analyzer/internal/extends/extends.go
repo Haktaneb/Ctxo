@@ -19,8 +19,10 @@ import (
 // Extract returns `extends` edges grouped by the source file of the
 // embedding type (the child). External embeddings (stdlib types promoted
 // into a module-local struct) are skipped — we only care about intra-module
-// inheritance chains for graph traversal.
-func Extract(rootDir string, pkgs []*packages.Package) map[string][]emit.Edge {
+// inheritance chains for graph traversal. include filters on the embedding
+// type's file (module-relative, forward slashes); embedded targets are never
+// filtered. A nil include keeps every embedding type.
+func Extract(rootDir string, pkgs []*packages.Package, include func(relFile string) bool) map[string][]emit.Edge {
 	type entry struct {
 		named *types.Named
 		file  string
@@ -82,6 +84,9 @@ func Extract(rootDir string, pkgs []*packages.Package) map[string][]emit.Edge {
 	}
 
 	for _, e := range named {
+		if include != nil && !include(e.file) {
+			continue
+		}
 		switch under := e.named.Underlying().(type) {
 		case *types.Struct:
 			for i := 0; i < under.NumFields(); i++ {

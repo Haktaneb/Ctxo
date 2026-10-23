@@ -18,8 +18,10 @@ import (
 
 // Extract returns `implements` edges grouped by the source file of the
 // concrete type. Both sides of each edge are guaranteed to live inside the
-// module root — external interfaces and stdlib types are skipped.
-func Extract(rootDir string, pkgs []*packages.Package) map[string][]emit.Edge {
+// module root; external interfaces and stdlib types are skipped. include
+// filters on the concrete type's file (module-relative, forward slashes);
+// interfaces are never filtered. A nil include keeps every concrete type.
+func Extract(rootDir string, pkgs []*packages.Package, include func(relFile string) bool) map[string][]emit.Edge {
 	type typed struct {
 		named *types.Named
 		file  string
@@ -75,6 +77,9 @@ func Extract(rootDir string, pkgs []*packages.Package) map[string][]emit.Edge {
 		ifaceID := symbols.SymbolID(iface.file, iface.named.Obj().Name(), "interface")
 
 		for _, c := range concretes {
+			if include != nil && !include(c.file) {
+				continue
+			}
 			concreteID := symbols.SymbolID(c.file, c.named.Obj().Name(), kindOf(c.named))
 			if concreteID == ifaceID {
 				continue

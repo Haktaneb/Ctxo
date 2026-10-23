@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
@@ -53,13 +54,19 @@ type LoadResult struct {
 	FallbackUsed bool
 }
 
-// Packages loads "./..." rooted at dir. Patterns can override the default
-// for tests that want to scope analysis to a single sub-package.
+// Packages loads "./..." rooted at dir, test packages included. Patterns can
+// override the default for tests that want to scope analysis to a single
+// sub-package. Partition splits the result into the production set (exactly
+// what a load without tests returns) and the test variants.
 //
 // Failure mode: returns a LoadResult (possibly with empty Packages) and
 // sets FatalError. The caller should surface the error but continue —
 // degraded analysis beats no analysis when consumers have a flaky module.
 func Packages(dir string, patterns ...string) *LoadResult {
+	return load(dir, true, patterns...)
+}
+
+func load(dir string, tests bool, patterns ...string) *LoadResult {
 	if len(patterns) == 0 {
 		patterns = []string{"./..."}
 	}
@@ -67,7 +74,7 @@ func Packages(dir string, patterns ...string) *LoadResult {
 	cfg := &packages.Config{
 		Mode:  Mode,
 		Dir:   dir,
-		Tests: false,
+		Tests: tests,
 		// GOFLAGS=-mod=mod lets `go list` automatically add missing module
 		// entries (matches what `go build` does) instead of failing with
 		// "go: updates to go.mod needed; to update it: go mod tidy".
@@ -87,6 +94,36 @@ func Packages(dir string, patterns ...string) *LoadResult {
 		res.Errors = append(res.Errors, p.Errors...)
 	})
 	return res
+}
+
+// Partitioned splits a load with tests into production packages and test
+// variants. Each list is sorted by package ID.
+type Partitioned struct {
+	Prod, Tests []*packages.Package
+}
+
+// Partition puts packages whose ID has no "[" (and that are not generated
+// test mains: Name "main", ID ending ".test") in Prod, and packages whose ID
+// has "[" (internal and external test packages, and production packages
+// recompiled for a test) in Tests. Test mains are dropped.
+func Partition(pkgs []*packages.Package) Partitioned {
+	var out Partitioned
+	for _, p := range pkgs {
+		switch {
+		case strings.Contains(p.ID, "["):
+			out.Tests = append(out.Tests, p)
+		case p.Name == "main" && strings.HasSuffix(p.ID, ".test"):
+			// generated test main, never analysed
+		default:
+			out.Prod = append(out.Prod, p)
+		}
+	}
+	byID := func(list []*packages.Package) {
+		sort.SliceStable(list, func(i, j int) bool { return list[i].ID < list[j].ID })
+	}
+	byID(out.Prod)
+	byID(out.Tests)
+	return out
 }
 
 // PackagesWithFallback tries to load the whole module first; if that yields

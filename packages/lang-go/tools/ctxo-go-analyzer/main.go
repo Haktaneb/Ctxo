@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"go/ast"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -58,7 +59,7 @@ type fileAggregate struct {
 	edges   []emit.Edge
 }
 
-func run(root string, stdout *os.File) error {
+func run(root string, stdout io.Writer) error {
 	w := emit.NewWriter(stdout)
 	start := time.Now()
 
@@ -87,14 +88,17 @@ func run(root string, stdout *os.File) error {
 		return agg
 	}
 
-	for _, pkg := range res.Packages {
+	parts := load.Partition(res.Packages)
+
+	// Production pass: exactly the analysis of a load without tests.
+	for _, pkg := range parts.Prod {
 		for _, fs := range symbols.Extract(pkg, root) {
 			get(fs.RelPath).symbols = append(get(fs.RelPath).symbols, fs.Symbols...)
 		}
 	}
 
-	ext := edges.NewExtractor(root, res.Packages)
-	for _, pkg := range res.Packages {
+	ext := edges.NewExtractor(root, append(append([]*packages.Package{}, parts.Prod...), parts.Tests...))
+	for _, pkg := range parts.Prod {
 		for _, file := range pkg.Syntax {
 			rel := relativeFile(pkg, file, root)
 			if rel == "" {
@@ -104,13 +108,15 @@ func run(root string, stdout *os.File) error {
 		}
 	}
 
-	for rel, implEdges := range implements.Extract(root, res.Packages) {
+	for rel, implEdges := range implements.Extract(root, parts.Prod, nil) {
 		get(rel).edges = append(get(rel).edges, implEdges...)
 	}
 
-	for rel, extEdges := range extends.Extract(root, res.Packages) {
+	for rel, extEdges := range extends.Extract(root, parts.Prod, nil) {
 		get(rel).edges = append(get(rel).edges, extEdges...)
 	}
+
+	testPass(root, parts.Tests, ext, get)
 
 	paths := make([]string, 0, len(byFile))
 	for p := range byFile {
@@ -128,7 +134,7 @@ func run(root string, stdout *os.File) error {
 		}
 	}
 
-	reachRes := reach.Analyze(root, res.Packages, reachDeadline)
+	reachRes := reach.Analyze(root, parts.Prod, reachDeadline)
 	deadIDs := collectDead(byFile, reachRes.Reachable)
 	if err := w.Dead(emit.Dead{
 		SymbolIDs: deadIDs,
@@ -147,13 +153,82 @@ func run(root string, stdout *os.File) error {
 	})
 }
 
+// testPass emits the _test.go files of the test variants, in package ID
+// order. A file is taken from the first variant that holds it, so each test
+// function appears once. implements and extends run inside the variant's own
+// package universe, restricted to the files this variant emits, so a test
+// fake links to the production interface it satisfies. A file's edges are
+// de-duplicated by from, to, kind and typeArgs.
+func testPass(root string, tests []*packages.Package, ext *edges.Extractor, get func(string) *fileAggregate) {
+	emitted := make(map[string]bool)
+	for _, pkg := range tests {
+		mine := make(map[string]bool)
+		for _, file := range pkg.Syntax {
+			if pkg.Fset == nil {
+				break
+			}
+			tf := pkg.Fset.File(file.Pos())
+			if tf == nil || !strings.HasSuffix(filepath.Base(tf.Name()), "_test.go") {
+				continue
+			}
+			rel := relativeFile(pkg, file, root)
+			if rel == "" || emitted[rel] {
+				continue
+			}
+			fs, ok := symbols.ExtractFile(pkg, file, root)
+			if !ok {
+				continue
+			}
+			emitted[rel] = true
+			mine[rel] = true
+			agg := get(rel)
+			agg.symbols = append(agg.symbols, fs.Symbols...)
+			agg.edges = append(agg.edges, ext.Extract(pkg, file)...)
+		}
+		if len(mine) == 0 {
+			continue
+		}
+		include := func(rel string) bool { return mine[rel] }
+		universe := []*packages.Package{pkg}
+		for rel, implEdges := range implements.Extract(root, universe, include) {
+			get(rel).edges = append(get(rel).edges, implEdges...)
+		}
+		for rel, extEdges := range extends.Extract(root, universe, include) {
+			get(rel).edges = append(get(rel).edges, extEdges...)
+		}
+	}
+	for rel := range emitted {
+		agg := get(rel)
+		agg.edges = dedupeEdges(agg.edges)
+	}
+}
+
+func dedupeEdges(in []emit.Edge) []emit.Edge {
+	type key struct{ from, to, kind, typeArgs string }
+	seen := make(map[key]bool, len(in))
+	out := in[:0]
+	for _, e := range in {
+		k := key{e.From, e.To, e.Kind, strings.Join(e.TypeArgs, ",")}
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, e)
+	}
+	return out
+}
+
 // collectDead walks every function/method symbol across the module and
 // returns the subset not present in the reachable set. Non-callable kinds
 // (type/variable/class/interface) are excluded — CHA gives us liveness for
-// callable symbols only.
+// callable symbols only. Symbols of _test.go files are never dead: reach
+// runs on production packages, and the CLI decides what tests keep alive.
 func collectDead(byFile map[string]*fileAggregate, reachable map[string]bool) []string {
 	var dead []string
-	for _, agg := range byFile {
+	for file, agg := range byFile {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
 		for _, s := range agg.symbols {
 			if s.Kind != "function" && s.Kind != "method" {
 				continue
