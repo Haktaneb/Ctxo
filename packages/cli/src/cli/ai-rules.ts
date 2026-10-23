@@ -928,7 +928,8 @@ export function ensureMcpConfig(
   if (servers['ctxo']) {
     // From a global install, ctxo's own npx default moves to the global binary; a custom entry stays.
     if (kind === 'global' && isNpxDefaultEntry(servers['ctxo'])) {
-      write({ ...parsed, [target.serverKey]: { ...servers, ctxo: entry } });
+      // Only the launcher changes: the user's other fields (env, ...) stay.
+      write({ ...parsed, [target.serverKey]: { ...servers, ctxo: { ...(servers['ctxo'] as Record<string, unknown>), ...entry } } });
       return { file: target.file, action: 'updated' };
     }
     return { file: target.file, action: 'skipped' };

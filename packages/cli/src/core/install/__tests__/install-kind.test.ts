@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { cliInstallKind, mcpLauncherOf, assessInstallCopies, type InstallCopiesFacts } from '../install-kind.js';
+import { cliInstallKind, mcpLauncherOf, mcpNpxPin, assessInstallCopies, type InstallCopiesFacts } from '../install-kind.js';
 
 describe('cliInstallKind', () => {
   it.each([
@@ -23,6 +23,8 @@ describe('cliInstallKind', () => {
 describe('mcpLauncherOf', () => {
   it.each([
     [{ command: 'npx', args: ['-y', '@ctxo/cli'] }, 'npx'],
+    [{ command: 'npx', args: ['-y', '@ctxo/cli@0.13.0'] }, 'npx'],
+    [{ command: 'npx', args: ['-y', '@ctxo/cli-other'] }, 'other'],
     [{ command: 'npx.cmd', args: ['-y', '@ctxo/cli'] }, 'npx'],
     [{ command: 'cmd', args: ['/c', 'npx', '-y', '@ctxo/cli'] }, 'npx'],
     [{ command: 'ctxo', args: [] }, 'path-binary'],
@@ -54,16 +56,35 @@ describe('assessInstallCopies', () => {
     });
   });
 
-  it('warns about two copies and names @ctxo/domain only when it is installed', () => {
-    expect(assessInstallCopies(facts({ launchers: ['npx'], hooksCallCtxo: true, domainInstalled: true }))).toEqual({
+  it('warns about a pinned npx entry that differs from the global copy, naming @ctxo/domain only when installed', () => {
+    const base = { launchers: ['npx'] as const, hooksCallCtxo: true, npxPins: ['0.12.0'], globalCliVersion: '0.13.1' };
+    expect(assessInstallCopies(facts({ ...base, domainInstalled: true }))).toEqual({
       status: 'warn',
       message:
-        'MCP starts "npx -y @ctxo/cli" while hooks run "ctxo" from PATH: two copies, and @ctxo/domain installed in one is missing from the other',
+        'MCP starts "npx -y @ctxo/cli@0.12.0" while hooks run "ctxo" 0.13.1 from PATH: two copies, and @ctxo/domain installed in one is missing from the other',
       fix: 'Install once globally ("npm i -g @ctxo/cli @ctxo/domain"), then run "ctxo init --only mcp" from that install',
     });
-    const plain = assessInstallCopies(facts({ launchers: ['npx'], hooksCallCtxo: true }));
-    expect(plain.status).toBe('warn');
+    const plain = assessInstallCopies(facts(base));
+    expect(plain).toMatchObject({
+      status: 'warn',
+      message:
+        'MCP starts "npx -y @ctxo/cli@0.12.0" while hooks run "ctxo" 0.13.1 from PATH: two copies, so a package installed next to one is not seen by the other',
+    });
     expect(JSON.stringify(plain)).not.toContain('@ctxo/domain');
+  });
+
+  it('treats an unpinned npx entry as the global copy (npx runs the global install)', () => {
+    expect(assessInstallCopies(facts({ launchers: ['npx'], hooksCallCtxo: true, globalCliVersion: '0.13.1' }))).toEqual({
+      status: 'pass',
+      message: 'one copy: MCP and hooks run ctxo from PATH',
+    });
+  });
+
+  it('does not warn about a pin equal to the global version or when the global version is unknown', () => {
+    const same = facts({ launchers: ['npx'], hooksCallCtxo: true, npxPins: ['0.13.1'], globalCliVersion: '0.13.1' });
+    expect(assessInstallCopies(same).status).toBe('pass');
+    const unknown = facts({ launchers: ['npx'], hooksCallCtxo: true, npxPins: ['0.12.0'] });
+    expect(assessInstallCopies(unknown).status).toBe('pass');
   });
 
   it.each([
@@ -72,5 +93,18 @@ describe('assessInstallCopies', () => {
     [facts({ launchers: [], hooksCallCtxo: true }), 'nothing to compare (no ctxo hooks or no MCP entry)'],
   ])('passes with the right message', (input, message) => {
     expect(assessInstallCopies(input)).toEqual({ status: 'pass', message });
+  });
+});
+
+describe('mcpNpxPin', () => {
+  it.each([
+    [{ command: 'npx', args: ['-y', '@ctxo/cli@0.12.0'] }, '0.12.0'],
+    [{ command: 'cmd', args: ['/c', 'npx', '-y', '@ctxo/cli@1.0.0-beta.1'] }, '1.0.0-beta.1'],
+    [{ command: 'npx', args: ['-y', '@ctxo/cli'] }, undefined],
+    [{ command: 'npx', args: ['-y', '@ctxo/cli@latest'] }, undefined],
+    [{ command: 'ctxo', args: [] }, undefined],
+    [null, undefined],
+  ])('reads the pin of %j as %s', (entry, expected) => {
+    expect(mcpNpxPin(entry)).toBe(expected);
   });
 });

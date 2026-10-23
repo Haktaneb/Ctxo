@@ -13,8 +13,11 @@ describe('ctxo install domain', () => {
   let dir: string;
   let errorSpy: MockInstance<typeof console.error>;
   let savedExitCode: typeof process.exitCode;
+  let savedCI: string | undefined;
 
   beforeEach(() => {
+    savedCI = process.env['CI'];
+    delete process.env['CI'];
     savedExitCode = process.exitCode;
     process.exitCode = undefined;
     runPackageManager.mockClear();
@@ -23,6 +26,8 @@ describe('ctxo install domain', () => {
   });
 
   afterEach(() => {
+    if (savedCI === undefined) delete process.env['CI'];
+    else process.env['CI'] = savedCI;
     vi.restoreAllMocks();
     process.exitCode = savedExitCode;
     rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
@@ -70,6 +75,20 @@ describe('ctxo install domain', () => {
     expect(stderr()).toContain(
       '[ctxo] No package.json here: installing globally, so the MCP server, hooks and CLI share one copy.',
     );
+    expect(stderr()).toMatch(/Command: npm .*-g/);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it('refuses an implicit global install under CI=true, while --global is not refused', async () => {
+    process.env['CI'] = 'true';
+    await new InstallCommand(dir).run({ languages: ['domain'], dryRun: true, pm: 'npm' });
+    expect(stderr()).toContain('CI environment detected');
+    expect(process.exitCode).toBe(1);
+
+    process.exitCode = undefined;
+    errorSpy.mockClear();
+    await new InstallCommand(dir).run({ languages: ['domain'], dryRun: true, pm: 'npm', global: true });
+    expect(stderr()).not.toContain('CI environment detected');
     expect(stderr()).toMatch(/Command: npm .*-g/);
     expect(process.exitCode).toBeUndefined();
   });

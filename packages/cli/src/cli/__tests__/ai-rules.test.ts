@@ -743,6 +743,30 @@ describe('ensureMcpConfig install kinds (K15)', () => {
     expect(readFileSync(join(custom, '.mcp.json'), 'utf-8')).toBe(original);
   });
 
+  it("keeps the user's env and the target's extra fields when replacing the npx entry", () => {
+    const dir = makeTempDir();
+    writeFileSync(
+      join(dir, '.mcp.json'),
+      JSON.stringify({ mcpServers: { ctxo: { command: 'npx', args: ['-y', '@ctxo/cli'], env: { CTXO_RESPONSE_LIMIT: '16384' } } } }),
+    );
+    expect(ensureMcpConfig(dir, claude(), { installKind: 'global' }).action).toBe('updated');
+    expect(JSON.parse(readFileSync(join(dir, '.mcp.json'), 'utf-8')).mcpServers.ctxo).toEqual({
+      command: 'ctxo',
+      args: [],
+      env: { CTXO_RESPONSE_LIMIT: '16384' },
+    });
+
+    const vs = makeTempDir();
+    mkdirSync(join(vs, '.vscode'));
+    writeFileSync(join(vs, '.vscode', 'mcp.json'), JSON.stringify({ servers: { ctxo: { command: 'npx', args: ['-y', '@ctxo/cli'] } } }));
+    ensureMcpConfig(vs, getMcpConfigTargets(['github-copilot'])[0], { installKind: 'global' });
+    expect(JSON.parse(readFileSync(join(vs, '.vscode', 'mcp.json'), 'utf-8')).servers.ctxo).toEqual({
+      command: 'ctxo',
+      args: [],
+      type: 'stdio',
+    });
+  });
+
   it('a dry run reports the replacement and writes nothing', () => {
     const dir = makeTempDir();
     const original = JSON.stringify({ mcpServers: { ctxo: { command: 'npx', args: ['-y', '@ctxo/cli'] } } });

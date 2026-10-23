@@ -173,7 +173,7 @@ describe('UpdateCommand and @ctxo/domain', () => {
         runner: cap.deps.runner,
         setExitCode: cap.deps.setExitCode,
       });
-      await cmd.run({ pm: 'npm' });
+      await cmd.run({ pm: 'npm', force: true });
     } finally {
       cap.restore();
       rmSync(dir, { recursive: true, force: true });

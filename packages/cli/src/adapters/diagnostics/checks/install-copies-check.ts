@@ -1,7 +1,7 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import type { IHealthCheck, CheckContext, CheckResult } from '../../../core/diagnostics/types.js';
-import { assessInstallCopies, mcpLauncherOf, type McpLauncher } from '../../../core/install/install-kind.js';
+import { assessInstallCopies, mcpLauncherOf, mcpNpxPin, type McpLauncher } from '../../../core/install/install-kind.js';
 import { resolvePackageCandidates } from '../../language/plugin-discovery.js';
 import { DOMAIN_MODULE_PACKAGE } from '../../modules/module-loader.js';
 
@@ -35,8 +35,9 @@ function readJson(path: string): unknown {
   }
 }
 
-function mcpLaunchers(projectRoot: string): McpLauncher[] {
+function mcpLaunchers(projectRoot: string): { launchers: McpLauncher[]; npxPins: string[] } {
   const out: McpLauncher[] = [];
+  const npxPins: string[] = [];
   for (const { file, keys } of MCP_FILES) {
     const json = readJson(join(projectRoot, file));
     if (!isRecord(json)) continue;
@@ -44,9 +45,11 @@ function mcpLaunchers(projectRoot: string): McpLauncher[] {
       const servers = json[key];
       const launcher = isRecord(servers) ? mcpLauncherOf(servers['ctxo']) : undefined;
       if (launcher !== undefined) out.push(launcher);
+      const pin = isRecord(servers) ? mcpNpxPin(servers['ctxo']) : undefined;
+      if (pin !== undefined) npxPins.push(pin);
     }
   }
-  return out;
+  return { launchers: out, npxPins };
 }
 
 /** True when any `command` string under a settings file's `hooks` starts with `ctxo `. */
@@ -71,6 +74,29 @@ function binaryOnPath(dirs: readonly string[]): boolean {
   return dirs.some((dir) => dir !== '' && names.some((name) => existsSync(join(dir, name))));
 }
 
+/** Version of the `@ctxo/cli` behind the `ctxo` binary found in `dirs`; undefined when it cannot be found. */
+function globalCliVersion(dirs: readonly string[]): string | undefined {
+  const names = process.platform === 'win32' ? ['ctxo.cmd', 'ctxo.exe'] : ['ctxo'];
+  for (const dir of dirs) {
+    const found = dir === '' ? undefined : names.find((name) => existsSync(join(dir, name)));
+    if (found === undefined) continue;
+    const candidates = [
+      join(dir, 'node_modules', '@ctxo', 'cli', 'package.json'), // Windows npm prefix, a global bin dir with its own node_modules
+      join(dir, '..', 'lib', 'node_modules', '@ctxo', 'cli', 'package.json'), // unix npm prefix/bin
+    ];
+    try {
+      candidates.push(join(realpathSync(join(dir, found)), '..', '..', 'package.json')); // symlink to <pkg>/dist/<file>
+    } catch {
+      // not a link ctxo can follow
+    }
+    for (const file of candidates) {
+      const json = readJson(file);
+      if (isRecord(json) && json['name'] === '@ctxo/cli' && typeof json['version'] === 'string') return json['version'];
+    }
+  }
+  return undefined;
+}
+
 export class InstallCopiesCheck implements IHealthCheck {
   readonly id = 'install_copies';
   readonly title = 'Install copies';
@@ -80,8 +106,12 @@ export class InstallCopiesCheck implements IHealthCheck {
   async run(ctx: CheckContext): Promise<CheckResult> {
     try {
       const pathDirs = this.options.pathDirs ?? (process.env['PATH'] ?? '').split(delimiter);
+      const { launchers, npxPins } = mcpLaunchers(ctx.projectRoot);
+      const globalVersion = globalCliVersion(pathDirs);
       const verdict = assessInstallCopies({
-        launchers: mcpLaunchers(ctx.projectRoot),
+        launchers,
+        npxPins,
+        ...(globalVersion !== undefined ? { globalCliVersion: globalVersion } : {}),
         hooksCallCtxo: anyHookCallsCtxo(ctx.projectRoot),
         ctxoOnPath: binaryOnPath(pathDirs),
         domainInstalled: resolvePackageCandidates(DOMAIN_MODULE_PACKAGE, ctx.projectRoot).length > 0,

@@ -24,27 +24,41 @@ describe('InstallCopiesCheck', () => {
     mkdirSync(dirname(join(dir, file)), { recursive: true });
     writeFileSync(join(dir, file), JSON.stringify(value), 'utf-8');
   };
-  const putBinary = (): void => writeFileSync(join(binDir, process.platform === 'win32' ? 'ctxo.cmd' : 'ctxo'), '', 'utf-8');
+  const putBinary = (version?: string): void => {
+    writeFileSync(join(binDir, process.platform === 'win32' ? 'ctxo.cmd' : 'ctxo'), '', 'utf-8');
+    if (version === undefined) return;
+    const pkgDir = join(binDir, 'node_modules', '@ctxo', 'cli');
+    mkdirSync(pkgDir, { recursive: true });
+    writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: '@ctxo/cli', version }), 'utf-8');
+  };
   const hooks = (command: string) => ({ hooks: { PreToolUse: [{ matcher: 'Edit', hooks: [{ type: 'command', command }] }] } });
   const run = (pathDirs: readonly string[] = [binDir]) =>
     new InstallCopiesCheck({ pathDirs }).run({ projectRoot: dir, ctxoRoot: join(dir, '.ctxo'), indices: [] } as CheckContext);
 
-  it('warns when MCP uses npx and hooks call ctxo, without naming @ctxo/domain when it is not installed', async () => {
-    putBinary();
-    put('.mcp.json', { mcpServers: { ctxo: { command: 'npx', args: ['-y', '@ctxo/cli'] } } });
+  it('warns when MCP pins an npx version that differs from the global copy, without naming @ctxo/domain when it is not installed', async () => {
+    putBinary('0.13.1');
+    put('.mcp.json', { mcpServers: { ctxo: { command: 'npx', args: ['-y', '@ctxo/cli@0.12.0'] } } });
     put('.claude/settings.json', hooks('ctxo gate-hook'));
 
     const result = await run();
 
     expect(result.id).toBe('install_copies');
     expect(result.status).toBe('warn');
-    expect(result.message).toContain('MCP starts "npx -y @ctxo/cli" while hooks run "ctxo" from PATH');
+    expect(result.message).toContain('MCP starts "npx -y @ctxo/cli@0.12.0" while hooks run "ctxo" 0.13.1 from PATH');
     expect(JSON.stringify(result)).not.toContain('@ctxo/domain');
   });
 
+  it('passes with an unpinned npx entry and a global copy (npx runs the global install)', async () => {
+    putBinary('0.13.1');
+    put('.mcp.json', { mcpServers: { ctxo: { command: 'npx', args: ['-y', '@ctxo/cli'] } } });
+    put('.claude/settings.json', hooks('ctxo gate-hook'));
+
+    expect(await run()).toMatchObject({ status: 'pass', message: 'one copy: MCP and hooks run ctxo from PATH' });
+  });
+
   it('reads the servers of every client file and the local settings', async () => {
-    putBinary();
-    put('.vscode/mcp.json', { servers: { ctxo: { type: 'stdio', command: 'npx', args: ['-y', '@ctxo/cli'] } } });
+    putBinary('0.13.1');
+    put('.vscode/mcp.json', { servers: { ctxo: { type: 'stdio', command: 'npx', args: ['-y', '@ctxo/cli@0.12.0'] } } });
     put('.claude/settings.local.json', hooks('ctxo gate-hook'));
 
     expect((await run()).status).toBe('warn');
