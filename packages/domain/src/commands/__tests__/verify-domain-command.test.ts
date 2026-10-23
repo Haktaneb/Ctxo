@@ -273,6 +273,51 @@ describe('ctxo verify-domain', () => {
     expect(stderr.join('\n')).toContain('Usage: ctxo verify-domain [--since <ref>] [--boundaries by-rung|report] [--json]');
   });
 
+  it('verify-domain reports card reference problems from the current index', async () => {
+    const dir = await project();
+    const gone = 'src/Lending/Loan.ts::Loan.Gone::method';
+    put(dir, 'docs/domain/lending.md', CARD('LEND-01', `Tests: \`src/Lending/Loan.test.ts\`\nCode: \`src/Lending/Loan.ts\`, \`${LOAN}\`, \`${gone}\``));
+    expect(await runCommand(dir, '--json')).toBe(0);
+    const six = json().checks.find((c: any) => c.id === '6');
+    expect(six.status).toBe('warn');
+    expect(six.findings).toEqual([
+      {
+        check: '6',
+        severity: 'warning',
+        message: `LEND-01: Code: "${gone}" is not an indexed symbol; it links to its file`,
+        file: 'docs/domain/lending.md',
+        line: 9,
+        context: 'lending',
+      },
+    ]);
+
+    // A production rule: comment naming an unknown rule ID warns; a lint code with another prefix does not.
+    stdout.length = 0;
+    put(dir, 'src/Lending/Loan.ts', '// rule: LEND-77\n// rule: E501\nexport class Loan {}\n');
+    put(dir, 'docs/domain/lending.md', CARD('LEND-01', 'Tests: `src/Lending/Loan.test.ts`\nCode: `src/Lending/Nope.ts`'));
+    expect(await runCommand(dir, '--json')).toBe(1);
+    const messages = json()
+      .checks.find((c: any) => c.id === '6')
+      .findings.map((f: any) => [f.severity, f.message, f.file, f.line]);
+    expect(messages).toEqual([
+      ['error', 'LEND-01: Code file "src/Lending/Nope.ts" does not exist', 'docs/domain/lending.md', 9],
+      ['warning', 'rule: comment names unknown rule LEND-77', 'src/Lending/Loan.ts', 1],
+    ]);
+  });
+
+  it('a Tests: or Code: value that names a directory is a missing file, reported once', async () => {
+    const dir = await project();
+    put(dir, 'docs/domain/lending.md', CARD('LEND-01', 'Tests: `src/Lending`\nCode: `src/Billing`'));
+    expect(await runCommand(dir, '--json')).toBe(1);
+    const findings = json()
+      .checks.find((c: any) => c.id === '6')
+      .findings.map((f: any) => [f.severity, f.message, f.file, f.line]);
+    expect(findings).toEqual([
+      ['error', 'LEND-01: Tests file "src/Lending" does not exist', 'docs/domain/lending.md', 7],
+      ['error', 'LEND-01: Code file "src/Billing" does not exist', 'docs/domain/lending.md', 9],
+    ]);
+  });
+
   it('a registry with problems fails check 1 and exits 1', async () => {
     const dir = await project({ registry: 'version: 2\ncontexts: []\n' });
     expect(await runCommand(dir)).toBe(1);

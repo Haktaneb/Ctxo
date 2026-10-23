@@ -18,7 +18,7 @@ anti-pattern warnings, and change health scores in under 500ms.
 
 ## MCP Tools
 
-All 14 tools exposed over MCP stdio:
+All 14 core tools (16 with `@ctxo/domain`) exposed over MCP stdio:
 
 - [get_logic_slice](/mcp-tools/get-logic-slice) — symbol + transitive deps
 

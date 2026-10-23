@@ -9,7 +9,7 @@
  * Scoring: BM25 * (1 + pageRankWeight * pageRankScore) * bigramBoost
  */
 
-import type { SymbolNode, SearchResponse, SearchResult, SearchMetrics } from '../types.js';
+import type { SymbolNode, SearchDocument, SearchResponse, SearchResult, SearchMetrics } from '../types.js';
 import { SymbolTokenizer } from './symbol-tokenizer.js';
 import { FuzzyCorrector } from './fuzzy-corrector.js';
 import { createLogger } from '../logger.js';
@@ -17,12 +17,12 @@ import { createLogger } from '../logger.js';
 const log = createLogger('ctxo:search');
 
 /** BM25 parameters tuned for code search (short documents) */
-interface BM25Config {
+export interface BM25Config {
   k1: number; // term frequency saturation (default: 1.2)
   b: number; // length normalization (default: 0.25 — low for short symbol names)
 }
 
-interface SearchEngineConfig {
+export interface SearchEngineConfig {
   bm25: BM25Config;
   /** Weight of PageRank boost: finalScore = bm25 * (1 + pageRankWeight * pr) */
   pageRankWeight: number;
@@ -45,7 +45,16 @@ const DEFAULT_CONFIG: SearchEngineConfig = {
   maxPerPhase: 50,
 };
 
-/** A document in the inverted index (one per symbol) */
+/**
+ * The configuration of a document index (`buildDocumentIndex`): prose has longer, uneven documents, so
+ * length normalisation is the BM25 default (b 0.75), and there is no PageRank.
+ */
+export const DOCUMENT_SEARCH_CONFIG: Partial<SearchEngineConfig> = Object.freeze({
+  bm25: Object.freeze({ k1: 1.2, b: 0.75 }),
+  pageRankWeight: 0,
+});
+
+/** A document in the inverted index (one per symbol or per search document) */
 interface IndexedDocument {
   symbolId: string;
   name: string;
@@ -72,6 +81,7 @@ export class SearchEngine {
   private documents: IndexedDocument[] = [];
   private primaryIndex: Map<string, Posting[]> = new Map();
   private avgDocLength = 0;
+  private isDocumentIndex = false;
 
   // Trigram index (character 3-grams)
   private trigramIndex: Map<string, Posting[]> = new Map();
@@ -91,25 +101,82 @@ export class SearchEngine {
 
   buildIndex(symbols: SymbolNode[], pageRankScores?: Map<string, number>): void {
     const start = performance.now();
+    this.indexEntries(
+      symbols.map((sym) => {
+        const filePath = sym.symbolId.split('::')[0] ?? '';
+        return {
+          doc: {
+            symbolId: sym.symbolId,
+            name: sym.name,
+            kind: sym.kind,
+            filePath,
+            tokens: this.tokenizer.tokenize(sym.name, filePath),
+            length: 0,
+          },
+          trigramText: sym.name.toLowerCase(),
+        };
+      }),
+      pageRankScores ?? new Map(),
+      false,
+    );
+
+    const elapsed = performance.now() - start;
+    log.info(`Index built: ${symbols.length} symbols, ${this.primaryIndex.size} terms, ${this.trigramIndex.size} trigrams (${elapsed.toFixed(0)}ms)`);
+  }
+
+  /**
+   * Index documents instead of symbols: a hit carries the document `id` in `symbolId`, the `title` in `name`,
+   * `kind` and the `path` in `filePath`. The tokens are the title words, the path words and the text words
+   * (repeats kept); trigrams come from the lowercased title; there is no PageRank. A document index is
+   * rebuilt as a whole: `updateFile` does not apply to it.
+   */
+  buildDocumentIndex(documents: readonly SearchDocument[]): void {
+    const start = performance.now();
+    this.indexEntries(
+      documents.map((document) => {
+        const tokens = [
+          ...this.tokenizer.tokenizeText(document.title),
+          ...SymbolTokenizer.tokenizeFilePath(document.path),
+          ...this.tokenizer.tokenizeText(document.text),
+        ];
+        return {
+          doc: {
+            symbolId: document.id,
+            name: document.title,
+            kind: document.kind,
+            filePath: document.path,
+            tokens,
+            length: 0,
+          },
+          trigramText: document.title.toLowerCase(),
+        };
+      }),
+      new Map(),
+      true,
+    );
+
+    const elapsed = performance.now() - start;
+    log.info(`Document index built: ${documents.length} documents, ${this.primaryIndex.size} terms, ${this.trigramIndex.size} trigrams (${elapsed.toFixed(0)}ms)`);
+  }
+
+  /** The indexing both `buildIndex` and `buildDocumentIndex` share: replaces the whole index. */
+  private indexEntries(
+    entries: ReadonlyArray<{ doc: IndexedDocument; trigramText: string }>,
+    pageRankScores: Map<string, number>,
+    isDocumentIndex: boolean,
+  ): void {
+    this.isDocumentIndex = isDocumentIndex;
     this.documents = [];
     this.primaryIndex = new Map();
     this.trigramIndex = new Map();
-    this.pageRankScores = pageRankScores ?? new Map();
+    this.pageRankScores = pageRankScores;
 
     let totalLength = 0;
     const vocabFreq = new Map<string, number>();
 
-    for (const sym of symbols) {
-      const filePath = sym.symbolId.split('::')[0] ?? '';
-      const tokens = this.tokenizer.tokenize(sym.name, filePath);
-      const doc: IndexedDocument = {
-        symbolId: sym.symbolId,
-        name: sym.name,
-        kind: sym.kind,
-        filePath,
-        tokens,
-        length: tokens.length,
-      };
+    for (const { doc, trigramText } of entries) {
+      const tokens = doc.tokens;
+      doc.length = tokens.length;
       const docIndex = this.documents.length;
       this.documents.push(doc);
       totalLength += tokens.length;
@@ -129,9 +196,8 @@ export class SearchEngine {
         postings.push({ docIndex, termFrequency: tf });
       }
 
-      // Build trigram index from symbol name (lowercased)
-      const nameLower = sym.name.toLowerCase();
-      const trigrams = this.extractTrigrams(nameLower);
+      // Build trigram index from the symbol name or document title (lowercased)
+      const trigrams = this.extractTrigrams(trigramText);
       const trigramFreqs = new Map<string, number>();
       for (const tri of trigrams) {
         trigramFreqs.set(tri, (trigramFreqs.get(tri) ?? 0) + 1);
@@ -150,9 +216,6 @@ export class SearchEngine {
 
     // Build vocabulary for fuzzy corrector
     this.fuzzy.buildVocabulary(vocabFreq);
-
-    const elapsed = performance.now() - start;
-    log.info(`Index built: ${symbols.length} symbols, ${this.primaryIndex.size} terms, ${this.trigramIndex.size} trigrams (${elapsed.toFixed(0)}ms)`);
   }
 
   search(query: string, limit = 50): SearchResponse {
@@ -252,6 +315,11 @@ export class SearchEngine {
   }
 
   updateFile(filePath: string, symbols: SymbolNode[]): void {
+    if (this.isDocumentIndex) {
+      log.warn('updateFile does not apply to a document index; rebuild it with buildDocumentIndex');
+      return;
+    }
+
     // Remove old documents for this file
     const oldIndices = new Set<number>();
     for (let i = 0; i < this.documents.length; i++) {

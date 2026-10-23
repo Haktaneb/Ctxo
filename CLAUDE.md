@@ -6,7 +6,7 @@ Ctxo is a **Model Context Protocol (MCP) server** that gives AI coding assistant
 
 * **Type:** npm package / CLI tool / MCP server (stdio transport)
 * **Author:** Alper Hankendi
-* **Status:** 14 MCP tools, pnpm monorepo with 10 packages, 987+ tests
+* **Status:** 14 core MCP tools (plus `get_domain_context` and `get_rule` with `@ctxo/domain`), pnpm monorepo with 10 packages, 987+ tests
 * **Language:** TypeScript (ESM-first, `"type": "module"`)
 * **Runtime:** Node.js >= 20
 
@@ -273,7 +273,7 @@ Language support ships as separate plugin packages discovered at runtime by scan
 // consumer project package.json
 {
   "devDependencies": {
-    "@ctxo/cli": "^0.13.0",
+    "@ctxo/cli": "^0.15.0",
     "@ctxo/lang-typescript": "^0.8.1",
     "@ctxo/lang-go": "^0.9.1",
     "@ctxo/lang-csharp": "^0.9.0"
@@ -281,7 +281,7 @@ Language support ships as separate plugin packages discovered at runtime by scan
 }
 ```
 
-## MCP Tools (14 total)
+## MCP Tools (14 core + 2 with @ctxo/domain)
 
 | Tool                        | Purpose                                                                                                    |
 | --------------------------- | ---------------------------------------------------------------------------------------------------------- |
@@ -299,6 +299,10 @@ Language support ships as separate plugin packages discovered at runtime by scan
 | `get_class_hierarchy`       | Class inheritance tree (ancestors + descendants)                                                           |
 | `get_symbol_importance`     | PageRank centrality ranking                                                                                |
 | `get_pr_impact`             | Full PR risk assessment (changes + blast radius + co-changes)                                              |
+| `get_domain_context`        | With `@ctxo/domain`: the card of the context that owns a symbol or file (terms, rules with tests and code, contracts, decisions) |
+| `get_rule`                  | With `@ctxo/domain`: one rule by ID with its tests (and link sources), implementing symbols, decisions and provenance |
+
+With `@ctxo/domain` and a domain graph, `get_blast_radius` adds `rulesAffected` and `cardsToUpdate`, `get_why_context` `decisions`, `get_context_for_task` `cardExcerpt`, `get_pr_impact` `contextsTouched`, `cardsChanged` and `rulesWithoutTests`, and `get_ranked_context` takes `scope: "domain"` (see [the domain graph](docs/features/domain-knowledge.md#the-domain-graph)).
 
 ### Tool Selection Guide — When to Use Which Tool
 
@@ -344,6 +348,10 @@ Checking if safe to delete/rename?
 
 Working with class hierarchies?
   → get_class_hierarchy (extends/implements tree)
+
+Need the business rules or decisions behind code? (with @ctxo/domain)
+  → get_domain_context (the card of the context that owns the symbol or file)
+  → then get_rule (one rule: its tests, code and decisions)
 ```
 
 ### MCP Tool Response Format (all tools)
@@ -367,7 +375,7 @@ Working with class hierarchies?
 
 * **Response envelope (`_meta`):** All tool responses include `_meta: { totalItems, returnedItems, truncated, totalBytes }`. Large responses auto-truncated at 8KB (configurable via `CTXO_RESPONSE_LIMIT` env).
 * **Intent filtering:** `get_blast_radius`, `get_logic_slice`, `find_importers`, `find_dead_code` accept optional `intent` parameter for keyword-based result filtering.
-* **Tool annotations:** All 14 tools declare `readOnlyHint`, `idempotentHint`, `openWorldHint` annotations for MCP clients.
+* **Tool annotations:** All 14 core tools (and the 2 domain tools) declare `readOnlyHint`, `idempotentHint`, `openWorldHint` annotations for MCP clients.
 
 ## AI Assistant Rules (MCP Tool Usage — MANDATORY)
 

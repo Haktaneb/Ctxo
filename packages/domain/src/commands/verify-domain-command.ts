@@ -2,14 +2,17 @@ import type { CtxoHost, FileIndex, IGitPort, ModuleCommand, ModuleCommandContext
 import { GitChangeReader } from '../adapters/git-changes.js';
 import { loaderPlatforms, readExistingLoaderRules } from '../adapters/loader-rules-files.js';
 import { readRegistry } from '../adapters/registry-reader.js';
-import { readRepoText, repoFileExists } from '../adapters/repo-files.js';
+import { readCardText, readRepoText, readRepoTexts, repoFileExists, repoIsFile } from '../adapters/repo-files.js';
 import { readTestFiles } from '../adapters/test-file-source.js';
 import { computeBoundaries } from '../core/boundaries.js';
 import { githubSlugs, parseCard, parseMarkdownHeadings, type ParsedCard } from '../core/card-parser.js';
-import { DEFAULT_DOMAIN_CONFIG, resolveDomainConfig, type BoundaryMode } from '../core/domain-config.js';
+import { resolveDomainConfig, type BoundaryMode } from '../core/domain-config.js';
 import { diffLoaderRules, renderLoaderRules, type LoaderRulesDiff } from '../core/loader-rules.js';
 import { createOwnership } from '../core/ownership.js';
-import { annotationRefs, resolveRuleRefs, scanTestText, type RuleRef, type ScanOptions } from '../core/rule-id-scan.js';
+import { buildGraphNodes, type UnresolvedRef } from '../core/domain-graph.js';
+import { buildScanOptions, resolveRuleRefs, scanRuleComments, scanTestFiles, type RuleRef } from '../core/rule-id-scan.js';
+import { ruleSymbolLinks } from '../core/rule-symbol-links.js';
+import { ruleTestLinks, type RefLookup } from '../core/rule-test-links.js';
 import { computeTouched, type TouchedReport } from '../core/touched.js';
 import { runVerifyChecks, type CheckOutcome, type Finding } from '../core/verify-checks.js';
 
@@ -80,19 +83,6 @@ function printHuman(outcomes: readonly CheckOutcome[], errors: number, warnings:
   console.error(`[ctxo] verify-domain: ${errors} errors, ${warnings} warnings`);
 }
 
-function idRegExp(pattern: string): RegExp {
-  try {
-    return new RegExp(pattern);
-  } catch {
-    return new RegExp(DEFAULT_DOMAIN_CONFIG.rules.idPattern);
-  }
-}
-
-function prefixOf(id: string): string {
-  const dash = id.indexOf('-');
-  return dash < 0 ? id : id.slice(0, dash);
-}
-
 const MARKDOWN = /\.(?:md|markdown)$/i;
 
 /** `ctxo verify-domain`: the CI gate for the registry, the cards, rule IDs, generated rules and boundaries (spec 10.5). */
@@ -155,35 +145,50 @@ async function verify(host: CtxoHost, ctx: ModuleCommandContext, options: Option
   const cards = new Map<string, ParsedCard | undefined>();
   for (const context of registry?.contexts ?? []) {
     if (context.card === undefined || cards.has(context.card)) continue;
-    const text = readRepoText(projectRoot, context.card);
+    // Read like the index pass reads cards (I2), so check 7 and graph.json see the same text.
+    const text = readCardText(projectRoot, context.card, (message) => services.createLogger('ctxo:domain').warn(message));
     cards.set(context.card, text === undefined ? undefined : parseCard(text));
   }
 
   // K6: rule IDs in tests, by file text and by indexed annotations.
-  const ids = new Set<string>();
-  const prefixes = new Set<string>();
-  for (const card of cards.values()) {
-    for (const rule of card?.rules ?? []) {
-      ids.add(rule.id);
-      prefixes.add(prefixOf(rule.id));
-    }
-  }
-  for (const context of registry?.contexts ?? []) if (context.rulePrefix !== undefined) prefixes.add(context.rulePrefix);
-  const scanOptions: ScanOptions = {
-    rules: { ids, prefixes },
-    idPattern: idRegExp(config.rules.idPattern),
-    trackerPrefixes: new Set(config.rules.trackerPrefixes),
-    ruleTraitKeys: new Set(config.tests.ruleTraitKeys),
-  };
+  const ruleIds = [...cards.values()].flatMap((card) => (card?.rules ?? []).map((rule) => rule.id));
+  const scanOptions = buildScanOptions(config, ruleIds, registry);
   const tracked = (await git?.listTrackedFiles?.()) ?? indexedFiles;
-  const refs: RuleRef[] = [];
-  if (registry !== undefined) {
-    for (const test of readTestFiles(projectRoot, tracked, isTestFile, indices)) {
-      refs.push(...scanTestText(test.file, test.text, test.index, scanOptions));
-    }
-    for (const index of indices) if (isTestFile(index.file)) refs.push(...annotationRefs(index, scanOptions));
-  }
+  const refs =
+    registry !== undefined ? scanTestFiles(readTestFiles(projectRoot, tracked, isTestFile, indices), indices, isTestFile, scanOptions) : [];
   const ruleLinks = resolveRuleRefs(refs, scanOptions);
+
+  // F3 and F4: card Tests: and Code: references and production rule: comments, from the current index and the repo
+  // through the same functions as the index pass (E5); the stored graph is never read.
+  let cardRefProblems: UnresolvedRef[] = [];
+  let codeRuleRefs: RuleRef[] = [];
+  if (registry !== undefined) {
+    const byFile = new Map(indices.map((index) => [index.file.replace(/\\/g, '/'), index]));
+    const symbolNames = new Map(indices.flatMap((index) => index.symbols.map((symbol) => [symbol.symbolId, symbol.name] as const)));
+    const lookup: RefLookup = {
+      hasSymbol: (symbolId) => symbolNames.has(symbolId),
+      symbolName: (symbolId) => symbolNames.get(symbolId),
+      fileExists: (path) => repoIsFile(projectRoot, path),
+    };
+    const { cardRefs } = buildGraphNodes({
+      registry,
+      cards: registry.contexts.flatMap((context) => {
+        if (context.card === undefined) return [];
+        const card = cards.get(context.card);
+        return [{ context, path: context.card, ...(card === undefined ? {} : { card }) }];
+      }),
+    });
+    const production = indexedFiles.filter((file) => !isTestFile(file));
+    const commentRefs = readRepoTexts(projectRoot, production).flatMap(({ file, text }) =>
+      scanRuleComments(file, text, byFile.get(file), scanOptions),
+    );
+    const codeRefs = resolveRuleRefs(commentRefs, scanOptions);
+    codeRuleRefs = [...codeRefs.unknown];
+    cardRefProblems = [
+      ...ruleTestLinks({ cardRefs, testRefs: ruleLinks, lookup }).unresolved,
+      ...ruleSymbolLinks({ cardRefs, codeRefs, lookup }).unresolved,
+    ];
+  }
 
   // Generated loader rules against disk, and the context map.
   const loaderDiff = registry
@@ -244,12 +249,15 @@ async function verify(host: CtxoHost, ctx: ModuleCommandContext, options: Option
     makeMatcher,
     cards,
     fileExists: (path) => repoFileExists(projectRoot, path),
+    isRepoFile: (path) => repoIsFile(projectRoot, path),
     headingSlugs: (path) => {
       if (!MARKDOWN.test(path)) return undefined;
-      const text = readRepoText(projectRoot, path);
+      const text = readCardText(projectRoot, path);
       return text === undefined ? undefined : githubSlugs(parseMarkdownHeadings(text));
     },
     ruleLinks,
+    cardRefProblems,
+    codeRuleRefs,
     loaderDiff,
     ...(contextMapText !== undefined ? { contextMapText } : {}),
     boundaries,

@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ContextHistoryEntry } from '../../core/context-metrics.js';
+import type { DomainGraph } from '../../core/domain-graph.js';
 import { DomainArtifactStore, type BoundariesArtifact, type ContextsArtifact } from '../artifact-store.js';
 
 let root: string;
@@ -35,6 +36,21 @@ const BOUNDARIES: BoundariesArtifact = {
   blockingRungs: ['bounded', 'boring'],
   crossEdges: [],
   violations: [],
+};
+
+const GRAPH: DomainGraph = {
+  ctxoArtifact: 'domain-graph',
+  version: 1,
+  registryHash: 'h1',
+  cardsHash: 'c1',
+  contexts: [{ id: 'context:lending', context: 'lending', name: 'Lending', rung: 'named' }],
+  rules: [],
+  terms: [],
+  decisions: [],
+  sections: [],
+  openQuestions: [],
+  links: [],
+  unresolved: [],
 };
 
 function entry(commitSha: string, committedAt: number): ContextHistoryEntry {
@@ -109,10 +125,49 @@ describe('DomainArtifactStore', () => {
     expect(store.readHistory().map((h) => h.commitSha)).toEqual(['bbbbbbb']);
   });
 
+  it('readGraph reads what writeIfChanged wrote and rejects other shapes', () => {
+    const store = new DomainArtifactStore(root);
+    expect(store.readGraph()).toBeUndefined();
+    expect(store.writeIfChanged('graph.json', GRAPH)).toBe(true);
+    expect(store.readGraph()).toEqual(GRAPH);
+
+    const file = join(domainDir, 'graph.json');
+    const bad: unknown[] = [
+      { ...GRAPH, ctxoArtifact: 'domain-contexts' },
+      { ...GRAPH, version: 2 },
+      { ...GRAPH, registryHash: 1 },
+      { ...GRAPH, cardsHash: undefined },
+      ...(['contexts', 'rules', 'terms', 'decisions', 'sections', 'openQuestions', 'links', 'unresolved'] as const).flatMap((key) => [
+        { ...GRAPH, [key]: undefined },
+        { ...GRAPH, [key]: {} },
+      ]),
+      [],
+      'graph',
+    ];
+    for (const value of bad) {
+      writeFileSync(file, JSON.stringify(value), 'utf-8');
+      expect(store.readGraph()).toBeUndefined();
+    }
+    writeFileSync(file, '{ not json', 'utf-8');
+    expect(store.readGraph()).toBeUndefined();
+  });
+
+  it('writeIfChanged leaves an equal graph.json untouched', () => {
+    const store = new DomainArtifactStore(root);
+    expect(store.writeIfChanged('graph.json', GRAPH)).toBe(true);
+    const file = join(domainDir, 'graph.json');
+    utimesSync(file, OLD, OLD);
+    expect(store.writeIfChanged('graph.json', JSON.parse(JSON.stringify(GRAPH)))).toBe(false);
+    expect(statSync(file).mtimeMs).toBe(OLD.getTime());
+    expect(store.writeIfChanged('graph.json', { ...GRAPH, cardsHash: 'c2' })).toBe(true);
+    expect(store.readGraph()?.cardsHash).toBe('c2');
+  });
+
   it('removeAll deletes the artifacts and the history, and nothing else', () => {
     const store = new DomainArtifactStore(root);
     store.writeIfChanged('contexts.json', CONTEXTS);
     store.writeIfChanged('boundaries.json', BOUNDARIES);
+    store.writeIfChanged('graph.json', GRAPH);
     store.writeHistory(entry('aaaaaaa', 1));
     writeFileSync(join(domainDir, 'Order.ts.json'), '{}', 'utf-8');
 
@@ -120,6 +175,7 @@ describe('DomainArtifactStore', () => {
 
     expect(existsSync(join(domainDir, 'contexts.json'))).toBe(false);
     expect(existsSync(join(domainDir, 'boundaries.json'))).toBe(false);
+    expect(existsSync(join(domainDir, 'graph.json'))).toBe(false);
     expect(existsSync(join(domainDir, 'history'))).toBe(false);
     expect(existsSync(join(domainDir, 'Order.ts.json'))).toBe(true);
     store.removeAll();
@@ -176,6 +232,18 @@ describe('DomainArtifactStore', () => {
       expect(store.writeIfChanged('contexts.json', CONTEXTS)).toBe(false);
       expect(store.writeIfChanged('boundaries.json', BOUNDARIES)).toBe(false);
       expectUntouched(entries);
+    });
+
+    it('graph.json of a source file domain/graph is never removed or overwritten', () => {
+      mkdirSync(domainDir, { recursive: true });
+      const path = join(domainDir, 'graph.json');
+      const text = sourceEntry('domain/graph');
+      writeFileSync(path, text, 'utf-8');
+      const store = new DomainArtifactStore(root);
+      expect(store.readGraph()).toBeUndefined();
+      expect(store.writeIfChanged('graph.json', GRAPH)).toBe(false);
+      store.removeAll();
+      expect(readFileSync(path, 'utf-8')).toBe(text);
     });
 
     it('writeIfChanged still replaces a corrupt (unparseable) or marked artifact', () => {

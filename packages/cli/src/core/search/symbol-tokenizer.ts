@@ -72,6 +72,25 @@ export class SymbolTokenizer {
   }
 
   /**
+   * Tokenize prose (a document title or body). Words are runs of letters, digits, `_` and `-`; each word is
+   * split like a symbol name (camelCase, snake_case, rule IDs such as `LEND-03`) and lowercased. Stop words
+   * are dropped; repeats are kept, so BM25 sees the term frequency.
+   *
+   *   "A member holds LoanPolicy LEND-03" → ["member", "holds", "loan", "policy", "lend", "03"]
+   */
+  tokenizeText(text: string): string[] {
+    const tokens: string[] = [];
+    for (const word of text.split(/[^\p{L}\p{N}_-]+/u)) {
+      if (word.length === 0) continue;
+      for (const part of SymbolTokenizer.splitName(word)) {
+        const lowered = part.toLowerCase();
+        if (!STOP_WORDS.has(lowered)) tokens.push(lowered);
+      }
+    }
+    return tokens;
+  }
+
+  /**
    * Tokenize a search query. Queries use stop words and don't include originals.
    */
   tokenizeQuery(query: string): string[] {

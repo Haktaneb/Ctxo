@@ -60,6 +60,8 @@ export function childEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv 
   delete env['DEBUG'];
   delete env['CI'];
   delete env['CTXO_HTTP_PORT'];
+  // A developer's own response limit would truncate responses the tests read in full.
+  delete env['CTXO_RESPONSE_LIMIT'];
   env['GIT_CONFIG_GLOBAL'] = gitConfig();
   env['GIT_CONFIG_NOSYSTEM'] = '1';
   return { ...env, ...extra };
@@ -205,10 +207,10 @@ export class SampleWorkspace {
     this.commit('chore: generated loader rules');
   }
 
-  /** Starts the built MCP server over stdio in the workspace. */
-  async connect(): Promise<McpSession> {
+  /** Starts the built MCP server over stdio in the workspace; `extraEnv` is added to the server's environment. */
+  async connect(extraEnv: Readonly<Record<string, string>> = {}): Promise<McpSession> {
     const env: Record<string, string> = {};
-    for (const [key, value] of Object.entries(childEnv())) if (value !== undefined) env[key] = value;
+    for (const [key, value] of Object.entries(childEnv({ ...extraEnv }))) if (value !== undefined) env[key] = value;
     const client = new Client({ name: 'domain-acceptance', version: '0.0.0' });
     await client.connect(new StdioClientTransport({ command: process.execPath, args: [CLI_BIN], cwd: this.dir, env, stderr: 'ignore' }));
     return new McpSession(client);
@@ -218,10 +220,26 @@ export class SampleWorkspace {
 export class McpSession {
   constructor(private readonly client: Client) {}
 
-  /** Calls a tool and returns the parsed JSON text of its response. */
+  /**
+   * Calls a tool and returns the parsed JSON of the last text content of its response: a staleness warning comes
+   * as an earlier text item and is skipped.
+   */
   async call(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const response = (await this.client.callTool({ name, arguments: args })) as { content: { type: string; text: string }[] };
-    return JSON.parse(response.content[0]!.text) as Record<string, unknown>;
+    const response = (await this.client.callTool({ name, arguments: args })) as { content: { type: string; text?: string }[] };
+    const texts = response.content.filter((item) => item.type === 'text' && typeof item.text === 'string');
+    const last = texts[texts.length - 1];
+    if (last === undefined) throw new Error(`${name} returned no text content`);
+    return JSON.parse(last.text!) as Record<string, unknown>;
+  }
+
+  /** The names of the tools the server lists. */
+  async listTools(): Promise<string[]> {
+    return (await this.listToolDefinitions()).map((tool) => tool.name);
+  }
+
+  /** The tools the server lists with their input schemas. */
+  async listToolDefinitions(): Promise<readonly { name: string; inputSchema: Record<string, unknown> }[]> {
+    return (await this.client.listTools()).tools.map((tool) => ({ name: tool.name, inputSchema: tool.inputSchema as Record<string, unknown> }));
   }
 
   async close(): Promise<void> {

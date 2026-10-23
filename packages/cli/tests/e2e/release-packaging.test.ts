@@ -88,7 +88,17 @@ describe('Release Packaging', () => {
     expect(files.some((f: string) => f === 'package.json')).toBe(true);
   });
 
-  it('tarball size is reasonable (< 2150KB)', { timeout: 30_000 }, () => {
+  it('npm pack --dry-run ships no source maps', { timeout: 30_000 }, () => {
+    const output = execSync('npm pack --dry-run --json', { cwd: ROOT, encoding: 'utf-8' });
+
+    const files: string[] = JSON.parse(output)[0]?.files?.map((f: { path: string }) => f.path) ?? [];
+
+    expect(files.filter((f) => f.endsWith('.map'))).toEqual([]);
+    expect(files).toContain('dist/index.js');
+    expect(files).toContain('dist/internal.js');
+  });
+
+  it('tarball size is reasonable (< 850KB)', { timeout: 30_000 }, () => {
     const output = execSync('npm pack --dry-run --json', { cwd: ROOT, encoding: 'utf-8' });
 
     const info = JSON.parse(output);
@@ -129,9 +139,10 @@ describe('Release Packaging', () => {
     // check, shipped as JS plus source maps) crossed it at 2052.03KB, so it is 2100KB, the next 50KB step.
     // The rest of PR 2B (the module's response enrichers, the six tool description clauses, the longer
     // README and llms*.txt, and the merge of language parity and 0.13.1) measured 2124.73KB, so it is
-    // 2150KB, the next 50KB step. Source maps are a large part of the tarball; slimming them is the owner's
+    // 2150KB, the next 50KB step. Source maps were a large part of the tarball; slimming them was the owner's
     // call (spec 4).
-    expect(sizeKB).toBeLessThan(2150);
+    // PR 3 (#156) stops publishing source maps (the owner's call): 2128.79KB to 766.07KB, so the limit is 850KB.
+    expect(sizeKB).toBeLessThan(850);
     expect(sizeKB).toBeGreaterThan(1); // Sanity: not empty (dist/ may not exist in CI pre-build)
   });
 });

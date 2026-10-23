@@ -43,7 +43,7 @@ Copying the Claude Code config verbatim will silently fail to register.
 
 1. Open Copilot Chat, switch to **Agent** mode (dropdown at the top of the
    chat pane).
-2. Click the **tools** icon. You should see a `ctxo` group with 14 tools.
+2. Click the **tools** icon. You should see a `ctxo` group with 14 tools (16 with `@ctxo/domain`).
 3. Ask:
 
 > List the tools available from the `ctxo` server.

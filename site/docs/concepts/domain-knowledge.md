@@ -40,6 +40,32 @@ With `@ctxo/domain` and a registry, core tools carry additive fields: `context` 
 the package or a registry sees none of them. The fold guard and the loader rules are what get the agent to
 read the card in the first place.
 
+## The domain graph
+
+`ctxo index` (and the post-commit hook) turns the registry, the cards and the glossary into one artifact,
+`.ctxo/index/domain/graph.json`: contexts, rules, terms and decisions, linked to code by symbol IDs, each link with
+the source that produced it.
+
+| Link | From | Sources |
+| --- | --- | --- |
+| Rule to test | A rule ID in a test | xUnit `Trait("Rule", ...)`, NUnit `Category`, MSTest `TestCategory`, JUnit `Tag`; test titles and `rule:` comments; plain mentions in test files; the card's `Tests:` line |
+| Rule to code | A rule ID in the card or the code | The card's `Code:` line; a `rule: LEND-03` comment above or inside a declaration |
+| Decision to provenance | A dated card decision | Relative links to repository files; `#123`, tracker keys and URLs kept as strings, never fetched |
+| Term to identifiers | A `**Term**` in `Language` or the glossary | Symbol and table names that carry the term's words |
+
+Code metrics (PageRank, communities, snapshots, dead code, the safe-edit gate's percentiles) never read the graph, so
+editing a card never shifts code clusters. `ctxo watch` does not rebuild it: after a card edit the tools answer
+from the last graph and say `stale: true` until the next `ctxo index` or commit.
+
+With a graph the agent gets:
+
+- `rulesAffected` and `cardsToUpdate` on `get_blast_radius`, `decisions` on `get_why_context`, a `cardExcerpt`
+  on `get_context_for_task`, and `contextsTouched`, `cardsChanged` and `rulesWithoutTests` on `get_pr_impact`;
+- two tools, [`get_domain_context`](/mcp-tools/get-domain-context) and [`get_rule`](/mcp-tools/get-rule):
+  14 core tools, plus 2 with `@ctxo/domain`;
+- `get_ranked_context` with [`scope: "domain"`](/mcp-tools/get-ranked-context#the-domain-scope): BM25 over card
+  sections, glossary entries and the provenance files the cards link to.
+
 ## Adoption ladder
 
 A context's `rung` in the registry says how far it has come. No level requires code changes.

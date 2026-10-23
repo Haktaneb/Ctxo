@@ -216,7 +216,7 @@ describe('domainInit', () => {
     expect(content).toContain('## At branch finish');
     expect(content).toContain('ctxo contexts-touched --since <base>');
     expect(content).toContain('Domain-Unchanged: <id> (reason)');
-    expect(content).toContain('<!-- ctxo-skill v0.14 -->');
+    expect(content).toContain('<!-- ctxo-skill v0.15 -->');
     expect(content).not.toContain(String.fromCharCode(0x2014));
     expect(rows).toContainEqual({ file: 'claude-code/ctxo-domain-fold', action: 'created' });
   });

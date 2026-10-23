@@ -6,7 +6,7 @@ import { parseCard, type ParsedCard } from '../core/card-parser.js';
 import type { DiscoveryInput } from '../core/discovery.js';
 import type { DomainConfig } from '../core/domain-config.js';
 import { readRegistry } from './registry-reader.js';
-import { readRepoText } from './repo-files.js';
+import { readCardText } from './repo-files.js';
 
 /**
  * Gathers what `discoverConventions` reads: the cards, the co-change window's commit subjects, the branch
@@ -29,7 +29,8 @@ export async function gatherDiscoveryInput(
   for (const context of registry?.contexts ?? []) {
     if (context.card === undefined || seen.has(context.card)) continue;
     seen.add(context.card);
-    const text = readRepoText(projectRoot, context.card);
+    // Read like every other card read (I2): real path inside the repo, no-follow open, 1 MiB cap.
+    const text = readCardText(projectRoot, context.card, (message) => services.createLogger('ctxo:domain').warn(message));
     if (text !== undefined) cards.push(parseCard(text));
   }
 

@@ -6,7 +6,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { startHttpTransport } from './adapters/transport/http-server-transport.js';
-import { z } from 'zod';
+import { z, type ZodRawShape } from 'zod';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -33,8 +33,9 @@ import { handleGetSymbolImportance } from './adapters/mcp/get-symbol-importance.
 import { handleGetPrImpact } from './adapters/mcp/get-pr-impact.js';
 import { SessionRecorderAdapter } from './adapters/stats/session-recorder-adapter.js';
 import { withRecording } from './adapters/stats/with-recording.js';
-import { collectEnrichers } from './adapters/mcp/enrich-payload.js';
+import { collectEnrichers, collectTaskContextReservation } from './adapters/mcp/enrich-payload.js';
 import { CORE_TOOL_NAMES, collectModuleTools, handleModuleTool, moduleInputShape } from './adapters/mcp/module-tool-handler.js';
+import { CODE_SCOPE, collectRankedScopes, rankedScopeDescription, rankedScopeNames, withRankedScopes } from './adapters/mcp/ranked-scope-handler.js';
 import type { StalenessCheck } from './adapters/mcp/get-logic-slice.js';
 import type { LoadedModule } from './adapters/modules/module-loader.js';
 import type { ISessionRecorderPort } from './ports/i-session-recorder-port.js';
@@ -138,8 +139,9 @@ export async function startMcpServer(options: StartMcpServerOptions = {}): Promi
 
 /**
  * Registers the 14 core tools, then the tools of the loaded modules, on `server`. A module's enrichers
- * reach the six core tools with an enrich seam; a module tool named like a core tool, or one whose input
- * schema cannot be built, is skipped with a warning. Exported for tests.
+ * reach the seven core tools with an enrich seam, their token reservations reach get_context_for_task and
+ * their ranked-context scopes reach get_ranked_context (its `scope` parameter exists only then); a module tool named like a core tool, or one whose input schema cannot be built, is skipped with a
+ * warning. Exported for tests.
  */
 export function registerTools(
   server: McpServer,
@@ -154,6 +156,8 @@ export function registerTools(
   modules: readonly LoadedModule[] = [],
 ): void {
   const enrichers = collectEnrichers(modules);
+  const taskContextReservation = collectTaskContextReservation(modules);
+  const rankedScopes = collectRankedScopes(modules);
 
   // Tool annotations — all Ctxo tools are read-only index queries
   const toolAnnotations = {
@@ -189,7 +193,7 @@ export function registerTools(
   server.registerTool(
     'get_why_context',
     {
-      description: 'Retrieve git commit history intent and anti-pattern warnings (reverts, rollbacks) for a symbol. Use this when you need to understand WHY code was written this way or whether it has a history of problems. Pair with get_change_intelligence for complexity/churn scores. With @ctxo/domain and a registry, `contextDrift` reports the named context of the symbol: its share of cross-context edges over time and files that moved between contexts.',
+      description: 'Retrieve git commit history intent and anti-pattern warnings (reverts, rollbacks) for a symbol. Use this when you need to understand WHY code was written this way or whether it has a history of problems. Pair with get_change_intelligence for complexity/churn scores. With @ctxo/domain and a registry, `contextDrift` reports the named context of the symbol: its share of cross-context edges over time and files that moved between contexts. With @ctxo/domain and a domain graph, `decisions` lists up to five card decisions of the context of the symbol with their provenance, those naming a rule linked to the symbol first.',
       inputSchema: {
         symbolId: z.string().min(1).describe(`The symbol ID (${SYMBOL_ID_FORMAT})`),
         maxCommits: z.number().int().min(1).optional().describe('Limit commit history to N most recent commits'),
@@ -216,7 +220,7 @@ export function registerTools(
   server.registerTool(
     'get_blast_radius',
     {
-      description: 'BEFORE modifying any symbol (a function, class, method or type, or a SQL table, view or procedure), call this to understand impact. Returns every symbol that depends on the target, directly or transitively, with risk scores that fall with depth. Each dependent is in the tier of its strongest edge: confirmed (`calls`, `extends`, `implements` and the data edges `reads`, `writes`, `executes`), likely (co-changed or `uses`), and potential (`imports`). When co-change history exists, `coChangedFiles` lists up to 10 files that often change together with the target\'s file but have no dependency path to it (informational: not counted in the tiers or risk scores). Use `confidence` to filter by tier, `intent` to filter by keyword. Large results are auto-truncated with `_meta.hint` for drill-in. For what a symbol DEPENDS ON (downstream), use get_logic_slice instead. For full PR-level analysis, use get_pr_impact. With @ctxo/domain and a registry, each impacted symbol carries `context` (its named context id).',
+      description: 'BEFORE modifying any symbol (a function, class, method or type, or a SQL table, view or procedure), call this to understand impact. Returns every symbol that depends on the target, directly or transitively, with risk scores that fall with depth. Each dependent is in the tier of its strongest edge: confirmed (`calls`, `extends`, `implements` and the data edges `reads`, `writes`, `executes`), likely (co-changed or `uses`), and potential (`imports`). When co-change history exists, `coChangedFiles` lists up to 10 files that often change together with the target\'s file but have no dependency path to it (informational: not counted in the tiers or risk scores). Use `confidence` to filter by tier, `intent` to filter by keyword. Large results are auto-truncated with `_meta.hint` for drill-in. For what a symbol DEPENDS ON (downstream), use get_logic_slice instead. For full PR-level analysis, use get_pr_impact. With @ctxo/domain and a registry, each impacted symbol carries `context` (its named context id). With @ctxo/domain and a domain graph (built by `ctxo index`), `rulesAffected` lists the card rules linked to the symbol or its dependents, and `cardsToUpdate` the cards that hold them.',
       inputSchema: {
         symbolId: z.string().min(1).describe(`The symbol ID (${SYMBOL_ID_FORMAT}). Every definition of a SQL object, and its name::kind id, has the same dependents`),
         confidence: z.enum(['confirmed', 'likely', 'potential']).optional().describe('Filter by confidence tier'),
@@ -258,12 +262,12 @@ export function registerTools(
     (args) => deadCodeHandler(args),
   );
 
-  const contextForTaskHandler = withRecording('get_context_for_task', handleGetContextForTask(storage, masking, staleness, ctxoRoot, coChange), recorder);
+  const contextForTaskHandler = withRecording('get_context_for_task', handleGetContextForTask(storage, masking, staleness, ctxoRoot, coChange, enrichers.get('get_context_for_task'), taskContextReservation), recorder);
 
   server.registerTool(
     'get_context_for_task',
     {
-      description: 'Get task-optimized context for a symbol based on what you are about to do. Specify taskType: "fix" (bug investigation - includes history + anti-patterns), "extend" (add feature - includes deps + blast radius), "refactor" (restructure - includes importers + complexity), or "understand" (learn - includes full slice + architecture). Context entries that depend on the symbol (its blast radius) carry an optional `confidence` tier: confirmed, likely or potential, where co-change history can raise potential to likely. This is the BEST starting point when you know both the symbol and your intent.',
+      description: 'Get task-optimized context for a symbol based on what you are about to do. Specify taskType: "fix" (bug investigation - includes history + anti-patterns), "extend" (add feature - includes deps + blast radius), "refactor" (restructure - includes importers + complexity), or "understand" (learn - includes full slice + architecture). Context entries that depend on the symbol (its blast radius) carry an optional `confidence` tier: confirmed, likely or potential, where co-change history can raise potential to likely. This is the BEST starting point when you know both the symbol and your intent. With @ctxo/domain and a domain graph, `cardExcerpt` adds the card rules linked to the symbol and its neighbours, the terms of its context and its contracts within `tokenBudget` (left out when even an empty excerpt does not fit).',
       inputSchema: {
         symbolId: z.string().min(1).describe(`The symbol ID (${SYMBOL_ID_FORMAT})`),
         taskType: z.enum(['fix', 'extend', 'refactor', 'understand']).describe('Task type determines which context is most relevant'),
@@ -274,7 +278,19 @@ export function registerTools(
     (args) => contextForTaskHandler(args),
   );
 
-  const rankedContextHandler = withRecording('get_ranked_context', handleGetRankedContext(storage, masking, staleness, ctxoRoot), recorder);
+  // Module scopes wrap the unchanged code handler inside the recording, so their calls are recorded under
+  // get_ranked_context. The `scope` parameter exists only when a module provides a scope.
+  const rankedContextHandler = withRecording('get_ranked_context', withRankedScopes(handleGetRankedContext(storage, masking, staleness, ctxoRoot), rankedScopes, masking), recorder);
+  const rankedScopeShape: ZodRawShape =
+    rankedScopes.size === 0
+      ? {}
+      : {
+          scope: z
+            .enum([CODE_SCOPE, ...rankedScopeNames(rankedScopes)] as [string, ...string[]])
+            .optional()
+            .default(CODE_SCOPE)
+            .describe(rankedScopeDescription(rankedScopes)),
+        };
 
   server.registerTool(
     'get_ranked_context',
@@ -285,6 +301,7 @@ export function registerTools(
         tokenBudget: z.number().optional().default(4000).describe('Max tokens for results (default 4000)'),
         strategy: z.enum(['combined', 'dependency', 'importance']).optional().default('combined').describe('Ranking strategy'),
         searchMode: z.enum(['fts', 'legacy']).optional().default('fts').describe('"fts" (default): BM25 ranking with camelCase splitting, trigram fallback and typo correction; "legacy": substring matching; strategy "importance" always uses legacy matching'),
+        ...rankedScopeShape,
       },
       annotations: toolAnnotations,
     },
@@ -379,7 +396,7 @@ export function registerTools(
   server.registerTool(
     'get_pr_impact',
     {
-      description: 'Analyze the full impact of a PR or recent changes in a SINGLE call — combines changed symbols + blast radius + co-change history into one risk assessment. Results include `_meta` with truncation info. Use this FIRST when reviewing a PR or evaluating recent commits. For single-symbol analysis, use get_blast_radius instead. With @ctxo/domain and a registry, changed symbols carry `context` and `contextBoundaryViolations` lists edges that touch them and cross a context boundary outside its contracts.',
+      description: 'Analyze the full impact of a PR or recent changes in a SINGLE call: combines changed symbols + blast radius + co-change history into one risk assessment. Results include `_meta` with truncation info. Use this FIRST when reviewing a PR or evaluating recent commits. For single-symbol analysis, use get_blast_radius instead. With @ctxo/domain and a registry, changed symbols carry `context` and `contextBoundaryViolations` lists edges that touch them and cross a context boundary outside its contracts. With @ctxo/domain and a domain graph, `contextsTouched` (the commits after the merge base of `since` and HEAD, plus the working tree), `cardsChanged` and `rulesWithoutTests` report the named contexts the change touched, the cards it changed and their rules without a test link.',
       inputSchema: {
         since: z.string().optional().default('HEAD~1').describe('Git ref to diff against (default HEAD~1)'),
         maxFiles: z.number().int().min(1).optional().default(50).describe('Max changed files to analyze'),

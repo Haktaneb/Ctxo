@@ -52,7 +52,7 @@ safely add any of them to `autoApprove` without risking destructive actions.
 ## Verify
 
 1. Click **MCP Servers** in the Cline sidebar.
-2. `ctxo` appears with a green dot and its 14 tools underneath.
+2. `ctxo` appears with a green dot and its 14 tools (16 with `@ctxo/domain`) underneath.
 3. If it is red, click the server name to see the spawn log.
 
 Smoke test:

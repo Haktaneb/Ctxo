@@ -1,4 +1,3 @@
-import { statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { CoreToolName, CtxoHost, ResponseEnricher } from '@ctxo/cli/internal';
 import { DomainArtifactStore, type BoundariesArtifact, type ContextsArtifact } from '../adapters/artifact-store.js';
@@ -6,12 +5,89 @@ import { readRegistry } from '../adapters/registry-reader.js';
 import type { BoundaryViolationRecord } from '../core/boundaries.js';
 import { contextDrift, type ContextHistoryEntry } from '../core/context-metrics.js';
 import { resolveDomainConfig } from '../core/domain-config.js';
+import { ADDITIVE_CAP } from '../core/limits.js';
 import { registryHash } from '../core/registry.js';
-
-/** The most entries an additive array carries on an existing tool; a `<name>Total` count says when more existed. */
-const ADDITIVE_CAP = 50;
+import { createRacyStamper, type DomainState, type DomainStateOptions } from './domain-state.js';
+import { blastRadiusDomainFields, taskContextDomainFields, whyContextDomainFields } from './graph-enrichers.js';
+import { prImpactDomainFields } from './pr-impact-fields.js';
 
 type Payload = Record<string, unknown>;
+
+/**
+ * The longest an asynchronous domain enricher may take before its tool answers without the domain fields: well
+ * under the MCP clients' tool timeouts (tens of seconds), and far above the few milliseconds the graph lookups take.
+ */
+export const ENRICHER_TIMEOUT_MS = 5_000;
+
+/** Whether `value` has a callable `then`: a Promise or any other thenable. */
+function isThenable(value: unknown): value is PromiseLike<Payload> {
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return false;
+  return typeof (value as { then?: unknown }).then === 'function';
+}
+
+/**
+ * `enricher`, bounded in time. It works on a copy of the payload; a synchronous result is returned as is. A Promise
+ * result that has not settled after `timeoutMs` gives the payload exactly as it came in (none of the domain fields)
+ * and one warning; its late result or rejection is ignored. A rejection in time is passed on to the caller (the core
+ * guard keeps the payload and warns).
+ */
+export function withTimeout(
+  tool: CoreToolName,
+  enricher: ResponseEnricher,
+  warn: (message: string) => void,
+  timeoutMs: number = ENRICHER_TIMEOUT_MS,
+): ResponseEnricher {
+  return (payload, args) => {
+    const result = enricher(structuredClone(payload), args);
+    if (!isThenable(result)) return result;
+    return new Promise<Payload>((resolvePromise, reject) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        settled = true;
+        warn(`The ${tool} domain fields did not settle within ${timeoutMs} ms; they are left out of this response`);
+        resolvePromise(payload);
+      }, timeoutMs);
+      (timer as { unref?: () => void }).unref?.();
+      result.then(
+        (value) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolvePromise(value);
+        },
+        (err: unknown) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          reject(err);
+        },
+      );
+    });
+  };
+}
+
+/**
+ * The links in order on one payload: each adds its fields and returns the payload. Synchronous until a link returns
+ * a thenable; the remaining links then run on its resolved value.
+ */
+function compose(...links: ResponseEnricher[]): ResponseEnricher {
+  return (payload, args) => {
+    let current: Payload = payload;
+    for (let i = 0; i < links.length; i++) {
+      const result = links[i]!(current, args);
+      if (isThenable(result)) {
+        const rest = links.slice(i + 1);
+        return Promise.resolve(result).then(async (value) => {
+          let next = value;
+          for (const link of rest) next = await link(next, args);
+          return next;
+        });
+      }
+      current = result;
+    }
+    return current;
+  };
+}
 
 function isRecord(value: unknown): value is Payload {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -24,16 +100,6 @@ function isRecord(value: unknown): value is Payload {
 function fileOfSymbolId(id: string): string | undefined {
   const parts = id.split('::');
   return parts.length >= 3 && parts[0] !== '' ? parts[0] : undefined;
-}
-
-/** A cheap change stamp for a file or folder: mtime and size, or 'missing'. */
-function stampOf(path: string): string {
-  try {
-    const stat = statSync(path);
-    return `${stat.mtimeMs}:${stat.size}`;
-  } catch {
-    return 'missing';
-  }
 }
 
 /** A value reloaded only when its stamp changes. */
@@ -61,13 +127,21 @@ interface DomainView {
 }
 
 /**
- * The response enrichers (spec 10.5 to 10.7). Registry hash, artifacts and history are cached by file mtime
- * and size. Without a registry, or when `contexts.json` was built from another registry text, every enricher
- * returns the payload unchanged (E3).
+ * The response enrichers: PR 2B's context fields (spec 10.5 to 10.7) composed with the domain graph fields of
+ * `state` (spec 11.3). Registry hash, artifacts and history are cached by file mtime and size, with the racy-stamp
+ * rule of `createRacyStamper`. Without a registry, or when `contexts.json` was built from another registry text,
+ * PR 2B's enrichers return the payload unchanged (E3); the graph fields follow `state.load()` the same way. The
+ * enrichers of the asynchronous tools are bounded by `ENRICHER_TIMEOUT_MS` (`withTimeout`).
  */
-export function createEnrichers(host: CtxoHost): Partial<Record<CoreToolName, ResponseEnricher>> {
+export function createEnrichers(
+  host: CtxoHost,
+  state: DomainState,
+  options: DomainStateOptions = {},
+): Partial<Record<CoreToolName, ResponseEnricher>> {
   const store = new DomainArtifactStore(host.ctxoRoot);
   const domainDir = join(host.ctxoRoot, 'index', 'domain');
+  /** The shared racy-stamp rule (M6): mtime and size, 'missing', or a one-off value for a file modified within 2 s. */
+  const stampOf = createRacyStamper(options.now);
 
   const configCache = new Cached<ReturnType<typeof resolveDomainConfig>>();
   const hashCache = new Cached<string | undefined>();
@@ -162,10 +236,20 @@ export function createEnrichers(host: CtxoHost): Partial<Record<CoreToolName, Re
     return ids;
   }
 
+  const log = host.services.createLogger('ctxo:domain');
+  const bounded = (tool: CoreToolName, enricher: ResponseEnricher): ResponseEnricher =>
+    withTimeout(tool, enricher, (message) => log.warn(message));
+
   return {
     search_symbols: withDomain((payload, _args, domain) => tagAll(payload['results'], domain)),
 
-    get_blast_radius: withDomain((payload, _args, domain) => tagAll(payload['impactedSymbols'], domain)),
+    get_blast_radius: bounded(
+      'get_blast_radius',
+      compose(
+        withDomain((payload, _args, domain) => tagAll(payload['impactedSymbols'], domain)),
+        blastRadiusDomainFields(state),
+      ),
+    ),
 
     find_importers: withDomain((payload, _args, domain) => tagAll(payload['importers'], domain)),
 
@@ -177,29 +261,44 @@ export function createEnrichers(host: CtxoHost): Partial<Record<CoreToolName, Re
       }
     }),
 
-    get_pr_impact: withDomain((payload, _args, domain) => {
-      if (Array.isArray(payload['files'])) {
-        for (const file of payload['files']) if (isRecord(file)) tagAll(file['symbols'], domain);
-      }
-      const artifact = domain.boundaries();
-      if (artifact === undefined) return;
-      const changed = changedSymbolIds(payload);
-      const touching: BoundaryViolationRecord[] = artifact.violations.filter(
-        (v) => changed.has(v.from.symbolId) || changed.has(v.to.symbolId),
-      );
-      if (touching.length === 0) return;
-      payload['contextBoundaryViolations'] = touching.slice(0, ADDITIVE_CAP);
-      if (touching.length > ADDITIVE_CAP) payload['contextBoundaryViolationsTotal'] = touching.length;
-    }),
+    // The git reads of the domain fields keep running when the bound fires; only their fields are dropped.
+    get_pr_impact: bounded(
+      'get_pr_impact',
+      compose(
+        withDomain((payload, _args, domain) => {
+          if (Array.isArray(payload['files'])) {
+            for (const file of payload['files']) if (isRecord(file)) tagAll(file['symbols'], domain);
+          }
+          const artifact = domain.boundaries();
+          if (artifact === undefined) return;
+          const changed = changedSymbolIds(payload);
+          const touching: BoundaryViolationRecord[] = artifact.violations.filter(
+            (v) => changed.has(v.from.symbolId) || changed.has(v.to.symbolId),
+          );
+          if (touching.length === 0) return;
+          payload['contextBoundaryViolations'] = touching.slice(0, ADDITIVE_CAP);
+          if (touching.length > ADDITIVE_CAP) payload['contextBoundaryViolationsTotal'] = touching.length;
+        }),
+        prImpactDomainFields(host, state),
+      ),
+    ),
 
-    get_why_context: withDomain((payload, args, domain) => {
-      const symbolId = args['symbolId'];
-      if (typeof symbolId !== 'string') return;
-      const file = fileOfSymbolId(symbolId) ?? (symbolId.includes('::') ? undefined : symbolId);
-      const context = file === undefined ? undefined : domain.contextOf(file);
-      if (context === undefined) return;
-      const drift = contextDrift(context, domain.history(), domain.contexts.movedFiles, domain.hash);
-      if (drift !== undefined) payload['contextDrift'] = drift;
-    }),
+    get_why_context: bounded(
+      'get_why_context',
+      compose(
+        withDomain((payload, args, domain) => {
+          const symbolId = args['symbolId'];
+          if (typeof symbolId !== 'string') return;
+          const file = fileOfSymbolId(symbolId) ?? (symbolId.includes('::') ? undefined : symbolId);
+          const context = file === undefined ? undefined : domain.contextOf(file);
+          if (context === undefined) return;
+          const drift = contextDrift(context, domain.history(), domain.contexts.movedFiles, domain.hash);
+          if (drift !== undefined) payload['contextDrift'] = drift;
+        }),
+        whyContextDomainFields(state),
+      ),
+    ),
+
+    get_context_for_task: taskContextDomainFields(state),
   };
 }

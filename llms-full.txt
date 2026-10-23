@@ -53,7 +53,7 @@ Source paths referenced below live under `packages/cli/src/`.
 
 ---
 
-## Tool Reference (14 tools)
+## Tool Reference (14 core tools, plus 2 with @ctxo/domain)
 
 ### get_logic_slice
 Retrieve a symbol and all its transitive dependencies.
@@ -82,6 +82,8 @@ Returns: impactedSymbols array with symbolId, depth, riskScore, confidence, edge
 Also returns coChangedFiles (when co-change data exists): up to 10 files that co-change with the target's file at frequency >= 0.5 but have no graph path to it, each with file, frequency, sharedCommits. Informational: not counted in tiers, risk scores or the safe-edit gate.
 Every copy of a table, view or procedure that several files define, and its 2-part ID, reports the same dependents (those of the winning definition).
 
+With @ctxo/domain and a domain graph: `rulesAffected` (card rules linked to the target or an impacted symbol, target first; each `{ ruleId, title, context, card, via: [{ symbolId, link: code|test }] (up to 5), viaCount }`) and `cardsToUpdate` (`{ context, card }`, registry order). Capped at 50 with `<name>Total`.
+
 When to use: BEFORE modifying any symbol, including a SQL table, view or procedure.
 Instead of: get_logic_slice (forward deps), get_pr_impact (PR-level).
 
@@ -105,6 +107,8 @@ Parameters:
 - maxCommits (number, optional): Limit to N most recent commits
 
 Returns: commitHistory array + antiPatternWarnings (reverts, rollbacks, undo patterns), and driftSignals when a community snapshot exists. driftSignals carries confidence (low below 3 distinct commits, medium 3-6, high 7+), distinctCommits (different commits in the snapshot history, other than the current one), snapshotsAvailable (history entries passed in, kept for compatibility) and an optional hint.
+
+With @ctxo/domain and a domain graph: `decisions`, up to 5 dated card decisions of the symbol's context (those naming a rule linked to the symbol first, each group newest first; `decisionsTotal` when more), each `{ id, date, text, card, line, rules, provenance }`; provenance entries are `{ kind: "file", path, exists, label? }` or `{ kind: "external", value }` (never fetched). `[]` when the file has no single owning context.
 
 When to use: Understanding WHY code was written this way, checking for problem history.
 Pair with: get_change_intelligence (complexity/churn scores).
@@ -149,6 +153,8 @@ Task types:
 
 Context entries that depend on the symbol (its blast radius) carry an optional confidence tier (confirmed|likely|potential); co-change history can raise potential to likely. Entries carry no symbol annotations (use get_logic_slice level 4). A 2-part data ID (`dbo.loans::table`) is accepted.
 
+With @ctxo/domain and a domain graph: `cardExcerpt` `{ context?, card?, rules: [{ ruleId, title, linkedTo: target|neighbour, text? }], terms: [{ term, definition }], contracts?, tokens, omitted }`. Up to a quarter of tokenBudget is reserved before the code context is packed; the excerpt fills tokenBudget - totalTokens, so the sum never exceeds the budget. Left out only when even an empty excerpt does not fit.
+
 When to use: BEST starting point when you know the symbol AND your intent.
 
 ### get_ranked_context
@@ -160,7 +166,9 @@ Parameters:
 - strategy (enum: combined|dependency|importance, default combined): Ranking strategy
 - searchMode (enum: fts|legacy, default fts): "fts" is BM25 with camelCase splitting, trigram fallback and automatic typo correction (reported in `fuzzyCorrection`); "legacy" is substring matching
 
-Returns: Symbols ranked by BM25 relevance + PageRank importance, packed within budget.
+- scope (enum: code|domain, default code; only with @ctxo/domain): "domain" searches rules, terms, decisions, card sections and in-repo provenance files (BM25 k1 1.2, b 0.75, no PageRank; strategy and searchMode do not apply). Without the package the parameter does not exist.
+
+Returns: Symbols ranked by BM25 relevance + PageRank importance, packed within budget. With scope "domain": `{ query, scope, results: [{ id, kind: rule|term|decision|section|provenance, title, context?, path, line?, excerpt, relevanceScore, tokens }], totalTokens, tokenBudget, searchMetrics }`.
 
 When to use: Have a question/topic but don't know which symbol to look at.
 Instead of: search_symbols (exact name/regex search).
@@ -232,7 +240,30 @@ Parameters:
 
 Returns: changedFiles, changedSymbols, totalImpact, riskLevel (low|medium|high), per-file blast radius, co-change data (coChangedWith per file), boundaryViolations (confidence from distinctCommits) and clustersAffected.
 
+With @ctxo/domain and a domain graph: `contextsTouched` (`{ id, status, card?, cardChanged, acknowledged?, fileCount, files }` with up to 10 files; over the merge base of since and HEAD plus the working tree, while `files` stays `git diff <since>`), `cardsChanged` (registry cards changed in the range or the working tree) and `rulesWithoutTests` (rules of touched contexts without a test link, with `untested` reasons). Capped at 50 with `<name>Total`; left out when git cannot resolve since. An empty diff also carries `_meta`.
+
 When to use: FIRST tool when reviewing a PR or evaluating recent commits.
+
+### get_domain_context (with @ctxo/domain)
+The card of the named context that owns a symbol or file.
+
+Parameters:
+- symbolId (string, optional): Symbol ID; its file part selects the context (the symbol need not be indexed). Wins over path
+- path (string, optional): Repo-relative file path, or a context's card path
+
+Returns: `context` (id, name, rung, card, rulePrefix, paths), `terms` (definitions with origin card|glossary, up to 15 `identifiers`, `identifierCount`), `rules` (each with `untested?`, up to 10 `tests` and 10 `code` links with `sources`, `testCount`, `codeCount`), `contracts` (outbound, inbound, text, references), `decisions` (newest first, capped at 50) and `openQuestions`. With neither parameter: `contexts` with ruleCount, rulesWithTests, termCount, decisionCount. Misses: `{ found: false, hint }` (no registry, invalid or changed registry, no graph, no owning context, a path outside the project). After a card edit not yet indexed: `stale: true` and a hint.
+
+When to use: Before changing code in a named context; to learn the rules, terms and contracts behind it.
+
+### get_rule (with @ctxo/domain)
+One domain rule by ID.
+
+Parameters:
+- ruleId (string, required): e.g. LEND-03; LEND03, Lend03, lend_03 and the id of a domain-scope hit (rule:LEND-03) also match
+
+Returns: `rule` (ruleId, title, text, line, untested?, context, card), `tests` and `symbols` (each `{ file, symbolId?, testName?, fallback?, sources: [{ source, annotation?, file, line }] }`; test sources annotation|category|test-title|rule-comment|mention|card-tests, code sources card-code|rule-comment), `decisions` mentioning it, `provenance` (with the decision it came from) and `unresolved` card values when any. `{ found: false, hint: "No rule <ID> in any card." }` for an unknown ID.
+
+When to use: A change may affect a business rule; find the tests that pin it and the decisions behind it.
 
 ---
 
@@ -281,6 +312,10 @@ Checking if safe to delete/rename?
 
 Working with class hierarchies?
   -> get_class_hierarchy (extends/implements tree)
+
+Need the business rules or decisions behind code? (with @ctxo/domain)
+  -> get_domain_context (the card of the context that owns the symbol or file)
+  -> then get_rule (one rule: tests, code, decisions)
 ```
 
 ---
@@ -497,7 +532,7 @@ Title path joined with ` > `; whitespace collapsed; runs of `:` collapsed and a 
 
 ---
 
-## Domain Knowledge Layer: `@ctxo/domain` (unreleased, #156 PR 2B)
+## Domain Knowledge Layer: `@ctxo/domain` (0.14.0, #156 PR 2B)
 
 An opt-in package that lets a team name its bounded contexts and keep markdown cards in step with code. Ctxo supplies structure, linkage, verification and retrieval; it never writes domain text or fetches external documentation. Feature doc: docs/features/domain-knowledge.md ("Named contexts and the domain package", "Ctxo domain conventions v1"). Design record: docs/architecture/ADR/adr-018-domain-knowledge-layer.md.
 
@@ -545,6 +580,36 @@ An opt-in package that lets a team name its bounded contexts and keep markdown c
 ### Adoption ladder
 
 level 0: install and index; 1: registry with paths; 2: cards; 3: rule IDs and test links, through card `Tests:` lines, test names or framework tags; 4: contracts and shadow-spec resolutions. No level requires code changes.
+
+---
+
+## Domain Graph (unreleased, #156 PR 3)
+
+New in the next release: with `@ctxo/domain` and a registry, `ctxo index` (and the post-commit hook, also for a card-only commit) writes `.ctxo/index/domain/graph.json` (`ctxoArtifact: "domain-graph"`, byte-identical for the same input). `ctxo watch` does not rebuild it. Code metrics never read it.
+
+### Nodes and links
+- Nodes: `context:<id>`, `rule:<ID>`, `term:<context>/<term-key>` (repo-wide glossary terms use `*`), `decision:<context>/<date>-<n>`; search-only `section:<card>:<line>`.
+- Links, each with `source` and the evidence location `at` (1-based): rule-test (`annotation`: xUnit Trait with a `domain.tests.ruleTraitKeys` key; `category`: NUnit Category, MSTest TestCategory, JUnit Tag; `test-title`; `rule-comment`; `mention`; `card-tests`), rule-symbol (`card-code`; `rule-comment` in indexed non-test files up to 1 MiB, linked to the symbol starting within three lines below when it sits inside the symbol containing the comment, else the innermost one), decision-provenance (`card-link`, `card-text`), decision-rule, term-identifier (`symbol-name`, `table-name`; contiguous token run with plural folding, own context only, at most 50 per term).
+- Card values that resolve to nothing are kept in `unresolved` (`missing-file`, `not-a-symbol`).
+
+### Card format additions (Ctxo domain conventions v1)
+- `Tests:` and `Code:` values: repo-relative paths or symbol IDs (anything with `::`); `file#Name` names a plain test. A symbol ID the index does not hold links to its file. C# symbol IDs differ between the Roslyn and tree-sitter tiers, so prefer file paths in C# `Code:` lines.
+- `**Term**` items in Language; glossary items anywhere in glossary.md, `(context: <id>)` ties one to a context.
+- Decision lines `- YYYY-MM-DD: text`; rule IDs written in them link the decision; relative links are provenance files, `#123`, URLs and tracker keys external strings (never fetched).
+- An H1 ends the Rules and invariants section. Shared cards: rules belong to the first context by id (warned once).
+
+### Staleness
+- Registry changed since the graph: no domain fields, tools answer the "run ctxo index" hint.
+- Cards or glossary changed: answers from the graph with `stale: true` and a hint.
+
+### verify-domain check 6
+- `<ID>: Code file "<file>" does not exist` (error, also for directories, like Tests).
+- `<ID>: <field>: "<value>" is not an indexed symbol; it links to its file` (warning).
+- `rule: comment names unknown rule <ID>` (warning, production code, only for a rule prefix).
+
+### Internal API (ADR-018 addendum)
+- Async enrichers (awaited by get_blast_radius, get_pr_impact, get_why_context; dropped with a warning by synchronous tools), get_context_for_task as the seventh enrich-seam tool, `reserveTaskContextTokens` (summed, capped at a quarter of tokenBudget), `rankedContextScopes`, host services `createDocumentSearch`, `splitIdentifier`, `dataResourceKinds`.
+- The ctxo-domain-fold skill marker is v0.15; `ctxo doctor` reports older copies as outdated until `ctxo init --only domain`.
 
 ---
 

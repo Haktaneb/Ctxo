@@ -1,7 +1,10 @@
 import { join } from 'node:path';
 import type { CoChangeWindowCommits, CtxoHost, CtxoHostServices } from '../ports/i-ctxo-module.js';
 import type { CtxoConfig } from '../core/config/config-schema.js';
-import type { FileIndex } from '../core/types.js';
+import { DATA_RESOURCE_KINDS } from '@ctxo/plugin-api';
+import type { FileIndex, SearchDocument } from '../core/types.js';
+import { DOCUMENT_SEARCH_CONFIG, SearchEngine } from '../core/search/search-engine.js';
+import { SymbolTokenizer } from '../core/search/symbol-tokenizer.js';
 import { indexTestPatterns, loadConfig, makeGlobMatcher, resolveCoChangeConfig } from '../core/config/load-config.js';
 import { selectWindow, windowCutoff } from '../core/co-change/co-change-window.js';
 import { createLogger } from '../core/logger.js';
@@ -58,6 +61,14 @@ const HOST_SERVICES: CtxoHostServices = Object.freeze({
   readCoChangeWindow,
   findGitRoot: (dir: string) => locateGitRoot(dir) ?? undefined,
   testFrameworkAnnotations: TEST_FRAMEWORK_ANNOTATIONS,
+  dataResourceKinds: DATA_RESOURCE_KINDS,
+  createDocumentSearch: (documents: readonly SearchDocument[]) => {
+    const engine = new SearchEngine(DOCUMENT_SEARCH_CONFIG);
+    engine.buildDocumentIndex(documents);
+    // Only search goes out: a module never reaches buildIndex or updateFile.
+    return { search: (query: string, limit?: number) => engine.search(query, limit) };
+  },
+  splitIdentifier: (name: string) => SymbolTokenizer.splitName(name),
 });
 
 export interface CreateModuleHostOptions {

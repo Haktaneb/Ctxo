@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -7,7 +7,17 @@ import { DomainArtifactStore, type BoundariesArtifact, type ContextsArtifact } f
 import type { BoundaryViolationRecord } from '../../core/boundaries.js';
 import type { ContextHistoryEntry } from '../../core/context-metrics.js';
 import { registryHash } from '../../core/registry.js';
-import { createEnrichers } from '../enrichers.js';
+import { createDomainState } from '../domain-state.js';
+import { ENRICHER_TIMEOUT_MS, createEnrichers, withTimeout } from '../enrichers.js';
+import {
+  buildFixtureGraph,
+  LENDING_CARD,
+  LENDING_FIXTURE,
+  POLICY_FILE,
+  REGISTRY_TEXT,
+  ROOT,
+  TEST,
+} from '../../core/__tests__/lending-graph.fixture.js';
 
 const REGISTRY = `version: 1
 contexts:
@@ -97,7 +107,7 @@ function enrichers(setup: Setup = {}) {
   store.writeIfChanged('contexts.json', contexts(setup.hash ?? HASH));
   store.writeIfChanged('boundaries.json', boundaries(setup.violations ?? [], setup.hash ?? HASH));
   for (const entry of setup.history ?? []) store.writeHistory(entry);
-  return createEnrichers(host);
+  return createEnrichers(host, createDomainState(host));
 }
 
 const run = (
@@ -107,11 +117,20 @@ const run = (
   args: Record<string, unknown> = {},
 ): Record<string, unknown> => e[tool]!(structuredClone(payload), args);
 
+/** `run` for an enricher that may return a Promise (`get_pr_impact` adds its asynchronous domain fields). */
+const runAsync = async (
+  e: ReturnType<typeof enrichers>,
+  tool: keyof ReturnType<typeof enrichers>,
+  payload: Record<string, unknown>,
+  args: Record<string, unknown> = {},
+): Promise<Record<string, unknown>> => await e[tool]!(structuredClone(payload), args);
+
 describe('createEnrichers', () => {
-  it('registers an enricher for the six tools', () => {
+  it('registers an enricher for the seven tools', () => {
     expect(Object.keys(enrichers()).sort()).toEqual([
       'find_importers',
       'get_blast_radius',
+      'get_context_for_task',
       'get_logic_slice',
       'get_pr_impact',
       'get_why_context',
@@ -194,8 +213,8 @@ describe('createEnrichers', () => {
     ]);
   });
 
-  it('get_pr_impact adds context to symbols of singly-owned files and nothing for unowned files', () => {
-    const result = run(enrichers(), 'get_pr_impact', {
+  it('get_pr_impact adds context to symbols of singly-owned files and nothing for unowned files', async () => {
+    const result = await runAsync(enrichers(), 'get_pr_impact', {
       files: [
         { file: 'src/Lending/Loan.ts', symbols: [{ symbolId: 'src/Lending/Loan.ts::Loan::class' }] },
         { file: 'src/Loose.ts', symbols: [{ symbolId: 'src/Loose.ts::Loose::class' }] },
@@ -208,18 +227,18 @@ describe('createEnrichers', () => {
     ]);
   });
 
-  it('without a registry the payload is unchanged', () => {
+  it('without a registry the payload is unchanged', async () => {
     const e = enrichers({ registry: false });
     const payload = { results: [{ symbolId: 'a', file: 'src/Lending/Loan.ts' }] };
 
     expect(run(e, 'search_symbols', payload)).toEqual(payload);
-    expect(run(e, 'get_pr_impact', { files: [] })).toEqual({ files: [] });
+    expect(await runAsync(e, 'get_pr_impact', { files: [] })).toEqual({ files: [] });
     expect(run(e, 'get_why_context', { symbolId: 'src/Lending/Loan.ts::Loan::class' }, { symbolId: 'src/Lending/Loan.ts::Loan::class' })).toEqual({
       symbolId: 'src/Lending/Loan.ts::Loan::class',
     });
   });
 
-  it('stale artifacts add nothing', () => {
+  it('stale artifacts add nothing', async () => {
     const e = enrichers({
       hash: 'not-the-current-hash',
       violations: [violation(1)],
@@ -229,15 +248,15 @@ describe('createEnrichers', () => {
     const pr = { files: [{ file: 'src/Lending/L1.ts', symbols: [{ symbolId: 'src/Lending/L1.ts::L1::class' }] }] };
 
     expect(run(e, 'search_symbols', search)).toEqual(search);
-    expect(run(e, 'get_pr_impact', pr)).toEqual(pr);
+    expect(await runAsync(e, 'get_pr_impact', pr)).toEqual(pr);
     const why = { symbolId: 'src/Lending/Loan.ts::Loan::class' };
     expect(run(e, 'get_why_context', why, why)).toEqual(why);
   });
 
-  it('contextBoundaryViolations lists the violations touching changed symbols', () => {
+  it('contextBoundaryViolations lists the violations touching changed symbols', async () => {
     const e = enrichers({ violations: [violation(1), violation(2), violation(3)] });
 
-    const result = run(e, 'get_pr_impact', {
+    const result = await runAsync(e, 'get_pr_impact', {
       files: [
         { file: 'src/Lending/L1.ts', symbols: [{ symbolId: 'src/Lending/L1.ts::L1::class' }] },
         // The `to` end of violation 3 is a changed symbol too.
@@ -249,33 +268,33 @@ describe('createEnrichers', () => {
     expect(result).not.toHaveProperty('contextBoundaryViolationsTotal');
   });
 
-  it('contextBoundaryViolations is absent when no violation touches a changed symbol', () => {
+  it('contextBoundaryViolations is absent when no violation touches a changed symbol', async () => {
     const e = enrichers({ violations: [violation(1)] });
 
-    const result = run(e, 'get_pr_impact', {
+    const result = await runAsync(e, 'get_pr_impact', {
       files: [{ file: 'src/Lending/Other.ts', symbols: [{ symbolId: 'src/Lending/Other.ts::O::class' }] }],
     });
 
     expect(result).not.toHaveProperty('contextBoundaryViolations');
   });
 
-  it('contextBoundaryViolations is capped at 50 with contextBoundaryViolationsTotal', () => {
+  it('contextBoundaryViolations is capped at 50 with contextBoundaryViolationsTotal', async () => {
     const many = Array.from({ length: 60 }, (_, i) => violation(i));
     const changed = {
       files: many.map((v) => ({ file: v.from.file, symbols: [{ symbolId: v.from.symbolId }] })),
     };
 
-    const capped = run(enrichers({ violations: many }), 'get_pr_impact', changed);
+    const capped = await runAsync(enrichers({ violations: many }), 'get_pr_impact', changed);
 
     expect(capped['contextBoundaryViolations']).toEqual(many.slice(0, 50));
     expect(capped['contextBoundaryViolationsTotal']).toBe(60);
   });
 
-  it('contextBoundaryViolations keeps all ten with no total field', () => {
+  it('contextBoundaryViolations keeps all ten with no total field', async () => {
     const ten = Array.from({ length: 10 }, (_, i) => violation(i));
     const changed = { files: ten.map((v) => ({ file: v.from.file, symbols: [{ symbolId: v.from.symbolId }] })) };
 
-    const result = run(enrichers({ violations: ten }), 'get_pr_impact', changed);
+    const result = await runAsync(enrichers({ violations: ten }), 'get_pr_impact', changed);
 
     expect(result['contextBoundaryViolations']).toEqual(ten);
     expect(result).not.toHaveProperty('contextBoundaryViolationsTotal');
@@ -341,7 +360,9 @@ describe('createEnrichers', () => {
     writeFileSync(join(dir, 'docs', 'domain', 'contexts.yaml'), REGISTRY);
     const base = createModuleHost({ projectRoot: dir, mode: 'cli' });
     const loadConfig = vi.fn(base.services.loadConfig);
-    const e = createEnrichers({ ...base, services: { ...base.services, loadConfig } });
+    const spied = { ...base, services: { ...base.services, loadConfig } };
+    // A clock well past every mtime, so no stamp is racy.
+    const e = createEnrichers(spied, createDomainState(spied), { now: () => Date.now() + 60_000 });
     const payload = { results: [{ symbolId: 'a', file: 'src/Lending/Loan.ts' }] };
 
     e.search_symbols!(structuredClone(payload), {});
@@ -352,5 +373,134 @@ describe('createEnrichers', () => {
     writeFileSync(configPath, 'version: "1.0"\nstats:\n  enabled: false\n');
     e.search_symbols!(structuredClone(payload), {});
     expect(loadConfig).toHaveBeenCalledTimes(2);
+  });
+
+  it('sees a same-size registry edit within one mtime tick (the shared racy-stamp rule, M6)', () => {
+    const e = enrichers();
+    const registryPath = join(dir, 'docs', 'domain', 'contexts.yaml');
+    // One whole-second mtime for both texts, as a coarse file system would record it (inside the 2 s window).
+    const tick = Math.floor(Date.now() / 1000);
+    utimesSync(registryPath, tick, tick);
+    const payload = { results: [{ symbolId: 'a', file: 'src/Lending/Loan.ts' }] };
+    expect(run(e, 'search_symbols', payload)['results']).toEqual([{ symbolId: 'a', file: 'src/Lending/Loan.ts', context: 'lending' }]);
+
+    // Same size, same mtime: only the racy rule tells the two registry texts apart.
+    const edited = REGISTRY.replace('name: Lending', 'name: Lendinx');
+    expect(edited.length).toBe(REGISTRY.length);
+    writeFileSync(registryPath, edited);
+    utimesSync(registryPath, tick, tick);
+    expect(statSync(registryPath).size).toBe(Buffer.byteLength(REGISTRY));
+
+    // contexts.json was built from the old text, so the PR 2B fields stop (E3) instead of serving the old registry.
+    expect(run(e, 'search_symbols', payload)).toEqual(payload);
+  });
+
+  it("createEnrichers composes PR 2B's fields with the graph fields", async () => {
+    mkdirSync(join(dir, 'docs', 'domain', 'lending'), { recursive: true });
+    writeFileSync(join(dir, 'docs', 'domain', 'contexts.yaml'), REGISTRY_TEXT);
+    for (const [path, text] of Object.entries(LENDING_FIXTURE.cards)) {
+      mkdirSync(join(dir, path, '..'), { recursive: true });
+      writeFileSync(join(dir, path), text);
+    }
+    const host = createModuleHost({ projectRoot: dir, mode: 'cli' });
+    const store = new DomainArtifactStore(host.ctxoRoot);
+    store.writeIfChanged('contexts.json', {
+      ...contexts(registryHash(REGISTRY_TEXT)),
+      contexts: [{ id: 'lending', name: 'Lending', rung: 'bounded', fileCount: 1, files: [POLICY_FILE] }],
+      multiplyOwned: [],
+    });
+    store.writeIfChanged('graph.json', buildFixtureGraph());
+    const e = createEnrichers(host, createDomainState(host));
+
+    const result = await e.get_blast_radius!({ symbolId: ROOT, impactedSymbols: [{ symbolId: ROOT }, { symbolId: TEST }] }, {});
+    expect(result['impactedSymbols']).toEqual([{ symbolId: ROOT, context: 'lending' }, { symbolId: TEST }]);
+    expect((result['rulesAffected'] as { ruleId: string }[]).map((r) => r.ruleId)).toEqual(['LEND-03']);
+    expect(result['cardsToUpdate']).toEqual([{ context: 'lending', card: LENDING_CARD }]);
+
+    const why = await e.get_why_context!({ commitHistory: [] }, { symbolId: ROOT });
+    expect(why['decisions']).toHaveLength(5);
+
+    const task = e.get_context_for_task!({ context: [], totalTokens: 0, tokenBudget: 4000 }, { symbolId: ROOT });
+    expect(task).not.toBeInstanceOf(Promise);
+    expect((task as Record<string, unknown>)['cardExcerpt']).toMatchObject({ context: 'lending', card: LENDING_CARD });
+  });
+
+  it('get_context_for_task adds nothing without a registry (byte-identical payload)', () => {
+    const e = enrichers({ registry: false });
+    const payload = { context: [{ symbolId: 'a' }], totalTokens: 10, tokenBudget: 4000 };
+    expect(JSON.stringify(e.get_context_for_task!(structuredClone(payload), { symbolId: 'a' }))).toBe(JSON.stringify(payload));
+  });
+});
+
+describe('withTimeout', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it(`falls back to the core payload with a warning when an async enricher does not settle within ${ENRICHER_TIMEOUT_MS} ms`, async () => {
+    vi.useFakeTimers();
+    const warn = vi.fn();
+    const never = (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
+      payload['added'] = true;
+      return new Promise(() => undefined);
+    };
+    const bounded = withTimeout('get_pr_impact', never, warn);
+    const payload = { files: [] };
+    const pending = bounded(payload, {});
+    await vi.advanceTimersByTimeAsync(ENRICHER_TIMEOUT_MS - 1);
+    expect(warn).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    // The core payload, without the fields the enricher had started to add.
+    await expect(pending).resolves.toEqual({ files: [] });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]![0]).toBe(
+      `The get_pr_impact domain fields did not settle within ${ENRICHER_TIMEOUT_MS} ms; they are left out of this response`,
+    );
+    expect(ENRICHER_TIMEOUT_MS).toBe(5_000);
+  });
+
+  it('a rejection after the timeout stays silent', async () => {
+    vi.useFakeTimers();
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    try {
+      let rejectLate: (err: Error) => void = () => undefined;
+      const late = (): Promise<Record<string, unknown>> =>
+        new Promise((_resolve, reject) => {
+          rejectLate = reject;
+        });
+      const warn = vi.fn();
+      const pending = withTimeout('get_why_context', late, warn, 100)({ a: 1 }, {});
+      await vi.advanceTimersByTimeAsync(100);
+      await expect(pending).resolves.toEqual({ a: 1 });
+      rejectLate(new Error('too late'));
+      vi.useRealTimers();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(unhandled).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      process.off('unhandledRejection', unhandled);
+    }
+  });
+
+  it('leaves no timer after a success or a rejection in time', async () => {
+    vi.useFakeTimers();
+    const warn = vi.fn();
+    await expect(withTimeout('get_blast_radius', async (p) => ({ ...p, b: 2 }), warn)({ x: 1 }, {})).resolves.toEqual({ x: 1, b: 2 });
+    expect(vi.getTimerCount()).toBe(0);
+    await expect(withTimeout('get_blast_radius', () => Promise.reject(new Error('boom')), warn)({}, {})).rejects.toThrow('boom');
+    expect(vi.getTimerCount()).toBe(0);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('passes a synchronous result through and a settled Promise result through', async () => {
+    const warn = vi.fn();
+    const sync = withTimeout('get_blast_radius', (p) => ({ ...p, a: 1 }), warn);
+    expect(sync({ x: 1 }, {})).toEqual({ x: 1, a: 1 });
+    const async = withTimeout('get_blast_radius', async (p) => ({ ...p, b: 2 }), warn, 50);
+    await expect(async({ x: 1 }, {})).resolves.toEqual({ x: 1, b: 2 });
+    const rejecting = withTimeout('get_blast_radius', () => Promise.reject(new Error('boom')), warn, 50);
+    await expect(rejecting({ x: 1 }, {})).rejects.toThrow('boom');
+    expect(warn).not.toHaveBeenCalled();
   });
 });
