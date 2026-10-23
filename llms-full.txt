@@ -125,6 +125,8 @@ Parameters:
 
 Returns: deadSymbols (with confidence 1.0/0.9/0.7 and reason), deadFiles, unusedExports, scaffolding markers. Symbols in .sql files are never reported (their consumers may live outside the index).
 
+Test files are decided by the shared test-file classifier (the default test globs, such as `**/*.test.*`, `**/*_test.go` and `**/src/test/**`, plus files where a test-framework annotation marks a symbol). Unless includeTests is set they are left out: test symbols are never reported, and production code called only from tests is not dead.
+
 When to use: Cleanup, refactoring, confirming code is truly unused.
 Instead of: find_importers (specific symbol reverse lookup).
 
@@ -441,6 +443,54 @@ When the helper cannot restore or build during `ctxo index`, the C# plugin falls
 - First re-index after upgrading rewrites the committed JSON of C# files once (annotations). Make it a full `ctxo index` (see "C# annotations and test files").
 - UTF-16 files with a BOM are decoded; their hash changes once, so `ctxo index --check` reports them stale until the next `ctxo index`.
 - Shared conformance corpus: packages/sql-extract/corpus (`<case>.sql` + `<case>.expected.json`, modes `statement` and `file`), run by sql-extract, lang-sql and (with .NET) ScriptDom.
+
+---
+
+## Language Parity: TypeScript, Java and Go (unreleased, #156 PR 1C)
+
+`@ctxo/lang-typescript`, `@ctxo/lang-java` (with `@ctxo/lang-java-analyzer`) and `@ctxo/lang-go` do what `@ctxo/lang-csharp` does: annotations, tests as symbols with edges, and data edges for constant SQL at known call sites. Feature doc: docs/features/domain-knowledge.md ("Language parity"). Design record: the ADR-017 addendum.
+
+### Capability matrix
+
+| Language | Annotations (always on) | Test symbols | SQL at call sites (needs `@ctxo/lang-sql`) |
+|---|---|---|---|
+| C# | attributes, both tiers | test methods | Roslyn tier |
+| TypeScript/JS | decorators | describe/it/test blocks | always (one tier) |
+| Java | JDT: constant values; tree-sitter: strings only | test methods under src/test/java | JDT full tier only |
+| Go | struct tags, both tiers | `_test.go` functions and methods (full tier) | analyzer full tier only |
+
+### Known APIs
+
+- TypeScript/JS (receiver must trace to the npm module): pg `query` (also `{ text }`); mysql2 `query`, `execute` (also `{ sql }`); mssql `query` (call or tagged template), `execute` (a procedure name); `knex.raw`; Prisma `$queryRaw`, `$executeRaw` (tagged template, interpolations become `@p0`, `@p1`) and `$queryRawUnsafe`, `$executeRawUnsafe`; TypeORM `query`; Sequelize `query`; better-sqlite3 `prepare`, `exec`.
+- Java: JDBC `Connection.prepareStatement`, `prepareCall`, `Statement.execute*`; Spring `JdbcTemplate`, `NamedParameterJdbcTemplate` and their `*Operations` interfaces (`query*`, `update`, `batchUpdate`, `execute`); `EntityManager.createNativeQuery` (javax and jakarta); `@Query(value = ..., nativeQuery = true)`; MyBatis `@Select`, `@Insert`, `@Update`, `@Delete`. A JDBC escape `{call name(...)}` gives an `executes` edge.
+- Go: `database/sql` `Query`, `QueryRow`, `Exec`, `Prepare` and their `Context` forms on DB, Tx, Conn, Stmt; sqlx `Select`, `Get`, `Queryx`, `NamedExec`, `MustExec` (methods and package functions); pgx v4 and v5 `Query`, `QueryRow`, `Exec`, including pgxpool; gorm `Raw`, `Exec`. The SQL is the argument bound to the callee's first `string` parameter.
+- Out of scope in every language: ORM and query-builder calls (knex chains, Prisma model calls, TypeORM repositories, JPQL and Spring Data derived queries, gorm model calls).
+
+### Constants and matching
+
+- TypeScript: string literals, templates without substitutions, `+` and templates of constants, `const` bindings in the file or behind a relative import. Receiver provenance follows imports, `require`, type annotations and initializers, destructuring, constructor parameter properties and `this` members (through `extends` too), return types, `import('M').T`, `export *` barrels and dynamic `import()`, at most 8 steps. Relative modules missing from memory are read from disk (`.ts/.tsx/.js/.jsx`, inside the project root), so the post-commit hook, `--files` and watch give the same edges as a full run. Edges start at the innermost exported function, method of an exported class, exported variable or test block.
+- Java: JDT constant evaluation (literals, static final fields, concatenation, text blocks). The owner matches the receiver's static type, the binding's declaring class or any supertype; without a binding, the declared type through the imports. Edges start at the enclosing method or constructor.
+- Go: constants per `go/types`; the callee's method object (pointer stripped) names the owner. A closure belongs to its enclosing function.
+- Non-constant SQL is counted (debug logs and the analyzers' `sql: { constant, nonConstant }` summary), never guessed, and never stored in the index.
+
+### Annotation formats
+
+- TypeScript: `name` is the rightmost identifier (`@nest.Injectable()` gives `Injectable`); `args` are string literal arguments; `named` holds string properties of object-literal arguments. Property decorators go on the class with `named.member` (`{ name: 'Column', named: { member: 'memberId', name: 'member_id' } }`). Accessor and parameter decorators are ignored.
+- Java: simple name; `value` to `args`, other members to `named`; declared values only; strings, numbers, booleans, enum constants as `Type.MEMBER`, class literals as the qualified name; arrays flattened in `args` and joined with `,` in `named`. Java keeps a member named `member`.
+- Go: `{ name: 'tag', named: { member: '<Field>', <key>: '<value>' } }` per tagged field, on the struct; `reflect.StructTag` rules, first key wins.
+- Every language drops a key named `type` (`named.type` stays reserved).
+
+### Test-block naming (TypeScript)
+
+Title path joined with ` > `; whitespace collapsed; runs of `:` collapsed and a trailing `:` dropped; empty title `(untitled)`; cut at 200 characters; a repeated path (or one equal to an exported function name) gets ` #2`, ` #3`; children use their parent's final name. Example ID: `src/loans/loan-policy.test.ts::LoanPolicy > renewal > extends by seven days::function`. `index.tests` extras do not reach plugins.
+
+### Effects and limits
+
+- Tests count as blast-radius dependents (the gate may fire more often on well-tested symbols); symbol-level communities shift once; Go full-tier runs type-check test packages; JDT `calls`/`uses` edges stay type-level.
+- find_dead_code: shared test-file classifier (default globs plus test-annotated files); test symbols are never dead, production code called only from tests is not dead (Go included); production code under `test/` or `src/test/` folders and test-annotated files are left out of the analysis.
+- A Java file with a `@Test` method counts as a test file anywhere.
+- Limits: TypeScript misses union-typed receivers (`Pool | null`), getters returning a pool, namespace imports of relative modules and numeric constants in templates. Java's tree-sitter tier keeps strings only and evaluates no constants; MyBatis `<script>` and `${}` pass through as written; without a binding, subclass receivers, `super.update(...)` and `batchUpdate` array literals are missed. Go's tree-sitter tier decodes interpreted tag literals with JSON rules and reads exported structs only; build-tagged test files fall back to the syntax tier; sqlc-style interfaces, method values and method expressions give no call sites; sqlx `...Context` forms are not listed.
+- Corpus: `packages/sql-extract/corpus/<case>.<ts|java|go>.fixture` with `mode` `typescript`, `java` or `go`, run only by the matching plugin.
 
 ---
 

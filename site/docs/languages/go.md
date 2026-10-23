@@ -56,9 +56,10 @@ builds the analyzer binary into the plugin's `node_modules` directory
 
 | Kind        | Sources                                                    |
 | ----------- | ---------------------------------------------------------- |
-| `function`  | Top-level `func` declarations                              |
+| `function`  | Top-level `func` declarations (in `_test.go` files too, full tier) |
 | `method`    | Methods with receivers (`func (r *T) M()`)                 |
-| `type`      | `type` declarations (structs, aliases, named primitives)   |
+| `class`     | struct types                                               |
+| `type`      | other `type` declarations (aliases, named primitives)      |
 | `interface` | `type X interface { ... }` declarations                    |
 | `variable`  | Package-level `var` and `const` declarations               |
 
@@ -70,10 +71,79 @@ builds the analyzer binary into the plugin's `node_modules` directory
 | `calls`      | Function and method calls resolved by `go/types`                            |
 | `implements` | Struct-implements-interface relationships (structural, not declared)        |
 | `uses`       | Type references in field lists, function signatures, composite literals    |
+| `reads`, `writes`, `executes` | Constant SQL at known call sites, full tier with `@ctxo/lang-sql` installed ([below](#sql-at-call-sites)) |
 
 Note that Go has no `extends`. Embedding is modeled as a mix of `uses` and
 `implements` relationships because the analyzer reports implementation
 satisfaction explicitly via `go/types`.
+
+## Annotations: struct tags
+
+Struct field tags become annotations on the struct, in both tiers (always on).
+Each tagged field gives one `tag` annotation with the field name in
+`named.member` and one entry per tag key; untagged fields give nothing, and an
+embedded field is named by its type's last identifier. Fields do not become
+symbols.
+
+```go
+type Loan struct {
+	LoanID string `json:"loan_id" gorm:"column:loan_id;primaryKey"`
+}
+// Loan: [{ name: 'tag', named: { member: 'LoanID', json: 'loan_id', gorm: 'column:loan_id;primaryKey' } }]
+```
+
+- Parsing follows `reflect.StructTag`: the first key wins and parsing stops at
+  the first malformed pair. A key named `type` is dropped (`named.type` is
+  reserved). Caps: 20 per struct, 10 keys per field, 200 characters per value.
+- The analyzer emits the raw tags and one parser builds the annotations for
+  both tiers, so they agree. The tree-sitter tier reads exported structs only,
+  and decodes interpreted (double-quoted) tag literals with JSON rules rather
+  than Go unquote rules, so `\x41`, octal and `\a` escapes can differ;
+  raw-string tags, the usual form, agree.
+
+## Test symbols
+
+The full tier loads packages with their tests (`Tests: true`). Functions and
+methods in `_test.go` files become symbols with `calls` edges, analysed once
+each in the first test variant that holds them, so a test fake can implement a
+production interface. Tests are therefore blast-radius dependents of the code
+they call, and `find_dead_code` no longer reports functions whose only callers
+are tests. Production analysis, `hasMain` and the analyzer's dead list are
+unchanged and never hold a test symbol.
+
+- Build-tagged test files (for example `//go:build integration`) are not loaded
+  and fall back to the syntax tier.
+- Loading and type-checking test packages makes full-tier runs slower on
+  modules with many tests.
+- `t.Run` subtests are not symbols of their own.
+
+## SQL at call sites
+
+With [`@ctxo/lang-sql`](/languages/sql) installed and the full tier active,
+ctxo-go-analyzer reports constant SQL at known call sites, and the plugin adds
+`reads`, `writes` and `executes` edges from the enclosing function (a closure
+belongs to its function declaration), parsed by `@ctxo/sql-extract`. The
+tree-sitter tier gives no SQL edges, and without `@ctxo/lang-sql` there are
+none.
+
+| Package | Members |
+| --- | --- |
+| `database/sql` | `Query`, `QueryRow`, `Exec`, `Prepare` and their `Context` forms on `DB`, `Tx`, `Conn`, `Stmt` |
+| `github.com/jmoiron/sqlx` | `Select`, `Get`, `Queryx`, `NamedExec`, `MustExec` (methods and package functions) |
+| `github.com/jackc/pgx` v4 and v5 | `Query`, `QueryRow`, `Exec`, including `pgxpool` |
+| `gorm.io/gorm` | `Raw`, `Exec` |
+
+- **Matching:** the callee resolves through `go/types`; its receiver type
+  (pointer stripped) names the owner, so the `*sql.DB` methods promoted onto
+  `sqlx.DB` count too.
+- **Text:** the argument bound to the callee's first `string` parameter, when
+  `go/types` gives it a constant value (literals, `const` declarations,
+  constant concatenation). A `*sql.Stmt` method has no SQL argument: its text
+  was read at `Prepare`.
+- **Limits:** user-defined interfaces (sqlc's `DBTX`), method values and method
+  expressions give no call sites, and the sqlx `...Context` forms are not
+  listed. Non-constant SQL is counted in the analyzer's summary
+  (`sql: { constant, nonConstant }`, debug log only), never guessed.
 
 ## Go modules and workspaces
 

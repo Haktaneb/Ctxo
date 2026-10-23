@@ -15,13 +15,16 @@ v2; v2 adds data kinds, annotations, facts and host capabilities.
 
 ## Support matrix
 
-| Language              | Plugin                 | Parser                                           | Tier     | Extensions                 |
-| --------------------- | ---------------------- | ------------------------------------------------ | -------- | -------------------------- |
-| TypeScript/JavaScript | `@ctxo/lang-typescript` | ts-morph                                         | `full`   | `.ts .tsx .js .jsx`        |
-| Go                    | `@ctxo/lang-go`         | `ctxo-go-analyzer` (Go 1.22+) + tree-sitter-go   | `full`   | `.go`                      |
-| C#                    | `@ctxo/lang-csharp`     | `ctxo-roslyn` (.NET SDK 8+) + tree-sitter-c-sharp | `full`  | `.cs`                      |
-| Java                  | `@ctxo/lang-java` + `@ctxo/lang-java-analyzer` | Eclipse JDT Core (JRE 17+) + tree-sitter-java | `full` | `.java` |
-| SQL (T-SQL)           | `@ctxo/lang-sql`        | `@ctxo/sql-extract` (TypeScript tokenizer)       | `syntax` | `.sql`                   |
+| Language              | Plugin                 | Parser                                           | Tier     | Extensions                 | Annotations | Test symbols | SQL at call sites |
+| --------------------- | ---------------------- | ------------------------------------------------ | -------- | -------------------------- | ----------- | ------------ | ----------------- |
+| TypeScript/JavaScript | `@ctxo/lang-typescript` | ts-morph                                         | `full`   | `.ts .tsx .js .jsx`        | decorators | test blocks (`describe` / `it` / `test`) | yes |
+| Go                    | `@ctxo/lang-go`         | `ctxo-go-analyzer` (Go 1.22+) + tree-sitter-go   | `full`   | `.go`                      | struct tags (both tiers) | `_test.go` functions (full tier) | full tier |
+| C#                    | `@ctxo/lang-csharp`     | `ctxo-roslyn` (.NET SDK 8+) + tree-sitter-c-sharp | `full`  | `.cs`                      | attributes (both tiers) | test methods | Roslyn tier |
+| Java                  | `@ctxo/lang-java` + `@ctxo/lang-java-analyzer` | Eclipse JDT Core (JRE 17+) + tree-sitter-java | `full` | `.java` | annotations (both tiers) | test methods (`src/test/java`) | JDT full tier |
+| SQL (T-SQL)           | `@ctxo/lang-sql`        | `@ctxo/sql-extract` (TypeScript tokenizer)       | `syntax` | `.sql`                   | `columns` on tables | none | defines the targets |
+
+SQL at call sites needs `@ctxo/lang-sql` installed: without it, no language
+emits data edges. Annotations and test symbols are always on.
 
 Two tiers are defined by the plugin contract:
 
@@ -46,9 +49,12 @@ the canonical enums and format.
 
 Protocol v2 adds data coupling: the SQL plugin emits `table`, `view` and
 `procedure` symbols with `reads`, `writes` and `executes` edges, and with it
-installed the C# plugin links constant SQL at known call sites to the same
-tables. The C# plugin also reports attribute annotations, which mark test files
-for the contexts view.
+installed the C#, TypeScript, Java and Go plugins link constant SQL at known
+call sites to the same tables. All four report annotations (attributes,
+decorators, Java annotations, Go struct tags); test-framework annotations such
+as `Fact` or `@Test` mark test files for the contexts view and
+`find_dead_code`. Tests are symbols with edges in all four languages, so they
+count as blast-radius dependents.
 
 ## Detection
 

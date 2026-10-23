@@ -6,6 +6,69 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (nine packages today). Per-pac
 
 ## [Unreleased]
 
+**Language parity for TypeScript, Java and Go (#156 Phase 1, PR 1C).**
+
+### Added (language parity)
+
+- Symbol annotations in three more languages, always on, with the C# caps (20 per symbol, 10
+  positional and 10 named entries, 200 characters per value; a key named `type` is dropped):
+  TypeScript decorators on classes and methods (property decorators on the class with
+  `named.member`), Java annotations on types, methods and fields in the JDT tier (constant values)
+  and the tree-sitter tier (string values), and Go struct field tags as `tag` annotations on the
+  struct with `named.member`, in both Go tiers (#156).
+- TypeScript test blocks: in a test file, every `describe`, `it` and `test` block (and `suite`,
+  `context`, `specify`, the `f` / `x` variants and `.only`, `.skip`, `.each` and similar modifiers)
+  becomes a `function` symbol named by its title path (`LoanPolicy > renewal > extends by seven
+  days`), annotated `{ name: 'test' }`, with the `calls` and `uses` edges of its own callback (#156).
+- Go `_test.go` files in the full tier: ctxo-go-analyzer loads test packages, so test functions
+  and methods become symbols with `calls` edges, while reachability and the analyzer's dead list
+  stay on production packages (#156).
+- SQL edges at known call sites in TypeScript (pg, mysql2, mssql, `knex.raw`, Prisma raw, TypeORM,
+  Sequelize, better-sqlite3), Java (JDBC, Spring `JdbcTemplate`, JPA native queries, native
+  `@Query`, MyBatis; JDT full tier) and Go (`database/sql`, sqlx, pgx, gorm raw; analyzer full
+  tier) when `@ctxo/lang-sql` is installed. Constant SQL only, parsed by `@ctxo/sql-extract`, with
+  `reads`, `writes` and `executes` edges to the same canonical targets as C# and `.sql` files
+  (`dbo.loans::table`). The TypeScript side ties a receiver to the listed module through a
+  provenance walk of at most 8 steps and reads relative modules from disk, so incremental runs give
+  the same edges as a full run (#156).
+- Host-language corpus cases (`<case>.<ts|java|go>.fixture`) in `packages/sql-extract/corpus`, and
+  a `plugin-tests` CI job that runs the TypeScript, Java and Go plugin suites, JUnit on both Maven
+  profiles and `go test` (#156).
+
+### Changed (language parity)
+
+- The first re-index after upgrading `@ctxo/lang-typescript`, `@ctxo/lang-java` or `@ctxo/lang-go`
+  changes the committed index JSON of their files once (annotations and test symbols; SQL edges with
+  `@ctxo/lang-sql`). Make it a full `ctxo index` (#156).
+- TypeScript test blocks and Go test functions count as blast-radius dependents, so the safe-edit
+  gate may fire more often on well-tested symbols, as it does for C# (#156).
+- `find_dead_code` recognises test files with the shared test-file classifier (the default test
+  globs plus files a test-framework annotation marks) instead of its own path patterns, which missed
+  `_test.go`, `src/test/java`, `*.test.js` and `*.test.tsx` files. Unless `includeTests` is set,
+  test symbols are never reported dead, and production code called only from tests is not dead, so
+  Go functions whose only callers are tests are no longer reported. Production code under a folder
+  named `test/` or `src/test/`, and any file with a test-annotated symbol, is now left out of the
+  analysis as well (#156).
+- A Java file with a JUnit `@Test` method counts as a test file wherever it sits, because `Test` is
+  one of the test-framework annotation names (#156).
+- Symbol-level communities shift once after the upgrade, because test symbols and their edges join
+  the graph (#156).
+- Go full-tier runs load and type-check the test packages too, so they take longer on modules with
+  many tests (#156).
+- The JDT analyzer reads sources as UTF-8 and escapes every non-ASCII character in its JSON output,
+  so non-ASCII annotation values and SQL names arrive intact on every platform (#156).
+- `ctxo install sql` help: the SQL plugin also enables data edges from TypeScript, Java and Go call
+  sites (#156).
+
+### Compatibility (language parity)
+
+- `@ctxo/lang-typescript`, `@ctxo/lang-java` and `@ctxo/lang-go` still declare protocol `'1'` and
+  the `@ctxo/plugin-api` peer range `^0.7.3 || ^0.8.0 || ^0.9.0`, so they work with older CLIs,
+  which ignore annotations and never request SQL edges. `@ctxo/lang-java-analyzer` takes the same
+  version as `@ctxo/lang-java` (#156).
+- The three plugins now depend on `@ctxo/sql-extract`, the zero-dependency library of the ADR-017
+  dependency exception (K18) (#156).
+
 **Architectural intelligence: community detection, drift and boundary violations; co-change and incremental indexing (#157); the contexts view and data coupling with T-SQL (#156); tiered agent rules (#159).**
 
 ### Added

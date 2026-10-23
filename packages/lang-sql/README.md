@@ -32,9 +32,9 @@ The decision record is [ADR-017](https://github.com/alperhankendi/Ctxo/blob/mast
 - A table with no body has a symbol and no edges. A recursive procedure has no self edge.
 - SQL objects carry no complexity metrics, and a call to a SQL function is not an edge.
 
-## Effect on C#
+## Effect on the host languages
 
-When this plugin is installed, the CLI tells every plugin that `.sql` files are indexed (`capabilities.sqlCallSites`). The C# plugin then adds `reads`, `writes` and `executes` edges from a method to the tables and procedures named by constant SQL at known call sites (ADO.NET, Dapper including `CommandDefinition`, `SqlBulkCopy`, EF Core raw SQL). Those edges point at the same `dbo.loans::table` targets this plugin defines, so a C# method and the stored procedure that touches the same table meet in the graph. Without this plugin the C# plugin emits no SQL edges.
+When this plugin is installed, the CLI tells every plugin that `.sql` files are indexed (`capabilities.sqlCallSites`). The C# plugin then adds `reads`, `writes` and `executes` edges from a method to the tables and procedures named by constant SQL at known call sites (ADO.NET, Dapper including `CommandDefinition`, `SqlBulkCopy`, EF Core raw SQL). Those edges point at the same `dbo.loans::table` targets this plugin defines, so a C# method and the stored procedure that touches the same table meet in the graph. `@ctxo/lang-typescript`, `@ctxo/lang-java` (JDT full tier) and `@ctxo/lang-go` (analyzer full tier) do the same at their known call sites (pg, mysql2, mssql, knex, Prisma, TypeORM, Sequelize and better-sqlite3 raw SQL; JDBC, Spring `JdbcTemplate`, JPA native queries and MyBatis; `database/sql`, sqlx, pgx and gorm raw SQL). Without this plugin no language emits SQL edges.
 
 ## Install
 

@@ -36,6 +36,52 @@ the two layers compose cleanly.
   `reflect.New` or `json.Marshal` / `Unmarshal` / `NewDecoder` / `NewEncoder`
   as live to prevent false positives.
 
+## Struct tags as annotations
+
+Struct field tags become annotations on the struct, in both tiers, always on. Each tagged field
+gives one `tag` annotation with the field name in `named.member` and one entry per tag key
+(`reflect.StructTag` rules: the first key wins, parsing stops at the first malformed pair; a key
+named `type` is dropped):
+
+```go
+type Loan struct {
+	LoanID string `json:"loan_id" gorm:"column:loan_id;primaryKey"`
+}
+// Loan: [{ name: 'tag', named: { member: 'LoanID', json: 'loan_id', gorm: 'column:loan_id;primaryKey' } }]
+```
+
+The analyzer emits the raw tags and one parser builds the annotations for both tiers. The
+tree-sitter tier reads exported structs only and decodes interpreted (double-quoted) tag literals
+with JSON rules rather than Go unquote rules; raw-string tags agree in both tiers.
+
+## Test files
+
+The full tier loads packages with their tests: functions and methods in `_test.go` files become
+symbols with `calls` edges (a test fake can implement a production interface), so tests count as
+dependents in the blast radius. Production analysis, `hasMain` and the dead list are unchanged and
+never hold a test symbol. Build-tagged test files (for example `//go:build integration`) are not
+loaded and fall back to the syntax tier. Loading tests makes full-tier runs slower on modules with
+many tests.
+
+## SQL at call sites
+
+With [`@ctxo/lang-sql`](../lang-sql) installed (`capabilities.sqlCallSites`) and the full tier
+active, the analyzer reports constant SQL at known call sites, and the plugin turns it into
+`reads`, `writes` and `executes` edges from the enclosing function, through
+[`@ctxo/sql-extract`](../sql-extract):
+
+- `database/sql`: `Query`, `QueryRow`, `Exec`, `Prepare` and their `Context` forms on `DB`, `Tx`,
+  `Conn`, `Stmt`
+- sqlx: `Select`, `Get`, `Queryx`, `NamedExec`, `MustExec` (methods and package functions)
+- pgx v4 and v5: `Query`, `QueryRow`, `Exec`, including `pgxpool`
+- gorm: `Raw`, `Exec`
+
+The callee is resolved through `go/types` and matched on its receiver type; the SQL is the
+argument bound to its first `string` parameter, and it counts only when `go/types` gives it a
+constant value. User-defined interfaces (sqlc's `DBTX`), method values and method expressions give
+no call sites, and the sqlx `...Context` forms are not listed. The tree-sitter tier gives no SQL
+edges, and without `@ctxo/lang-sql` there are none.
+
 ## How the binary is built
 
 On first use, `GoAnalyzerAdapter.initialize()` hashes the analyzer source +

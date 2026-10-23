@@ -86,10 +86,83 @@ ctxo install java --syntax-only --global
 | `implements` | Interface implementation (`implements` clause)                                     |
 | `calls`      | Method invocations, constructor calls; resolved via JDT type bindings in full tier |
 | `uses`       | Type references in fields, parameters, generic arguments, annotations              |
+| `reads`, `writes`, `executes` | Constant SQL at known call sites, full tier with `@ctxo/lang-sql` installed ([below](#sql-at-call-sites)) |
 
 In full tier, 2-part and name-reference targets are resolved through the JDT
 type binding graph. In syntax tier, `calls` and `uses` targets are best-effort
 based on name matching.
+
+JDT `calls` and `uses` edges start at the enclosing type, so a method's own
+dependencies (a test method's included) show at its class. Data edges start at
+the method or constructor.
+
+## Annotations
+
+Annotations on types, methods and fields become symbol annotations in both
+tiers (always on). Every fragment of a field declaration gets the
+declaration's annotations, and `name` is the simple name.
+
+- The `value` member (shorthand or explicit) goes to `args`, the other members
+  to `named`. A member named `type` is dropped (`named.type` is reserved); a
+  member named `member` is kept, because Java fields are symbols of their own.
+- **Full tier (JDT):** declared values only, no defaults: strings as they are,
+  numbers through `String.valueOf`, `true` or `false`, enum constants as
+  `Type.MEMBER`, class literals as the qualified name (as written when
+  unresolved). Arrays are flattened in `args` and joined with `,` in `named`;
+  nested annotations and nulls are skipped. Without dependency JARs the
+  annotation still comes from the syntax, with constant evaluation; a number
+  JDT cannot evaluate keeps its raw token (`10L`, `0x10`).
+- **Syntax tier (tree-sitter):** string literals (escapes decoded) and string
+  arrays only. Non-string values such as `nullable = false` appear only in the
+  full tier, and string constants and concatenation are not evaluated.
+- Caps: 20 per symbol, 10 positional and 10 named entries, 200 characters per
+  value.
+
+```java
+@Entity
+@Table(name = "loans")
+public class Loan { }
+// Loan: [{ name: 'Entity' }, { name: 'Table', named: { name: 'loans' } }]
+```
+
+## Test symbols
+
+The JDT analyzer walks the whole project root except build folders, so test
+methods under `src/test/java` are method symbols with their annotations (the
+syntax tier indexes them too). A JUnit `@Test` gives the annotation `Test`, one
+of the test-framework names, so a file with a `@Test` method counts as a test
+file for the contexts view and `find_dead_code` wherever it sits.
+
+## SQL at call sites
+
+With [`@ctxo/lang-sql`](/languages/sql) installed and the full tier active, the
+analyzer reports constant SQL at known call sites, and the plugin adds `reads`,
+`writes` and `executes` edges from the enclosing method or constructor (a
+lambda belongs to its method), parsed by `@ctxo/sql-extract`. The tree-sitter
+tier gives no SQL edges, and without `@ctxo/lang-sql` there are none.
+
+| API | SQL text |
+| --- | --- |
+| JDBC `Connection.prepareStatement`, `prepareCall`; `Statement.execute*` | first argument |
+| Spring `JdbcTemplate`, `NamedParameterJdbcTemplate`, `JdbcOperations`, `NamedParameterJdbcOperations` (`query*`, `update`, `batchUpdate`, `execute`) | first `String` argument; every argument of an all-`String` `batchUpdate` |
+| `EntityManager.createNativeQuery` (`javax.persistence`, `jakarta.persistence`) | first argument |
+| Spring Data `@Query(value = ..., nativeQuery = true)` | `value` |
+| MyBatis `@Select`, `@Insert`, `@Update`, `@Delete` | `value`, array elements joined with a space |
+
+- **Constants:** JDT constant evaluation, so literals, `static final`
+  constants, concatenation and text blocks. A JDBC escape `{call name(...)}` or
+  `{? = call name(...)}` gives an `executes` edge to the procedure.
+- **Matching:** the receiver's static type, the binding's declaring class or any
+  supertype. Without dependency JARs on the classpath, the declared type of the
+  field, local variable or parameter, resolved through the single-type imports
+  or the package. With a method binding, a member whose first parameter is not
+  a `String` is no call site.
+- **Limits:** without a binding, subclass receivers (`LoanJdbc extends
+  JdbcTemplate`) and `super.update(...)` are missed, and array literals in
+  `batchUpdate` are not expanded. MyBatis `<script>` and `${}` texts pass
+  through as written. JPQL and Spring Data derived queries are not covered.
+- **Counts:** non-constant SQL is counted in the analyzer's summary
+  (`sql: { constant, nonConstant }`, debug log only), never guessed.
 
 ## Full tier and the analyzer package
 
