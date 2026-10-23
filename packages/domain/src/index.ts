@@ -6,7 +6,9 @@ import { verifyDomainCommand } from './commands/verify-domain-command.js';
 import { domainDoctorChecks } from './doctor/domain-checks.js';
 import { domainIndexPass } from './index-pass/domain-index-pass.js';
 import { domainInit } from './init/domain-init.js';
+import { createDomainState } from './mcp/domain-state.js';
 import { createEnrichers } from './mcp/enrichers.js';
+import { taskContextReservation } from './mcp/graph-enrichers.js';
 import { DOMAIN_PACKAGE, domainVersion, sameMinor } from './version.js';
 
 /**
@@ -24,6 +26,8 @@ export const register: CtxoModuleRegister = async (host) => {
       );
     return undefined;
   }
+  // One state for the enrichers, the reservation, the tools and the scope; it does no I/O until a first load (P19).
+  const state = createDomainState(host);
   return {
     id: 'domain',
     indexCapabilities: { facts: true },
@@ -34,7 +38,8 @@ export const register: CtxoModuleRegister = async (host) => {
       registrar.registerCommand(domainCommand(host));
       registrar.registerCommand(verifyDomainCommand(host));
     },
-    enrich: createEnrichers(host),
+    enrich: createEnrichers(host, state),
+    reserveTaskContextTokens: taskContextReservation(state),
     init: domainInit(host),
     doctorChecks: domainDoctorChecks(host),
   };

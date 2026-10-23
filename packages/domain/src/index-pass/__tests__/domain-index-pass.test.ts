@@ -214,6 +214,7 @@ describe('domainIndexPass', () => {
     expect(existsSync(join(domainDir(), 'graph.json'))).toBe(false);
     expect(readdirSync(join(domainDir(), 'history'))).toEqual(['1700000500-abc1234.json']);
     expect(logs.some((l) => l.includes('The domain graph could not be built: boom; graph.json not updated'))).toBe(true);
+    expect(logs.some((l) => l.includes('may serve the previous graph (or report a stale registry if it changed)'))).toBe(true);
     expect(logs.some((l) => /Domain: 2 contexts, 3 cross-context edges, 2 boundary violations \(\d+ ms\)/.test(l))).toBe(true);
 
     // A later successful run writes graph.json; a failing run after it leaves that file as it was.

@@ -122,7 +122,7 @@ export function domainIndexPass(host: CtxoHost): (ctx: IndexPassContext) => Prom
     } catch (err) {
       log.warn(
         `The domain graph could not be built: ${(err as Error).message}; graph.json not updated. ` +
-          'The domain tools report a stale registry until the graph builds again.',
+          'Until the graph builds again, the domain tools may serve the previous graph (or report a stale registry if it changed).',
       );
     }
 

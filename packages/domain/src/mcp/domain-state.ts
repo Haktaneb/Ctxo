@@ -51,6 +51,8 @@ export interface DomainStateOptions {
  * glossary. A registry the graph was not built from gives `stale-registry`; cards or a glossary edited since give a
  * snapshot with `staleCards`. A file modified within 2 s of the moment its stamp is taken (or in the future) gets a
  * stamp that never matches, so an edit of the same size inside one coarse mtime tick is seen by the next load.
+ * A racy stamp therefore reloads on every `load()` until the file is older than the window, and each such reload
+ * bumps `generation`: callers caching by `generation` recompute for those loads, which is correct, only slower.
  */
 export function createDomainState(host: CtxoHost, options: DomainStateOptions = {}): DomainState {
   const now = options.now ?? Date.now;
