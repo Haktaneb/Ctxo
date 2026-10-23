@@ -24,6 +24,27 @@ describe('finishFacts', () => {
     ]);
   });
 
+  it('detail.literal is capped at 200 code points like text', () => {
+    const literal = `"${'x'.repeat(4096)}"`;
+    const [fact] = finish([{ kind: 'comparison', symbolId: M, line: 1, text: `code == ${literal}`, operator: '==', literal, literalKind: 'string' }]);
+    expect(Array.from(fact!.detail!['literal']!)).toHaveLength(200);
+    expect(fact!.detail!['literal']).toBe(`"${'x'.repeat(199)}`);
+    expect(Array.from(fact!.text)).toHaveLength(200);
+
+    const pairAtCut = `"${'y'.repeat(198)}😀😀 tail"`;
+    const [paired] = finish([{ kind: 'comparison', symbolId: M, line: 2, text: 'x == y', operator: '==', literal: pairAtCut, literalKind: 'string' }]);
+    expect(paired!.detail!['literal']).toBe(`"${'y'.repeat(198)}😀`);
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(paired!.detail!['literal']!)).toBe(false);
+
+    const spaceAtCut = `"${'z'.repeat(198)}  more"`;
+    const [trimmed] = finish([{ kind: 'comparison', symbolId: M, line: 3, text: 'x == z', operator: '==', literal: spaceAtCut, literalKind: 'string' }]);
+    expect(trimmed!.detail!['literal']).toBe(`"${'z'.repeat(198)}`);
+
+    const short = '"a  b"';
+    const [kept] = finish([{ kind: 'comparison', symbolId: M, line: 4, text: 'x == "a  b"', operator: '==', literal: short, literalKind: 'string' }]);
+    expect(kept!.detail!['literal']).toBe(short);
+  });
+
   it('a call is kept only when a normalization pattern matches', () => {
     const facts = finish([
       { kind: 'call', symbolId: M, line: 2, text: 'email.Trim().ToLowerInvariant()', method: 'ToLowerInvariant' },

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SymbolNode } from '@ctxo/plugin-api';
+import { CSharpAdapter } from '../../csharp-adapter.js';
 import { annotationRouteEvidence } from '../annotation-endpoints.js';
 import { DEFAULT_FACT_OPTIONS } from '../fact-options.js';
 import { finishFacts } from '../finish-facts.js';
@@ -66,6 +67,40 @@ describe('annotationRouteEvidence', () => {
     expect(endpoints(symbols)).toEqual([
       `3 ${symbols[1]!.symbolId} GET /api/Members/find/{name}`,
       `8 ${symbols[2]!.symbolId} PUT /api/Members/{id}`,
+    ]);
+  });
+
+  it('the template: constructor argument reads the same from args[0] (Roslyn semantic) and named.template (syntax)', () => {
+    const roslyn = [
+      cls('Lending.Api.HoldsController', 0, 30, [{ name: 'Route', args: ['api/[controller]'] }]),
+      method('Lending.Api.HoldsController.Get', 3, [{ name: 'HttpGet', args: ['{id}'] }]),
+    ];
+    const syntax = [
+      cls('Lending.Api.HoldsController', 0, 30, [{ name: 'Route', named: { template: 'api/[controller]' } }]),
+      method('Lending.Api.HoldsController.Get(1)', 3, [{ name: 'HttpGet', named: { template: '{id}' } }]),
+    ];
+    expect(annotationRouteEvidence(roslyn).map(e => e.kind === 'route' ? `${e.verb} ${e.route}` : '')).toEqual(['GET /api/Holds/{id}']);
+    expect(annotationRouteEvidence(syntax).map(e => e.kind === 'route' ? `${e.verb} ${e.route}` : '')).toEqual(['GET /api/Holds/{id}']);
+  });
+
+  it('[HttpGet(template: "{id}")] parsed by the tree-sitter tier gives the route', async () => {
+    const source = [
+      'using Microsoft.AspNetCore.Mvc;',
+      'namespace Lending.Api;',
+      '[Route(template: "api/[controller]")]',
+      'public class HoldsController : ControllerBase',
+      '{',
+      '    [HttpGet(template: "{id}")]',
+      '    public string Get(int id) => "";',
+      '    [HttpPost("renew/{id}")]',
+      '    public string Renew(int id) => "";',
+      '}',
+    ].join('\n');
+    const symbols = await new CSharpAdapter().extractSymbols('Api/HoldsController.cs', source);
+    const evidence = annotationRouteEvidence(symbols);
+    expect(evidence.map(e => e.kind === 'route' ? `${e.line} ${e.verb} ${e.route}` : '')).toEqual([
+      '5 GET /api/Holds/{id}',
+      '7 POST /api/Holds/renew/{id}',
     ]);
   });
 

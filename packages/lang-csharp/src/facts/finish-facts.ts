@@ -6,6 +6,7 @@ import type { FactEvidence, FactOptions } from './fact-types.js';
 import {
   MAX_FACTS_PER_FILE,
   canonicalNumber,
+  capFactValue,
   hasRetryTimeoutFragment,
   isTrivialLiteral,
   joinRoute,
@@ -44,7 +45,7 @@ function draft(evidence: FactEvidence, options: FactOptions): DraftFact | undefi
   switch (evidence.kind) {
     case 'comparison':
       if (isTrivialLiteral(evidence.literal, evidence.literalKind, options.trivialLiterals)) return undefined;
-      return { ...base, kind: 'literal-comparison', text: evidence.text, detail: { operator: evidence.operator, literal: evidence.literal } };
+      return { ...base, kind: 'literal-comparison', text: evidence.text, detail: { operator: evidence.operator, literal: capFactValue(evidence.literal) } };
     case 'call':
       if (!matchesNormalizationPattern(evidence.method, evidence.qualifier, options.normalizationMethods)) return undefined;
       return { ...base, kind: 'normalization', text: evidence.text, detail: { method: evidence.method } };

@@ -18,32 +18,33 @@ const VECTORS_PATH = join(dirname(fileURLToPath(import.meta.url)), '../../../../
 
 interface Vector<I, E> { readonly input: I; readonly expected: E }
 type Repeat = { readonly repeat: string; readonly count: number };
-type TextValue = string | Repeat | readonly (string | Repeat)[];
+type Segments = readonly (string | Repeat)[];
 
 interface Vectors {
+  readonly $comment: string;
+  readonly defaults: { trivialLiterals: TrivialLiteral[]; normalizationMethods: string[] };
   readonly canonicalNumber: Vector<string, string | null>[];
   readonly isTrivialLiteral: Vector<{ literal: string; kind: LiteralKind }, boolean>[];
   readonly isTrivialLiteralCustom: Vector<{ literal: string; kind: LiteralKind; trivialLiterals: TrivialLiteral[] }, boolean>[];
   readonly hasRetryTimeoutFragment: Vector<string, boolean>[];
   readonly matchesNormalizationPattern: Vector<{ method: string; qualifier?: string }, boolean>[];
   readonly matchesNormalizationPatternCustom: Vector<{ method: string; qualifier?: string; patterns: string[] }, boolean>[];
-  readonly normalizeFactText: Vector<TextValue, TextValue>[];
+  readonly normalizeFactText: Vector<Segments, Segments>[];
   readonly joinRoute: Vector<string[], string>[];
 }
 
 const vectors = JSON.parse(readFileSync(VECTORS_PATH, 'utf8')) as Vectors;
 
-function expand(value: TextValue): string {
-  if (typeof value === 'string') return value;
-  if (Array.isArray(value)) return value.map(part => expand(part)).join('');
-  const { repeat, count } = value as Repeat;
-  return repeat.repeat(count);
+function expand(segments: Segments): string {
+  return segments.map(segment => (typeof segment === 'string' ? segment : segment.repeat.repeat(segment.count))).join('');
 }
 
 describe('fact conformance vectors', () => {
   it('the vectors file has every category', () => {
     expect(Object.keys(vectors).sort()).toEqual([
+      '$comment',
       'canonicalNumber',
+      'defaults',
       'hasRetryTimeoutFragment',
       'isTrivialLiteral',
       'isTrivialLiteralCustom',
@@ -52,6 +53,16 @@ describe('fact conformance vectors', () => {
       'matchesNormalizationPatternCustom',
       'normalizeFactText',
     ]);
+  });
+
+  it('the vectors defaults block equals DEFAULT_FACT_OPTIONS', () => {
+    expect(vectors.defaults).toEqual(DEFAULT_FACT_OPTIONS);
+  });
+
+  it('every normalizeFactText vector is a segment array', () => {
+    for (const { input, expected } of vectors.normalizeFactText) {
+      expect(Array.isArray(input) && Array.isArray(expected)).toBe(true);
+    }
   });
 
   it.each(vectors.canonicalNumber)('canonicalNumber($input) is $expected', ({ input, expected }) => {

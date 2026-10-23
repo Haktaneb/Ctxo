@@ -12,11 +12,15 @@ export const MAX_FACT_TEXT = 200;
 /** Most facts kept per file (FC-10). */
 export const MAX_FACTS_PER_FILE = 500;
 
+/** At most 200 code points (never inside a surrogate pair), trimmed at the end after a cut; shorter values are unchanged. */
+export function capFactValue(value: string): string {
+  const points = Array.from(value);
+  return points.length <= MAX_FACT_TEXT ? value : points.slice(0, MAX_FACT_TEXT).join('').trimEnd();
+}
+
 /** FC-2: whitespace runs become one space, trimmed, cut at 200 code points (never inside a surrogate pair). */
 export function normalizeFactText(text: string): string {
-  const collapsed = text.replace(/\s+/g, ' ').trim();
-  const points = Array.from(collapsed);
-  return points.length <= MAX_FACT_TEXT ? collapsed : points.slice(0, MAX_FACT_TEXT).join('').trimEnd();
+  return capFactValue(text.replace(/\s+/g, ' ').trim());
 }
 
 // ── FC-7 canonical numbers ──────────────────────────────────────

@@ -1,101 +1,748 @@
 {
+  "$comment": "Shared fact conformance vectors (PR 4, #156). Every category is an array of { input, expected }. canonicalNumber: expected null means not a constant (canonicalNumber returns undefined). matchesNormalizationPattern: an absent qualifier means the call has no receiver (written Name(...)). Categories without a list in their input use the defaults block. normalizeFactText: input and expected are segment arrays, concatenated; a segment is a string or { repeat, count }.",
+  "defaults": {
+    "trivialLiterals": [
+      0,
+      1,
+      -1,
+      null,
+      true,
+      false,
+      ""
+    ],
+    "normalizationMethods": [
+      "ToLower*",
+      "ToUpper*",
+      "Trim*",
+      "Normalize",
+      "toLowerCase",
+      "toUpperCase",
+      "trim",
+      "strings.ToLower",
+      "strings.TrimSpace",
+      "equalsIgnoreCase"
+    ]
+  },
   "canonicalNumber": [
-    { "input": "5", "expected": "5" },
-    { "input": "30_000", "expected": "30000" },
-    { "input": "5000L", "expected": "5000" },
-    { "input": "1.50", "expected": "1.5" },
-    { "input": "2.5m", "expected": "2.5" },
-    { "input": "0x10", "expected": "16" },
-    { "input": "0b101", "expected": "5" },
-    { "input": "10n", "expected": "10" },
-    { "input": "1e3", "expected": "1000" },
-    { "input": "30 * 1000", "expected": "30000" },
-    { "input": "(5 + 1) * 60", "expected": "360" },
-    { "input": "-1", "expected": "-1" },
-    { "input": "1 / 3", "expected": "0.333333" },
-    { "input": "-0", "expected": "0" },
-    { "input": "x * 2", "expected": null },
-    { "input": "1 / 0", "expected": null },
-    { "input": "\"5\"", "expected": null },
-    { "input": "", "expected": null }
+    {
+      "input": "5",
+      "expected": "5"
+    },
+    {
+      "input": "30_000",
+      "expected": "30000"
+    },
+    {
+      "input": "5000L",
+      "expected": "5000"
+    },
+    {
+      "input": "1.50",
+      "expected": "1.5"
+    },
+    {
+      "input": "2.5m",
+      "expected": "2.5"
+    },
+    {
+      "input": "0x10",
+      "expected": "16"
+    },
+    {
+      "input": "0b101",
+      "expected": "5"
+    },
+    {
+      "input": "10n",
+      "expected": "10"
+    },
+    {
+      "input": "1e3",
+      "expected": "1000"
+    },
+    {
+      "input": "30 * 1000",
+      "expected": "30000"
+    },
+    {
+      "input": "(5 + 1) * 60",
+      "expected": "360"
+    },
+    {
+      "input": "-1",
+      "expected": "-1"
+    },
+    {
+      "input": "1 / 3",
+      "expected": "0.333333"
+    },
+    {
+      "input": "-0",
+      "expected": "0"
+    },
+    {
+      "input": "0x1FL",
+      "expected": "31"
+    },
+    {
+      "input": "0o17",
+      "expected": "15"
+    },
+    {
+      "input": "1.5f",
+      "expected": "1.5"
+    },
+    {
+      "input": "1e-9",
+      "expected": "0"
+    },
+    {
+      "input": "1e21",
+      "expected": "1e+21"
+    },
+    {
+      "input": "x * 2",
+      "expected": null
+    },
+    {
+      "input": "1 / 0",
+      "expected": null
+    },
+    {
+      "input": "\"5\"",
+      "expected": null
+    },
+    {
+      "input": "",
+      "expected": null
+    }
   ],
   "isTrivialLiteral": [
-    { "input": { "literal": "0", "kind": "number" }, "expected": true },
-    { "input": { "literal": "0.0", "kind": "number" }, "expected": true },
-    { "input": { "literal": "0x0", "kind": "number" }, "expected": true },
-    { "input": { "literal": "-1", "kind": "number" }, "expected": true },
-    { "input": { "literal": "1L", "kind": "number" }, "expected": true },
-    { "input": { "literal": "1m", "kind": "number" }, "expected": true },
-    { "input": { "literal": "\"\"", "kind": "string" }, "expected": true },
-    { "input": { "literal": "''", "kind": "string" }, "expected": true },
-    { "input": { "literal": "@\"\"", "kind": "string" }, "expected": true },
-    { "input": { "literal": "``", "kind": "string" }, "expected": true },
-    { "input": { "literal": "null", "kind": "null" }, "expected": true },
-    { "input": { "literal": "nil", "kind": "null" }, "expected": true },
-    { "input": { "literal": "true", "kind": "boolean" }, "expected": true },
-    { "input": { "literal": "False", "kind": "boolean" }, "expected": true },
-    { "input": { "literal": "5", "kind": "number" }, "expected": false },
-    { "input": { "literal": "2", "kind": "number" }, "expected": false },
-    { "input": { "literal": "\"0\"", "kind": "string" }, "expected": false },
-    { "input": { "literal": "\"gold\"", "kind": "string" }, "expected": false },
-    { "input": { "literal": "'a'", "kind": "char" }, "expected": false }
+    {
+      "input": {
+        "literal": "0",
+        "kind": "number"
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "literal": "0.0",
+        "kind": "number"
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "literal": "0x0",
+        "kind": "number"
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "literal": "-1",
+        "kind": "number"
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "literal": "1L",
+        "kind": "number"
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "literal": "1m",
+        "kind": "number"
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "literal": "\"\"",
+        "kind": "string"
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "literal": "''",
+        "kind": "string"
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "literal": "@\"\"",
+        "kind": "string"
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "literal": "``",
+        "kind": "string"
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "literal": "null",
+        "kind": "null"
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "literal": "nil",
+        "kind": "null"
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "literal": "None",
+        "kind": "null"
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "literal": "true",
+        "kind": "boolean"
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "literal": "False",
+        "kind": "boolean"
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "literal": "5",
+        "kind": "number"
+      },
+      "expected": false
+    },
+    {
+      "input": {
+        "literal": "2",
+        "kind": "number"
+      },
+      "expected": false
+    },
+    {
+      "input": {
+        "literal": "\"0\"",
+        "kind": "string"
+      },
+      "expected": false
+    },
+    {
+      "input": {
+        "literal": "\"gold\"",
+        "kind": "string"
+      },
+      "expected": false
+    },
+    {
+      "input": {
+        "literal": "'a'",
+        "kind": "char"
+      },
+      "expected": false
+    }
   ],
   "isTrivialLiteralCustom": [
-    { "input": { "literal": "100", "kind": "number", "trivialLiterals": [100, "N/A"] }, "expected": true },
-    { "input": { "literal": "\"N/A\"", "kind": "string", "trivialLiterals": [100, "N/A"] }, "expected": true },
-    { "input": { "literal": "0", "kind": "number", "trivialLiterals": [100, "N/A"] }, "expected": false },
-    { "input": { "literal": "\"100\"", "kind": "string", "trivialLiterals": [100, "N/A"] }, "expected": false }
+    {
+      "input": {
+        "literal": "100",
+        "kind": "number",
+        "trivialLiterals": [
+          100,
+          "N/A"
+        ]
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "literal": "\"N/A\"",
+        "kind": "string",
+        "trivialLiterals": [
+          100,
+          "N/A"
+        ]
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "literal": "0",
+        "kind": "number",
+        "trivialLiterals": [
+          100,
+          "N/A"
+        ]
+      },
+      "expected": false
+    },
+    {
+      "input": {
+        "literal": "\"100\"",
+        "kind": "string",
+        "trivialLiterals": [
+          100,
+          "N/A"
+        ]
+      },
+      "expected": false
+    },
+    {
+      "input": {
+        "literal": "\"\n\"",
+        "kind": "string",
+        "trivialLiterals": [
+          "\n"
+        ]
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "literal": "\"\\n\"",
+        "kind": "string",
+        "trivialLiterals": [
+          "\n"
+        ]
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "literal": "@\"a\"\"b\"",
+        "kind": "string",
+        "trivialLiterals": [
+          "a\"b"
+        ]
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "literal": "$\"\"",
+        "kind": "string",
+        "trivialLiterals": [
+          ""
+        ]
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "literal": "\"\"\"\nraw\n\"\"\"",
+        "kind": "string",
+        "trivialLiterals": [
+          "raw\n"
+        ]
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "literal": "\"\"\"\nraw\n\"\"\"",
+        "kind": "string",
+        "trivialLiterals": [
+          "raw"
+        ]
+      },
+      "expected": false
+    },
+    {
+      "input": {
+        "literal": "\"abc\"u8",
+        "kind": "string",
+        "trivialLiterals": [
+          "abc"
+        ]
+      },
+      "expected": true
+    }
   ],
   "hasRetryTimeoutFragment": [
-    { "input": "MaxRetries", "expected": true },
-    { "input": "MAX_RETRIES", "expected": true },
-    { "input": "retryCount", "expected": true },
-    { "input": "attempts", "expected": true },
-    { "input": "TimeOut", "expected": true },
-    { "input": "requestTimeoutMs", "expected": true },
-    { "input": "tokenTTL", "expected": true },
-    { "input": "ExpiryDays", "expected": true },
-    { "input": "backoffFactor", "expected": true },
-    { "input": "delayMs", "expected": true },
-    { "input": "HOLD_TIMEOUT", "expected": true },
-    { "input": "settlementDays", "expected": false },
-    { "input": "relay", "expected": false },
-    { "input": "delta", "expected": false },
-    { "input": "count", "expected": false }
+    {
+      "input": "MaxRetries",
+      "expected": true
+    },
+    {
+      "input": "MAX_RETRIES",
+      "expected": true
+    },
+    {
+      "input": "retryCount",
+      "expected": true
+    },
+    {
+      "input": "attempts",
+      "expected": true
+    },
+    {
+      "input": "TimeOut",
+      "expected": true
+    },
+    {
+      "input": "requestTimeoutMs",
+      "expected": true
+    },
+    {
+      "input": "tokenTTL",
+      "expected": true
+    },
+    {
+      "input": "ExpiryDays",
+      "expected": true
+    },
+    {
+      "input": "backoffFactor",
+      "expected": true
+    },
+    {
+      "input": "delayMs",
+      "expected": true
+    },
+    {
+      "input": "HOLD_TIMEOUT",
+      "expected": true
+    },
+    {
+      "input": "settlementDays",
+      "expected": false
+    },
+    {
+      "input": "relay",
+      "expected": false
+    },
+    {
+      "input": "delta",
+      "expected": false
+    },
+    {
+      "input": "count",
+      "expected": false
+    },
+    {
+      "input": "maxRétries",
+      "expected": false
+    },
+    {
+      "input": "délaiRetry",
+      "expected": true
+    },
+    {
+      "input": "retry2x",
+      "expected": true
+    },
+    {
+      "input": "timeout-ms",
+      "expected": true
+    },
+    {
+      "input": "HTTPTimeout",
+      "expected": true
+    }
   ],
   "matchesNormalizationPattern": [
-    { "input": { "method": "ToLowerInvariant" }, "expected": true },
-    { "input": { "method": "ToUpper" }, "expected": true },
-    { "input": { "method": "TrimEnd" }, "expected": true },
-    { "input": { "method": "Normalize" }, "expected": true },
-    { "input": { "method": "toLowerCase" }, "expected": true },
-    { "input": { "method": "trim" }, "expected": true },
-    { "input": { "method": "equalsIgnoreCase" }, "expected": true },
-    { "input": { "method": "TrimSpace", "qualifier": "strings" }, "expected": true },
-    { "input": { "method": "ToLower", "qualifier": "bytes" }, "expected": true },
-    { "input": { "method": "trimStart" }, "expected": false },
-    { "input": { "method": "NormalizeEmail" }, "expected": false },
-    { "input": { "method": "lower" }, "expected": false },
-    { "input": { "method": "toString" }, "expected": false }
+    {
+      "input": {
+        "method": "ToLowerInvariant"
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "method": "ToUpper"
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "method": "TrimEnd"
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "method": "Normalize"
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "method": "toLowerCase"
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "method": "trim"
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "method": "equalsIgnoreCase"
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "method": "TrimSpace",
+        "qualifier": "strings"
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "method": "ToLower",
+        "qualifier": "bytes"
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "method": "trimStart"
+      },
+      "expected": false
+    },
+    {
+      "input": {
+        "method": "NormalizeEmail"
+      },
+      "expected": false
+    },
+    {
+      "input": {
+        "method": "lower"
+      },
+      "expected": false
+    },
+    {
+      "input": {
+        "method": "toString"
+      },
+      "expected": false
+    }
   ],
   "matchesNormalizationPatternCustom": [
-    { "input": { "method": "ToLower", "qualifier": "strings", "patterns": ["strings.ToLower"] }, "expected": true },
-    { "input": { "method": "ToLower", "qualifier": "bytes", "patterns": ["strings.ToLower"] }, "expected": false },
-    { "input": { "method": "ToLower", "patterns": ["strings.ToLower"] }, "expected": false }
+    {
+      "input": {
+        "method": "ToLower",
+        "qualifier": "strings",
+        "patterns": [
+          "strings.ToLower"
+        ]
+      },
+      "expected": true
+    },
+    {
+      "input": {
+        "method": "ToLower",
+        "qualifier": "bytes",
+        "patterns": [
+          "strings.ToLower"
+        ]
+      },
+      "expected": false
+    },
+    {
+      "input": {
+        "method": "ToLower",
+        "patterns": [
+          "strings.ToLower"
+        ]
+      },
+      "expected": false
+    }
   ],
   "normalizeFactText": [
-    { "input": "a  >=\n\t5", "expected": "a >= 5" },
-    { "input": { "repeat": "é", "count": 250 }, "expected": { "repeat": "é", "count": 200 } },
     {
-      "input": [{ "repeat": "a", "count": 199 }, { "repeat": "😀", "count": 2 }],
-      "expected": [{ "repeat": "a", "count": 199 }, { "repeat": "😀", "count": 1 }]
+      "input": [
+        "a  >=\n\t5"
+      ],
+      "expected": [
+        "a >= 5"
+      ]
+    },
+    {
+      "input": [
+        {
+          "repeat": "é",
+          "count": 250
+        }
+      ],
+      "expected": [
+        {
+          "repeat": "é",
+          "count": 200
+        }
+      ]
+    },
+    {
+      "input": [
+        {
+          "repeat": "a",
+          "count": 199
+        },
+        {
+          "repeat": "😀",
+          "count": 2
+        }
+      ],
+      "expected": [
+        {
+          "repeat": "a",
+          "count": 199
+        },
+        {
+          "repeat": "😀",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "input": [
+        {
+          "repeat": "a",
+          "count": 199
+        },
+        " b"
+      ],
+      "expected": [
+        {
+          "repeat": "a",
+          "count": 199
+        }
+      ]
+    },
+    {
+      "input": [
+        {
+          "repeat": "b",
+          "count": 200
+        }
+      ],
+      "expected": [
+        {
+          "repeat": "b",
+          "count": 200
+        }
+      ]
+    },
+    {
+      "input": [
+        ""
+      ],
+      "expected": [
+        ""
+      ]
+    },
+    {
+      "input": [
+        " \t\r\n "
+      ],
+      "expected": [
+        ""
+      ]
+    },
+    {
+      "input": [
+        {
+          "repeat": "é",
+          "count": 100
+        },
+        {
+          "repeat": "a",
+          "count": 99
+        },
+        "😀",
+        "z"
+      ],
+      "expected": [
+        {
+          "repeat": "é",
+          "count": 100
+        },
+        {
+          "repeat": "a",
+          "count": 99
+        },
+        "😀"
+      ]
+    },
+    {
+      "input": [
+        {
+          "repeat": "é",
+          "count": 100
+        },
+        {
+          "repeat": "a",
+          "count": 100
+        },
+        "😀"
+      ],
+      "expected": [
+        {
+          "repeat": "é",
+          "count": 100
+        },
+        {
+          "repeat": "a",
+          "count": 100
+        }
+      ]
     }
   ],
   "joinRoute": [
-    { "input": ["api/Loans", "{id}"], "expected": "/api/Loans/{id}" },
-    { "input": ["/loans/", ""], "expected": "/loans" },
-    { "input": ["", ""], "expected": "/" },
-    { "input": ["api//loans"], "expected": "/api/loans" },
-    { "input": ["loans", "/"], "expected": "/loans" }
+    {
+      "input": [
+        "api/Loans",
+        "{id}"
+      ],
+      "expected": "/api/Loans/{id}"
+    },
+    {
+      "input": [
+        "/loans/",
+        ""
+      ],
+      "expected": "/loans"
+    },
+    {
+      "input": [
+        "",
+        ""
+      ],
+      "expected": "/"
+    },
+    {
+      "input": [
+        "api//loans"
+      ],
+      "expected": "/api/loans"
+    },
+    {
+      "input": [
+        "loans",
+        "/"
+      ],
+      "expected": "/loans"
+    }
   ]
 }

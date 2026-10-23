@@ -14,9 +14,14 @@ const HTTP_VERBS: Readonly<Record<string, string>> = {
   HttpOptions: 'OPTIONS',
 };
 
-/** The route template of an annotation: `args[0]`, else `named.Template`, else none. */
+/**
+ * The route template of an annotation: `args[0]`, else `named.template`, else `named.Template`.
+ * `Template` is get-only on ASP.NET's attributes, so the named form in source is the constructor
+ * argument `template:`: the Roslyn semantic path reports it in `args[0]`, the Roslyn syntax fallback
+ * and tree-sitter in `named.template`.
+ */
 function template(annotation: SymbolAnnotation): string | undefined {
-  return annotation.args?.[0] ?? annotation.named?.['Template'];
+  return annotation.args?.[0] ?? annotation.named?.['template'] ?? annotation.named?.['Template'];
 }
 
 /** The last `.` segment of a symbol name, without the syntax tier's `(n)` parameter suffix. */
