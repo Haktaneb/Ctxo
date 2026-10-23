@@ -1,0 +1,64 @@
+{
+  "name": "@ctxo/domain",
+  "version": "0.13.0",
+  "description": "Ctxo domain knowledge layer: an opt-in module for @ctxo/cli",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/",
+    "skills/",
+    "schema/",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "test": "vitest run && vitest run --config vitest.config.e2e.ts",
+    "test:unit": "vitest run",
+    "test:e2e": "vitest run --config vitest.config.e2e.ts"
+  },
+  "keywords": [
+    "ctxo",
+    "ctxo-module",
+    "domain-knowledge"
+  ],
+  "author": "Alper Hankendi",
+  "license": "MIT",
+  "dependencies": {
+    "yaml": "^2.6.1"
+  },
+  "devDependencies": {
+    "@ctxo/cli": "workspace:*",
+    "@types/node": "^26.6.1",
+    "eslint": "^10.6.0",
+    "tsup": "^8.4.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.71.1",
+    "vitest": "^5.0.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alperhankendi/Ctxo.git",
+    "directory": "packages/domain"
+  },
+  "bugs": {
+    "url": "https://github.com/alperhankendi/Ctxo/issues"
+  },
+  "homepage": "https://github.com/alperhankendi/Ctxo#readme",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}
