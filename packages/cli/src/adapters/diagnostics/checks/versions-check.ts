@@ -1,5 +1,6 @@
 import type { IHealthCheck, CheckContext, CheckResult } from '../../../core/diagnostics/types.js';
 import {
+  collectModuleReports,
   gatherVersionInfo,
   formatVerbose,
   type VersionInfo,
@@ -44,10 +45,11 @@ export class VersionsCheck implements IHealthCheck {
 }
 
 async function collectInfo(ctx: CheckContext): Promise<VersionInfo> {
+  const modules = await collectModuleReports(ctx.projectRoot);
   const manifestPath = loadManifestPath(ctx.projectRoot);
-  if (!manifestPath) return gatherVersionInfo([]);
+  if (!manifestPath) return gatherVersionInfo([], modules);
   const { plugins } = await discoverPlugins({ manifestPath });
-  return gatherVersionInfo(plugins);
+  return gatherVersionInfo(plugins, modules);
 }
 
 function buildSummary(info: VersionInfo): string {

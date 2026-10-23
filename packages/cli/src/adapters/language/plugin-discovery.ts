@@ -1,6 +1,6 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, isAbsolute, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { CtxoLanguagePlugin } from '@ctxo/plugin-api';
 import { SUPPORTED_API_VERSIONS } from '@ctxo/plugin-api';
@@ -116,6 +116,84 @@ export function resolvePluginPackageJson(specifier: string, projectRequire: Node
       throw primary;
     }
   }
+}
+
+export interface ResolvedPackage {
+  readonly name: string;
+  readonly version: string;
+  readonly pkgDir: string;
+  readonly entryUrl: string;
+  readonly source: 'project' | 'cli';
+}
+
+/** `package.json` text of `specifier` as seen from `req`, read once; undefined when it cannot be found or read. */
+function readPackageJsonVia(specifier: string, req: NodeJS.Require): { pkgDir: string; raw: string } | undefined {
+  const files: string[] = [];
+  try {
+    files.push(req.resolve(`${specifier}/package.json`));
+  } catch {
+    // The package may not export ./package.json: look in the lookup paths directly.
+    for (const base of req.resolve.paths(specifier) ?? []) {
+      files.push(join(base, specifier, 'package.json'));
+    }
+  }
+  for (const file of files) {
+    try {
+      return { pkgDir: dirname(file), raw: readFileSync(file, 'utf-8') };
+    } catch {
+      // try the next lookup path
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Every copy of `specifier` the CLI may load, in order: the project's own copy first
+ * (resolved from `<projectRoot>/package.json`), then the copy next to the running CLI
+ * (`cliAnchor` is a directory standing in for the CLI's location; it defaults to this module).
+ * A copy that is the same real directory as an earlier one appears once. Never throws.
+ */
+export function resolvePackageCandidates(
+  specifier: string,
+  projectRoot: string,
+  cliAnchor?: string,
+): ResolvedPackage[] {
+  const lookups: Array<{ source: 'project' | 'cli'; req: NodeJS.Require }> = [
+    { source: 'project', req: createRequire(join(projectRoot, 'package.json')) },
+    {
+      source: 'cli',
+      req: cliAnchor === undefined ? cliFallbackRequire : createRequire(join(cliAnchor, 'package.json')),
+    },
+  ];
+  const found: ResolvedPackage[] = [];
+  const seen = new Set<string>();
+  for (const { source, req } of lookups) {
+    const read = readPackageJsonVia(specifier, req);
+    if (!read) continue;
+    try {
+      const real = realpathSync(read.pkgDir);
+      if (seen.has(real)) continue;
+      seen.add(real);
+      const pkg = JSON.parse(read.raw) as {
+        name?: string;
+        version?: string;
+        main?: string;
+        module?: string;
+        exports?: unknown;
+      };
+      const entry = pickEsmEntry(pkg.exports) ?? pkg.module ?? pkg.main ?? 'index.js';
+      found.push({
+        name: pkg.name ?? specifier,
+        version: pkg.version ?? '0.0.0',
+        pkgDir: real,
+        entryUrl: pathToFileURL(resolve(real, entry)).href,
+        source,
+      });
+    } catch (err) {
+      log.warn(`Skipped ${specifier} candidate in ${read.pkgDir}: ${(err as Error).message}`);
+    }
+  }
+  return found;
 }
 
 function resolvePluginEntryUrl(

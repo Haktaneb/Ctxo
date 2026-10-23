@@ -101,6 +101,7 @@ describe('formatShort', () => {
       ctxo: '0.7.0-alpha.0',
       pluginApiVersion: '2',
       pluginApiVersions: ['1', '2'],
+      modules: [],
       plugins: [],
       runtime: { node: 'v20.0.0', platform: 'linux', arch: 'x64' },
     };
@@ -114,6 +115,7 @@ describe('formatVerbose', () => {
       ctxo: '0.7.0-alpha.0',
       pluginApiVersion: '2',
       pluginApiVersions: ['1', '2'],
+      modules: [],
       plugins: [],
       runtime: { node: 'v20.0.0', platform: 'linux', arch: 'x64' },
     };
@@ -130,6 +132,7 @@ describe('formatVerbose', () => {
       ctxo: '0.7.0-alpha.0',
       pluginApiVersion: '2',
       pluginApiVersions: ['1', '2'],
+      modules: [],
       plugins: [
         {
           name: '@ctxo/lang-typescript',
@@ -153,6 +156,7 @@ describe('formatVerbose', () => {
       ctxo: '0.7.0-alpha.0',
       pluginApiVersion: '2',
       pluginApiVersions: ['1', '2'],
+      modules: [],
       plugins: [
         {
           name: '@ctxo/lang-future',
@@ -175,6 +179,7 @@ describe('formatJson', () => {
       ctxo: '0.7.0-alpha.0',
       pluginApiVersion: '2',
       pluginApiVersions: ['1', '2'],
+      modules: [],
       plugins: [
         {
           name: '@ctxo/lang-typescript',
@@ -191,6 +196,7 @@ describe('formatJson', () => {
       ctxo: '0.7.0-alpha.0',
       pluginApiVersion: '2',
       pluginApiVersions: ['1', '2'],
+      modules: [],
       runtime: { node: 'v20.0.0', platform: 'linux', arch: 'x64' },
       plugins: [
         {
@@ -209,6 +215,7 @@ describe('formatJson', () => {
       ctxo: '0.7.0-alpha.0',
       pluginApiVersion: '2',
       pluginApiVersions: ['1', '2'],
+      modules: [],
       plugins: [],
       runtime: { node: 'v20.0.0', platform: 'linux', arch: 'x64' },
     };
@@ -238,5 +245,46 @@ describe('gatherVersionInfo performance', () => {
 
     expect(elapsedMs).toBeLessThan(200);
     expect(info.plugins).toHaveLength(3);
+  });
+});
+
+describe('modules in the version report', () => {
+  const base = {
+    ctxo: '1.2.3',
+    pluginApiVersion: '2',
+    pluginApiVersions: ['1', '2'],
+    plugins: [],
+    runtime: { node: 'v20.0.0', platform: 'linux' as const, arch: 'x64' },
+  };
+
+  it('gatherVersionInfo defaults modules to an empty list', () => {
+    expect(gatherVersionInfo([]).modules).toEqual([]);
+  });
+
+  it('formatVerbose lists modules with their status', () => {
+    const info: VersionInfo = {
+      ...base,
+      modules: [{ name: '@ctxo/domain', status: 'active', version: '1.2.0', source: 'project' }],
+    };
+    expect(formatVerbose(info)).toContain('Modules:    @ctxo/domain 1.2.0 (active)');
+  });
+
+  it('formatVerbose names a version mismatch and leaves out a module that is not installed', () => {
+    const mismatch: VersionInfo = {
+      ...base,
+      modules: [{ name: '@ctxo/domain', status: 'version-mismatch', version: '1.3.0' }],
+    };
+    expect(formatVerbose(mismatch)).toContain('Modules:    @ctxo/domain 1.3.0 (version-mismatch)');
+    const absent: VersionInfo = { ...base, modules: [{ name: '@ctxo/domain', status: 'not-installed' }] };
+    expect(formatVerbose(absent)).not.toContain('Modules:');
+  });
+
+  it('the JSON output carries modules', () => {
+    const info: VersionInfo = {
+      ...base,
+      modules: [{ name: '@ctxo/domain', status: 'active', version: '1.2.0', source: 'cli' }],
+    };
+    const parsed = JSON.parse(formatJson(info)) as VersionInfo;
+    expect(parsed.modules).toEqual(info.modules);
   });
 });
