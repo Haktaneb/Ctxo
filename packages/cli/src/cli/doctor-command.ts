@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import type { IHealthCheck } from '../core/diagnostics/types.js';
+import type { LoadedModule } from '../adapters/modules/module-loader.js';
 import { JsonIndexReader } from '../adapters/storage/json-index-reader.js';
 import { HealthChecker } from '../adapters/diagnostics/health-checker.js';
 import { DoctorReporter } from '../adapters/diagnostics/doctor-reporter.js';
@@ -32,6 +33,8 @@ export interface DoctorOptions {
   fix?: boolean;
   dryRun?: boolean;
   yes?: boolean;
+  /** Loaded opt-in modules (@ctxo/domain); their doctor checks run after the core checks. */
+  modules?: readonly LoadedModule[];
 }
 
 export class DoctorCommand {
@@ -70,6 +73,8 @@ export class DoctorCommand {
       new OrphanedFilesCheck(),
       new CoChangesCacheCheck(),
       new SchemaVersionCheck(),
+      // Module checks last, so the core report reads the same with or without a module.
+      ...(options.modules ?? []).flatMap((module) => module.registration.doctorChecks ?? []),
     ];
 
     // Pre-load index once — shared by all index-related checks (avoids 5x redundant readAll)

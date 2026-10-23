@@ -16,6 +16,15 @@ import { BlastRadiusCommand } from './blast-radius-command.js';
 import { ContextsCommand } from './contexts-command.js';
 import { GateHookCommand } from './gate-hook-command.js';
 import { GateCommand } from './gate-command.js';
+import {
+  FAST_ROUTE_COMMANDS,
+  isKnownModuleCommand,
+  loadModulesFor,
+  moduleHelpLines,
+  runFastRoute,
+  runModuleCommand,
+} from './module-commands.js';
+import type { LoadedModule } from '../adapters/modules/module-loader.js';
 import { parseCoChangeSince } from '../core/co-change/co-change-window.js';
 
 /** `value` as a positive integer, or undefined when it is anything else (no sign, decimals, exponent or unit). */
@@ -69,24 +78,49 @@ function readInitPartsFlag(args: readonly string[], flag: '--only' | '--skip'): 
   return { present, parts };
 }
 
+export interface CliRouterOptions {
+  /** A directory standing in for the CLI's location when modules are looked up (tests); defaults to the running CLI. */
+  readonly cliAnchor?: string;
+}
+
 export class CliRouter {
   private readonly projectRoot: string;
+  private readonly cliAnchor: string | undefined;
+  private modules: Promise<readonly LoadedModule[]> | undefined;
 
-  constructor(projectRoot: string) {
+  constructor(projectRoot: string, options: CliRouterOptions = {}) {
     // If cwd is a subdirectory of a git repo (common in monorepos and when
     // users run ctxo from anywhere below the repo root), use the repo root so
     // every subcommand consistently operates on the same project.
     this.projectRoot = locateGitRoot(projectRoot) ?? projectRoot;
+    this.cliAnchor = options.cliAnchor;
+  }
+
+  /**
+   * The opt-in modules (@ctxo/domain), loaded on first use and only by the routes that need them: the
+   * help, module and unknown commands, `index` and `doctor` (`version` reports them through its own
+   * loader call, which shares this load). Never rejects; a failed load means no module.
+   */
+  private loadModules(): Promise<readonly LoadedModule[]> {
+    this.modules ??= loadModulesFor(this.projectRoot, 'cli', { cliAnchor: this.cliAnchor });
+    return this.modules;
   }
 
   async route(args: string[]): Promise<void> {
     const command = args[0];
 
+    // A module command the CLI knows by name is dispatched before the global help, so that
+    // `ctxo verify-domain --help` answers with the command's own usage (or the install hint).
+    if (command !== undefined && isKnownModuleCommand(command)) {
+      await this.dispatchModuleCommand(command, args);
+      return;
+    }
+
     // --help and -h win over everything else on the line, before any flag is parsed or any command is built:
     // `ctxo index --help` must print the help and never start an index run, and `ctxo init --help` never an init.
     // There is one help text for the whole CLI (each command has its own lines in it).
     if (!command || args.some((arg) => arg === '--help' || arg === '-h')) {
-      this.printHelp();
+      await this.printHelp();
       return;
     }
 
@@ -174,6 +208,8 @@ export class CliRouter {
           process.exit(1);
           return;
         }
+        // Loaded after every flag is checked, so a bad flag fails without touching the modules.
+        const modules = await this.loadModules();
         await new IndexCommand(this.projectRoot).run({
           files: filesArg.length > 0 ? filesArg : undefined,
           commit: commitArg,
@@ -184,6 +220,7 @@ export class CliRouter {
           cochangeCommits: cochangeCommitsArg,
           cochangeSince: cochangeSinceArg,
           installMissing,
+          modules,
         });
         break;
       }
@@ -252,12 +289,14 @@ export class CliRouter {
         const fixArg = args.includes('--fix');
         const dryRunArg = args.includes('--dry-run');
         const yesArg = args.includes('--yes') || args.includes('-y');
+        const modules = await this.loadModules();
         await new DoctorCommand(this.projectRoot).run({
           json: jsonArg,
           quiet: quietArg,
           fix: fixArg,
           dryRun: dryRunArg,
           yes: yesArg,
+          modules,
         });
         break;
       }
@@ -380,14 +419,53 @@ export class CliRouter {
       }
 
       default:
+        // A command a loaded module registers; known module names never get here (dispatched above).
+        if (await this.dispatchModuleCommand(command, args)) return;
         console.error(`[ctxo] Unknown command: "${command}". Run "ctxo --help" for usage.`);
         process.exit(1);
         return;
     }
   }
 
-  private printHelp(): void {
+  /**
+   * Runs a module command and sets `process.exitCode` from it. A known module command name without its
+   * module prints the install hint and exits 1 (the hook command exits 0 silently, as on the fast route).
+   * Resolves to false when no module registers `command` and the CLI does not know the name, so the caller
+   * reports an unknown command.
+   */
+  private async dispatchModuleCommand(command: string, args: readonly string[]): Promise<boolean> {
+    if (FAST_ROUTE_COMMANDS.has(command)) {
+      process.exitCode = await runFastRoute(args, this.projectRoot);
+      return true;
+    }
+    let code: number | undefined;
+    try {
+      code = await runModuleCommand(command, args.slice(1), {
+        projectRoot: this.projectRoot,
+        modules: await this.loadModules(),
+      });
+    } catch (err) {
+      console.error(`[ctxo] "ctxo ${command}" failed: ${(err as Error).message}`);
+      process.exitCode = 1;
+      return true;
+    }
+    if (code !== undefined) {
+      process.exitCode = code;
+      return true;
+    }
+    if (isKnownModuleCommand(command)) {
+      console.error(`[ctxo] "ctxo ${command}" needs @ctxo/domain. Install it with "ctxo install domain".`);
+      process.exitCode = 1;
+      return true;
+    }
+    return false;
+  }
+
+  private async printHelp(): Promise<void> {
     const v = getVersion();
+    // The help ends with the loaded modules' commands, or one line on how to get them.
+    const moduleLines = moduleHelpLines(await this.loadModules());
+    const moduleBlock = moduleLines.length > 0 ? `\n\n${moduleLines.join('\n')}` : '';
     console.error(`
 ctxo v${v} — MCP server for dependency-aware codebase context
 
@@ -442,6 +520,6 @@ Usage:
   ctxo --version --json          Machine-readable version payload
   ctxo version                   Subcommand — verbose by default
   ctxo --help               Show this help message (also ctxo <command> --help; nothing is run)
-`.trim());
+`.trim() + moduleBlock);
   }
 }

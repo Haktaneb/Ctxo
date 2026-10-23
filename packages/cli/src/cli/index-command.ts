@@ -19,8 +19,12 @@ import {
   indexIgnoreProjectPatterns,
   makeGlobMatcher,
   resolveCoChangeConfig,
+  type ResolvedCoChangeConfig,
 } from '../core/config/load-config.js';
 import type { CtxoConfig } from '../core/config/config-schema.js';
+import { selectWindow, windowCutoff } from '../core/co-change/co-change-window.js';
+import type { LoadedModule } from '../adapters/modules/module-loader.js';
+import type { IndexPassContext } from '../ports/i-ctxo-module.js';
 import {
   detectLanguages,
   decideNeededLanguages,
@@ -47,6 +51,7 @@ import { SymbolGraph } from '../core/graph/symbol-graph.js';
 import { PageRankCalculator } from '../core/importance/pagerank-calculator.js';
 import type {
   BoundaryViolationsArtifact,
+  ChangeLog,
   CommunitySnapshot,
   DriftEventsArtifact,
   EdgeQuality,
@@ -147,6 +152,11 @@ export class IndexCommand {
     /** Co-change window by age, counted back from HEAD (`--cochange-since`); overrides `cochange.since`. */
     cochangeSince?: string;
     installMissing?: boolean;
+    /**
+     * Loaded opt-in modules (@ctxo/domain). A module that declares `indexCapabilities.facts` turns the
+     * facts request on, and each module's `indexPass` runs at the end of a run that refreshed the products.
+     */
+    modules?: readonly LoadedModule[];
   } = {}): Promise<void> {
     if (options.check) {
       // Delegate to verify logic: hash-based freshness check
@@ -167,9 +177,15 @@ export class IndexCommand {
     // without a plugin having been loaded.
     const commitChanges = options.commit !== undefined ? await readCommitChanges(gitAdapter, options.commit) : [];
 
+    // Facts are requested by index.facts: true, or by a loaded module that asks for them. The one answer
+    // serves both sites: the capability handed to the plugins and the Phase 1c extraction.
+    const modules = options.modules ?? [];
+    const requestFacts =
+      factsRequested(ignore.config) || modules.some((module) => module.registration.indexCapabilities?.facts === true);
+
     // Set up adapters via plugin discovery (TS, Go, C# all plugin-backed)
     const registry = new LanguageAdapterRegistry();
-    const plugins = await this.registerDiscoveredPlugins(registry, ignore.ignoreProjectPatterns, factsRequested(ignore.config));
+    const plugins = await this.registerDiscoveredPlugins(registry, ignore.ignoreProjectPatterns, requestFacts);
     const { tsMorphLike, roslynAdapter, csharpComposite, goTier, javaTier } = plugins;
     // The C# tier as loaded; re-read after the Roslyn batch, which can switch it to the syntax tier.
     const csharpTierAtLoad = plugins.csharpTier;
@@ -345,8 +361,9 @@ export class IndexCommand {
       }
     }
 
-    // Phase 1c: facts, only when requested (index.facts: true). They go into the JSON index, never SQLite.
-    if (factsRequested(ignore.config)) {
+    // Phase 1c: facts, only when requested (index.facts: true, or a module asks). They go into the JSON
+    // index, never SQLite.
+    if (requestFacts) {
       for (const entry of pendingIndices) {
         const adapter = registry.getAdapter(entry.relativePath);
         if (!adapter) continue;
@@ -433,6 +450,8 @@ export class IndexCommand {
     // config.yaml and `--cochange-*`; `--max-history` only sets how much history each file keeps.
     // Non-fatal like phases 2c and 2d: an unexpected failure here must not stop the index from
     // being written, and co-changes.json is only ever replaced by a complete matrix.
+    // The raw change log and the window it was read for are kept for the module index passes (Phase 2e).
+    let phase2ChangeLog: { readonly changeLog: ChangeLog; readonly coChange: ResolvedCoChangeConfig } | undefined;
     if (!options.skipHistory && refreshCoChange) {
       try {
         const coChange = resolveCoChangeConfig(ignore.config, {
@@ -441,6 +460,7 @@ export class IndexCommand {
         });
         const maxHistory = options.maxHistory ?? 20;
         const changeLog = await gitAdapter.getChangeLog(changeLogSize(coChange.maxCommits, maxHistory));
+        if (changeLog !== undefined) phase2ChangeLog = { changeLog, coChange };
 
         if (changeLog === undefined) {
           // git failed, is missing, or the repository has no commit yet. intent[] stays empty, as it
@@ -599,6 +619,14 @@ export class IndexCommand {
       }
     }
 
+    // Phase 2e: the index passes of opt-in modules (@ctxo/domain), after the architecture artifacts and the
+    // contexts view when they ran. They run on every run that refreshed the products: they read the merged
+    // index, not the communities, so --skip-community or a failed community detection does not skip them.
+    // --check never gets here. A failing pass is reported and the run goes on.
+    if (refreshProducts) {
+      await this.runModuleIndexPasses(modules, ignore.config, indexed, phase2ChangeLog);
+    }
+
     // Ensure .ctxo/.cache/ is in .gitignore (skip during verify runs)
     if (!options.skipSideEffects) {
       this.ensureGitignore();
@@ -621,6 +649,62 @@ export class IndexCommand {
 
     // Dispose Roslyn adapter
     if (roslynAdapter) await roslynAdapter.dispose();
+  }
+
+  /**
+   * Phase 2e. Runs each module's `indexPass` on the merged index (the one the snapshot, the artifacts and
+   * the contexts view were built from), with a graph built on first use, the host's test-file check and,
+   * when Phase 2 read the change log, the raw commits of the co-change window (renames intact). Each pass
+   * is awaited in turn; one that throws is reported and the next one still runs.
+   */
+  private async runModuleIndexPasses(
+    modules: readonly LoadedModule[],
+    config: CtxoConfig,
+    indices: readonly FileIndex[],
+    phase2: { readonly changeLog: ChangeLog; readonly coChange: ResolvedCoChangeConfig } | undefined,
+  ): Promise<void> {
+    const passes = modules.filter((module) => typeof module.registration.indexPass === 'function');
+    if (passes.length === 0) return;
+
+    let ctx: IndexPassContext;
+    try {
+      // The host's services, so a pass classifies test files and builds the graph exactly as the module
+      // host does everywhere else.
+      const { createModuleHost } = await import('./module-host.js');
+      const { services } = createModuleHost({ projectRoot: this.projectRoot, mode: 'cli' });
+      let graph: SymbolGraph | undefined;
+      ctx = {
+        projectRoot: this.projectRoot,
+        ctxoRoot: this.ctxoRoot,
+        config,
+        indices,
+        graph: () => (graph ??= services.buildGraph(indices)),
+        isTestFile: services.createTestFileCheck(config, indices),
+        history:
+          phase2 === undefined
+            ? undefined
+            : {
+                head: phase2.changeLog.head,
+                headCommittedAt: phase2.changeLog.headCommittedAt,
+                commits: selectWindow(
+                  phase2.changeLog.commits,
+                  phase2.coChange.maxCommits,
+                  windowCutoff(phase2.coChange, phase2.changeLog.headCommittedAt),
+                ),
+              },
+      };
+    } catch (err) {
+      console.error(`[ctxo] Module index passes skipped: ${(err as Error).message}`);
+      return;
+    }
+
+    for (const module of passes) {
+      try {
+        await module.registration.indexPass!(ctx);
+      } catch (err) {
+        console.error(`[ctxo] ${module.name} index pass failed: ${(err as Error).message}`);
+      }
+    }
   }
 
   private async autoInstallMissingPlugins(): Promise<void> {

@@ -1,9 +1,9 @@
 import { SUPPORTED_API_VERSIONS } from '@ctxo/plugin-api';
 import type { CtxoLanguagePlugin } from '@ctxo/plugin-api';
 import { getVersion } from './cli-paths.js';
-import { discoverPlugins, type DiscoveredPlugin } from '../adapters/language/plugin-discovery.js';
+import { discoverPlugins, resolvePackageCandidates, type DiscoveredPlugin } from '../adapters/language/plugin-discovery.js';
 import { loadManifestPath } from './plugin-loader.js';
-import type { ModuleReport } from '../adapters/modules/module-loader.js';
+import { DOMAIN_MODULE_PACKAGE, loadCtxoModules, type ModuleReport } from '../adapters/modules/module-loader.js';
 
 const NEWEST_API_VERSION: string = SUPPORTED_API_VERSIONS[SUPPORTED_API_VERSIONS.length - 1]!;
 
@@ -114,16 +114,21 @@ export function formatJson(info: VersionInfo): string {
 }
 
 /**
- * What the module loader reports for this project. The host and the loader are imported on demand so
- * the pure formatters above stay light.
+ * What the module loader reports for this project. Without any copy of the module it is `not-installed`
+ * and the host is never built; otherwise the host is imported on demand. Never throws:
+ * a failure while loading is reported as `load-failed`.
  */
 export async function collectModuleReports(projectRoot: string): Promise<readonly ModuleReport[]> {
-  const [{ createModuleHost }, { loadCtxoModules }] = await Promise.all([
-    import('./module-host.js'),
-    import('../adapters/modules/module-loader.js'),
-  ]);
-  const { reports } = await loadCtxoModules(createModuleHost({ projectRoot, mode: 'cli' }));
-  return reports;
+  try {
+    if (resolvePackageCandidates(DOMAIN_MODULE_PACKAGE, projectRoot).length === 0) {
+      return [{ name: DOMAIN_MODULE_PACKAGE, status: 'not-installed' }];
+    }
+    const { createModuleHost } = await import('./module-host.js');
+    const { reports } = await loadCtxoModules(createModuleHost({ projectRoot, mode: 'cli' }));
+    return reports;
+  } catch (err) {
+    return [{ name: DOMAIN_MODULE_PACKAGE, status: 'load-failed', reason: (err as Error).message }];
+  }
 }
 
 export interface VersionOptions {

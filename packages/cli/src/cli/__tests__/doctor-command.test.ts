@@ -126,6 +126,38 @@ describe('DoctorCommand', () => {
     expect(names.indexOf('ai_rules')).toBe(names.indexOf('git_hooks') + 1);
   });
 
+  it('doctor runs module checks after the core checks', async () => {
+    setupHealthyProject();
+    await seedValidDb();
+    const seen: string[] = [];
+    const stubCheck = {
+      id: 'stub_check',
+      title: 'Stub check',
+      run: async (ctx: { projectRoot: string }) => {
+        seen.push(ctx.projectRoot);
+        return { id: 'stub_check', title: 'Stub check', status: 'warn' as const, message: 'from the stub module' };
+      },
+    };
+    const modules = [
+      { name: '@ctxo/domain', version: '0.0.0', registration: { id: 'domain' as const, doctorChecks: [stubCheck] } },
+    ];
+
+    await new DoctorCommand(tempDir).run({ json: true, modules });
+
+    const parsed = JSON.parse(stdoutSpy.mock.calls.map(c => c[0]).join(''));
+    const names: string[] = parsed.checks.map((c: { name: string }) => c.name);
+    expect(names.at(-1)).toBe('stub_check');
+    expect(names.indexOf('schema_version')).toBeLessThan(names.indexOf('stub_check'));
+    expect(parsed.checks.at(-1)).toMatchObject({ status: 'warn', message: 'from the stub module' });
+    expect(seen).toEqual([tempDir]);
+
+    // Without modules the stub check is absent.
+    stdoutSpy.mockClear();
+    await new DoctorCommand(tempDir).run({ json: true });
+    const plain = JSON.parse(stdoutSpy.mock.calls.map(c => c[0]).join(''));
+    expect(plain.checks.map((c: { name: string }) => c.name)).not.toContain('stub_check');
+  });
+
   it('outputs quiet format with --quiet flag', async () => {
     setupHealthyProject();
     await seedValidDb();

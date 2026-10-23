@@ -1,13 +1,18 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import type { CtxoLanguagePlugin } from '@ctxo/plugin-api';
 import type { DiscoveredPlugin } from '../../adapters/language/plugin-discovery.js';
 import {
+  collectModuleReports,
   gatherVersionInfo,
   formatShort,
   formatVerbose,
   formatJson,
   type VersionInfo,
 } from '../version-command.js';
+import { writeStubDomainPackage } from './helpers/stub-domain-package.js';
 
 function makePlugin(over: Partial<CtxoLanguagePlugin> = {}): CtxoLanguagePlugin {
   return {
@@ -286,5 +291,43 @@ describe('modules in the version report', () => {
     };
     const parsed = JSON.parse(formatJson(info)) as VersionInfo;
     expect(parsed.modules).toEqual(info.modules);
+  });
+});
+
+describe('collectModuleReports', () => {
+  const dirs: string[] = [];
+
+  function tempDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'ctxo-version-modules-'));
+    dirs.push(dir);
+    return dir;
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+
+  it('reports not-installed without building a module host when no copy exists', async () => {
+    const hostModule = await import('../module-host.js');
+    const createHost = vi.spyOn(hostModule, 'createModuleHost');
+
+    const reports = await collectModuleReports(tempDir());
+
+    expect(reports).toEqual([{ name: '@ctxo/domain', status: 'not-installed' }]);
+    expect(createHost).not.toHaveBeenCalled();
+  });
+
+  it('reports load-failed instead of throwing when the module host cannot be built', async () => {
+    const project = tempDir();
+    writeStubDomainPackage(project, "export async function register() { return { id: 'domain' }; }\n");
+    const hostModule = await import('../module-host.js');
+    vi.spyOn(hostModule, 'createModuleHost').mockImplementation(() => {
+      throw new Error('host exploded');
+    });
+
+    const reports = await collectModuleReports(project);
+
+    expect(reports).toEqual([{ name: '@ctxo/domain', status: 'load-failed', reason: 'host exploded' }]);
   });
 });

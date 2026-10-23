@@ -1137,8 +1137,8 @@ describe('bundled skills', () => {
   });
 
   it('the guide tools are exactly the MCP tools the server registers', () => {
-    // packages/cli/src/index.ts registers every tool with server.registerTool('<name>', ...).
-    const source = readFileSync(join(import.meta.dirname, '..', '..', 'index.ts'), 'utf-8');
+    // packages/cli/src/mcp-server.ts registers every tool with server.registerTool('<name>', ...).
+    const source = readFileSync(join(import.meta.dirname, '..', '..', 'mcp-server.ts'), 'utf-8');
     const registered = [...source.matchAll(/\bregisterTool\(\s*'([a-z_]+)'/g)].map((m) => m[1]);
     expect(registered.length).toBeGreaterThan(0);
     expect([...registered].sort()).toEqual([...GUIDE_TOOLS].sort());
