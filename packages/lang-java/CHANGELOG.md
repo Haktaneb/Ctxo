@@ -1,5 +1,11 @@
 # @ctxo/lang-java
 
+## 0.10.0
+
+### Minor Changes
+
+- 5e7d482: Minor release: bump all packages to a new minor version line.
+
 ## 0.9.1
 
 ### Patch Changes
