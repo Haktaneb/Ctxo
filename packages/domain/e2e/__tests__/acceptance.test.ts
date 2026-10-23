@@ -285,13 +285,30 @@ describe.each(VARIANTS)('PR 2B acceptance, %s sample', (variant) => {
         await session.call('get_logic_slice', { symbolId }),
         await session.call('get_pr_impact', { since: 'HEAD~1' }),
         await session.call('get_why_context', { symbolId }),
+        await session.call('get_context_for_task', { symbolId, taskType: 'understand' }),
       ];
+      const added = ['rulesAffected', 'cardsToUpdate', 'cardExcerpt', 'decisions', 'contextsTouched', 'cardsChanged', 'rulesWithoutTests'];
       responses.forEach((response, i) => {
         expect(response['error'], `response ${i}`).toBeUndefined();
         const keys = allKeys(response);
-        for (const key of ['context', 'contextBoundaryViolations', 'contextDrift']) expect(keys.has(key), `response ${i} has ${key}`).toBe(false);
+        for (const key of ['context', 'contextBoundaryViolations', 'contextDrift', ...added]) {
+          // get_context_for_task has its own `context` list of code symbols.
+          if (key === 'context' && i === 6) continue;
+          expect(keys.has(key), `response ${i} has ${key}`).toBe(false);
+        }
       });
       expect((responses[0] as { results: unknown[] }).results.length).toBeGreaterThan(0);
+
+      // The domain tools and the domain scope answer a graceful miss, never an error (spec 11.5).
+      for (const [name, args] of [
+        ['get_domain_context', { path: LOAN_LIMIT[variant] }],
+        ['get_rule', { ruleId: 'LEND-03' }],
+        ['get_ranked_context', { query: 'five loans', scope: 'domain' }],
+      ] as const) {
+        const response = await session.call(name, args);
+        expect(response['error'], name).toBeUndefined();
+        expect(response, name).toMatchObject({ found: false, hint: 'No domain registry at docs/domain/contexts.yaml. Create one with "ctxo init --domain".' });
+      }
     } finally {
       await session.close();
     }
