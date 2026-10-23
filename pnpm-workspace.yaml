@@ -1,3 +1,7 @@
 packages:
   - "packages/*"
   - "site"
+
+# Keep workspace packages out of the hoisted .pnpm/node_modules (it ends up on NODE_PATH): the cli tests
+# that expect @ctxo/domain to be absent would otherwise resolve the workspace copy.
+hoistWorkspacePackages: false
