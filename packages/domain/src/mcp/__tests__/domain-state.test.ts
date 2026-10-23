@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -173,6 +173,46 @@ describe('createDomainState', () => {
     await runPass();
     const cleared = state.load();
     expect(cleared.ok && cleared.snapshot.staleCards).toBe(false);
+  });
+
+  it('hashes an oversize card as missing, like the index pass, and warns once across reloads (I2)', async () => {
+    setUp();
+    write('docs/domain/lending/domain.md', `${CARD}\n${'x'.repeat(1_048_577)}\n`);
+    await runPass();
+    const logs: string[] = [];
+    vi.mocked(console.error).mockImplementation((...args: unknown[]) => {
+      logs.push(args.join(' '));
+    });
+    // The real clock: the card was just written, so its stamp is racy and every load reloads.
+    const state = createDomainState(newHost());
+    const first = state.load();
+    const second = state.load();
+    expect(first.ok && first.snapshot.staleCards).toBe(false);
+    expect(second.ok && second.snapshot.staleCards).toBe(false);
+    if (second.ok) expect(second.snapshot.index.rules.has('LEND-03')).toBe(false);
+    const warnings = logs.filter((l) => l.includes('domain file docs/domain/lending/domain.md is not read: larger than 1048576 bytes'));
+    expect(warnings).toHaveLength(1);
+  });
+
+  it('does not read a card symlinked outside the repository (I2)', async () => {
+    setUp();
+    await runPass();
+    const outside = mkdtempSync(join(tmpdir(), 'ctxo-domain-outside-'));
+    try {
+      writeFileSync(join(outside, 'secret.md'), CARD, 'utf-8');
+      const card = join(root, 'docs/domain/lending/domain.md');
+      rmSync(card);
+      try {
+        symlinkSync(join(outside, 'secret.md'), card, 'file');
+      } catch {
+        return; // Windows without developer mode cannot make the symlink.
+      }
+      // Same text as indexed, but read through a link that leaves the repository: it counts as missing, so stale.
+      const result = createDomainState(newHost()).load();
+      expect(result.ok && result.snapshot.staleCards).toBe(true);
+    } finally {
+      rmSync(outside, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
   });
 
   it('reloads only after a file changes', async () => {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createModuleHost, type CoChangeWindowCommits, type CtxoHost, type FileIndex, type IndexPassContext } from '@ctxo/cli/internal';
@@ -453,6 +453,46 @@ contexts:
     expect(graph.decisions).toEqual([]);
     // The rule-free scan still writes the glossary term.
     expect(graph.terms.map((t) => t.id)).toEqual(['term:*/member']);
+  });
+
+  it('does not read a card symlinked outside the repository, and keeps its text out of graph.json (I2)', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'ctxo-domain-outside-'));
+    try {
+      const secret = join(outside, 'credentials.md');
+      writeFileSync(secret, CARD.replace('Free text written by people.', 'TOP-SECRET-TOKEN'), 'utf-8');
+      const card = join(root, 'docs', 'domain', 'lending', 'domain.md');
+      rmSync(card);
+      try {
+        symlinkSync(secret, card, 'file');
+      } catch {
+        return; // Windows without developer mode cannot make the symlink.
+      }
+      await runPass();
+      const text = read('graph.json');
+      expect(text).not.toContain('TOP-SECRET-TOKEN');
+      const graph = JSON.parse(text) as DomainGraph;
+      expect(graph.rules).toEqual([]);
+      expect(graph.contexts.find((c) => c.id === 'context:lending')).toMatchObject({ card: 'docs/domain/lending/domain.md' });
+      expect(logs.some((l) => l.includes('domain file docs/domain/lending/domain.md is not read: outside the repository'))).toBe(true);
+    } finally {
+      rmSync(outside, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
+  it('skips a card over 1 MiB with a warning, as a missing card (I2)', async () => {
+    writeRepo('docs/domain/lending/domain.md', `${CARD}\n${'x'.repeat(1_048_577)}\n`);
+    await runPass();
+    const graph = JSON.parse(read('graph.json')) as DomainGraph;
+    expect(graph.rules).toEqual([]);
+    expect(logs.some((l) => l.includes('domain file docs/domain/lending/domain.md is not read: larger than 1048576 bytes'))).toBe(true);
+  });
+
+  it('skips an oversize glossary with a warning (I2)', async () => {
+    writeRepo('docs/domain/glossary.md', `- **Member**: a registered patron\n${'x'.repeat(1_048_577)}\n`);
+    await runPass();
+    const graph = JSON.parse(read('graph.json')) as DomainGraph;
+    expect(graph.terms.map((t) => t.id)).not.toContain('term:*/member');
+    expect(logs.some((l) => l.includes('domain file docs/domain/glossary.md is not read: larger than 1048576 bytes'))).toBe(true);
   });
 
   it('never fetches external provenance', async () => {

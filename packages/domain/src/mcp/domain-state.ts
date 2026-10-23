@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 import type { CtxoHost } from '@ctxo/cli/internal';
 import { DomainArtifactStore } from '../adapters/artifact-store.js';
 import { readRegistry } from '../adapters/registry-reader.js';
-import { readRepoText } from '../adapters/repo-files.js';
+import { readCardText } from '../adapters/repo-files.js';
 import { resolveDomainConfig, type DomainConfig } from '../core/domain-config.js';
 import { cardsHash } from '../core/domain-graph.js';
 import { indexGraph, type DomainSnapshot } from '../core/domain-graph-query.js';
@@ -79,6 +79,15 @@ export function createDomainState(host: CtxoHost, options: DomainStateOptions = 
   const configPath = join(host.ctxoRoot, 'config.yaml');
   const graphPath = join(host.ctxoRoot, 'index', 'domain', 'graph.json');
   const stampRepo = (path: string): string => `${path}|${stampOf(resolve(host.projectRoot, path))}`;
+  /** A skipped card or glossary is logged once per state, not on every reload. The logger is made on first use (P19). */
+  const warned = new Set<string>();
+  let log: ReturnType<CtxoHost['services']['createLogger']> | undefined;
+  const warnOnce = (message: string): void => {
+    if (warned.has(message)) return;
+    warned.add(message);
+    log ??= host.services.createLogger('ctxo:domain');
+    log.warn(message);
+  };
 
   let configStamp: string | undefined;
   let config: DomainConfig | undefined;
@@ -124,9 +133,10 @@ export function createDomainState(host: CtxoHost, options: DomainStateOptions = 
     if (graph === undefined) return fail('no-graph', NO_GRAPH_HINT, cards);
     if (graph.registryHash !== registryHash(loaded.text)) return fail('stale-registry', STALE_REGISTRY_HINT, cards);
 
+    // The hash sees the same text the index pass parsed: the same checked read, a skip counts as a missing card.
     const current = cardsHash(
       cards.map((path) => {
-        const text = readRepoText(host.projectRoot, path);
+        const text = readCardText(host.projectRoot, path, warnOnce);
         return text === undefined ? { path } : { path, text };
       }),
     );

@@ -1,7 +1,7 @@
 import type { CtxoHost, IndexPassContext } from '@ctxo/cli/internal';
 import { DomainArtifactStore, type BoundariesArtifact, type ContextsArtifact } from '../adapters/artifact-store.js';
 import { readRegistry } from '../adapters/registry-reader.js';
-import { readRepoText, readRepoTexts, repoFileExists, repoIsFile } from '../adapters/repo-files.js';
+import { readCardText, readRepoTexts, repoFileExists, repoIsFile } from '../adapters/repo-files.js';
 import { readTestFiles } from '../adapters/test-file-source.js';
 import { computeBoundaries } from '../core/boundaries.js';
 import { parseCard, parseGlossary, type ParsedCard } from '../core/card-parser.js';
@@ -175,18 +175,21 @@ async function composeGraph(
   const texts = new Map<string, string | undefined>();
   const parsed = new Map<string, ParsedCard | undefined>();
   const cards: CardInput[] = [];
+  // I2: read like provenance files (real path inside the repo, no-follow open, 1 MiB cap); a skip is a missing card.
+  const readText = (path: string): string | undefined => {
+    if (!texts.has(path)) texts.set(path, readCardText(projectRoot, path, input.warn));
+    return texts.get(path);
+  };
   for (const context of registry.contexts) {
     if (context.card === undefined) continue;
-    if (!texts.has(context.card)) {
-      const text = readRepoText(projectRoot, context.card);
-      texts.set(context.card, text);
+    if (!parsed.has(context.card)) {
+      const text = readText(context.card);
       parsed.set(context.card, text === undefined ? undefined : parseCard(text));
     }
     const card = parsed.get(context.card);
     cards.push(card === undefined ? { context, path: context.card } : { context, path: context.card, card });
   }
-  const glossaryText = readRepoText(projectRoot, registry.glossary);
-  if (!texts.has(registry.glossary)) texts.set(registry.glossary, glossaryText);
+  const glossaryText = readText(registry.glossary);
   const glossary = glossaryText === undefined ? undefined : { path: registry.glossary, items: parseGlossary(glossaryText) };
   const hashOfCards = cardsHash([...texts].map(([path, text]) => (text === undefined ? { path } : { path, text })));
 

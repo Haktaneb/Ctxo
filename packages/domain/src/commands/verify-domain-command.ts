@@ -2,7 +2,7 @@ import type { CtxoHost, FileIndex, IGitPort, ModuleCommand, ModuleCommandContext
 import { GitChangeReader } from '../adapters/git-changes.js';
 import { loaderPlatforms, readExistingLoaderRules } from '../adapters/loader-rules-files.js';
 import { readRegistry } from '../adapters/registry-reader.js';
-import { readRepoText, readRepoTexts, repoFileExists, repoIsFile } from '../adapters/repo-files.js';
+import { readCardText, readRepoText, readRepoTexts, repoFileExists, repoIsFile } from '../adapters/repo-files.js';
 import { readTestFiles } from '../adapters/test-file-source.js';
 import { computeBoundaries } from '../core/boundaries.js';
 import { githubSlugs, parseCard, parseMarkdownHeadings, type ParsedCard } from '../core/card-parser.js';
@@ -145,7 +145,8 @@ async function verify(host: CtxoHost, ctx: ModuleCommandContext, options: Option
   const cards = new Map<string, ParsedCard | undefined>();
   for (const context of registry?.contexts ?? []) {
     if (context.card === undefined || cards.has(context.card)) continue;
-    const text = readRepoText(projectRoot, context.card);
+    // Read like the index pass reads cards (I2), so check 7 and graph.json see the same text.
+    const text = readCardText(projectRoot, context.card, (message) => services.createLogger('ctxo:domain').warn(message));
     cards.set(context.card, text === undefined ? undefined : parseCard(text));
   }
 
@@ -251,7 +252,7 @@ async function verify(host: CtxoHost, ctx: ModuleCommandContext, options: Option
     isRepoFile: (path) => repoIsFile(projectRoot, path),
     headingSlugs: (path) => {
       if (!MARKDOWN.test(path)) return undefined;
-      const text = readRepoText(projectRoot, path);
+      const text = readCardText(projectRoot, path);
       return text === undefined ? undefined : githubSlugs(parseMarkdownHeadings(text));
     },
     ruleLinks,

@@ -1,4 +1,4 @@
-import { closeSync, constants as fsConstants, existsSync, fstatSync, openSync, readFileSync, statSync } from 'node:fs';
+import { closeSync, constants as fsConstants, existsSync, fstatSync, openSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 
 /**
@@ -106,6 +106,98 @@ export function readFileText(absolute: string, maxBytes: number, options: ReadFi
       }
     }
   }
+}
+
+/** A repo-relative path resolved to its real path, or why there is none (`skip` undefined: it does not exist). */
+export type LocatedRepoPath = { readonly real: string; readonly root: string } | { readonly skip: string | undefined };
+
+/** The real path of a repo-relative path when it lies inside the real path of the repository. Never throws. */
+export function locateRepoPath(projectRoot: string, repoPath: string): LocatedRepoPath {
+  if (repoPath === '' || isAbsolute(repoPath)) return { skip: 'not a repo-relative path' };
+  try {
+    const root = realpathSync(resolve(projectRoot));
+    const real = realpathSync(resolve(root, repoPath));
+    const rel = relative(root, real);
+    return rel === '' || leavesProject(rel) ? { skip: 'outside the repository' } : { real, root };
+  } catch (err) {
+    const code = errorCode(err);
+    return code === 'ENOENT' || code === 'ENOTDIR' ? { skip: undefined } : { skip: `unreadable (${code})` };
+  }
+}
+
+/**
+ * True when the open descriptor is the file at `real` and `real` still resolves to itself inside the repository: a
+ * symlink or another file swapped in between the check and the open fails this.
+ */
+function sameFile(root: string, real: string, fd: number): boolean {
+  try {
+    const opened = fstatSync(fd);
+    const again = realpathSync(real);
+    if (again !== real) return false;
+    const rel = relative(root, again);
+    if (rel === '' || leavesProject(rel)) return false;
+    const current = statSync(again);
+    return current.dev === opened.dev && current.ino === opened.ino;
+  } catch {
+    return false;
+  }
+}
+
+/** The reason text of a skip; undefined for a missing file. */
+function skipText(skip: TextSkip, maxBytes: number): string | undefined {
+  switch (skip.reason) {
+    case 'missing':
+      return undefined;
+    case 'not-a-file':
+      return 'not a regular file';
+    case 'too-large':
+      return `larger than ${maxBytes} bytes`;
+    case 'binary':
+      return 'binary (a NUL byte in the first 8 KiB)';
+    case 'changed':
+      return 'changed while it was read';
+    case 'unreadable':
+      return `unreadable (${skip.code})`;
+  }
+}
+
+export interface CheckedReadOptions {
+  /** Test seam: runs between the path check and the open, with the real path the check returned. */
+  readonly afterCheck?: (real: string) => void;
+}
+
+/**
+ * One repo-relative file's text, read only when its real path lies inside the repository: the checked real path is
+ * opened without following a symlink (where the OS can refuse one), the open descriptor is checked to be that file,
+ * and the file is skipped when it is over `maxBytes` or binary. `skip` carries the reason, undefined when the file
+ * is simply missing. Never throws.
+ */
+export function readCheckedRepoText(
+  projectRoot: string,
+  repoPath: string,
+  maxBytes: number,
+  options: CheckedReadOptions = {},
+): { readonly text: string } | { readonly skip: string | undefined } {
+  const located = locateRepoPath(projectRoot, repoPath);
+  if (!('real' in located)) return { skip: located.skip };
+  options.afterCheck?.(located.real);
+  const read = readFileText(located.real, maxBytes, { noFollow: true, verify: (fd) => sameFile(located.root, located.real, fd) });
+  return 'text' in read ? { text: read.text } : { skip: skipText(read.skip, maxBytes) };
+}
+
+/** Cards and the glossary above this size are not read (1 MiB). */
+export const CARD_MAX_BYTES = 1_048_576;
+
+/**
+ * The text of a card or of the glossary, read like a provenance file (`readCheckedRepoText`, `CARD_MAX_BYTES`):
+ * undefined when it is missing or skipped, so a skipped file counts as a missing one. A skip that is not simply a
+ * missing file is passed to `warn` with its reason.
+ */
+export function readCardText(projectRoot: string, repoPath: string, warn?: (message: string) => void): string | undefined {
+  const read = readCheckedRepoText(projectRoot, repoPath, CARD_MAX_BYTES);
+  if ('text' in read) return read.text;
+  if (read.skip !== undefined) warn?.(`domain file ${repoPath} is not read: ${read.skip}`);
+  return undefined;
 }
 
 /** One file's text, or undefined when it is not a regular file, too large, binary or unreadable. */
