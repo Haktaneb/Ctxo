@@ -8,6 +8,7 @@ import (
 	"go/token"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
@@ -32,82 +33,115 @@ func Extract(pkg *packages.Package, rootDir string) []FileSymbols {
 	}
 
 	byFile := make(map[string]*FileSymbols)
-	getOrCreate := func(rel string) *FileSymbols {
-		if fs, ok := byFile[rel]; ok {
-			return fs
-		}
-		fs := &FileSymbols{RelPath: rel}
-		byFile[rel] = fs
-		return fs
-	}
-
 	for _, file := range pkg.Syntax {
-		rel := relativeFile(pkg.Fset, file, rootDir)
-		if rel == "" {
+		fs, ok := ExtractFile(pkg, file, rootDir)
+		if !ok {
 			continue
 		}
-		fs := getOrCreate(rel)
-
-		for _, decl := range file.Decls {
-			switch d := decl.(type) {
-			case *ast.FuncDecl:
-				if d.Name == nil || d.Name.Name == "_" {
-					continue
-				}
-				kind := "function"
-				name := d.Name.Name
-				if d.Recv != nil && len(d.Recv.List) > 0 {
-					recv := receiverTypeName(d.Recv.List[0].Type)
-					if recv != "" {
-						name = recv + "." + d.Name.Name
-					}
-					kind = "method"
-				}
-				fs.Symbols = append(fs.Symbols, makeSymbol(pkg.Fset, rel, name, kind, d.Pos(), d.End()))
-
-			case *ast.GenDecl:
-				switch d.Tok {
-				case token.TYPE:
-					for _, spec := range d.Specs {
-						ts, ok := spec.(*ast.TypeSpec)
-						if !ok || ts.Name == nil || ts.Name.Name == "_" {
-							continue
-						}
-						kind := typeSpecKind(ts.Type)
-						fs.Symbols = append(fs.Symbols, makeSymbol(pkg.Fset, rel, ts.Name.Name, kind, ts.Pos(), ts.End()))
-					}
-				case token.VAR, token.CONST:
-					for _, spec := range d.Specs {
-						vs, ok := spec.(*ast.ValueSpec)
-						if !ok {
-							continue
-						}
-						for _, n := range vs.Names {
-							if n.Name == "_" {
-								continue
-							}
-							fs.Symbols = append(fs.Symbols, makeSymbol(pkg.Fset, rel, n.Name, "variable", n.Pos(), n.End()))
-						}
-					}
-				}
-			}
+		if prev, seen := byFile[fs.RelPath]; seen {
+			prev.Symbols = append(prev.Symbols, fs.Symbols...)
+			sortByStartLine(prev.Symbols)
+			continue
 		}
+		byFile[fs.RelPath] = &fs
 	}
 
 	out := make([]FileSymbols, 0, len(byFile))
 	for _, v := range byFile {
-		sort.SliceStable(v.Symbols, func(i, j int) bool {
-			return v.Symbols[i].StartLine < v.Symbols[j].StartLine
-		})
 		out = append(out, *v)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].RelPath < out[j].RelPath })
 	return out
 }
 
+// ExtractFile emits the symbols of one parsed file of pkg, sorted by start
+// line. It returns false when the file lies outside rootDir or pkg has no
+// file set.
+func ExtractFile(pkg *packages.Package, file *ast.File, rootDir string) (FileSymbols, bool) {
+	if pkg == nil || pkg.Fset == nil || file == nil {
+		return FileSymbols{}, false
+	}
+	rel := relativeFile(pkg.Fset, file, rootDir)
+	if rel == "" {
+		return FileSymbols{}, false
+	}
+	fs := FileSymbols{RelPath: rel}
+
+	for _, decl := range file.Decls {
+		switch d := decl.(type) {
+		case *ast.FuncDecl:
+			if d.Name == nil || d.Name.Name == "_" {
+				continue
+			}
+			kind := "function"
+			name := d.Name.Name
+			if d.Recv != nil && len(d.Recv.List) > 0 {
+				recv := receiverTypeName(d.Recv.List[0].Type)
+				if recv != "" {
+					name = recv + "." + d.Name.Name
+				}
+				kind = "method"
+			}
+			fs.Symbols = append(fs.Symbols, makeSymbol(pkg.Fset, rel, name, kind, d.Pos(), d.End()))
+
+		case *ast.GenDecl:
+			switch d.Tok {
+			case token.TYPE:
+				for _, spec := range d.Specs {
+					ts, ok := spec.(*ast.TypeSpec)
+					if !ok || ts.Name == nil || ts.Name.Name == "_" {
+						continue
+					}
+					kind := typeSpecKind(ts.Type)
+					sym := makeSymbol(pkg.Fset, rel, ts.Name.Name, kind, ts.Pos(), ts.End())
+					if st, ok := ts.Type.(*ast.StructType); ok {
+						sym.Tags = structTags(st)
+					}
+					fs.Symbols = append(fs.Symbols, sym)
+				}
+			case token.VAR, token.CONST:
+				for _, spec := range d.Specs {
+					vs, ok := spec.(*ast.ValueSpec)
+					if !ok {
+						continue
+					}
+					for _, n := range vs.Names {
+						if n.Name == "_" {
+							continue
+						}
+						fs.Symbols = append(fs.Symbols, makeSymbol(pkg.Fset, rel, n.Name, "variable", n.Pos(), n.End()))
+					}
+				}
+			}
+		}
+	}
+
+	sortByStartLine(fs.Symbols)
+	return fs, true
+}
+
+func sortByStartLine(syms []emit.Symbol) {
+	sort.SliceStable(syms, func(i, j int) bool {
+		return syms[i].StartLine < syms[j].StartLine
+	})
+}
+
 // SymbolID composes the deterministic Ctxo symbol-id format.
 func SymbolID(relFile, name, kind string) string {
 	return relFile + "::" + name + "::" + kind
+}
+
+// FuncDeclSymbolID names the symbol a function declaration's body belongs
+// to: "Recv.Name" as a method when the receiver reduces to a type name, else
+// the bare name as a function. Edges and SQL call sites use it for their
+// from side.
+func FuncDeclSymbolID(relFile string, fd *ast.FuncDecl) string {
+	if fd.Recv != nil && len(fd.Recv.List) > 0 {
+		if recv := receiverTypeName(fd.Recv.List[0].Type); recv != "" {
+			return SymbolID(relFile, recv+"."+fd.Name.Name, "method")
+		}
+	}
+	return SymbolID(relFile, fd.Name.Name, "function")
 }
 
 // receiverTypeName strips pointer indirection and generic instantiation from
@@ -122,6 +156,56 @@ func receiverTypeName(expr ast.Expr) string {
 			expr = x.X
 		case *ast.IndexListExpr: // generic with multiple type params: Map[K, V]
 			expr = x.X
+		case *ast.Ident:
+			return x.Name
+		default:
+			return ""
+		}
+	}
+}
+
+// structTags returns one entry per field name that carries a tag, in field
+// order. An embedded field is named after its type's last identifier. The
+// literal is decoded with strconv.Unquote; a failed or empty decode is skipped.
+func structTags(st *ast.StructType) []emit.FieldTag {
+	if st.Fields == nil {
+		return nil
+	}
+	var out []emit.FieldTag
+	for _, f := range st.Fields.List {
+		if f.Tag == nil {
+			continue
+		}
+		tag, err := strconv.Unquote(f.Tag.Value)
+		if err != nil || tag == "" {
+			continue
+		}
+		if len(f.Names) == 0 {
+			if name := embeddedFieldName(f.Type); name != "" {
+				out = append(out, emit.FieldTag{Field: name, Tag: tag})
+			}
+			continue
+		}
+		for _, n := range f.Names {
+			out = append(out, emit.FieldTag{Field: n.Name, Tag: tag})
+		}
+	}
+	return out
+}
+
+// embeddedFieldName reduces an embedded field type (T, *T, pkg.T, T[X]) to the
+// last identifier.
+func embeddedFieldName(expr ast.Expr) string {
+	for {
+		switch x := expr.(type) {
+		case *ast.StarExpr:
+			expr = x.X
+		case *ast.IndexExpr:
+			expr = x.X
+		case *ast.IndexListExpr:
+			expr = x.X
+		case *ast.SelectorExpr:
+			return x.Sel.Name
 		case *ast.Ident:
 			return x.Name
 		default:

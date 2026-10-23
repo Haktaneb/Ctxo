@@ -1,0 +1,5 @@
+{
+  "description": "database/sql: DB.Query, DB.QueryRowContext, Tx.ExecContext (an UPDATE reads and writes dbo.loans), Conn.QueryContext with an EXEC and DB.Prepare; Stmt.Exec has no SQL text and gives nothing.",
+  "mode": "go",
+  "accesses": { "reads": ["dbo.holds", "dbo.loans"], "writes": ["dbo.loans"], "executes": ["dbo.usp_closeloan"] }
+}

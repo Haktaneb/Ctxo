@@ -1,0 +1,5 @@
+{
+  "description": "sqlx Select, Get, Queryx, NamedExec, MustExec and sqlx.Get; pgx Conn.Query, pgxpool.Pool.Exec and Tx.QueryRow; gorm Raw and Exec; a gorm model chain gives nothing.",
+  "mode": "go",
+  "accesses": { "reads": ["dbo.holds", "dbo.loans", "dbo.members"], "writes": ["dbo.holds", "dbo.loanarchive"], "executes": [] }
+}

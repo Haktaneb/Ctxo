@@ -43,7 +43,10 @@ export type SymbolId = string;
  * A host-language attribute or decorator attached to a symbol (protocol v2).
  * `name` is the attribute name as written, without namespace and without an
  * `Attribute` suffix. `named.type` is reserved: it carries the fully qualified
- * type name when known, and a source argument named `type` is dropped. Plugins
+ * type name when known, and a source argument named `type` is dropped.
+ * `named.member` is reserved too: it names the class property or struct field a
+ * decorator or tag sits on (TypeScript, Go), wins over a source key named
+ * `member` and does not count toward the 10 named entries. Plugins
  * cap host-language attributes at 20 per symbol, 10 positional entries and at
  * most 10 named entries plus the reserved `type` per annotation, and 200
  * characters per value; longer values are truncated. `args` and `named` are

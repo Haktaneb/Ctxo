@@ -44,7 +44,7 @@ type LoudGreeter interface {
 		t.Fatal(res.FatalError)
 	}
 
-	out := Extract(dir, res.Packages)
+	out := Extract(dir, res.Packages, nil)
 
 	edges := map[string]bool{}
 	for _, list := range out {
@@ -97,7 +97,7 @@ func (i ID) String() string { return string(i) }
 	if res.FatalError != nil {
 		t.Fatal(res.FatalError)
 	}
-	out := Extract(dir, res.Packages)
+	out := Extract(dir, res.Packages, nil)
 
 	got := false
 	for _, list := range out {
@@ -109,6 +109,28 @@ func (i ID) String() string { return string(i) }
 	}
 	if !got {
 		t.Errorf("expected non-struct type ID to implement Stringer; got %v", out)
+	}
+}
+
+func TestIncludeFiltersConcreteTypeFiles(t *testing.T) {
+	dir := writeFixture(t, map[string]string{
+		"go.mod": "module fixture\n\ngo 1.22\n",
+		"a.go":   "package fixture\n\ntype Greeter interface{ Greet() string }\n\ntype Hello struct{}\n\nfunc (Hello) Greet() string { return \"hi\" }\n",
+		"b.go":   "package fixture\n\ntype Ciao struct{}\n\nfunc (Ciao) Greet() string { return \"ciao\" }\n",
+	})
+	res := load.Packages(dir)
+	if res.FatalError != nil {
+		t.Fatal(res.FatalError)
+	}
+	out := Extract(dir, res.Packages, func(rel string) bool { return rel == "b.go" })
+	if len(out["a.go"]) != 0 {
+		t.Errorf("a.go is filtered out but has edges: %v", out["a.go"])
+	}
+	if len(out["b.go"]) != 1 || out["b.go"][0].To != "a.go::Greeter::interface" {
+		t.Errorf("b.go must keep Ciao -> Greeter (the interface file is not filtered): %v", out["b.go"])
+	}
+	if all := Extract(dir, res.Packages, nil); len(all["a.go"]) != 1 || len(all["b.go"]) != 1 {
+		t.Errorf("nil include must keep every edge: %v", all)
 	}
 }
 

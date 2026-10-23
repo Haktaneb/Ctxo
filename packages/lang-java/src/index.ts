@@ -14,8 +14,8 @@ export const plugin: CtxoLanguagePlugin = {
   version: VERSION,
   extensions: ['.java'],
   tier: 'full',
-  createAdapter(_ctx: PluginContext): ILanguageAdapter {
-    return new JavaCompositeAdapter();
+  createAdapter(ctx: PluginContext): ILanguageAdapter {
+    return new JavaCompositeAdapter({ sqlCallSites: ctx.capabilities?.sqlCallSites === true });
   },
 };
 

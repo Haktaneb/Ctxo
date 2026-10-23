@@ -187,6 +187,65 @@ jobs:
           CTXO_REQUIRE_DOTNET: '1'
         run: pnpm --filter @ctxo/domain test:e2e
 
+  # The TypeScript, Java and Go plugins with their toolchains: the plugin suites on the
+  # JDT and Go analyzer tiers, the analyzer's JUnit tests on both JDT profiles, the Go
+  # analyzer's own tests, and the CLI's end-to-end language parity test.
+  plugin-tests:
+    name: Plugin Tests (TypeScript, Java, Go)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # A Java test reads a non-ASCII file name (Üye.java); the JVM needs a UTF-8 locale for it.
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 10.9.0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: packages/lang-go/tools/ctxo-go-analyzer/go.mod
+          cache-dependency-path: packages/lang-go/tools/ctxo-go-analyzer/go.sum
+
+      - run: pnpm install --frozen-lockfile
+
+      # Also builds the JDT analyzer JARs (Maven) that the Java full tier runs.
+      - name: Build workspace packages
+        run: pnpm -r build
+
+      - name: Run the lang-typescript, lang-java and lang-go tests
+        env:
+          CTXO_JDT_ANALYZER_JAR: ${{ github.workspace }}/packages/lang-java-analyzer/jar/ctxo-jdt-analyzer-17.jar
+        run: pnpm --filter @ctxo/lang-typescript --filter @ctxo/lang-java --filter @ctxo/lang-go test
+
+      - name: Run the JDT analyzer JUnit tests (Java 11 and Java 17 profiles)
+        run: pnpm --filter @ctxo/lang-java-analyzer test && mvn -q -f packages/lang-java-analyzer/java/pom.xml -Pjava17 test
+
+      - name: Run the Go analyzer tests
+        working-directory: packages/lang-go/tools/ctxo-go-analyzer
+        run: go test ./...
+
+      # SQL call sites in TypeScript, Java and Go reach the lang-sql table. It is opt-in
+      # (CTXO_PARITY_E2E=1), so the e2e-tests job skips it.
+      - name: Run the end-to-end language parity test
+        env:
+          CTXO_PARITY_E2E: '1'
+        run: pnpm --filter @ctxo/cli test:e2e tests/e2e/language-parity-sql.test.ts
+
   build:
     name: Build
     runs-on: ubuntu-latest

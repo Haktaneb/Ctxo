@@ -170,6 +170,9 @@ importers:
 
   packages/lang-go:
     dependencies:
+      '@ctxo/sql-extract':
+        specifier: workspace:^
+        version: link:../sql-extract
       tree-sitter:
         specifier: ^0.22.4
         version: 0.22.4
@@ -195,6 +198,9 @@ importers:
 
   packages/lang-java:
     dependencies:
+      '@ctxo/sql-extract':
+        specifier: workspace:^
+        version: link:../sql-extract
       tree-sitter:
         specifier: ^0.22.4
         version: 0.22.4
@@ -247,6 +253,9 @@ importers:
 
   packages/lang-typescript:
     dependencies:
+      '@ctxo/sql-extract':
+        specifier: workspace:^
+        version: link:../sql-extract
       ts-morph:
         specifier: ^28.0.0
         version: 28.0.0

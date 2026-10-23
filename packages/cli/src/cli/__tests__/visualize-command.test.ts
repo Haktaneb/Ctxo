@@ -58,6 +58,42 @@ describe('VisualizeCommand', () => {
     expect(html).toContain('"shownSymbols":4');
   });
 
+  it('embeds a symbol name containing </script>, $& and $\' without breaking the page', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'ctxo-vis-esc-'));
+    tempDirs.push(tempDir);
+
+    const nasty = "a </script><img src=x onerror=alert(1)> $' $&";
+    const ctxoRoot = join(tempDir, '.ctxo');
+    const writer = new JsonIndexWriter(ctxoRoot);
+    const index = buildIndex('src/core/a.ts');
+    writer.write({
+      ...index,
+      symbols: [
+        ...index.symbols,
+        { symbolId: 'src/core/a.test.ts::title::function', name: nasty, kind: 'function', startLine: 1, endLine: 2 },
+      ],
+    });
+
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await new VisualizeCommand(tempDir).run({ noBrowser: true });
+    spy.mockRestore();
+
+    const html = readFileSync(join(ctxoRoot, 'visualize.html'), 'utf-8');
+    const start = html.indexOf('var CTXO_DATA = ');
+    expect(start).toBeGreaterThan(-1);
+    const lineEnd = html.indexOf('\n', start);
+    const json = html.slice(start + 'var CTXO_DATA = '.length, lineEnd).replace(/;\s*$/, '');
+
+    // The data never holds a raw "<", so no title can close the script element.
+    expect(json).not.toContain('<');
+    expect(json).toContain('\\u003c/script>');
+    const payload = JSON.parse(json);
+    expect(payload.nodes.map((n: { name: string }) => n.name)).toContain(nasty);
+    // The template after the marker is intact (nothing was spliced into the JSON).
+    expect(html).toContain('Ctxo Dependency Graph');
+    expect(html.match(/<\/script>/g)!.length).toBe(html.match(/<script/g)!.length);
+  });
+
   it('includes all scoring dimensions in payload', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'ctxo-vis2-'));
     tempDirs.push(tempDir);

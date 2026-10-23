@@ -2,6 +2,7 @@ import GoLanguage from 'tree-sitter-go';
 import type { SyntaxNode } from 'tree-sitter';
 import { TreeSitterAdapter } from './tree-sitter-adapter.js';
 import { createLogger } from './logger.js';
+import { structTagAnnotations, type FieldTag } from './struct-tags.js';
 import type { SymbolNode, GraphEdge, ComplexityMetrics } from '@ctxo/plugin-api';
 
 const log = createLogger('ctxo:lang-go');
@@ -164,12 +165,66 @@ export class GoAdapter extends TreeSitterAdapter {
       else if (typeBody?.type === 'interface_type') kind = 'interface';
 
       const range = this.nodeToLineRange(spec);
+      const annotations = kind === 'class' && typeBody ? structTagAnnotations(this.extractFieldTags(typeBody)) : undefined;
       symbols.push({
         symbolId: this.buildSymbolId(filePath, name, kind),
         name,
         kind,
         ...range,
+        ...(annotations ? { annotations } : {}),
       });
+    }
+  }
+
+  /** (field, raw tag) pairs of a struct_type, in field order; embedded fields use their type's last identifier. */
+  private extractFieldTags(structType: SyntaxNode): FieldTag[] {
+    const tags: FieldTag[] = [];
+    const list = structType.namedChildren.find((c) => c.type === 'field_declaration_list');
+    if (!list) return tags;
+
+    for (const decl of list.namedChildren) {
+      if (decl.type !== 'field_declaration') continue;
+      const tagNode = decl.childForFieldName('tag');
+      if (!tagNode) continue;
+      const tag = this.decodeTagLiteral(tagNode);
+      if (!tag) continue;
+
+      const names = decl.namedChildren.filter((c) => c.type === 'field_identifier').map((c) => c.text);
+      if (names.length === 0) {
+        const embedded = this.embeddedTypeName(decl.childForFieldName('type'));
+        if (embedded) names.push(embedded);
+      }
+      for (const field of names) tags.push({ field, tag });
+    }
+    return tags;
+  }
+
+  private decodeTagLiteral(node: SyntaxNode): string | undefined {
+    const text = node.text;
+    if (node.type === 'raw_string_literal') return text.slice(1, -1) || undefined;
+    if (node.type !== 'interpreted_string_literal') return undefined;
+    try {
+      return (JSON.parse(text) as string) || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private embeddedTypeName(typeNode: SyntaxNode | null): string | undefined {
+    if (!typeNode) return undefined;
+    switch (typeNode.type) {
+      case 'type_identifier':
+        return typeNode.text;
+      case 'qualified_type':
+        return typeNode.childForFieldName('name')?.text;
+      case 'generic_type':
+        return this.embeddedTypeName(typeNode.childForFieldName('type'));
+      case 'pointer_type': {
+        const inner = typeNode.namedChildren[0];
+        return inner ? this.embeddedTypeName(inner) : undefined;
+      }
+      default:
+        return undefined;
     }
   }
 

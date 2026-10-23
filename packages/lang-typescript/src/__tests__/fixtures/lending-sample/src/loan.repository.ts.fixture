@@ -1,0 +1,23 @@
+import sql from 'mssql';
+import { pool } from './db';
+import { ACTIVE_LOANS_SQL } from './queries';
+
+export class LoanRepository {
+  async active() {
+    return pool.query(ACTIVE_LOANS_SQL);
+  }
+
+  async archive() {
+    return pool.query(`INSERT INTO dbo.LoanArchive (Id) SELECT Id FROM dbo.Loans WHERE ClosedAt IS NOT NULL`);
+  }
+
+  async close(id: number) {
+    const request = new sql.Request();
+    request.input('id', id);
+    return request.execute('usp_CloseLoan');
+  }
+
+  async byMember(memberId: number) {
+    return pool.query(`SELECT * FROM dbo.Loans WHERE MemberId = ${memberId}`);
+  }
+}

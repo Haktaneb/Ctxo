@@ -1,0 +1,6 @@
+{
+  "description": "The host languages' parameter placeholders (JDBC ?, pg $1, :name, MyBatis #{x}, @p0 and EF {0}) are skipped, so every statement keeps its table access; sql-extract only, because ScriptDom does not parse the placeholders that are not T-SQL.",
+  "mode": "statement",
+  "sides": ["sql-extract"],
+  "accesses": { "reads": ["dbo.loans", "dbo.members"], "writes": ["dbo.holds", "dbo.loanarchive", "dbo.loanstaging"], "executes": [] }
+}

@@ -57,8 +57,15 @@ These nine kinds are the full enum (`SYMBOL_KINDS` in `@ctxo/plugin-api`). Langu
 "packages/cli/src/adapters/storage/sqlite-storage-adapter.ts::SqliteStorageAdapter::class"
 "packages/cli/src/adapters/storage/sqlite-storage-adapter.ts::upsertSymbol::method"
 
+// TypeScript test block (title path joined with " > "; a repeated path gets " #2")
+"src/loans/loan-policy.test.ts::LoanPolicy > renewal > extends by seven days::function"
+"src/loans/loan-policy.test.ts::LoanPolicy > renewal > extends by seven days #2::function"
+
 // Go package-level function
 "internal/server/server.go::NewServer::function"
+
+// Go test function (full tier)
+"internal/loans/repo_test.go::TestActiveLoans::function"
 
 // C# class
 "src/Ctxo.Roslyn/Analyzer.cs::Analyzer::class"
@@ -74,11 +81,16 @@ These nine kinds are the full enum (`SYMBOL_KINDS` in `@ctxo/plugin-api`). Langu
 "db/lending.sql::dbo.usp_closeloan::procedure"
 ```
 
+Test-block names are normalised so the ID always splits into exactly three
+parts: whitespace runs become one space, runs of `:` become one `:` and a
+trailing `:` is dropped, an empty title becomes `(untitled)`, and a title is cut
+at 200 characters. See [TypeScript test symbols](/languages/typescript#test-symbols).
+
 ## SQL names and 2-part data references
 
 For SQL objects the `name` segment is the canonical two-part name: lowercase (ASCII `A` to `Z` only), `[...]` and `"..."` delimiters removed, default schema `dbo`. `[dbo].[Loans]`, `dbo.Loans` and `Loans` all give `dbo.loans`. The symbol's `name` field keeps the declared spelling.
 
-Edge targets may be a 2-part **name reference**, `<name>::<kind>`, when the emitting plugin does not know the defining file. Data edges always use one: `dbo.loans::table` for `reads` and `writes`, `dbo.usp_closeloan::procedure` for `executes`. The graph resolves a table reference to any `table` or `view` with that name (a C# call site cannot know which one it is) and a procedure reference to a `procedure`. A symbol's own ID always has three parts.
+Edge targets may be a 2-part **name reference**, `<name>::<kind>`, when the emitting plugin does not know the defining file. Data edges always use one: `dbo.loans::table` for `reads` and `writes`, `dbo.usp_closeloan::procedure` for `executes`. The graph resolves a table reference to any `table` or `view` with that name (a host-language call site cannot know which one it is) and a procedure reference to a `procedure`. A symbol's own ID always has three parts.
 
 ### Several definitions of one object
 

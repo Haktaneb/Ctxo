@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alperhankendi/ctxo/tools/ctxo-go-analyzer/internal/emit"
 	"github.com/alperhankendi/ctxo/tools/ctxo-go-analyzer/internal/load"
 )
 
@@ -140,6 +141,58 @@ func (b *Box[T]) Get() T { return b.v }
 	}
 	if !found {
 		t.Error("expected method Box.Get with generic receiver")
+	}
+}
+
+func TestStructTagsAreEmittedRaw(t *testing.T) {
+	dir := writeFixture(t, map[string]string{
+		"go.mod": "module fixture\n\ngo 1.22\n",
+		"a.go": "package fixture\n\n" +
+			"type Base struct{ CreatedAt int64 }\n\n" +
+			"type Loan struct {\n" +
+			"\tLoanID           int    `json:\"loan_id\" gorm:\"column:loan_id;primaryKey\"`\n" +
+			"\tMemberID, CopyID int    `json:\"member_id\"`\n" +
+			"\tBase\n" +
+			"\t*Embedded `json:\"emb\"`\n" +
+			"\tNote             string\n" +
+			"\tDue              string \"json:\\\"due_at\\\"\"\n" +
+			"\tEmpty            string \"\"\n" +
+			"}\n\n" +
+			"type Embedded struct{}\n" +
+			"type Alias string\n" +
+			"type Greeter interface{ Greet() }\n",
+	})
+	res := load.Packages(dir)
+	if res.FatalError != nil {
+		t.Fatalf("Packages: %v", res.FatalError)
+	}
+	got := map[string][]emit.FieldTag{}
+	for _, pkg := range res.Packages {
+		for _, fs := range Extract(pkg, dir) {
+			for _, s := range fs.Symbols {
+				got[s.Name] = s.Tags
+			}
+		}
+	}
+	want := []emit.FieldTag{
+		{Field: "LoanID", Tag: `json:"loan_id" gorm:"column:loan_id;primaryKey"`},
+		{Field: "MemberID", Tag: `json:"member_id"`},
+		{Field: "CopyID", Tag: `json:"member_id"`},
+		{Field: "Embedded", Tag: `json:"emb"`},
+		{Field: "Due", Tag: `json:"due_at"`},
+	}
+	if len(got["Loan"]) != len(want) {
+		t.Fatalf("Loan tags = %#v, want %#v", got["Loan"], want)
+	}
+	for i := range want {
+		if got["Loan"][i] != want[i] {
+			t.Errorf("tag %d = %#v, want %#v", i, got["Loan"][i], want[i])
+		}
+	}
+	for _, name := range []string{"Base", "Embedded", "Alias", "Greeter"} {
+		if len(got[name]) != 0 {
+			t.Errorf("%s should have no tags, got %#v", name, got[name])
+		}
 	}
 }
 

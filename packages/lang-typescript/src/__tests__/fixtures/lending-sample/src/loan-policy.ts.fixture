@@ -1,0 +1,12 @@
+export const MAX_LOANS = 5;
+export const RENEWAL_DAYS = 7;
+
+export function canBorrow(activeLoans: number): boolean {
+  return activeLoans < MAX_LOANS;
+}
+
+export function renewalDue(borrowedOn: Date): Date {
+  const due = new Date(borrowedOn.getTime());
+  due.setUTCDate(due.getUTCDate() + RENEWAL_DAYS);
+  return due;
+}

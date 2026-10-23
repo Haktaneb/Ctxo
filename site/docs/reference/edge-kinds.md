@@ -16,9 +16,9 @@ Edges in the Ctxo dependency graph carry one of eight kinds: five code kinds and
 | `extends` | subclass → base | `class A extends B` | TypeScript, C#, Go (struct embedding), Java |
 | `implements` | class → interface | `class A implements I` | TypeScript, C#, Java |
 | `uses` | reference → target | type annotation, generic parameter, identifier reference | All parsers |
-| `reads` | code → table or view | `SELECT ... FROM dbo.Loans` | SQL (view, procedure and function bodies), C# (constant SQL at known call sites) |
-| `writes` | code → table or view | `UPDATE dbo.Loans ...`, `SqlBulkCopy.DestinationTableName` | SQL, C# |
-| `executes` | code → stored procedure | `EXEC dbo.usp_CloseLoan` | SQL, C# |
+| `reads` | code → table or view | `SELECT ... FROM dbo.Loans` | SQL (view, procedure and function bodies); C#, TypeScript, Java and Go (constant SQL at known call sites) |
+| `writes` | code → table or view | `UPDATE dbo.Loans ...`, `SqlBulkCopy.DestinationTableName` | SQL, C#, TypeScript, Java, Go |
+| `executes` | code → stored procedure | `EXEC dbo.usp_CloseLoan`, mssql `request.execute('usp_CloseLoan')`, JDBC `{call usp_CloseLoan(?)}` | SQL, C#, TypeScript, Java, Go |
 
 All edges are directed. The index stores each edge as `{ from, to, kind, typeOnly? }` where `from` is a [symbol ID](/reference/symbol-ids) and `to` is a symbol ID or a 2-part name reference.
 
@@ -42,16 +42,17 @@ Emitted when a class declares conformance to an interface. In Go, implicit inter
 
 ### uses
 
-The catch-all for non-call references: type positions, generic arguments, identifier reads, and decorator targets. Use this edge when you need every mention of a symbol, not just its invocations.
+The catch-all for non-call references: type positions, generic arguments, identifier reads, and imported decorator names (the decorators themselves are [annotations](/languages/typescript#annotations), not edges). Use this edge when you need every mention of a symbol, not just its invocations.
 
 ### reads, writes, executes (data edges)
 
-Emitted by [`@ctxo/lang-sql`](/languages/sql) from view, procedure and function bodies, and by the [C# plugin](/languages/csharp#sql-at-call-sites) for constant SQL at known data-access call sites (only when a SQL plugin is installed). `reads` comes from `FROM`, `JOIN`, `APPLY` and `MERGE ... USING`; `writes` from `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `TRUNCATE TABLE`, `SELECT ... INTO` and `OUTPUT ... INTO` targets; `executes` from `EXEC` of a procedure.
+Emitted by [`@ctxo/lang-sql`](/languages/sql) from view, procedure and function bodies, and by the host-language plugins for constant SQL at known data-access call sites, only when a SQL plugin is installed: [C#](/languages/csharp#sql-at-call-sites) (Roslyn tier), [TypeScript](/languages/typescript#sql-at-call-sites), [Java](/languages/java#sql-at-call-sites) (JDT full tier) and [Go](/languages/go#sql-at-call-sites) (analyzer full tier). A host-language edge starts at the calling method, function or test block. `reads` comes from `FROM`, `JOIN`, `APPLY` and `MERGE ... USING`; `writes` from `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `TRUNCATE TABLE`, `SELECT ... INTO` and `OUTPUT ... INTO` targets; `executes` from `EXEC` of a procedure.
 
 The target is a canonical 2-part name reference: `dbo.loans::table` for `reads` and `writes`, `dbo.usp_closeloan::procedure` for `executes` (lowercase ASCII, delimiters stripped, default schema `dbo`). The graph resolves a table reference to any `table` or `view` with that name, and a procedure reference to a `procedure`. When several files define the object, a copy outside test files and docs folders wins, then the first file in sorted path order; see [several definitions](/reference/symbol-ids#several-definitions-of-one-object). A reference that no indexed file defines stays unresolved.
 
 ```json
 { "from": "db/lending.sql::dbo.usp_closeloan::procedure", "to": "dbo.loans::table", "kind": "writes" }
+{ "from": "src/loans/loan-repository.ts::closeLoan::function", "to": "dbo.loans::table", "kind": "writes" }
 ```
 
 Data edges are `confirmed` in blast radius. They stay out of symbol-level communities and boundary violations; the [contexts view](/cli/contexts) reports data coupling instead.

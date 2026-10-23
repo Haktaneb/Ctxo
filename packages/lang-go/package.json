@@ -1,6 +1,6 @@
 {
   "name": "@ctxo/lang-go",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "description": "Ctxo Go language plugin (ctxo-go-analyzer + tree-sitter, full tier)",
   "type": "module",
   "engines": {
@@ -39,6 +39,7 @@
   "author": "Alper Hankendi",
   "license": "MIT",
   "dependencies": {
+    "@ctxo/sql-extract": "workspace:^",
     "tree-sitter": "^0.22.4",
     "tree-sitter-go": "0.23.4"
   },

@@ -1,0 +1,5 @@
+{
+  "description": "Raw SQL through ORMs and query builders: knex.raw, Prisma $queryRaw (tagged and with a tagged argument), $executeRaw, $queryRawUnsafe and $executeRawUnsafe, TypeORM query and Sequelize query; a knex chain, a Prisma model call, a TypeORM repository find and a Sequelize model findAll give nothing.",
+  "mode": "typescript",
+  "accesses": { "reads": ["dbo.holds", "dbo.loans", "dbo.members"], "writes": ["dbo.holds", "dbo.loanstaging"], "executes": [] }
+}

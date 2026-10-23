@@ -300,3 +300,38 @@ describe('GoAdapter — isSupported', () => {
     expect(adapter.tier).toBe('syntax');
   });
 });
+
+describe('GoAdapter - struct tag annotations', () => {
+  const adapter = new GoAdapter();
+  const loanSource = readFileSync(
+    join(import.meta.dirname, '..', '..', 'test-fixtures', 'lending-module', 'loans', 'loan.go'),
+    'utf-8',
+  );
+
+  it('exported structs carry their field tags as annotations', async () => {
+    const symbols = await adapter.extractSymbols('loans/loan.go', loanSource);
+    const loan = symbols.find((s) => s.symbolId === 'loans/loan.go::Loan::class');
+    expect(loan?.annotations).toEqual([
+      { name: 'tag', named: { member: 'LoanID', json: 'loan_id', gorm: 'column:loan_id;primaryKey' } },
+      { name: 'tag', named: { member: 'MemberID', json: 'member_id' } },
+      { name: 'tag', named: { member: 'CopyID', json: 'member_id' } },
+      { name: 'tag', named: { member: 'Due', json: 'due_at' } },
+    ]);
+  });
+
+  it('structs without tags carry no annotations key', async () => {
+    const symbols = await adapter.extractSymbols('loans/loan.go', loanSource);
+    const base = symbols.find((s) => s.symbolId === 'loans/loan.go::Base::class');
+    expect(base).toBeDefined();
+    expect(base).not.toHaveProperty('annotations');
+  });
+
+  it('an embedded field uses its type name, including pointers and packages', async () => {
+    const src = 'package p\n\ntype T struct {\n\t*Embedded `json:"e"`\n\tpkg.Other `db:"o"`\n}\n';
+    const symbols = await adapter.extractSymbols('p/t.go', src);
+    expect(symbols[0]?.annotations).toEqual([
+      { name: 'tag', named: { member: 'Embedded', json: 'e' } },
+      { name: 'tag', named: { member: 'Other', db: 'o' } },
+    ]);
+  });
+});

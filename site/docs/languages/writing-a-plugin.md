@@ -116,6 +116,19 @@ the fully qualified type name when you know it: never copy a source argument
 that is itself named `type` into `named`. The CLI checks shape only, and keeps
 a symbol whose annotations are malformed by dropping them.
 
+Two `named` keys are reserved:
+
+- `type`: the annotation type's fully qualified name, set only by an extractor
+  that knows it (the C# Roslyn tier). Every official plugin drops a source key
+  named `type`, and the TypeScript, Java and Go plugins never set it.
+- `member`: the member a piece of metadata belongs to, when that member is not
+  a symbol of its own. The TypeScript plugin puts property decorators on the
+  class with `named.member` set to the property name, and the Go plugin does
+  the same for struct field tags. It wins over a source key of the same name
+  and does not count toward the 10 named entries. Set it only where you emit it
+  this way; a language whose fields are symbols (Java, C#) keeps a source key
+  named `member`.
+
 **Facts.** Implement `extractFacts` only if you can report `CodeFact`s
 (`FACT_KINDS`: `literal-comparison`, `normalization`, `retry-timeout`,
 `endpoint`; `line` is 0-based; `text` is one trimmed line of at most 200
@@ -134,7 +147,27 @@ They are computed before any `createAdapter` call and offered to every plugin;
 ignore the ones you do not use. Absent fields mean `false`, and on a v1 core
 `capabilities` is absent. Emit SQL call-site edges only when `sqlCallSites` is
 set, so a repository without a SQL plugin gets no edges to resources that
-cannot exist.
+cannot exist. Read them once in `createAdapter` and pass plain booleans to
+your adapter, as the official plugins do:
+
+```ts
+createAdapter(ctx: PluginContext): ILanguageAdapter {
+  return new LoanLangAdapter({ sqlCallSites: ctx.capabilities?.sqlCallSites === true });
+}
+```
+
+A SQL call-site edge points at the canonical 2-part target (`dbo.loans::table`
+for `reads` and `writes`, `dbo.usp_closeloan::procedure` for `executes`).
+Produce the names with `extractSqlAccesses` from `@ctxo/sql-extract` rather
+than your own parser, so your edges meet those of the SQL, C#, TypeScript,
+Java and Go plugins at the same node.
+
+**External analyzers.** A plugin that runs a helper process (the Roslyn
+helper, the JDT analyzer JAR, ctxo-go-analyzer) owns the protocol between the
+two. Its JSON lines (symbols, edges, call-site records, summary counts) are an
+internal protocol of that plugin, not part of the plugin API: the CLI sees only
+what `ILanguageAdapter` returns, so you can change the helper's format in any
+release as long as plugin and helper ship together.
 
 **Dependencies.** Import only from `@ctxo/plugin-api`. The one exception is a
 Ctxo-owned utility package with zero runtime dependencies, today only

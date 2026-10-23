@@ -1,0 +1,9 @@
+{
+  "description": "JDBC prepareStatement, prepareCall with {call ...} and {? = call ...}, and Statement.executeQuery/execute/executeUpdate give reads, writes and executes; PreparedStatement.executeQuery() has no text and gives nothing.",
+  "mode": "java",
+  "accesses": {
+    "reads": ["dbo.loans", "dbo.members"],
+    "writes": ["dbo.loanarchive"],
+    "executes": ["dbo.usp_closeloan", "dbo.usp_notifymember"]
+  }
+}

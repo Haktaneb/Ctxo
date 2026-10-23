@@ -44,8 +44,11 @@ Common aliases are accepted and normalized: `ts`, `js`, `py`, `c#`, `cs`,
 `net`, `golang`, `kt`, `rb`, `rs`, `tsql` (for `sql`).
 
 `sql` installs [`@ctxo/lang-sql`](/languages/sql), the T-SQL plugin for `.sql`
-files. With it installed, the C# plugin also adds SQL edges at known call
-sites.
+files. With it installed, the host-language plugins also add `reads`, `writes`
+and `executes` edges for constant SQL at known call sites: C# (Roslyn tier),
+TypeScript and JavaScript, Java (JDT full tier) and Go (analyzer full tier).
+Without it, no language emits SQL edges. Annotations and test symbols do not
+depend on it.
 
 ## Package manager detection
 
@@ -73,6 +76,8 @@ ctxo install typescript go --yes
 ```shell [sql]
 # Install the T-SQL plugin next to the C# plugin.
 ctxo install csharp sql --yes
+# Or next to TypeScript, Java and Go.
+ctxo install typescript java go sql --yes
 ```
 
 ```shell [dry run]

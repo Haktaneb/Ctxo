@@ -6,11 +6,11 @@ Maintained by the Ctxo core team. Guaranteed to track `@ctxo/plugin-api` ≥ 12 
 
 | Plugin | npm | Tier | Extensions | Notes |
 |---|---|---|---|---|
-| `@ctxo/lang-typescript` | [![npm](https://img.shields.io/npm/v/@ctxo/lang-typescript)](https://www.npmjs.com/package/@ctxo/lang-typescript) | full | `.ts .tsx .js .jsx` | ts-morph; type-aware cross-file resolution |
-| `@ctxo/lang-go` | [![npm](https://img.shields.io/npm/v/@ctxo/lang-go)](https://www.npmjs.com/package/@ctxo/lang-go) | syntax | `.go` | tree-sitter; exported-symbol analysis |
+| `@ctxo/lang-typescript` | [![npm](https://img.shields.io/npm/v/@ctxo/lang-typescript)](https://www.npmjs.com/package/@ctxo/lang-typescript) | full | `.ts .tsx .js .jsx` | ts-morph; type-aware cross-file resolution; decorators as annotations, test blocks as symbols, SQL at known call sites with `@ctxo/lang-sql` |
+| `@ctxo/lang-go` | [![npm](https://img.shields.io/npm/v/@ctxo/lang-go)](https://www.npmjs.com/package/@ctxo/lang-go) | syntax / full | `.go` | full tier via the bundled `ctxo-go-analyzer` (Go 1.22+), tree-sitter fallback; struct tags as annotations, `_test.go` files in the full tier, SQL at known call sites with `@ctxo/lang-sql` (full tier) |
 | `@ctxo/lang-csharp` | [![npm](https://img.shields.io/npm/v/@ctxo/lang-csharp)](https://www.npmjs.com/package/@ctxo/lang-csharp) | full | `.cs` | Roslyn full-tier; tree-sitter syntax fallback |
-| `@ctxo/lang-java` | [![npm](https://img.shields.io/npm/v/@ctxo/lang-java)](https://www.npmjs.com/package/@ctxo/lang-java) | syntax / full | `.java` | tree-sitter syntax tier built-in; full tier via `@ctxo/lang-java-analyzer` companion (JRE 11+ required, covers Java 8-21); detected by `pom.xml` / `build.gradle` / `build.gradle.kts` |
-| `@ctxo/lang-sql` | [![npm](https://img.shields.io/npm/v/@ctxo/lang-sql)](https://www.npmjs.com/package/@ctxo/lang-sql) | syntax | `.sql` | T-SQL definitions (`table`, `view`, `procedure`, `function`) with `reads` / `writes` / `executes` edges from their bodies; built on the zero-dependency `@ctxo/sql-extract` library; protocol v2 (`apiVersion: '2'`), so it needs a CLI that accepts v2. Installing it also turns on SQL edges at known C# call sites. See [domain knowledge](features/domain-knowledge.md) |
+| `@ctxo/lang-java` | [![npm](https://img.shields.io/npm/v/@ctxo/lang-java)](https://www.npmjs.com/package/@ctxo/lang-java) | syntax / full | `.java` | tree-sitter syntax tier built-in; full tier via `@ctxo/lang-java-analyzer` companion (JRE 11+ required, covers Java 8-21); detected by `pom.xml` / `build.gradle` / `build.gradle.kts`; annotations in both tiers, SQL at known call sites with `@ctxo/lang-sql` (full tier) |
+| `@ctxo/lang-sql` | [![npm](https://img.shields.io/npm/v/@ctxo/lang-sql)](https://www.npmjs.com/package/@ctxo/lang-sql) | syntax | `.sql` | T-SQL definitions (`table`, `view`, `procedure`, `function`) with `reads` / `writes` / `executes` edges from their bodies; built on the zero-dependency `@ctxo/sql-extract` library; protocol v2 (`apiVersion: '2'`), so it needs a CLI that accepts v2. Installing it also turns on SQL edges at known C#, TypeScript, Java and Go call sites. See [domain knowledge](features/domain-knowledge.md) |
 
 Install:
 
@@ -27,6 +27,20 @@ ctxo install java              # syntax tier + full-tier analyzer when JRE 11+ d
 ctxo install java --full-tier  # force full-tier analyzer install
 ctxo install java --syntax-only  # skip analyzer, syntax tier only
 ```
+
+### What the official plugins emit beyond symbols and edges
+
+Every official plugin stays on protocol `'1'` and reads `PluginContext.capabilities` when the host offers it (an older CLI offers none, ignores annotations and never asks for SQL edges):
+
+| Plugin | Annotations (always on) | Test symbols | SQL at call sites (`capabilities.sqlCallSites`) |
+|---|---|---|---|
+| `@ctxo/lang-csharp` | attributes, both tiers | test methods (annotated `Fact`, `Test`, `TestMethod` and so on) | ADO.NET, Dapper, `SqlBulkCopy`, EF Core raw SQL (Roslyn tier) |
+| `@ctxo/lang-typescript` | decorators on classes and methods; property decorators on the class with `named.member` | `describe` / `it` / `test` blocks in test files as `function` symbols annotated `{ name: 'test' }` | pg, mysql2, mssql, `knex.raw`, Prisma raw, TypeORM and Sequelize `query`, better-sqlite3 |
+| `@ctxo/lang-java` | annotations on types, methods and fields (full tier: constant values; tree-sitter: strings only) | test methods under `src/test/java` with their annotations (a `@Test` marks the file as a test file) | JDBC, Spring `JdbcTemplate`, JPA native queries, native `@Query`, MyBatis (JDT full tier) |
+| `@ctxo/lang-go` | struct field tags as `tag` annotations on the struct with `named.member`, both tiers | `_test.go` functions and methods (full tier) | `database/sql`, sqlx, pgx, gorm raw SQL (analyzer full tier) |
+| `@ctxo/lang-sql` | `columns` on tables | none | n/a: it defines the tables, views and procedures the edges point at |
+
+The TypeScript, Java and Go plugins depend on `@ctxo/sql-extract` for the SQL text, as `@ctxo/lang-sql` does. See [language parity](features/domain-knowledge.md#language-parity-typescript-java-and-go).
 
 ### Java full-tier notes
 
@@ -115,7 +129,7 @@ All additive; a v1 plugin needs no change:
 - `ILanguageAdapter.extractFacts` and `CodeFact` (`FACT_KINDS`): called only when the host asks for facts.
 - `PluginContext.capabilities` (`PluginCapabilities`): `facts` when `index.facts: true` is set, `sqlCallSites` when a plugin for `.sql` is installed.
 - Peer ranges: the official plugins accept `@ctxo/plugin-api` `^0.7.3 || ^0.8.0 || ^0.9.0`; `@ctxo/lang-sql` accepts `^0.9.0`, the first release with protocol v2.
-- Dependency exception (ADR-017): a plugin may depend on a Ctxo-owned utility package with zero runtime dependencies. Today that is only `@ctxo/sql-extract`, which is a library, not a plugin, and is never discovered.
+- Dependency exception (ADR-017): a plugin may depend on a Ctxo-owned utility package with zero runtime dependencies. Today that is only `@ctxo/sql-extract`, which is a library, not a plugin, and is never discovered; `@ctxo/lang-sql`, `@ctxo/lang-typescript`, `@ctxo/lang-java` and `@ctxo/lang-go` use it.
 
 See [domain knowledge](features/domain-knowledge.md) and [ADR-017](architecture/ADR/adr-017-plugin-protocol-v2-and-data-coupling.md).
 

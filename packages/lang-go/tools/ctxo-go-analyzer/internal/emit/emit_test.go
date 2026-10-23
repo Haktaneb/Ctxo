@@ -65,6 +65,17 @@ func TestFileRecordDefaultsEmptySlices(t *testing.T) {
 	}
 }
 
+func TestSymbolTagsOmittedWhenEmpty(t *testing.T) {
+	plain, _ := json.Marshal(Symbol{SymbolID: "a.go::A::class", Name: "A", Kind: "class"})
+	if strings.Contains(string(plain), "tags") {
+		t.Errorf("empty Tags must be omitted: %s", plain)
+	}
+	tagged, _ := json.Marshal(Symbol{Name: "A", Tags: []FieldTag{{Field: "X", Tag: `json:"x"`}}})
+	if !strings.Contains(string(tagged), `"tags":[{"field":"X","tag":"json:\"x\""}]`) {
+		t.Errorf("tags not emitted as {field,tag}: %s", tagged)
+	}
+}
+
 func TestEdgeTypeArgsOmitEmpty(t *testing.T) {
 	b, err := json.Marshal(Edge{From: "a", To: "b", Kind: "calls"})
 	if err != nil {

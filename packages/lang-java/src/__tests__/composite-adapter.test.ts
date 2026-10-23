@@ -1,7 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { detectJavaRuntime } from '../analyzer/toolchain-detect.js';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { CAN_RUN_JDT, JDT_FIXTURE, testAnalyzerJar } from './helpers/analyzer-jar.js';
 
 vi.mock('../analyzer/jar-resolve.js', () => ({
   resolveAnalyzerJar: vi.fn(() => null),
@@ -50,26 +48,21 @@ describe('JavaCompositeAdapter (syntax fallback)', () => {
   });
 });
 
-const jar = process.env.CTXO_JDT_ANALYZER_JAR
-  ?? resolve(import.meta.dirname, '../../../lang-java-analyzer/jar/ctxo-jdt-analyzer.jar');
-const fixture = resolve(import.meta.dirname, '../../../lang-java-analyzer/java/src/test/resources/fixture');
-const java = detectJavaRuntime();
-const canRun = java.available && existsSync(jar) && existsSync(fixture);
-
-describe.skipIf(!canRun)('JavaCompositeAdapter (full tier, real jar)', () => {
+describe.skipIf(!CAN_RUN_JDT)('JavaCompositeAdapter (full tier, real jar)', () => {
   beforeEach(() => {
     // Make resolveAnalyzerJar honor the env override so the full tier can activate
-    vi.mocked(resolveAnalyzerJar).mockImplementation(() => {
-      const jarPath = process.env.CTXO_JDT_ANALYZER_JAR;
-      return jarPath && existsSync(jarPath) ? jarPath : null;
-    });
+    vi.mocked(resolveAnalyzerJar).mockImplementation(() => process.env.CTXO_JDT_ANALYZER_JAR ?? null);
     vi.mocked(analyzerPackageVersion).mockReturnValue('0.8.0');
   });
 
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it('selects full tier and serves resolved call edges; complexity still tree-sitter', async () => {
-    process.env.CTXO_JDT_ANALYZER_JAR = jar;
+    vi.stubEnv('CTXO_JDT_ANALYZER_JAR', testAnalyzerJar()!);
     const adapter = new JavaCompositeAdapter();
-    await adapter.initialize(fixture);
+    await adapter.initialize(JDT_FIXTURE);
     expect(adapter.getTier()).toBe('full');
     const edges = await adapter.extractEdges('Foo.java', '');
     expect(edges.some((e) => e.kind === 'calls' && e.to.includes('helper'))).toBe(true);

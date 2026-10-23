@@ -29,7 +29,7 @@ ctxo install typescript go --yes    # non-interactive install of specific plugin
 ctxo install java                   # syntax tier + full-tier analyzer when JRE 11+ detected
 ctxo install java --full-tier       # force full-tier analyzer install
 ctxo install java --syntax-only     # skip analyzer, syntax tier only
-ctxo install sql                    # T-SQL plugin (alias tsql); also turns on SQL edges at known C# call sites
+ctxo install sql                    # T-SQL plugin (alias tsql); also turns on SQL edges at known C#, TypeScript, Java and Go call sites
 ctxo install --dry-run --pm pnpm    # preview install plan with chosen pm
 ctxo update                         # check + apply updates for ctxo + plugins
 ctxo update --check                 # check only, exit 0
@@ -83,11 +83,11 @@ packages/
 ├── cli/              @ctxo/cli             # primary CLI + MCP server (composition root)
 ├── plugin-api/       @ctxo/plugin-api      # plugin protocol v1 + v2 types (no runtime deps on cli)
 ├── sql-extract/      @ctxo/sql-extract     # zero-dependency T-SQL tokenizer + recognizers (a library, not a plugin; ADR-017)
-├── lang-typescript/  @ctxo/lang-typescript # ts-morph, full tier
-├── lang-go/          @ctxo/lang-go         # tree-sitter Go
+├── lang-typescript/  @ctxo/lang-typescript # ts-morph, full tier; decorators, test blocks, SQL call sites (via @ctxo/sql-extract)
+├── lang-go/          @ctxo/lang-go         # ctxo-go-analyzer (full tier, _test.go, SQL call sites via @ctxo/sql-extract) + tree-sitter Go; struct tags
 ├── lang-csharp/      @ctxo/lang-csharp     # Roslyn (+ ScriptDom for SQL call sites) + tree-sitter + tools/ctxo-roslyn
-├── lang-java/        @ctxo/lang-java       # tree-sitter Java (syntax tier); full tier via @ctxo/lang-java-analyzer companion (JRE 11+, ADR-014)
-├── lang-java-analyzer/ @ctxo/lang-java-analyzer # prebuilt Eclipse JDT analyzer JARs for the Java full tier
+├── lang-java/        @ctxo/lang-java       # tree-sitter Java (syntax tier); full tier via @ctxo/lang-java-analyzer companion (JRE 11+, ADR-014); annotations, SQL call sites (full tier, via @ctxo/sql-extract)
+├── lang-java-analyzer/ @ctxo/lang-java-analyzer # prebuilt Eclipse JDT analyzer JARs for the Java full tier (annotations, SQL call sites)
 └── lang-sql/         @ctxo/lang-sql        # T-SQL .sql files on protocol v2 (tables, views, procedures, data edges)
 ```
 
@@ -99,7 +99,7 @@ packages/
   * **`ports/`** **NEVER imports from** **`adapters/`**
   * **`adapters/mcp/`** **may import from** **`core/`** **and** **`ports/`** **only**
   * **Composition root (`packages/cli/src/index.ts`)** is the ONLY file that wires adapters to ports
-* **Plugins (`@ctxo/lang-*`) import only from** **`@ctxo/plugin-api`; never from** **`@ctxo/cli`.** The one exception (ADR-017): a Ctxo-owned utility package with zero runtime dependencies, today only `@ctxo/sql-extract` (used by `@ctxo/lang-sql`).
+* **Plugins (`@ctxo/lang-*`) import only from** **`@ctxo/plugin-api`; never from** **`@ctxo/cli`.** The one exception (ADR-017): a Ctxo-owned utility package with zero runtime dependencies, today only `@ctxo/sql-extract` (used by `@ctxo/lang-sql`, `@ctxo/lang-typescript`, `@ctxo/lang-java` and `@ctxo/lang-go`).
 * **No barrel exports** (`index.ts` re-exports) — import directly from source file path
 * **Port-first rule:** every adapter MUST implement a port interface
 
@@ -244,7 +244,7 @@ Skills land in `.claude/skills/<name>/SKILL.md` (Claude Code) and `.cursor/rules
 
 Language support ships as separate plugin packages discovered at runtime by scanning the consumer project's `package.json` for `@ctxo/lang-*` and `ctxo-lang-*` names. Each plugin implements the protocol contract exported by `@ctxo/plugin-api` (a stable surface with zero runtime dependencies on `@ctxo/cli`). Users opt into languages by adding plugin packages to devDependencies (or running `ctxo install`); `ctxo doctor` surfaces missing plugins and `ctxo index --install-missing` auto-installs them. See [ADR-012](docs/architecture/ADR/adr-012-plugin-architecture-and-monorepo.md).
 
-**Protocol v2** ([ADR-017](docs/architecture/ADR/adr-017-plugin-protocol-v2-and-data-coupling.md)): `SUPPORTED_API_VERSIONS = ['1', '2']`, and a plugin declares the lowest version it works on (the official plugins stay on `'1'`; `@ctxo/lang-sql` declares `'2'`). v2 adds the data kinds (`table`, `view`, `procedure`; `reads`, `writes`, `executes`; core analyses use `DATA_RESOURCE_KINDS`, never the literal `table`), `SymbolNode.annotations`, facts on request (`extractFacts`, `index.facts: true`) and `PluginContext.capabilities` (`facts`, `sqlCallSites`, the latter only when a `.sql` plugin is installed). Annotations and facts live in the JSON index only. The one dependency exception is `@ctxo/sql-extract`: a zero-dependency library, not a plugin, never discovered. Peer ranges: the official plugins `^0.7.3 || ^0.8.0 || ^0.9.0`, `@ctxo/lang-sql` `^0.9.0` (plugin-api 0.8.0 is protocol v1). Feature doc: [domain knowledge](docs/features/domain-knowledge.md).
+**Protocol v2** ([ADR-017](docs/architecture/ADR/adr-017-plugin-protocol-v2-and-data-coupling.md)): `SUPPORTED_API_VERSIONS = ['1', '2']`, and a plugin declares the lowest version it works on (the official plugins stay on `'1'`; `@ctxo/lang-sql` declares `'2'`). v2 adds the data kinds (`table`, `view`, `procedure`; `reads`, `writes`, `executes`; core analyses use `DATA_RESOURCE_KINDS`, never the literal `table`), `SymbolNode.annotations`, facts on request (`extractFacts`, `index.facts: true`) and `PluginContext.capabilities` (`facts`, `sqlCallSites`, the latter only when a `.sql` plugin is installed). Annotations and facts live in the JSON index only. The one dependency exception is `@ctxo/sql-extract`: a zero-dependency library, not a plugin, never discovered; the TypeScript, Java and Go plugins use it for SQL at call sites (ADR-017 addendum), as `@ctxo/lang-sql` does for `.sql` files. Language parity: the TypeScript, Java and Go plugins also report annotations (decorators, Java annotations, Go struct tags; `named.member` for TypeScript properties and Go fields) and tests as symbols (TypeScript test blocks, Go `_test.go` in the full tier), and add SQL edges at known call sites only when `capabilities.sqlCallSites` is set; they stay on protocol `'1'`. Peer ranges: the official plugins `^0.7.3 || ^0.8.0 || ^0.9.0`, `@ctxo/lang-sql` `^0.9.0` (plugin-api 0.8.0 is protocol v1). Feature doc: [domain knowledge](docs/features/domain-knowledge.md).
 
 ```JSON
 // consumer project package.json

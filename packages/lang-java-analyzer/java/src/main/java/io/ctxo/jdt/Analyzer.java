@@ -9,15 +9,34 @@ import java.util.*;
 
 /** Runs JDT batch analysis over a set of source files and emits FileResults. */
 public final class Analyzer {
+  private static final String SOURCE_ENCODING = "UTF-8";
   private final String rootDir;
   private final String[] classpath;
+  private final boolean sqlCallSites;
+  private Dtos.SqlStats sqlStats;
 
   public Analyzer(String rootDir, String[] classpath) {
+    this(rootDir, classpath, false);
+  }
+
+  /** With {@code sqlCallSites}, file results carry the SQL text at known call sites ({@link SqlCallSites}). */
+  public Analyzer(String rootDir, String[] classpath, boolean sqlCallSites) {
     this.rootDir = rootDir;
     this.classpath = classpath;
+    this.sqlCallSites = sqlCallSites;
+    this.sqlStats = sqlCallSites ? new Dtos.SqlStats() : null;
+  }
+
+  /**
+   * The SQL texts of the last {@link #analyze} run (each run starts from zero, so a keep-alive
+   * tick that re-analyzes every file does not add up); null without {@code sqlCallSites}.
+   */
+  public Dtos.SqlStats sqlStats() {
+    return sqlStats;
   }
 
   public List<Dtos.FileResult> analyze(List<String> sourceFiles) {
+    if (sqlCallSites) sqlStats = new Dtos.SqlStats();
     Map<String, Dtos.FileResult> byPath = new LinkedHashMap<>();
     ASTParser parser = ASTParser.newParser(AST.getJLSLatest());
     parser.setKind(ASTParser.K_COMPILATION_UNIT);
@@ -27,14 +46,23 @@ public final class Analyzer {
     Map<String, String> options = JavaCore.getOptions();
     JavaCore.setComplianceOptions(JavaCore.VERSION_17, options);
     parser.setCompilerOptions(options);
-    parser.setEnvironment(classpath, new String[] { rootDir }, null, true);
+    // Sources are read as UTF-8: without an encoding JDT uses the platform default (Cp1252, Cp1254
+    // and the like on JRE 11-17 on Windows) and misreads non-ASCII literals such as SQL table names.
+    parser.setEnvironment(classpath, new String[] { rootDir }, new String[] { SOURCE_ENCODING }, true);
 
     String[] files = sourceFiles.toArray(new String[0]);
+    String[] encodings = new String[files.length];
+    Arrays.fill(encodings, SOURCE_ENCODING);
     FileASTRequestor requestor = new FileASTRequestor() {
       @Override public void acceptAST(String sourceFilePath, CompilationUnit cu) {
         String rel = relativize(sourceFilePath);
         Dtos.FileResult fr = new Dtos.FileResult(rel);
-        cu.accept(new EmitVisitor(cu, rel, fr));
+        List<Dtos.SqlSite> sites = sqlCallSites ? new ArrayList<>() : null;
+        cu.accept(new EmitVisitor(cu, rel, fr, sites));
+        if (sites != null && !sites.isEmpty()) {
+          sites.sort(SQL_SITE_ORDER);
+          fr.sqlCallSites = sites;
+        }
         // imports: anchor on the first top-level type symbol (JDT visits imports before types,
         // so this must run after the visitor has populated symbols).
         String anchor = null;
@@ -65,7 +93,7 @@ public final class Analyzer {
         byPath.put(rel, fr);
       }
     };
-    parser.createASTs(files, null, new String[0], requestor, null);
+    parser.createASTs(files, encodings, new String[0], requestor, null);
     return new ArrayList<>(byPath.values());
   }
 
@@ -77,20 +105,48 @@ public final class Analyzer {
     } catch (Exception e) { return absSourcePath.replace('\\', '/'); }
   }
 
+  /** By line, then text (symbol and kind break the remaining ties, so the order never depends on the walk). */
+  private static final Comparator<Dtos.SqlSite> SQL_SITE_ORDER = Comparator
+      .comparingInt((Dtos.SqlSite s) -> s.line)
+      .thenComparing(s -> s.text)
+      .thenComparing(s -> s.symbolId)
+      .thenComparing(s -> s.kind);
+
   private final class EmitVisitor extends ASTVisitor {
     private final CompilationUnit cu;
     private final String file;
     private final Dtos.FileResult out;
+    /** The SQL call sites of the file; null without {@code sqlCallSites}. */
+    private final List<Dtos.SqlSite> sqlSites;
     private String enclosingTypeId;
+    /**
+     * The method or constructor whose body is being visited (lambdas inside it included); null in
+     * field initializers, initializer blocks and outside any member. Saved per body declaration.
+     */
+    private String enclosingMethodId;
+    private final List<String> savedMethodIds = new ArrayList<>();
 
-    EmitVisitor(CompilationUnit cu, String file, Dtos.FileResult out) { this.cu = cu; this.file = file; this.out = out; }
+    EmitVisitor(CompilationUnit cu, String file, Dtos.FileResult out, List<Dtos.SqlSite> sqlSites) {
+      this.cu = cu; this.file = file; this.out = out; this.sqlSites = sqlSites;
+    }
+
+    private void enterMember(String methodId) {
+      savedMethodIds.add(enclosingMethodId);
+      enclosingMethodId = methodId;
+    }
+
+    private void leaveMember() {
+      enclosingMethodId = savedMethodIds.remove(savedMethodIds.size() - 1);
+    }
 
     private int line0(int pos) { return Math.max(0, cu.getLineNumber(pos) - 1); }
     private String symId(String name, String kind) { return file + "::" + name + "::" + kind; }
-    private void addType(String name, String kind, ASTNode node) {
-      out.symbols.add(new Dtos.Sym(symId(name, kind), name, kind,
+    private void addType(String name, String kind, AbstractTypeDeclaration node) {
+      Dtos.Sym sym = new Dtos.Sym(symId(name, kind), name, kind,
           line0(node.getStartPosition()), line0(node.getStartPosition() + node.getLength()),
-          node.getStartPosition(), node.getStartPosition() + node.getLength()));
+          node.getStartPosition(), node.getStartPosition() + node.getLength());
+      sym.annotations = Annotations.of(node.modifiers());
+      out.symbols.add(sym);
     }
 
     @Override public boolean visit(TypeDeclaration node) {
@@ -142,23 +198,49 @@ public final class Analyzer {
 
     @Override public boolean visit(MethodDeclaration node) {
       String name = node.getName().getIdentifier();
-      out.symbols.add(new Dtos.Sym(symId(name, "method"), name, "method",
+      Dtos.Sym sym = new Dtos.Sym(symId(name, "method"), name, "method",
           line0(node.getStartPosition()), line0(node.getStartPosition() + node.getLength()),
-          node.getStartPosition(), node.getStartPosition() + node.getLength()));
+          node.getStartPosition(), node.getStartPosition() + node.getLength());
+      sym.annotations = Annotations.of(node.modifiers());
+      out.symbols.add(sym);
       if (node.getReturnType2() != null) addUses(node.getReturnType2());
+      enterMember(sym.symbolId);
+      if (sqlSites != null) SqlCallSites.fromAnnotations(node, sym.symbolId, cu, sqlStats, sqlSites);
       return true;
     }
 
+    @Override public void endVisit(MethodDeclaration node) {
+      leaveMember();
+    }
+
+    @Override public boolean visit(Initializer node) {
+      enterMember(null);
+      return true;
+    }
+
+    @Override public void endVisit(Initializer node) {
+      leaveMember();
+    }
+
     @Override public boolean visit(FieldDeclaration node) {
+      enterMember(null);
+      // Every fragment (`int a, b;`) gets the declaration's annotations.
+      List<Dtos.Ann> annotations = Annotations.of(node.modifiers());
       for (Object o : node.fragments()) {
         VariableDeclarationFragment f = (VariableDeclarationFragment) o;
         String name = f.getName().getIdentifier();
-        out.symbols.add(new Dtos.Sym(symId(name, "variable"), name, "variable",
+        Dtos.Sym sym = new Dtos.Sym(symId(name, "variable"), name, "variable",
             line0(node.getStartPosition()), line0(node.getStartPosition() + node.getLength()),
-            node.getStartPosition(), node.getStartPosition() + node.getLength()));
+            node.getStartPosition(), node.getStartPosition() + node.getLength());
+        sym.annotations = annotations;
+        out.symbols.add(sym);
       }
       addUses(node.getType());
       return true;
+    }
+
+    @Override public void endVisit(FieldDeclaration node) {
+      leaveMember();
     }
 
     @Override public boolean visit(SingleVariableDeclaration node) {
@@ -196,6 +278,9 @@ public final class Analyzer {
     }
 
     @Override public boolean visit(MethodInvocation node) {
+      if (sqlSites != null && enclosingMethodId != null) {
+        SqlCallSites.fromInvocation(node, enclosingMethodId, cu, sqlStats, sqlSites);
+      }
       if (enclosingTypeId == null) return true;
       IMethodBinding mb = node.resolveMethodBinding();
       if (mb != null && mb.getDeclaringClass() != null) {

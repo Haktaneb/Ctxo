@@ -176,6 +176,16 @@ describe('cli-router contexts command', () => {
     expect(help).toContain('ctxo contexts             Candidate contexts from dependency and co-change clusters (table)');
     expect(help).toContain('ctxo contexts --json      Same, full contexts-view.json to stdout');
   });
+
+  it('help documents ctxo install sql with every call-site language', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await new CliRouter(process.cwd()).route(['--help']);
+    const help = errorSpy.mock.calls.map((a) => String(a[0])).join('\n');
+    errorSpy.mockRestore();
+    expect(help).toContain(
+      'ctxo install sql          SQL plugin: .sql definitions, data edges from C#, TypeScript, Java and Go call sites',
+    );
+  });
 });
 
 describe('cli-router index co-change flags', () => {

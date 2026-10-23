@@ -63,6 +63,26 @@ Narrow to adapters only:
 }
 ```
 
+## Test files
+
+Test files are recognised by the same classifier the contexts view uses: the
+default test globs (`**/__tests__/**`, `**/*.test.*`, `**/*.spec.*`,
+`**/test/**`, `**/tests/**`, `**/*_test.go`, `**/src/test/**` and the C# and
+Python patterns) plus every file in which a test-framework annotation (`Fact`,
+`Test`, `TestMethod` and the rest) marks a symbol. With `includeTests: false`
+(the default):
+
+- test symbols are never reported dead, even a TypeScript test block or a Go
+  test function with no outgoing edges;
+- production code called only from tests is not dead. In particular, Go
+  functions whose only callers are `_test.go` functions are no longer reported,
+  as in the other languages;
+- production code under a folder named `test/` or `src/test/`, and any file
+  with a test-annotated symbol, is left out of the analysis as well.
+
+`index.tests` globs are not consulted here. Symbols in `.sql` files are never
+reported.
+
 ## Confidence tiers
 
 | Score | Meaning                                                              |
@@ -87,7 +107,7 @@ deleting anything even at `confidence: 1.0`.
 :::
 
 - **Framework entry points** are filtered by heuristic patterns. If your framework is unusual, expect false positives.
-- **`includeTests: false`** (default) means a symbol used only by tests counts as dead. Flip to `true` if test-only utilities should stay.
+- **`includeTests: false`** (default) leaves test files out of the analysis: test symbols are never reported, and a production symbol whose only callers are tests is not dead. Flip to `true` to analyse test files as ordinary code.
 - **Requires** `ctxo index`.
 
 ## Related tools

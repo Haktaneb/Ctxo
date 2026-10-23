@@ -1,0 +1,31 @@
+import { Pool } from 'pg';
+import mysql from 'mysql2/promise';
+import sql from 'mssql';
+import Database from 'better-sqlite3';
+
+const pool = new Pool();
+const db = new Database('lending.db');
+
+export async function pgCalls(): Promise<void> {
+  await pool.query('SELECT Id FROM dbo.Loans WHERE ClosedAt IS NULL');
+  await pool.query({ text: 'SELECT Id FROM dbo.Members WHERE Id = $1', values: [1] });
+}
+
+export async function mysqlCalls(): Promise<void> {
+  const conn = await mysql.createConnection({ host: 'localhost' });
+  await conn.query('SELECT Id FROM dbo.Holds WHERE MemberId = ?', [1]);
+  await conn.execute({ sql: 'UPDATE dbo.Loans SET Renewals = Renewals + 1 WHERE Id = ?' }, [1]);
+}
+
+export async function mssqlCalls(memberId: number): Promise<void> {
+  const request = new sql.Request();
+  await request.query('INSERT INTO dbo.LoanArchive (Id) SELECT Id FROM dbo.Loans WHERE ClosedAt IS NOT NULL');
+  await request.query`SELECT Id FROM dbo.Holds WHERE MemberId = ${memberId}`;
+  await request.execute('usp_CloseLoan');
+  await request.execute('dbo.usp_NotifyMember');
+}
+
+export function sqliteCalls(): void {
+  db.prepare('SELECT Id FROM dbo.Members').all();
+  db.exec('DELETE FROM dbo.Loans WHERE Id = 0');
+}

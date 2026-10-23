@@ -120,7 +120,7 @@ The CLI computes capabilities from the discovered plugins before any `createAdap
 
 ### The one dependency exception
 
-Language plugins import only from `@ctxo/plugin-api`. The exception: a plugin may depend on a Ctxo-owned utility package with zero runtime dependencies. Today that is only `@ctxo/sql-extract`, the T-SQL tokenizer and recognizers. It is a library, not a plugin, and it is never discovered.
+Language plugins import only from `@ctxo/plugin-api`. The exception: a plugin may depend on a Ctxo-owned utility package with zero runtime dependencies. Today that is only `@ctxo/sql-extract`, the T-SQL tokenizer and recognizers, used by `@ctxo/lang-sql` and, for SQL at call sites, by `@ctxo/lang-typescript`, `@ctxo/lang-java` and `@ctxo/lang-go`. It is a library, not a plugin, and it is never discovered.
 
 ## `@ctxo/lang-sql`
 
@@ -237,6 +237,102 @@ index:
     - "src/Lending.Properties/**"
 ```
 
+A JUnit `@Test` gives the Java annotation `Test`, one of the names above, so since the Java plugin reports annotations, a Java file with a `@Test` method counts as a test file wherever it sits (through the same annotation rule, `filesWithTestAnnotations`), not only under `src/test/`.
+
+## Language parity: TypeScript, Java and Go
+
+`@ctxo/lang-typescript`, `@ctxo/lang-java` (with `@ctxo/lang-java-analyzer`) and `@ctxo/lang-go` now do what `@ctxo/lang-csharp` does: they report annotations, index tests as symbols with edges, and, with `@ctxo/lang-sql` installed, add data edges for constant SQL at known call sites. A TypeScript repository, a Spring service and a Go module that touch `dbo.loans` meet the C# code and the `.sql` definitions at the same node. The design record is the [ADR-017 addendum](../architecture/ADR/adr-017-plugin-protocol-v2-and-data-coupling.md#addendum-language-parity-pr-1c).
+
+### No SQL edges without `@ctxo/lang-sql`
+
+SQL call sites are read only when the host sets `capabilities.sqlCallSites`, which it does only when a plugin for `.sql` files (today `@ctxo/lang-sql`) is installed. Without it, no language emits `reads`, `writes` or `executes` edges, so a repository never gets edges to tables that cannot exist in its graph. Annotations and test symbols need no capability: they are always on.
+
+### SQL at call sites
+
+Every language uses the same rules as C#: only compile-time constant SQL counts, ORM and query-builder calls are left out (knex chains, Prisma model calls, TypeORM repositories, JPQL and Spring Data derived queries, gorm model calls), and the text goes through `extractSqlAccesses` of `@ctxo/sql-extract`, so the targets are the canonical 2-part names (`dbo.loans::table`, `dbo.usp_closeloan::procedure`). Each plugin keeps its rows of the shared API table as data:
+
+| Language | APIs | SQL text | Procedure name when |
+|---|---|---|---|
+| TypeScript / JavaScript | pg `query` (also a `{ text }` config object); mysql2 `query`, `execute` (also `{ sql }`); mssql `query` (call or tagged template), `execute`; `knex.raw`; Prisma `$queryRaw`, `$executeRaw` (tagged template) and `$queryRawUnsafe`, `$executeRawUnsafe`; TypeORM `query`; Sequelize `query`; better-sqlite3 `prepare`, `exec` | the first argument, or the tagged template | mssql `execute` (its argument is a procedure name) |
+| Java | JDBC `Connection.prepareStatement`, `prepareCall` and `Statement.execute*`; Spring `JdbcTemplate`, `NamedParameterJdbcTemplate` and their `*Operations` interfaces (`query*`, `update`, `batchUpdate`, `execute`); `EntityManager.createNativeQuery` (`javax` and `jakarta`); Spring Data `@Query(value = ..., nativeQuery = true)`; MyBatis `@Select`, `@Insert`, `@Update`, `@Delete` | the first `String` argument (every argument of an all-`String` `batchUpdate`); the annotation's `value`, array elements joined with a space | the text is a JDBC escape, `{call name(...)}` or `{? = call name(...)}` |
+| Go | `database/sql` `Query`, `QueryRow`, `Exec`, `Prepare` and their `Context` forms on `DB`, `Tx`, `Conn`, `Stmt`; sqlx `Select`, `Get`, `Queryx`, `NamedExec`, `MustExec` (methods and package functions); pgx v4 and v5 `Query`, `QueryRow`, `Exec`, including `pgxpool`; gorm `Raw`, `Exec` | the argument bound to the callee's first `string` parameter | never (an `EXEC` inside a statement still gives an `executes` edge) |
+
+What counts as a constant:
+
+- **TypeScript:** string literals, templates without substitutions, `+` and templates whose parts are all constant, and `const` bindings with such an initializer, in the same file or behind a relative import. A constant used twice in one expression stays constant. In a tagged template (mssql, Prisma), each interpolation becomes a placeholder `@p0`, `@p1` and so on, so `` prisma.$queryRaw`SELECT id FROM dbo.Loans WHERE member_id = ${memberId}` `` reads `dbo.loans`.
+- **Java:** JDT constant evaluation: literals, `static final` constants, constant concatenation and text blocks.
+- **Go:** a value that `go/types` gives a constant string: literals, `const` declarations and constant concatenation.
+
+How the receiver is matched:
+
+- **TypeScript: receiver provenance.** The in-memory ts-morph project has no library types (`node_modules` is not loaded), so a call `<receiver>.<member>` counts only when a walk ties the receiver to a module in the table: imports (named, default, namespace, `import x = require`), `require('pg')`, type annotations and initializers, destructuring, constructor parameter properties and `this` members (also through the enclosing class's `extends` clause), function return types, `import('pg').Pool`, `export *` barrels and dynamic `import()`. The walk takes at most 8 steps (each declaration hop or barrel module is one) and never revisits a declaration. Relative modules missing from the in-memory project are read from disk for that one file's extraction (`.ts`, `.tsx`, `.js` and `.jsx` only, never outside the project root), so the post-commit hook, `--files` and `ctxo watch` give the same SQL edges as a full `ctxo index`. Edges start at the innermost exported function, method of an exported class, exported variable or test block; calls elsewhere are skipped.
+- **Java: receiver type, supertypes and imports.** The JDT analyzer matches the receiver's static type, the method binding's declaring class or any of their supertypes. When the dependency JARs are not on the classpath, it reads the declared type of the field, local variable or parameter in the same file and resolves it through the single-type imports or the package. With a method binding, a member whose first parameter is not `java.lang.String` is no call site; without one, the first argument decides when it is a `String` constant or `String`-typed. Edges start at the enclosing method or constructor; a lambda belongs to its method.
+- **Go: the callee's method object.** ctxo-go-analyzer resolves the callee through `go/types`; its receiver type (pointer stripped) names the owner. The `*sql.DB` methods promoted onto `sqlx.DB` and the pgx v5 `Tx` interface match too. A matching callee without a `string` parameter (a `*sql.Stmt` method, whose text was read at `Prepare`) is not counted. A closure belongs to its enclosing function declaration.
+
+**Full tier only for Java and Go.** The SQL text comes from the JDT analyzer (JRE 11+ and `@ctxo/lang-java-analyzer`) and from ctxo-go-analyzer (Go 1.22+); the tree-sitter tiers give no SQL edges. TypeScript has one tier, so its call sites are always read.
+
+**Counts.** Non-constant SQL is counted, never guessed. The counts reach debug logging only (`DEBUG=ctxo:*`), never the index: TypeScript counts every matched call site whose text is not constant; the JDT analyzer counts a matched call whose first argument is not a constant (with a method binding when the first parameter is a `String`, without one when the argument is `String`-typed); ctxo-go-analyzer counts every matched call whose `string` argument is not a constant. Each analyzer's summary line carries them as `sql: { constant, nonConstant }`.
+
+**Make SQL visible** by keeping it in a constant:
+
+```ts
+const CLOSE_LOAN = 'UPDATE dbo.Loans SET closed_at = now() WHERE id = $1';   // visible: writes dbo.loans
+export async function closeLoan(pool: Pool, id: string) {
+  await pool.query(CLOSE_LOAN, [id]);
+}
+```
+
+### Annotations per language
+
+All three follow the C# caps: 20 annotations per symbol, 10 positional arguments, 10 named entries and 200 characters per value; `args` and `named` are omitted when empty. `named.type` stays reserved in every language and none of these plugins sets it, so a decorator property, Java annotation member or struct-tag key named `type` is dropped (a TypeORM `@Column({ type: 'int' })` loses its `type`). `named.member` is reserved only where the plugin emits it, for metadata of a member that is not a symbol of its own:
+
+| Language | Source | Annotation |
+|---|---|---|
+| TypeScript | decorators on classes and methods | `name` is the rightmost identifier (`@nest.Injectable()` gives `Injectable`); `args` are string-literal and plain-template arguments; `named` holds the string properties of object-literal arguments, the first occurrence winning. Accessor and parameter decorators are ignored |
+| TypeScript | property decorators | on the class, after the class's own decorators, with `named.member`: `@Column({ name: 'member_id' }) memberId` gives `{ name: 'Column', named: { member: 'memberId', name: 'member_id' } }` |
+| Java (JDT) | annotations on types, methods and fields | the simple name; the `value` member goes to `args`, other members to `named`; declared values only (no defaults): strings, numbers, `true`/`false`, enum constants as `Type.MEMBER`, class literals as the qualified name; arrays flattened in `args` and joined with `,` in `named`; nested annotations and nulls skipped |
+| Java (tree-sitter) | the same | string literals and string arrays only |
+| Go | struct field tags, in both tiers | one `tag` annotation per tagged field on its struct: `` LoanID string `json:"loan_id" gorm:"column:loan_id;primaryKey"` `` gives `{ name: 'tag', named: { member: 'LoanID', json: 'loan_id', gorm: 'column:loan_id;primaryKey' } }`; an embedded field is named by its type's last identifier; untagged fields give nothing |
+
+Java fields are symbols of their own, so their annotations stay on them, and Java (like C#) keeps a source member named `member`. TypeScript class properties and Go struct fields do not become symbols.
+
+### Test symbols per language
+
+| Language | What becomes a symbol |
+|---|---|
+| TypeScript / JavaScript | In a test file (`**/__tests__/**`, `**/*.test.*`, `**/*.spec.*`, `**/test/**`, `**/tests/**`), every `describe`, `it` or `test` block (also `suite`, `context`, `specify`, the `f` and `x` variants and modifiers such as `.only`, `.skip`, `.each`, `.skipIf`) becomes a `function` symbol named by its title path and annotated `{ name: 'test' }`. A block's `calls` and `uses` edges come from its own callback minus nested blocks, so each `it` owns its edges and a `describe` keeps its hooks. A block without a callback (`it.todo`) is not a symbol |
+| Go | The full tier loads test packages too: functions and methods in `_test.go` files become symbols with `calls` edges (a test fake can `implements` a production interface). Reachability still runs on production packages only, so the analyzer's dead list never holds a test symbol |
+| Java | Test methods under `src/test/java` were method symbols already; they now carry their annotations, and a `@Test` marks the file as a test file |
+
+TypeScript test titles: a non-literal title keeps its source text; whitespace runs become one space, runs of `:` become one and a trailing `:` is dropped; an empty title becomes `(untitled)`; titles are cut at 200 characters. A path seen again in the file (or equal to an exported function's name) gets ` #2`, ` #3` in source order, and children use their parent's final name:
+
+```text
+src/loans/loan-policy.test.ts::LoanPolicy > renewal > extends by seven days::function
+src/loans/loan-policy.test.ts::LoanPolicy > renewal > extends by seven days #2::function
+```
+
+`index.tests` extras do not reach plugins, so TypeScript test blocks come only from the default globs above.
+
+### What changes elsewhere
+
+- **Blast radius and the gate.** Test blocks and Go test functions have edges into production code and count as its dependents, so the safe-edit gate may fire more often on well-tested symbols, as it does for C#.
+- **Dead code.** `find_dead_code` recognises test files with the shared test-file classifier (the default test globs plus files a test-framework annotation marks) instead of its own path patterns, which missed `_test.go`, `src/test/java`, `*.test.js` and `*.test.tsx` files. Unless `includeTests` is set, test symbols are never reported dead, even without outgoing edges, and production code called only from tests is not dead. In particular, Go functions whose only callers are tests are no longer reported. Production code under a folder named `test/` or `src/test/`, and any file with a test-annotated symbol, is left out of the analysis as well.
+- **Communities.** Test symbols and their edges join the graph, so symbol-level communities shift once after the upgrade. Data edges stay out of communities.
+- **Java edges stay type-level.** JDT `calls` and `uses` edges still start at the enclosing type, so a Java test method's own dependencies show at its class; data edges start at the method or constructor.
+- **Go full-tier cost.** Go full-tier runs load and type-check the test packages as well, so they take longer on modules with many tests.
+
+### Limitations
+
+- **TypeScript.** A receiver the provenance walk cannot tie to a listed module is missed, not guessed: a client passed through an untyped factory or a dependency-injection container, more than 8 steps away, a union-typed receiver (`Pool | null`), a getter or method that returns a pool, a namespace import of a relative module. Numeric constants in a template are not constant.
+- **Java.** The tree-sitter tier keeps string values only (non-string values such as `nullable = false` appear only in the full tier), does not evaluate string constants or concatenation (escapes in literals are decoded). MyBatis `<script>` and `${}` texts pass through as written. Without a method binding (dependency JARs missing), subclass receivers (`LoanJdbc extends JdbcTemplate`) and `super.update(...)` are missed, and array literals in `batchUpdate` are not expanded. In the syntax fallback, numbers keep their raw token (`10L`, `0x10`) when JDT cannot evaluate them.
+- **Go.** The tree-sitter tier decodes interpreted (double-quoted) tag literals with JSON rules, not Go unquote rules, so `\x41`, octal and `\a` escapes can differ from the full tier (raw-string tags, the usual form, agree); it reads exported structs only. Build-tagged test files (for example `//go:build integration`) are not loaded, so the full tier gives them no symbols. User-defined interfaces (sqlc's `DBTX`), method values and method expressions give no call sites, and the sqlx `...Context` forms are not in the table.
+
+### Host-language corpus cases
+
+`packages/sql-extract/corpus` holds cases written in each host language next to the SQL ones: `<case>.<ts|java|go>.fixture` with a `<case>.expected.json` whose `mode` (`typescript`, `java` or `go`) matches the extension and whose `accesses` hold the union of the case's data edges by kind. They default to `sides: []`, so the sql-extract, lang-sql and ScriptDom tests skip them; only the matching plugin runs them (Java and Go against the stub library types of the lending samples), and the sql-extract corpus test checks the pairing and modes.
+
+**Adding one.** Write `<case>.ts.fixture` (or `.java.fixture`, `.go.fixture`) with synthetic library-lending names, write `<case>.expected.json` with `"mode": "typescript"` (or `java`, `go`) and the expected `reads`, `writes` and `executes`, each sorted, then run `pnpm --filter @ctxo/sql-extract test` and the plugin's suite: `pnpm --filter @ctxo/lang-typescript test`, `pnpm --filter @ctxo/lang-java test` with `CTXO_JDT_ANALYZER_JAR` pointing at a built analyzer JAR, or `pnpm --filter @ctxo/lang-go test` with Go on `PATH`. A Java or Go case that needs a library type the stubs do not have adds it to the stubs.
+
 ## Data coupling in the contexts view
 
 `ctxo index` adds data coupling to `.ctxo/index/contexts-view.json` (see "Candidate contexts" in [architectural intelligence](architectural-intelligence.md) for the view itself):
@@ -295,6 +391,8 @@ contextsView:
 
 | Missing | Behaviour |
 |---|---|
+| JRE 11+ or `@ctxo/lang-java-analyzer` | The Java plugin runs its tree-sitter tier: annotations with string values only, no SQL call-site edges |
+| Go 1.22+ (or no `go.mod` / `go.work`) | The Go plugin runs its tree-sitter tier: struct-tag annotations on exported structs and no SQL call-site edges |
 | .NET SDK 8+ | No Roslyn annotations and no SQL call-site edges; the tree-sitter tier still emits attribute annotations, with literal arguments only. `ctxo doctor` (`csharp_tier`) passes at the syntax tier with a hint |
 | The Roslyn helper cannot restore or build (for example a private or offline NuGet feed without ScriptDom) | The C# plugin falls back to tree-sitter: symbols and literal-only annotations are kept; Roslyn-tier details (resolved `named.type`, non-literal argument values) and SQL call-site edges are lost. `ctxo index` reports `C#: N files (syntax tier - the Roslyn helper failed, run "ctxo doctor")` and `ctxo doctor` warns (`csharp_tier`) |
 | The Roslyn keep-alive of `ctxo watch` is gone (idle shutdown or crash) | The next re-index restarts it once. If the restart fails, the C# plugin falls back to tree-sitter, so watch never writes a C# file with zero symbols because the keep-alive stopped |
@@ -310,10 +408,11 @@ contextsView:
 - **ScriptDom restore.** The Roslyn helper now restores `Microsoft.SqlServer.TransactSql.ScriptDom` from NuGet for every C# user, with or without `@ctxo/lang-sql`. If your feed cannot serve it, the plugin falls back to tree-sitter (see above); make the package reachable from your NuGet sources to keep the Roslyn tier.
 - **.NET roll forward.** The helper targets `net8.0` with `RollForward` `Major`: the .NET host keeps using an installed 8.x runtime and rolls forward to a newer major runtime when no 8.x is installed. The built helper has been run with `dotnet exec --fx-version` on .NET 8, 9 and 10, and an integration test checks the `rollForward` setting and runs the helper on the newest installed runtime.
 - **Lone `.csproj`.** A C# repository with one `.csproj` and no solution file now indexes in the Roslyn tier.
+- **One-time TypeScript, Java and Go index change.** The first re-index after upgrading `@ctxo/lang-typescript`, `@ctxo/lang-java` or `@ctxo/lang-go` rewrites the committed JSON of their files: annotations and test symbols are always on, and SQL edges appear when `@ctxo/lang-sql` is installed. Make it a full `ctxo index`, so every file and every test symbol changes in one commit. Expect the safe-edit gate to fire somewhat more often on well-tested symbols, and symbol-level communities to shift once.
 
 ## The conformance corpus
 
-`packages/sql-extract/corpus/` keeps the TypeScript and C# SQL parsers in agreement. Each case is a `<case>.sql` file (UTF-8, LF, pinned by `.gitattributes`) with a `<case>.expected.json`:
+`packages/sql-extract/corpus/` keeps the TypeScript and C# SQL parsers in agreement. It also holds host-language cases for TypeScript, Java and Go call sites (see [host-language corpus cases](#host-language-corpus-cases)). Each case is a `<case>.sql` file (UTF-8, LF, pinned by `.gitattributes`) with a `<case>.expected.json`:
 
 ```json
 {
@@ -336,6 +435,6 @@ The `@ctxo/sql-extract` and `@ctxo/lang-sql` tests run every case on their side.
 
 - [ADR-017](../architecture/ADR/adr-017-plugin-protocol-v2-and-data-coupling.md): the decisions behind this phase
 - [Architectural intelligence](architectural-intelligence.md): communities, co-change and the contexts view
-- [SQL language page](../../site/docs/languages/sql.md) and [C# language page](../../site/docs/languages/csharp.md)
+- [SQL language page](../../site/docs/languages/sql.md) and the [C#](../../site/docs/languages/csharp.md), [TypeScript](../../site/docs/languages/typescript.md), [Java](../../site/docs/languages/java.md) and [Go](../../site/docs/languages/go.md) language pages
 - [Writing a plugin](../../site/docs/languages/writing-a-plugin.md): the v2 surface for plugin authors
 - [roadmap.md](../roadmap.md): deferred items (NoSQL, messaging, dialects, ORMs)
