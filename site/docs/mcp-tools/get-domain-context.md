@@ -153,7 +153,7 @@ With neither parameter the response lists every context in registry order:
 
 ## Graceful misses
 
-Every miss is `{ "found": false, "hint": "..." }`, never an error:
+Every miss is `{ "found": false, "hint": "..." }`. An unexpected failure (an unreadable graph) is `{ "error": true, "message": "..." }`. The misses:
 
 | Situation | Hint |
 | --- | --- |

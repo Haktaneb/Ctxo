@@ -532,7 +532,7 @@ Title path joined with ` > `; whitespace collapsed; runs of `:` collapsed and a 
 
 ---
 
-## Domain Knowledge Layer: `@ctxo/domain` (unreleased, #156 PR 2B)
+## Domain Knowledge Layer: `@ctxo/domain` (0.14.0, #156 PR 2B)
 
 An opt-in package that lets a team name its bounded contexts and keep markdown cards in step with code. Ctxo supplies structure, linkage, verification and retrieval; it never writes domain text or fetches external documentation. Feature doc: docs/features/domain-knowledge.md ("Named contexts and the domain package", "Ctxo domain conventions v1"). Design record: docs/architecture/ADR/adr-018-domain-knowledge-layer.md.
 
@@ -589,7 +589,7 @@ New in the next release: with `@ctxo/domain` and a registry, `ctxo index` (and t
 
 ### Nodes and links
 - Nodes: `context:<id>`, `rule:<ID>`, `term:<context>/<term-key>` (repo-wide glossary terms use `*`), `decision:<context>/<date>-<n>`; search-only `section:<card>:<line>`.
-- Links, each with `source` and the evidence location `at` (1-based): rule-test (`annotation`: xUnit Trait with a `domain.tests.ruleTraitKeys` key; `category`: NUnit Category, MSTest TestCategory, JUnit Tag; `test-title`; `rule-comment`; `mention`; `card-tests`), rule-symbol (`card-code`; `rule-comment` in indexed non-test files up to 1 MiB, linked to the symbol starting within three lines below, else the innermost one), decision-provenance (`card-link`, `card-text`), decision-rule, term-identifier (`symbol-name`, `table-name`; contiguous token run with plural folding, own context only, at most 50 per term).
+- Links, each with `source` and the evidence location `at` (1-based): rule-test (`annotation`: xUnit Trait with a `domain.tests.ruleTraitKeys` key; `category`: NUnit Category, MSTest TestCategory, JUnit Tag; `test-title`; `rule-comment`; `mention`; `card-tests`), rule-symbol (`card-code`; `rule-comment` in indexed non-test files up to 1 MiB, linked to the symbol starting within three lines below when it sits inside the symbol containing the comment, else the innermost one), decision-provenance (`card-link`, `card-text`), decision-rule, term-identifier (`symbol-name`, `table-name`; contiguous token run with plural folding, own context only, at most 50 per term).
 - Card values that resolve to nothing are kept in `unresolved` (`missing-file`, `not-a-symbol`).
 
 ### Card format additions (Ctxo domain conventions v1)

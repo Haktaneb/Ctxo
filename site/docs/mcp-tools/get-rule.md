@@ -116,6 +116,7 @@ Every source names the file and line where Ctxo saw it. A link exists only to an
 | --- | --- |
 | No card defines the ID | `{ "found": false, "hint": "No rule LEND-99 in any card." }` |
 | No registry, an invalid or changed registry, or no graph | `{ "found": false, "hint": "..." }` with the same hints as [`get_domain_context`](/mcp-tools/get-domain-context#graceful-misses) |
+| An unexpected failure (an unreadable graph) | `{ "error": true, "message": "..." }` |
 | A card or the glossary changed since the last index | The answer from the graph, plus `stale: true` and a hint to run `ctxo index` |
 
 ## Truncation

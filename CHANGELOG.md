@@ -20,7 +20,7 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (ten packages today). Per-pack
   with a `domain.tests.ruleTraitKeys` key, NUnit `Category`, MSTest `TestCategory`, JUnit `Tag`; the text scan of
   test files with ID variants and test titles; `rule:` comments; card `Tests:` lines), rule to symbol (card `Code:`
   lines; `rule:` comments in indexed non-test files up to 1 MiB, linked to the declaration that starts within three
-  lines below, else the innermost one), decision to provenance (relative links to repository files; `#123`, URLs and
+  lines below and sits inside the symbol that contains the comment, else the innermost one), decision to provenance (relative links to repository files; `#123`, URLs and
   tracker keys kept as strings, never fetched) and term to identifiers (symbol and table names that carry the
   term's words, within the term's context, with plural folding, at most 50 per term with the count).
 - Card format additions, all optional and none needing a code change: `Code:` lines, `**Term**` items in
@@ -32,7 +32,7 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (ten packages today). Per-pack
   `cardsChanged` and `rulesWithoutTests` on `get_pr_impact`.
 - `get_domain_context({ symbolId?, path? })`: the card of the named context that owns a symbol or file (terms,
   rules with tests and code links, contracts, decisions, open questions); with neither parameter, every context with
-  its counts. `get_rule({ ruleId })`: one rule (ID variants accepted) with its tests and their link sources, the
+  its counts. `get_rule({ ruleId })`: one rule (ID variants accepted, and the `rule:LEND-03` id of a domain-scope hit as is) with its tests and their link sources, the
   symbols that implement it, decisions and provenance. Both answer `{ found: false, hint }` without a registry or a
   graph, and add `stale: true` after a card edit not yet indexed. Ctxo now has 14 core tools, 16 with
   `@ctxo/domain`.
@@ -85,8 +85,13 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (ten packages today). Per-pack
 - `ctxo verify-domain` check 6 warns about an unknown rule ID in a `rule:` comment in production code
   (`rule: comment names unknown rule <ID>`), only when its prefix is a rule prefix (`# rule: E501` stays silent).
 - A `rule:` comment written above a declaration links to that declaration (the symbol that starts within three
-  lines below the comment), not to the enclosing class; the comment marker, `rule:` and the ID must be on one line,
+  lines below the comment and sits inside the symbol that contains it), not to the enclosing class; a comment
+  inside a method body stays with that method; the comment marker, `rule:` and the ID must be on one line,
   and `/** rule: X */` counts.
+- Cards and the glossary are read the way provenance files are: only when their real path lies inside the
+  repository (a card symlinked outside it is not read), through a no-follow open, and up to 1 MiB. A skipped file
+  counts as a missing card, in the graph, in the stale-card check and in `ctxo verify-domain`, and is logged with
+  its reason.
 - An H1 heading now ends the "Rules and invariants" section of a card. A `### X-NN` heading after a stray H1 in
   that section no longer defines a rule, so `verify-domain` check 6 results can change for such cards.
 - The asynchronous tools (`get_blast_radius`, `get_pr_impact`, `get_why_context`) await asynchronous module
@@ -103,8 +108,7 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (ten packages today). Per-pack
 - `@ctxo/cli` no longer ships source maps in its npm package (unpacked size about 2.1 MB to about 0.8 MB, so the release-packaging limit is 850 KB, it was 2150 KB); stack traces were never mapped without `--enable-source-maps`, so behaviour is unchanged.
 - `pnpm-workspace.yaml` sets `hoistWorkspacePackages: false`, so a workspace package is never resolved
   through pnpm's hidden hoist; the setting moved out of the root `.npmrc`, so npm no longer warns
-  "Unknown project config"; `@ctxo/lang-java` declares `@ctxo/lang-java-analyzer` as a devDependency
-  for the test that resolves it.
+  "Unknown project config".
 
 **Domain knowledge layer: `@ctxo/domain` (#156 Phase 2, PR 2B).**
 
@@ -179,6 +183,10 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (ten packages today). Per-pack
 - `get_why_context` responses gain the `_meta` envelope the other tools already carry.
 - `ctxo install <name>` with an unknown name still exits 1; its message now lists `domain` among the
   known names.
+- The root `.npmrc` sets `hoist-workspace-packages=false`, so a workspace package is never resolved
+  through pnpm's hidden hoist; `@ctxo/lang-java` declares `@ctxo/lang-java-analyzer` as a devDependency
+  for the test that resolves it.
+- The CLI tarball limit in the release-packaging test is 2150 KB (it was 2100 KB).
 - MCP tool descriptions of `search_symbols`, `get_blast_radius`, `find_importers`, `get_logic_slice`,
   `get_pr_impact` and `get_why_context` name the new additive field.
 - `ctxo domain rules --check` fails on blocked files (a hand-written file at a generated path) as well

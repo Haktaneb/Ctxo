@@ -68,7 +68,7 @@ Language adapters ship as separate npm packages and are discovered by scanning t
 - Card format additions (no code change needed): `Code:` lines, `**Term**` items, glossary `(context: <id>)`, dated decision lines. `Tests:`/`Code:` values with `::` are symbol IDs; use `file#Name` for a plain test name. `verify-domain` check 6 also errors on missing `Code:` files and directories, and warns on unindexed symbol IDs and unknown IDs in production `rule:` comments of a rule prefix.
 - `@ctxo/cli` no longer publishes source maps (tarball about 0.8 MB unpacked). Internal API: async enrichers, `reserveTaskContextTokens`, `rankedContextScopes`, host services `createDocumentSearch`, `splitIdentifier`, `dataResourceKinds` (ADR-018 addendum).
 
-## Unreleased: domain knowledge layer, `@ctxo/domain` (#156, PR 2B)
+## Domain knowledge layer, `@ctxo/domain` (0.14.0, #156 PR 2B)
 
 - Install: `ctxo install domain` (globally when the project has no `package.json`), then `ctxo init --domain`. Opt-in: without the package, no commands, fields or hooks, and a known domain command name prints an install hint and exits 1 (`ctxo domain-guard-hook` exits 0 without output). With the package but no registry, the domain commands print a hint and exit 0 and no `context` fields appear.
 - Registry `docs/domain/contexts.yaml`: contexts with `id`, `name`, `card`, `paths`, `rung` (fear, pinned, named, bounded, boring), `rulePrefix`, `contracts`; `unowned.allow`, `glossary`, `contextMap`. A card has five H2 headings (Language; Rules and invariants; Boundary contracts; Decisions; Open questions) and rules as `### LEND-03 title` with optional `Tests:`, `Code:` and `Untested:` lines.
