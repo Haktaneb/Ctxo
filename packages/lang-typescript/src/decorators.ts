@@ -25,7 +25,14 @@ function propertyKey(node: Node): string | undefined {
   return undefined;
 }
 
-function toAnnotation(decorator: Decorator, member?: string): SymbolAnnotation {
+function toAnnotation(decorator: Decorator, member?: string): SymbolAnnotation | undefined {
+  let decoratorName: string;
+  try {
+    decoratorName = decorator.getName();
+  } catch {
+    // ts-morph throws for expressions that are neither an identifier nor a property access.
+    return undefined;
+  }
   const args: string[] = [];
   const named: Record<string, string> = {};
   let namedCount = 0;
@@ -53,7 +60,7 @@ function toAnnotation(decorator: Decorator, member?: string): SymbolAnnotation {
   }
 
   return {
-    name: decorator.getName(),
+    name: decoratorName,
     ...(args.length > 0 ? { args } : {}),
     ...(Object.keys(named).length > 0 ? { named } : {}),
   };
@@ -63,17 +70,23 @@ function toAnnotation(decorator: Decorator, member?: string): SymbolAnnotation {
 export function classAnnotations(cls: ClassDeclaration): SymbolAnnotation[] | undefined {
   const out: SymbolAnnotation[] = [];
   for (const decorator of cls.getDecorators()) {
-    out.push(toAnnotation(decorator));
+    const ann = toAnnotation(decorator);
+    if (ann) out.push(ann);
   }
   for (const prop of cls.getProperties()) {
     for (const decorator of prop.getDecorators()) {
-      out.push(toAnnotation(decorator, prop.getName()));
+      const ann = toAnnotation(decorator, prop.getName());
+      if (ann) out.push(ann);
     }
   }
   return out.length > 0 ? out.slice(0, ANNOTATION_CAPS.perSymbol) : undefined;
 }
 
 export function methodAnnotations(method: MethodDeclaration): SymbolAnnotation[] | undefined {
-  const out = method.getDecorators().map((d) => toAnnotation(d));
+  const out: SymbolAnnotation[] = [];
+  for (const d of method.getDecorators()) {
+    const ann = toAnnotation(d);
+    if (ann) out.push(ann);
+  }
   return out.length > 0 ? out.slice(0, ANNOTATION_CAPS.perSymbol) : undefined;
 }

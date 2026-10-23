@@ -82,6 +82,17 @@ export class P {
     expect(out.some((s) => s.name === 'Hidden')).toBe(false);
   });
 
+  it('an exotic decorator expression is skipped and the rest of the file is kept', async () => {
+    const out = await symbols(`
+@(x)() @Good('a') export class Z {
+  @(y ? a : b)() @Fine() m() {}
+  @(p)() q = 1;
+}`);
+    expect(out.map((s) => s.name)).toEqual(['Z', 'Z.m']);
+    expect(out[0].annotations).toEqual([{ name: 'Good', args: ['a'] }]);
+    expect(out[1].annotations).toEqual([{ name: 'Fine' }]);
+  });
+
   it('symbols without decorators carry no annotations key', async () => {
     const out = await symbols(`export class Plain { m() {} }`);
     for (const s of out) expect('annotations' in s).toBe(false);
