@@ -72,7 +72,7 @@ describe('diffLoaderRules', () => {
     const existing = new Map<string, string>([
       ['.claude/rules/ctxo-context-lending.md', `﻿${CLAUDE.replace(/\n/g, '\r\n')}`],
       ['.cursor/rules/ctxo-context-lending.mdc', `${CURSOR}extra\n`],
-      ['.claude/rules/ctxo-context-gone.md', `${LOADER_RULE_MARKER}\n# Gone\n`],
+      ['.claude/rules/ctxo-context-gone.md', `---\npaths:\n  - "x/**"\n---\n${LOADER_RULE_MARKER}\n# Gone\n`],
       ['.claude/rules/ctxo-context-mine.md', '# my own rule\n'],
     ]);
     expect(diffLoaderRules(expected, existing)).toEqual({
@@ -80,7 +80,10 @@ describe('diffLoaderRules', () => {
       outdated: ['.cursor/rules/ctxo-context-lending.mdc'],
       stale: ['.claude/rules/ctxo-context-gone.md'],
       foreign: ['.claude/rules/ctxo-context-mine.md'],
+      blocked: [],
     });
+    const quoted = new Map([['.claude/rules/ctxo-context-lending.md', `# mine\n${LOADER_RULE_MARKER}\n`]]);
+    expect(diffLoaderRules(expected, quoted).blocked).toEqual(['.claude/rules/ctxo-context-lending.md']);
     expect(diffLoaderRules(expected, new Map()).missing).toEqual(expected.map((f) => f.path));
   });
 });

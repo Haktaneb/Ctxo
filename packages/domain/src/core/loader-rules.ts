@@ -17,6 +17,8 @@ export interface LoaderRulesDiff {
   readonly outdated: readonly string[];
   readonly stale: readonly string[];
   readonly foreign: readonly string[];
+  /** Prefixed files without the marker at a path a generated file belongs at. */
+  readonly blocked: readonly string[];
 }
 
 const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -60,26 +62,35 @@ function normalise(text: string): string {
   return noBom.replace(/\r\n?/g, '\n');
 }
 
+/** Generated means the marker is the first line after the front matter, not merely somewhere in the file. */
+export function isGeneratedRule(text: string): boolean {
+  const lines = normalise(text).split(/\n/);
+  if (lines[0] !== '---') return false;
+  const close = lines.indexOf('---', 1);
+  return close > 0 && lines[close + 1] === LOADER_RULE_MARKER;
+}
+
 /**
  * Compares the expected files with the prefixed files found on disk. A file with the marker that is not expected
- * is stale; a prefixed file without the marker is foreign (reported, never changed). CRLF and a BOM are ignored.
+ * is stale; a prefixed file without the marker is foreign (reported, never changed), or blocked when an expected file belongs at its path. CRLF and a BOM are ignored.
  */
 export function diffLoaderRules(expected: readonly LoaderRuleFile[], existing: ReadonlyMap<string, string>): LoaderRulesDiff {
   const missing: string[] = [];
   const outdated: string[] = [];
   const stale: string[] = [];
   const foreign: string[] = [];
+  const blocked: string[] = [];
   const expectedPaths = new Set<string>();
   for (const file of expected) {
     expectedPaths.add(file.path);
     const current = existing.get(file.path);
     if (current === undefined) missing.push(file.path);
-    else if (!normalise(current).includes(LOADER_RULE_MARKER)) foreign.push(file.path);
+    else if (!isGeneratedRule(current)) blocked.push(file.path);
     else if (normalise(current) !== file.content) outdated.push(file.path);
   }
   for (const [path, text] of existing) {
     if (expectedPaths.has(path)) continue;
-    if (normalise(text).includes(LOADER_RULE_MARKER)) stale.push(path);
+    if (isGeneratedRule(text)) stale.push(path);
     else foreign.push(path);
   }
   return {
@@ -87,5 +98,6 @@ export function diffLoaderRules(expected: readonly LoaderRuleFile[], existing: R
     outdated: outdated.sort(compare),
     stale: stale.sort(compare),
     foreign: foreign.sort(compare),
+    blocked: blocked.sort(compare),
   };
 }

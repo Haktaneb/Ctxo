@@ -15,7 +15,7 @@ const USAGE = [
 
 const HELP_LINES = ['  ctxo domain rules --write|--check   Generate or check the path-scoped loader rules per context'];
 
-const STALE_NOTE = 'deleted (stale)';
+const BLOCKED_NOTE = 'exists without the generated marker; rename it or delete it, then run --write';
 
 async function rules(args: readonly string[], host: CtxoHost, ctx: ModuleCommandContext): Promise<number> {
   const write = args.includes('--write');
@@ -47,19 +47,20 @@ async function rules(args: readonly string[], host: CtxoHost, ctx: ModuleCommand
   if (write) {
     const results = applyLoaderRules(ctx.projectRoot, expected, diff);
     for (const result of results) {
-      if (result.warning === STALE_NOTE) console.error(`  deleted  ${result.file}`);
-      else console.error(`  ${result.action}  ${result.file}${result.warning ? `  (${result.warning})` : ''}`);
+      console.error(`  ${result.action}  ${result.file}${result.warning ? `  (${result.warning})` : ''}`);
     }
+    for (const path of diff.blocked) console.error(`[ctxo] ${path} ${BLOCKED_NOTE}`);
     for (const path of diff.foreign) console.error(`  foreign (kept)  ${path}`);
-    if (results.length === 0) console.error('[ctxo] Loader rules are up to date.');
-    return results.some((result) => result.action === 'skipped') ? 1 : 0;
+    if (results.length === 0 && diff.blocked.length === 0) console.error('[ctxo] Loader rules are up to date.');
+    return diff.blocked.length > 0 || results.some((result) => result.action === 'skipped') ? 1 : 0;
   }
 
   for (const path of diff.missing) console.error(`  missing   ${path}`);
   for (const path of diff.outdated) console.error(`  outdated  ${path}`);
   for (const path of diff.stale) console.error(`  stale     ${path}`);
   for (const path of diff.foreign) console.error(`  foreign   ${path}  (no generated marker; not checked)`);
-  const failing = diff.missing.length + diff.outdated.length + diff.stale.length > 0;
+  for (const path of diff.blocked) console.error(`[ctxo] ${path} ${BLOCKED_NOTE}`);
+  const failing = diff.missing.length + diff.outdated.length + diff.stale.length + diff.blocked.length > 0;
   if (failing) console.error('[ctxo] Loader rules are out of date; run "ctxo domain rules --write".');
   else console.error('[ctxo] Loader rules are up to date.');
   return failing ? 1 : 0;

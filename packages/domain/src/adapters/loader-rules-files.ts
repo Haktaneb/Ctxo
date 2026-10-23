@@ -1,8 +1,13 @@
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import type { InitFileResult } from '@ctxo/cli/internal';
 import { LOADER_RULE_PREFIX, type LoaderPlatform, type LoaderRuleFile, type LoaderRulesDiff } from '../core/loader-rules.js';
+
+export interface LoaderRuleResult {
+  readonly file: string;
+  readonly action: 'created' | 'updated' | 'deleted' | 'skipped';
+  readonly warning?: string;
+}
 
 const RULE_DIRS = ['.claude/rules', '.cursor/rules'] as const;
 
@@ -28,7 +33,7 @@ export function readExistingLoaderRules(projectRoot: string): Map<string, string
       continue;
     }
     for (const name of names.sort()) {
-      if (!name.startsWith(LOADER_RULE_PREFIX)) continue;
+      if (!name.startsWith(LOADER_RULE_PREFIX) || name.endsWith('.tmp')) continue;
       try {
         found.set(`${dir}/${name}`, readFileSync(join(projectRoot, dir, name), 'utf-8'));
       } catch {
@@ -52,8 +57,8 @@ function writeAtomic(target: string, content: string): void {
 }
 
 /** Writes the missing and outdated files (a `wx` temp file renamed over the target, PF27) and deletes the stale ones. */
-export function applyLoaderRules(projectRoot: string, expected: readonly LoaderRuleFile[], diff: LoaderRulesDiff): InitFileResult[] {
-  const results: InitFileResult[] = [];
+export function applyLoaderRules(projectRoot: string, expected: readonly LoaderRuleFile[], diff: LoaderRulesDiff): LoaderRuleResult[] {
+  const results: LoaderRuleResult[] = [];
   const byPath = new Map(expected.map((file) => [file.path, file.content]));
   const write = (path: string, action: 'created' | 'updated'): void => {
     try {
@@ -68,7 +73,7 @@ export function applyLoaderRules(projectRoot: string, expected: readonly LoaderR
   for (const path of diff.stale) {
     try {
       rmSync(join(projectRoot, path), { force: true });
-      results.push({ file: path, action: 'updated', warning: 'deleted (stale)' });
+      results.push({ file: path, action: 'deleted' });
     } catch (err) {
       results.push({ file: path, action: 'skipped', warning: `cannot delete: ${(err as Error).message}` });
     }
