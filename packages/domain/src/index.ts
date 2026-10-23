@@ -6,6 +6,7 @@ import { verifyDomainCommand } from './commands/verify-domain-command.js';
 import { domainDoctorChecks } from './doctor/domain-checks.js';
 import { domainIndexPass } from './index-pass/domain-index-pass.js';
 import { domainInit } from './init/domain-init.js';
+import { domainRankedScope } from './mcp/domain-scope.js';
 import { createDomainState } from './mcp/domain-state.js';
 import { domainTools } from './mcp/domain-tools.js';
 import { createEnrichers } from './mcp/enrichers.js';
@@ -44,6 +45,7 @@ export const register: CtxoModuleRegister = async (host) => {
     },
     enrich: createEnrichers(host, state),
     reserveTaskContextTokens: taskContextReservation(state),
+    rankedContextScopes: [domainRankedScope(host, state)],
     init: domainInit(host),
     doctorChecks: domainDoctorChecks(host),
   };
