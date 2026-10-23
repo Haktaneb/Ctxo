@@ -144,7 +144,8 @@ export class SampleWorkspace {
 
   /** Replaces `from` with `to` in a file; throws when `from` is not there. */
   replace(file: string, from: string, to: string): void {
-    const text = this.read(file);
+    // A checkout with core.autocrlf=true holds the fixtures with CRLF; compare and write LF.
+    const text = this.read(file).replace(/\r\n/g, '\n');
     if (!text.includes(from)) throw new Error(`${file} does not contain ${JSON.stringify(from)}`);
     this.write(file, text.replace(from, to));
   }

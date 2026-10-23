@@ -15,7 +15,7 @@ const USAGE = [
   '       ctxo domain discover [--json] [--write]',
   '',
   '  rules --write  Generate the path-scoped loader rules (.claude/rules, and .cursor/rules when .cursor/ exists)',
-  '  rules --check  Exit 1 when a generated rule is missing, outdated or stale',
+  '  rules --check  Exit 1 when a generated rule is missing, outdated or stale, or when a hand-written file blocks an expected path',
   '  discover       Propose tracker prefixes, rule trait keys and test folders from the repository; --json prints them, --write merges them into .ctxo/config.yaml',
 ];
 
@@ -69,10 +69,11 @@ async function rules(args: readonly string[], host: CtxoHost, ctx: ModuleCommand
   for (const path of diff.stale) console.error(`  stale     ${path}`);
   for (const path of diff.foreign) console.error(`  foreign   ${path}  (no generated marker; not checked)`);
   for (const path of diff.blocked) console.error(`[ctxo] ${path} ${BLOCKED_NOTE}`);
-  const failing = diff.missing.length + diff.outdated.length + diff.stale.length + diff.blocked.length > 0;
-  if (failing) console.error('[ctxo] Loader rules are out of date; run "ctxo domain rules --write".');
+  const regenerable = diff.missing.length + diff.outdated.length + diff.stale.length;
+  if (regenerable > 0) console.error('[ctxo] Loader rules are out of date; run "ctxo domain rules --write".');
+  else if (diff.blocked.length > 0) console.error('[ctxo] Loader rules are blocked: rename the file or delete it, then run "ctxo domain rules --write".');
   else console.error('[ctxo] Loader rules are up to date.');
-  return failing ? 1 : 0;
+  return regenerable + diff.blocked.length > 0 ? 1 : 0;
 }
 
 async function discover(args: readonly string[], host: CtxoHost, ctx: ModuleCommandContext): Promise<number> {

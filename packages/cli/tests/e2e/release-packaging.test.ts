@@ -88,7 +88,7 @@ describe('Release Packaging', () => {
     expect(files.some((f: string) => f === 'package.json')).toBe(true);
   });
 
-  it('tarball size is reasonable (< 2100KB)', { timeout: 30_000 }, () => {
+  it('tarball size is reasonable (< 2150KB)', { timeout: 30_000 }, () => {
     const output = execSync('npm pack --dry-run --json', { cwd: ROOT, encoding: 'utf-8' });
 
     const info = JSON.parse(output);
@@ -127,7 +127,11 @@ describe('Release Packaging', () => {
     // crossed the limit at 2024.33KB, so it is 2050KB, the next 50KB step.
     // Global installs (K15: install kinds, `ctxo install domain`, global MCP entries, the install_copies
     // check, shipped as JS plus source maps) crossed it at 2052.03KB, so it is 2100KB, the next 50KB step.
-    expect(sizeKB).toBeLessThan(2100);
+    // The rest of PR 2B (the module's response enrichers, the six tool description clauses, the longer
+    // README and llms*.txt, and the merge of language parity and 0.13.1) measured 2124.73KB, so it is
+    // 2150KB, the next 50KB step. Source maps are a large part of the tarball; slimming them is the owner's
+    // call (spec 4).
+    expect(sizeKB).toBeLessThan(2150);
     expect(sizeKB).toBeGreaterThan(1); // Sanity: not empty (dist/ may not exist in CI pre-build)
   });
 });

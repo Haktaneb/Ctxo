@@ -174,7 +174,7 @@ export function registerTools(
   server.registerTool(
     'get_logic_slice',
     {
-      description: 'Retrieve a symbol and all its transitive dependencies as a Logic-Slice. Use this when you need to UNDERSTAND what a symbol depends on (downstream view). L1=signature only, L2=direct deps, L3=full closure, L4=with token budget and symbol annotations (attributes, columns; only L4 includes them). Use `intent` to filter dependencies by keyword (e.g., "core", "adapter"). All responses include `_meta` with item counts and truncation info. For impact analysis (what BREAKS if this changes), use get_blast_radius instead. For task-specific context, use get_context_for_task.',
+      description: 'Retrieve a symbol and all its transitive dependencies as a Logic-Slice. Use this when you need to UNDERSTAND what a symbol depends on (downstream view). L1=signature only, L2=direct deps, L3=full closure, L4=with token budget and symbol annotations (attributes, columns; only L4 includes them). Use `intent` to filter dependencies by keyword (e.g., "core", "adapter"). All responses include `_meta` with item counts and truncation info. For impact analysis (what BREAKS if this changes), use get_blast_radius instead. For task-specific context, use get_context_for_task. With @ctxo/domain and a registry, the root symbol carries `context` (its named context id).',
       inputSchema: {
         symbolId: z.string().optional().describe(`Single symbol ID (${SYMBOL_ID_FORMAT})`),
         symbolIds: z.array(z.string()).optional().describe('Batch: array of symbol IDs'),
@@ -189,7 +189,7 @@ export function registerTools(
   server.registerTool(
     'get_why_context',
     {
-      description: 'Retrieve git commit history intent and anti-pattern warnings (reverts, rollbacks) for a symbol. Use this when you need to understand WHY code was written this way or whether it has a history of problems. Pair with get_change_intelligence for complexity/churn scores.',
+      description: 'Retrieve git commit history intent and anti-pattern warnings (reverts, rollbacks) for a symbol. Use this when you need to understand WHY code was written this way or whether it has a history of problems. Pair with get_change_intelligence for complexity/churn scores. With @ctxo/domain and a registry, `contextDrift` reports the named context of the symbol: its share of cross-context edges over time and files that moved between contexts.',
       inputSchema: {
         symbolId: z.string().min(1).describe(`The symbol ID (${SYMBOL_ID_FORMAT})`),
         maxCommits: z.number().int().min(1).optional().describe('Limit commit history to N most recent commits'),
@@ -216,7 +216,7 @@ export function registerTools(
   server.registerTool(
     'get_blast_radius',
     {
-      description: 'BEFORE modifying any symbol (a function, class, method or type, or a SQL table, view or procedure), call this to understand impact. Returns every symbol that depends on the target, directly or transitively, with risk scores that fall with depth. Each dependent is in the tier of its strongest edge: confirmed (`calls`, `extends`, `implements` and the data edges `reads`, `writes`, `executes`), likely (co-changed or `uses`), and potential (`imports`). When co-change history exists, `coChangedFiles` lists up to 10 files that often change together with the target\'s file but have no dependency path to it (informational: not counted in the tiers or risk scores). Use `confidence` to filter by tier, `intent` to filter by keyword. Large results are auto-truncated with `_meta.hint` for drill-in. For what a symbol DEPENDS ON (downstream), use get_logic_slice instead. For full PR-level analysis, use get_pr_impact.',
+      description: 'BEFORE modifying any symbol (a function, class, method or type, or a SQL table, view or procedure), call this to understand impact. Returns every symbol that depends on the target, directly or transitively, with risk scores that fall with depth. Each dependent is in the tier of its strongest edge: confirmed (`calls`, `extends`, `implements` and the data edges `reads`, `writes`, `executes`), likely (co-changed or `uses`), and potential (`imports`). When co-change history exists, `coChangedFiles` lists up to 10 files that often change together with the target\'s file but have no dependency path to it (informational: not counted in the tiers or risk scores). Use `confidence` to filter by tier, `intent` to filter by keyword. Large results are auto-truncated with `_meta.hint` for drill-in. For what a symbol DEPENDS ON (downstream), use get_logic_slice instead. For full PR-level analysis, use get_pr_impact. With @ctxo/domain and a registry, each impacted symbol carries `context` (its named context id).',
       inputSchema: {
         symbolId: z.string().min(1).describe(`The symbol ID (${SYMBOL_ID_FORMAT}). Every definition of a SQL object, and its name::kind id, has the same dependents`),
         confidence: z.enum(['confirmed', 'likely', 'potential']).optional().describe('Filter by confidence tier'),
@@ -296,7 +296,7 @@ export function registerTools(
   server.registerTool(
     'search_symbols',
     {
-      description: 'Search symbols by exact name or regex pattern across the codebase index. Use this when you know (part of) the symbol name and need to find its ID for use with other tools. For semantic/relevance-based search, use get_ranked_context instead.',
+      description: 'Search symbols by exact name or regex pattern across the codebase index. Use this when you know (part of) the symbol name and need to find its ID for use with other tools. For semantic/relevance-based search, use get_ranked_context instead. With @ctxo/domain and a registry, each result carries `context` (its named context id).',
       inputSchema: {
         pattern: z.string().min(1).describe('Search pattern (substring or regex)'),
         kind: SymbolKindSchema.optional().describe('Filter by symbol kind (table, view and procedure come from SQL plugins)'),
@@ -329,7 +329,7 @@ export function registerTools(
   server.registerTool(
     'find_importers',
     {
-      description: 'Find all symbols that import or depend on a given symbol (reverse dependency / "who uses this?"). Use this to check if a symbol is safe to modify or delete. Supports transitive traversal for deep impact chains. Use `intent` to filter by keyword (e.g., "test", "core"). For forward dependencies (what this symbol uses), use get_logic_slice. For aggregated impact with risk scores, use get_blast_radius.',
+      description: 'Find all symbols that import or depend on a given symbol (reverse dependency / "who uses this?"). Use this to check if a symbol is safe to modify or delete. Supports transitive traversal for deep impact chains. Use `intent` to filter by keyword (e.g., "test", "core"). For forward dependencies (what this symbol uses), use get_logic_slice. For aggregated impact with risk scores, use get_blast_radius. With @ctxo/domain and a registry, each importer carries `context` (its named context id).',
       inputSchema: {
         symbolId: z.string().min(1).describe(`The symbol ID (${SYMBOL_ID_FORMAT}). Every definition of a SQL object, and its name::kind id, has the same importers`),
         edgeKinds: z.array(EdgeKindSchema).optional().describe('Filter by edge kinds (reads, writes and executes are data access)'),
@@ -379,7 +379,7 @@ export function registerTools(
   server.registerTool(
     'get_pr_impact',
     {
-      description: 'Analyze the full impact of a PR or recent changes in a SINGLE call — combines changed symbols + blast radius + co-change history into one risk assessment. Results include `_meta` with truncation info. Use this FIRST when reviewing a PR or evaluating recent commits. For single-symbol analysis, use get_blast_radius instead.',
+      description: 'Analyze the full impact of a PR or recent changes in a SINGLE call — combines changed symbols + blast radius + co-change history into one risk assessment. Results include `_meta` with truncation info. Use this FIRST when reviewing a PR or evaluating recent commits. For single-symbol analysis, use get_blast_radius instead. With @ctxo/domain and a registry, changed symbols carry `context` and `contextBoundaryViolations` lists edges that touch them and cross a context boundary outside its contracts.',
       inputSchema: {
         since: z.string().optional().default('HEAD~1').describe('Git ref to diff against (default HEAD~1)'),
         maxFiles: z.number().int().min(1).optional().default(50).describe('Max changed files to analyze'),
