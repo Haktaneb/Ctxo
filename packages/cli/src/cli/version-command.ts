@@ -1,6 +1,6 @@
 import { SUPPORTED_API_VERSIONS } from '@ctxo/plugin-api';
 import type { CtxoLanguagePlugin } from '@ctxo/plugin-api';
-import { getVersion } from './cli-router.js';
+import { getVersion } from './cli-paths.js';
 import { discoverPlugins, type DiscoveredPlugin } from '../adapters/language/plugin-discovery.js';
 import { loadManifestPath } from './plugin-loader.js';
 

@@ -3,6 +3,7 @@ import {
   createTestFileClassifier,
   DEFAULT_TEST_GLOBS,
   filesWithTestAnnotations,
+  hasCSharpAnnotations,
   NAME_ONLY_TEST_GLOBS,
   TEST_FRAMEWORK_ANNOTATIONS,
 } from '../test-file-classifier.js';
@@ -131,6 +132,25 @@ describe('filesWithTestAnnotations', () => {
       ]),
     ]);
     expect(found.has(file)).toBe(true);
+  });
+});
+
+describe('hasCSharpAnnotations', () => {
+  it('is true when a .cs entry carries any annotation, test-framework or not', () => {
+    const file = 'src/Lending/LoanService.cs';
+    expect(hasCSharpAnnotations([indexOf(file, [method(file, 'Lend', [{ name: 'Obsolete' }])])])).toBe(true);
+  });
+
+  it('is false when no .cs entry carries an annotation', () => {
+    expect(hasCSharpAnnotations([])).toBe(false);
+    expect(hasCSharpAnnotations([indexOf('src/Lending/LoanService.cs', [method('src/Lending/LoanService.cs', 'Lend')])])).toBe(false);
+    // Annotations outside .cs files (another plugin's) are not C# evidence.
+    expect(hasCSharpAnnotations([indexOf('src/loan.ts', [method('src/loan.ts', 'lend', [{ name: 'Fact' }])])])).toBe(false);
+  });
+
+  it('is false for an empty annotations list', () => {
+    const file = 'src/Lending/LoanService.cs';
+    expect(hasCSharpAnnotations([indexOf(file, [method(file, 'Lend', [])])])).toBe(false);
   });
 });
 

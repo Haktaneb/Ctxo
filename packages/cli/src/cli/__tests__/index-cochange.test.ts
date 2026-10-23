@@ -129,6 +129,21 @@ describe('writeCoChangeMatrix', () => {
     );
   });
 
+  it('cuts the window with the since cutoff counted back from HEAD', () => {
+    const project = tempDir('ctxo-cochange-step-');
+    writeSources(project, ['src/a.ts', 'src/b.ts']);
+
+    // HEAD is day 3 of the shared history, so 1d keeps the commits of days 2 and 3.
+    writeCoChangeMatrix(optionsFor(project, { config: { cochange: { since: '1d' } } }));
+
+    const matrix = readMatrix(join(project, '.ctxo'));
+    expect(matrix.entries).toEqual([{ file1: 'src/a.ts', file2: 'src/b.ts', sharedCommits: 2, frequency: 1 }]);
+    expect(matrix.window).toMatchObject({ since: '1d', commitsScanned: 2, commitsUsed: 2 });
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[ctxo] Co-change: 1 pairs from 2 commits (0 mass commits skipped, window last 2000 commits within 1d of HEAD, 2 scanned)',
+    );
+  });
+
   it('drops an indexed file that is gone from the working tree', () => {
     const project = tempDir('ctxo-cochange-step-');
     writeSources(project, ['src/a.ts', 'src/b.ts']); // src/gone.ts is indexed but has no source left

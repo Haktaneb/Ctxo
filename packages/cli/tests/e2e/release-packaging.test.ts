@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, unlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
@@ -33,6 +34,43 @@ describe('Release Packaging', () => {
 
   it('dist/index.js exists after build', () => {
     expect(existsSync(join(ROOT, 'dist', 'index.js'))).toBe(true);
+  });
+
+  it('exports publish the entry and the internal API', () => {
+    const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8'));
+    expect(pkg.exports).toEqual({
+      '.': { types: './dist/index.d.ts', import: './dist/index.js' },
+      './internal': { types: './dist/internal.d.ts', import: './dist/internal.js' },
+      './package.json': './package.json',
+    });
+    expect(existsSync(join(ROOT, 'dist', 'internal.js'))).toBe(true);
+    expect(existsSync(join(ROOT, 'dist', 'internal.d.ts'))).toBe(true);
+  });
+
+  it('the internal API resolves through the package name', { timeout: 30_000 }, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ctxo-internal-api-'));
+    const link = join(dir, 'node_modules', '@ctxo', 'cli');
+    mkdirSync(dirname(link), { recursive: true });
+    symlinkSync(ROOT, link, 'junction');
+    try {
+      const output = execFileSync(
+        process.execPath,
+        ['--input-type=module', '-e', "import('@ctxo/cli/internal').then(m => process.stdout.write(typeof m.createModuleHost))"],
+        { cwd: dir, encoding: 'utf-8' },
+      );
+      expect(output).toBe('function');
+    } finally {
+      // Remove the link before the folder, so nothing can ever walk into the package it points at.
+      unlinkSync(link);
+      if (!existsSync(link)) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
+  it('npm pack --dry-run lists the internal entry and its types', { timeout: 30_000 }, () => {
+    const output = execSync('npm pack --dry-run --json', { cwd: ROOT, encoding: 'utf-8' });
+    const files: string[] = (JSON.parse(output)[0]?.files ?? []).map((f: { path: string }) => f.path);
+    expect(files).toContain('dist/internal.js');
+    expect(files).toContain('dist/internal.d.ts');
   });
 
   it('npm pack --dry-run excludes source and test files', { timeout: 30_000 }, () => {
@@ -81,6 +119,8 @@ describe('Release Packaging', () => {
     // step, 1600KB, plus 50KB of headroom). The owner set 2000KB ahead of the stack merge: PR 1B
     // (#156, 1712.86KB) plus PR 2A (tiered agent rules, about 1870KB together) would cross 1800KB;
     // PR 2A alone measured 1587.18KB at that change.
+    // PR 2B (#156) adds the `@ctxo/cli/internal` entry (its bundled declarations, about 31KB, and the code
+    // splitting shares between the two entries): 1905.87KB before it, 1946.30KB after, still under 2000KB.
     expect(sizeKB).toBeLessThan(2000);
     expect(sizeKB).toBeGreaterThan(1); // Sanity: not empty (dist/ may not exist in CI pre-build)
   });

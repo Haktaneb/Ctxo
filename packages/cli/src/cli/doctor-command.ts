@@ -24,6 +24,7 @@ import { SqliteCacheCheck } from '../adapters/diagnostics/checks/storage-check.j
 import { ConfigFileCheck } from '../adapters/diagnostics/checks/config-check.js';
 import { DiskUsageCheck } from '../adapters/diagnostics/checks/disk-check.js';
 import { applyFixes, formatFixReport } from './doctor-fix.js';
+import { getVersion } from './cli-paths.js';
 
 export interface DoctorOptions {
   json?: boolean;
@@ -43,7 +44,6 @@ export class DoctorCommand {
   }
 
   async run(options: DoctorOptions = {}): Promise<void> {
-    const { getVersion } = await import('./cli-router.js');
     console.error(`ctxo v${getVersion()} — health check\n`);
 
     const checks: IHealthCheck[] = [

@@ -1,7 +1,9 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: ['src/index.ts'],
+  // `internal` is the `@ctxo/cli/internal` entry (ADR-018); splitting shares the code both entries use.
+  entry: { index: 'src/index.ts', internal: 'src/internal.ts' },
+  splitting: true,
   format: ['esm'],
   dts: true,
   sourcemap: true,

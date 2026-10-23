@@ -1,5 +1,4 @@
-import { readFileSync, existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { getVersion, locateGitRoot } from './cli-paths.js';
 import { IndexCommand } from './index-command.js';
 import { SyncCommand } from './sync-command.js';
 import { StatusCommand } from './status-command.js';
@@ -68,40 +67,6 @@ function readInitPartsFlag(args: readonly string[], flag: '--only' | '--skip'): 
     return { present, parts, error: `[ctxo] Unknown init part: ${unknown[0]}. Valid parts: ${validParts}` };
   }
   return { present, parts };
-}
-
-export function getVersion(): string {
-  let dir = import.meta.dirname;
-  for (let i = 0; i < 10; i++) {
-    const pkg = join(dir, 'package.json');
-    if (existsSync(pkg)) {
-      try {
-        const json = JSON.parse(readFileSync(pkg, 'utf-8'));
-        return json.version ?? 'unknown';
-      } catch { break; }
-    }
-    const parent = join(dir, '..');
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return 'unknown';
-}
-
-/**
- * Walk up from `startDir` (capped at 12 levels) looking for a directory that
- * contains `.git`. First hit wins. Matches how git itself resolves the working
- * tree and keeps every subcommand consistent when the user runs ctxo from a
- * subdirectory or when pnpm --filter sets cwd to a monorepo package.
- */
-export function locateGitRoot(startDir: string): string | null {
-  let dir = startDir;
-  for (let i = 0; i < 12; i++) {
-    if (existsSync(join(dir, '.git'))) return dir;
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return null;
 }
 
 export class CliRouter {

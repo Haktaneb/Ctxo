@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeGlobMatcher, type ResolvedCoChangeConfig } from '../core/config/load-config.js';
 import { buildCoChangeMatrix } from '../core/co-change/co-change-analyzer.js';
-import { parseCoChangeSince, selectWindow, sinceCutoff } from '../core/co-change/co-change-window.js';
+import { selectWindow, windowCutoff } from '../core/co-change/co-change-window.js';
 import type { CanonicalCommit } from '../core/history/change-log.js';
 import type { JsonIndexWriter } from '../adapters/storage/json-index-writer.js';
 
@@ -51,9 +51,7 @@ export function writeCoChangeMatrix(options: WriteCoChangeMatrixOptions): void {
   const isIncluded = coChangeFileFilter(projectRoot, indexedFiles, coChange);
   if (isIncluded === undefined) return;
 
-  const since = coChange.since !== undefined ? parseCoChangeSince(coChange.since) : undefined;
-  const cutoff = since !== undefined ? sinceCutoff(headCommittedAt, since) : undefined;
-  const windowed = selectWindow(commits, coChange.maxCommits, cutoff);
+  const windowed = selectWindow(commits, coChange.maxCommits, windowCutoff(coChange, headCommittedAt));
 
   const matrix = buildCoChangeMatrix(windowed, {
     isIncluded,

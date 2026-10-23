@@ -19,6 +19,17 @@
   ],
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./internal": {
+      "types": "./dist/internal.d.ts",
+      "import": "./dist/internal.js"
+    },
+    "./package.json": "./package.json"
+  },
   "scripts": {
     "build": "tsup",
     "prepack": "node -e \"const fs=require('fs');for(const f of ['README.md','llms.txt','llms-full.txt'])fs.copyFileSync('../../'+f,f)\"",

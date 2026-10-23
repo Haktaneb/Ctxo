@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { getVersion } from './cli-router.js';
+import { getVersion } from './cli-paths.js';
 import { discoverPlugins } from '../adapters/language/plugin-discovery.js';
 import { loadManifestPath } from './plugin-loader.js';
 import { fetchDistTagsBatch, type HttpsFetcher } from '../core/update/registry-client.js';
