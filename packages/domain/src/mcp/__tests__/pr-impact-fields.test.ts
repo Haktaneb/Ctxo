@@ -2,8 +2,8 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { createModuleHost, type CtxoHost } from '@ctxo/cli/internal';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock, type MockInstance } from 'vitest';
+import { createModuleHost, type CtxoHost, type FileIndex } from '@ctxo/cli/internal';
 import { DomainArtifactStore } from '../../adapters/artifact-store.js';
 import {
   buildFixtureGraph,
@@ -57,13 +57,20 @@ function domainWarnings(): string[] {
 interface Repo {
   readonly host: CtxoHost;
   readonly fields: (payload: Payload, args?: Payload) => Promise<Payload>;
+  /** The host's `readIndex`, spied on. */
+  readonly readIndex: Mock<(ctxoRoot: string) => FileIndex[]>;
 }
+
+/** A clock far enough ahead that no file written by a test is inside the racy window. */
+const LATER = (): number => Date.now() + 60_000;
 
 /**
  * A temp repo: `main` holds the registry, the cards, the glossary and `code` files; the domain graph is written
  * under the ignored `.ctxo/`; HEAD is then a new `feat` branch.
  */
-function repo(options: { fixture?: FixtureInput; registry?: boolean; code?: Record<string, string> } = {}): Repo {
+function repo(
+  options: { fixture?: FixtureInput; registry?: boolean; code?: Record<string, string>; now?: () => number } = {},
+): Repo {
   const fixture = options.fixture ?? LENDING_FIXTURE;
   git('init', '-q', '-b', 'main');
   write('.gitignore', '.ctxo/\n');
@@ -73,10 +80,19 @@ function repo(options: { fixture?: FixtureInput; registry?: boolean; code?: Reco
   for (const [path, text] of Object.entries(options.code ?? { [POLICY_FILE]: 'class LoanPolicy {}\n' })) write(path, text);
   commit('main');
   git('checkout', '-q', '-b', 'feat');
-  const host = createModuleHost({ cliVersion: '0.0.0', mode: 'mcp', projectRoot: root });
+  const base = createModuleHost({ cliVersion: '0.0.0', mode: 'mcp', projectRoot: root });
+  // The host services are frozen: spy on a copy.
+  const readIndex = vi.fn((ctxoRoot: string) => base.services.readIndex(ctxoRoot));
+  const host: CtxoHost = { ...base, services: { ...base.services, readIndex } };
   new DomainArtifactStore(host.ctxoRoot).writeIfChanged('graph.json', buildFixtureGraph(fixture));
-  const enricher = prImpactDomainFields(host, createDomainState(host));
-  return { host, fields: async (payload, args = {}) => await enricher(structuredClone(payload), args) };
+  const enricher = prImpactDomainFields(host, createDomainState(host), options.now === undefined ? {} : { now: options.now });
+  return { host, readIndex, fields: async (payload, args = {}) => await enricher(structuredClone(payload), args) };
+}
+
+/** Writes one index entry JSON for `file` under `.ctxo/index/`. */
+function writeIndexEntry(file: string): void {
+  const entry: FileIndex = { file, lastModified: 1, symbols: [], edges: [], intent: [], antiPatterns: [] };
+  write(`.ctxo/index/${file}.json`, JSON.stringify(entry));
 }
 
 const CORE: Payload = { since: 'main', changedFiles: 1, files: [{ file: POLICY_FILE, symbols: [] }] };
@@ -257,5 +273,106 @@ describe('get_pr_impact domain fields', () => {
     expect((result['contextsTouched'] as { id: string }[]).map((c) => c.id)).toEqual(['lending']);
     expect(result['cardsChanged']).toEqual([]);
     expect((result['rulesWithoutTests'] as { ruleId: string }[]).map((r) => r.ruleId)).toEqual(['LEND-04', 'LEND-05']);
+  });
+
+  it('a since without a merge base with HEAD adds nothing and warns once', async () => {
+    const { fields } = repo();
+    git('checkout', '-q', '--orphan', 'other');
+    git('rm', '-q', '-r', '--cached', '.');
+    write('orphan.txt', 'unrelated history\n');
+    git('add', 'orphan.txt');
+    git('-c', 'commit.gpgsign=false', '-c', 'user.name=Test', '-c', 'user.email=test@test.com', 'commit', '-q', '-m', 'orphan');
+    git('checkout', '-q', '-f', 'feat');
+    git('clean', '-fq', '--', 'orphan.txt');
+
+    const result = await fields(CORE, { since: 'other' });
+
+    expect(result).toEqual(CORE);
+    expect(domainWarnings()).toEqual(['[ctxo:domain] WARN The get_pr_impact domain fields are left out: "other" has no merge base with HEAD']);
+  });
+
+  it('a renamed card is in cardsChanged through its old path', async () => {
+    const { fields } = repo();
+    git('mv', LENDING_CARD, 'docs/domain/lending/card.md');
+    commit('rename the card');
+
+    const result = await fields({ files: [] }, { since: 'main' });
+
+    expect(result['cardsChanged']).toEqual([LENDING_CARD]);
+  });
+
+  describe('the index read', () => {
+    it('an unchanged index is read once; a changed index entry is read again', async () => {
+      const { fields, readIndex } = repo({ now: LATER });
+      writeIndexEntry(POLICY_FILE);
+      write(POLICY_FILE, 'class LoanPolicy { int e; }\n');
+      commit('change');
+
+      await fields(CORE, { since: 'main' });
+      await fields(CORE, { since: 'main' });
+      expect(readIndex).toHaveBeenCalledTimes(1);
+
+      writeIndexEntry('src/Lending/Other.cs');
+      const result = await fields(CORE, { since: 'main' });
+      expect(readIndex).toHaveBeenCalledTimes(2);
+      expect((result['contextsTouched'] as { id: string }[]).map((c) => c.id)).toEqual(['lending']);
+    });
+
+    it('a file whose indexed symbol carries a test annotation stays a test file from the cached index', async () => {
+      const { fields, readIndex } = repo({ now: LATER });
+      const checks = 'src/Lending/Checks.cs';
+      const entry: FileIndex = {
+        file: checks,
+        lastModified: 1,
+        symbols: [{ symbolId: `${checks}::Checks.Limit::method`, name: 'Checks.Limit', kind: 'method', startLine: 1, endLine: 3, annotations: [{ name: 'Fact' }] }],
+        edges: [],
+        intent: [],
+        antiPatterns: [],
+      };
+      write(`.ctxo/index/${checks}.json`, JSON.stringify(entry));
+      write(checks, 'class Checks { [Fact] void Limit() {} }\n');
+      write(POLICY_FILE, 'class LoanPolicy { int g; }\n');
+      commit('change');
+
+      for (let i = 0; i < 2; i++) {
+        const result = await fields(CORE, { since: 'main' });
+        expect((result['contextsTouched'] as { files: string[] }[])[0]!.files).toEqual([POLICY_FILE]);
+      }
+      expect(readIndex).toHaveBeenCalledTimes(1);
+    });
+
+    it('an index written within 2 s of the stamp is read on every call', async () => {
+      const { fields, readIndex } = repo();
+      writeIndexEntry(POLICY_FILE);
+      write(POLICY_FILE, 'class LoanPolicy { int f; }\n');
+      commit('change');
+
+      await fields(CORE, { since: 'main' });
+      await fields(CORE, { since: 'main' });
+      expect(readIndex).toHaveBeenCalledTimes(2);
+    });
+
+    it('an empty range never reads the index', async () => {
+      const { fields, readIndex } = repo({ now: LATER });
+
+      const result = await fields({ files: [] }, { since: 'main' });
+
+      expect(readIndex).not.toHaveBeenCalled();
+      expect(result['contextsTouched']).toEqual([]);
+      expect(result['cardsChanged']).toEqual([]);
+      expect(result['rulesWithoutTests']).toEqual([]);
+    });
+
+    it('a range of card and glossary changes only never reads the index', async () => {
+      const { fields, readIndex } = repo({ now: LATER });
+      write(LENDING_CARD, `${LENDING_FIXTURE.cards[LENDING_CARD]}\nMore.\n`);
+      write(GLOSSARY_PATH, `${LENDING_FIXTURE.glossaryText}- **Renewal**: a second loan period\n`);
+      commit('docs');
+
+      const result = await fields({ files: [] }, { since: 'main' });
+
+      expect(readIndex).not.toHaveBeenCalled();
+      expect(result['cardsChanged']).toEqual([LENDING_CARD]);
+    });
   });
 });
