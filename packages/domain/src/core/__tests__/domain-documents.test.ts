@@ -131,6 +131,20 @@ describe('packDomainHits', () => {
     expect(totalTokens).toBe(results.reduce((sum, r) => sum + r.tokens, 0));
   });
 
+  it('orders hits by score, then by key in codepoint order', () => {
+    const tied = packDomainHits(
+      response([
+        [key('term:lending/loan'), 1],
+        [key('rule:LEND-04'), 2],
+        [key('rule:LEND-03'), 1],
+        [key(`file:${SPEC}`), 1],
+      ]),
+      byId,
+      10_000,
+    );
+    expect(tied.results.map((r) => r.id)).toEqual(['rule:LEND-04', `file:${SPEC}`, 'rule:LEND-03', 'term:lending/loan']);
+  });
+
   it('packs greedily within the budget and skips hits it does not know', () => {
     const all = packDomainHits(response([[key('rule:LEND-03'), 3], ['rule:GONE-1', 2], [key('term:lending/loan'), 1]]), byId, 10_000);
     expect(all.results.map((r) => r.id)).toEqual(['rule:LEND-03', 'term:lending/loan']);

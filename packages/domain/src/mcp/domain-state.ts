@@ -26,7 +26,26 @@ const NO_GRAPH_HINT = 'No domain graph yet; run "ctxo index".';
 const STALE_REGISTRY_HINT = 'The domain registry changed since the last "ctxo index"; run it to rebuild the domain graph.';
 
 /** A stamp whose mtime is this close to the moment it was taken is not trusted (the racy-git rule). */
-const RACY_WINDOW_MS = 2_000;
+export const RACY_WINDOW_MS = 2_000;
+
+/**
+ * A cache stamp function: `<mtimeMs>:<size>` of a path, `missing` when it cannot be stat'ed, and a one-off value
+ * that never matches when the file was modified within `RACY_WINDOW_MS` of the moment the stamp is taken (or in the
+ * future), so an edit of the same size inside one coarse mtime tick is seen by the next comparison.
+ */
+export function createRacyStamper(now: () => number = Date.now): (path: string) => string {
+  let racyCount = 0;
+  return (path: string): string => {
+    const taken = now();
+    try {
+      const stat = statSync(path);
+      if (stat.mtimeMs > taken - RACY_WINDOW_MS) return `racy:${++racyCount}`;
+      return `${stat.mtimeMs}:${stat.size}`;
+    } catch {
+      return 'missing';
+    }
+  };
+}
 
 /** The card paths of a registry (each once, registry order) and its glossary: the inputs of `cardsHash`. */
 function cardFiles(registry: DomainRegistry): string[] {
@@ -55,19 +74,8 @@ export interface DomainStateOptions {
  * bumps `generation`: callers caching by `generation` recompute for those loads, which is correct, only slower.
  */
 export function createDomainState(host: CtxoHost, options: DomainStateOptions = {}): DomainState {
-  const now = options.now ?? Date.now;
-  let racyCount = 0;
   /** mtime and size, 'missing', or a one-off value for a racy file. */
-  const stampOf = (path: string): string => {
-    const taken = now();
-    try {
-      const stat = statSync(path);
-      if (stat.mtimeMs > taken - RACY_WINDOW_MS) return `racy:${++racyCount}`;
-      return `${stat.mtimeMs}:${stat.size}`;
-    } catch {
-      return 'missing';
-    }
-  };
+  const stampOf = createRacyStamper(options.now);
   const configPath = join(host.ctxoRoot, 'config.yaml');
   const graphPath = join(host.ctxoRoot, 'index', 'domain', 'graph.json');
   const stampRepo = (path: string): string => `${path}|${stampOf(resolve(host.projectRoot, path))}`;

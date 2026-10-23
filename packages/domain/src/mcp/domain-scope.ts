@@ -1,7 +1,7 @@
 import type { CtxoHost, DocumentSearch, RankedContextScope, SearchResponse } from '@ctxo/cli/internal';
 import { provenanceStamp, readProvenanceTexts } from '../adapters/provenance-texts.js';
 import { buildSearchDocuments, packDomainHits, provenancePaths, type DomainDocument } from '../core/domain-documents.js';
-import { STALE_CARDS_HINT, type DomainState } from './domain-state.js';
+import { createRacyStamper, STALE_CARDS_HINT, type DomainState } from './domain-state.js';
 
 /**
  * The `domain` scope of `get_ranked_context` (spec 11.4, designer calls F12 and F13): BM25 through the host's
@@ -27,22 +27,40 @@ export function cleanQuery(query: string): string {
   return query.replace(/[^\p{L}\p{N}\s_-]+/gu, ' ').replace(/\s+/g, ' ').trim();
 }
 
+type Logger = ReturnType<CtxoHost['services']['createLogger']>;
+
 interface BuiltIndex {
   readonly key: string;
   readonly search: DocumentSearch;
   readonly documents: ReadonlyMap<string, DomainDocument>;
 }
 
-export function domainRankedScope(host: CtxoHost, state: DomainState): RankedContextScope {
+export interface DomainScopeOptions {
+  /** The clock for the racy-stamp rule of provenance files; `Date.now` by default. */
+  readonly now?: () => number;
+}
+
+export function domainRankedScope(host: CtxoHost, state: DomainState, options: DomainScopeOptions = {}): RankedContextScope {
   let built: BuiltIndex | undefined;
+  // The same racy-stamp rule as the domain state: a provenance file edited within 2 s is re-read on the next search.
+  const stamp = createRacyStamper(options.now);
+  let logger: Logger | undefined;
+  /** Each skip message once per scope: a racy file rebuilds the index on every search. */
+  const warned = new Set<string>();
+  const warn = (message: string): void => {
+    if (warned.has(message)) return;
+    warned.add(message);
+    logger ??= host.services.createLogger('ctxo:domain');
+    logger.warn(message);
+  };
 
   function indexFor(generation: number, paths: readonly string[], build: () => DomainDocument[]): BuiltIndex {
-    const key = [String(generation), ...paths.map((path) => `${path}|${provenanceStamp(host.projectRoot, path)}`)].join('\n');
+    const key = [String(generation), ...paths.map((path) => `${path}|${provenanceStamp(host.projectRoot, path, stamp)}`)].join('\n');
     if (built !== undefined && built.key === key) return built;
     const documents = build();
     built = {
       key,
-      // Codepoint order of the search key: equal scores keep it.
+      // Documents in codepoint order of the search key; packing orders equal scores by that key too.
       search: host.services.createDocumentSearch(documents),
       documents: new Map(documents.map((doc) => [doc.id, doc] as const)),
     };
@@ -59,7 +77,7 @@ export function domainRankedScope(host: CtxoHost, state: DomainState): RankedCon
         const { snapshot } = loaded;
         const paths = provenancePaths(snapshot.graph);
         const index = indexFor(snapshot.generation, paths, () =>
-          buildSearchDocuments(snapshot.graph, readProvenanceTexts(host.projectRoot, paths)),
+          buildSearchDocuments(snapshot.graph, readProvenanceTexts(host.projectRoot, paths, { warn })),
         );
         const cleaned = cleanQuery(query);
         const response: SearchResponse =

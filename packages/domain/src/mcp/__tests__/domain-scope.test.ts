@@ -6,7 +6,7 @@ import { createModuleHost, type CtxoHost, type FileIndex, type IndexPassContext,
 import { register } from '../../index.js';
 import { domainIndexPass } from '../../index-pass/domain-index-pass.js';
 import { domainVersion } from '../../version.js';
-import { createDomainState, STALE_CARDS_HINT } from '../domain-state.js';
+import { createDomainState, RACY_WINDOW_MS, STALE_CARDS_HINT } from '../domain-state.js';
 import { DOMAIN_SCOPE, domainRankedScope } from '../domain-scope.js';
 
 const REGISTRY = `version: 1
@@ -170,6 +170,20 @@ describe('domain scope of get_ranked_context', () => {
     expect(hits(await search(scope, 'at most five loans?!'))[0]!.id).toBe('rule:LEND-03');
   });
 
+  it('punctuation on body-only words still gives exact hits, not a fallback', async () => {
+    await setUp();
+    const scope = scopeOf();
+    for (const [query, first] of [
+      ['refused?', 'rule:LEND-03'],
+      ['renewal study.', `file:${SPEC}`],
+    ] as const) {
+      const payload = await search(scope, query);
+      expect((payload['searchMetrics'] as Obj)['porterHits'], query).toBeGreaterThan(0);
+      expect(payload['fuzzyCorrection'], query).toBeUndefined();
+      expect(hits(payload)[0]!.id, query).toBe(first);
+    }
+  });
+
   it('finds a glossary entry by its definition', async () => {
     await setUp();
     expect(hits(await search(scopeOf(), 'registered patron'))[0]).toMatchObject({
@@ -269,6 +283,53 @@ describe('domain scope of get_ranked_context', () => {
     const after = hits(await search(scope, 'overdue survey'));
     expect(build).toHaveBeenCalledTimes(2);
     expect(after[0]!.id).toBe(`file:${SPEC}`);
+  });
+
+  it('a provenance file modified within the racy window is re-read on every search', async () => {
+    await setUp();
+    const base = newHost();
+    const build = vi.fn(base.services.createDocumentSearch);
+    const host: CtxoHost = { ...base, services: { ...base.services, createDocumentSearch: build } };
+    const fixed = new Date(Math.floor(Date.now() / 1000) * 1000);
+    let clock = fixed.getTime() + 500;
+    const scope = domainRankedScope(host, createDomainState(host), { now: () => clock });
+
+    // Same size, same mtime: only the racy rule can tell the second text from the first.
+    write(SPEC, '# Loan limit\n\nThe limit rose after the overdue survey.\n');
+    utimesSync(join(root, SPEC), fixed, fixed);
+    await search(scope, 'overdue');
+    write(SPEC, '# Loan limit\n\nThe limit rose after the backlog survey.\n');
+    utimesSync(join(root, SPEC), fixed, fixed);
+    expect(hits(await search(scope, 'backlog'))[0]!.id).toBe(`file:${SPEC}`);
+    expect(build).toHaveBeenCalledTimes(2);
+
+    // Past the window the stamp is trusted again.
+    clock += RACY_WINDOW_MS + 60_000;
+    await search(scope, 'backlog');
+    await search(scope, 'backlog');
+    expect(build).toHaveBeenCalledTimes(3);
+  });
+
+  it('a provenance file it cannot search is logged once with its path and reason', async () => {
+    await setUp();
+    const base = newHost();
+    const warn = vi.fn();
+    const host: CtxoHost = {
+      ...base,
+      services: {
+        ...base.services,
+        createLogger: (namespace: string) => {
+          const logger = base.services.createLogger(namespace);
+          return namespace === 'ctxo:domain' ? { ...logger, warn } : logger;
+        },
+      },
+    };
+    // Over 256 KB and written just now: racy, so every search rebuilds and meets it again.
+    write(SPEC, `# Loan limit\n${'x'.repeat(262_144)}`);
+    const scope = domainRankedScope(host, createDomainState(host));
+    await search(scope, 'renewal');
+    await search(scope, 'renewal');
+    expect(warn.mock.calls).toEqual([[`provenance file ${SPEC} is not searched: larger than 262144 bytes`]]);
   });
 
   it('a card two contexts share gives one hit per context for the same section', async () => {

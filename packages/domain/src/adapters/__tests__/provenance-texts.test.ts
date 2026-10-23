@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -44,6 +44,7 @@ describe('readProvenanceTexts', () => {
     write('docs/big.md', `# Big\n${'x'.repeat(PROVENANCE_MAX_BYTES)}`);
     write('docs/bom.md', Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('# Bom\n')]));
 
+    const warnings: string[] = [];
     const texts = readProvenanceTexts(root, [
       'docs/specs/loan-limit.md',
       'docs/notes.txt',
@@ -52,7 +53,7 @@ describe('readProvenanceTexts', () => {
       'docs/big.md',
       'docs/bom.md',
       'docs/specs/loan-limit.md',
-    ]);
+    ], { warn: (message) => warnings.push(message) });
     expect(texts.map((t) => [t.path, t.title])).toEqual([
       ['docs/adr/adr-007.md', 'Raise the limit'],
       ['docs/bom.md', 'Bom'],
@@ -62,6 +63,7 @@ describe('readProvenanceTexts', () => {
     ]);
     expect(texts[4]!.text).toBe('# Loan limit\n\nThe limit rose from three to five loans after the renewal study.\n');
     expect(texts[1]!.text).toBe('# Bom\n');
+    expect(warnings).toEqual(['provenance file docs/big.md is not searched: larger than 262144 bytes']);
   });
 
   it('skips binary files, directories, missing files and paths outside the repository', () => {
@@ -69,15 +71,54 @@ describe('readProvenanceTexts', () => {
     mkdirSync(join(root, 'docs', 'dir'), { recursive: true });
     const linked = link(join(parent, 'secret.md'), 'docs/escape.md');
 
-    const texts = readProvenanceTexts(root, ['docs/bin.md', 'docs/dir', 'docs/missing.md', '../secret.md', join(parent, 'secret.md'), 'docs/escape.md', '']);
+    const warnings: string[] = [];
+    const paths = ['docs/bin.md', 'docs/dir', 'docs/missing.md', '../secret.md', join(parent, 'secret.md'), 'docs/escape.md', ''];
+    const texts = readProvenanceTexts(root, paths, { warn: (message) => warnings.push(message) });
     expect(texts).toEqual([]);
-    if (linked) expect(provenanceStamp(root, 'docs/escape.md')).toBe('none');
+    // A missing file is not worth a warning; everything else names its path and reason.
+    expect(warnings).toEqual([
+      'provenance file  is not searched: not a repo-relative path',
+      'provenance file ../secret.md is not searched: outside the repository',
+      `provenance file ${join(parent, 'secret.md')} is not searched: not a repo-relative path`,
+      'provenance file docs/bin.md is not searched: binary (a NUL byte in the first 8 KiB)',
+      'provenance file docs/dir is not searched: not a regular file',
+      ...(linked ? ['provenance file docs/escape.md is not searched: outside the repository'] : []),
+    ]);
+    if (linked) expect(provenanceStamp(root, 'docs/escape.md', () => 'stamp')).toBe('none');
   });
 
-  it('stamps a readable file by mtime and size, and anything else as none', () => {
+  it('does not read a symlink swapped in after the path check, and says so', () => {
     write('docs/a.md', '# A\n');
-    expect(provenanceStamp(root, 'docs/a.md')).toMatch(/^\d+(\.\d+)?:4$/);
-    expect(provenanceStamp(root, 'docs/missing.md')).toBe('none');
-    expect(provenanceStamp(root, '../secret.md')).toBe('none');
+    const warnings: string[] = [];
+    const checked: string[] = [];
+    const real = realpathSync(join(root, 'docs', 'a.md'));
+    let swapped = false;
+    const texts = readProvenanceTexts(root, ['docs/a.md'], {
+      warn: (message) => warnings.push(message),
+      afterCheck: (path) => {
+        checked.push(path);
+        unlinkSync(path);
+        swapped = link(join(parent, 'secret.md'), 'docs/a.md');
+      },
+    });
+    // The seam runs between the path check and the open, with the real path the check returned.
+    expect(checked).toEqual([real]);
+    if (!swapped) return;
+    expect(texts).toEqual([]);
+    expect(warnings).toEqual(['provenance file docs/a.md is not searched: changed while it was read']);
+  });
+
+  it('stamps a file inside the repository with the given stamp, and anything else as none', () => {
+    write('docs/a.md', '# A\n');
+    const seen: string[] = [];
+    const stamp = (absolute: string): string => {
+      seen.push(absolute);
+      return 'stamp';
+    };
+    expect(provenanceStamp(root, 'docs/a.md', stamp)).toBe('stamp');
+    expect(seen).toHaveLength(1);
+    expect(provenanceStamp(root, 'docs/missing.md', stamp)).toBe('none');
+    expect(provenanceStamp(root, '../secret.md', stamp)).toBe('none');
+    expect(seen).toHaveLength(1);
   });
 });
