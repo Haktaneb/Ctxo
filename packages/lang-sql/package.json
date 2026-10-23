@@ -38,7 +38,7 @@
     "@ctxo/sql-extract": "workspace:^"
   },
   "peerDependencies": {
-    "@ctxo/plugin-api": "^0.8.0 || ^0.9.0"
+    "@ctxo/plugin-api": "^0.9.0"
   },
   "devDependencies": {
     "@ctxo/plugin-api": "workspace:*",

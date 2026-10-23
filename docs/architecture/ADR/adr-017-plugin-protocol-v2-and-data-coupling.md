@@ -93,7 +93,7 @@ Capabilities are offered to every plugin through `PluginContext`; a plugin ignor
 
 - `SUPPORTED_API_VERSIONS = ['1', '2']`. `plugin-discovery.ts` accepts both. Version `'1'` stays accepted for at least 12 months after `'2'` ships.
 - Versions gate loading only. Plugins declare the **lowest** version they work on (Designer call 2): the existing official plugins stay on `'1'`, and only `@ctxo/lang-sql` declares `'2'`.
-- **Release (K40).** Protocol v2 ships in `@ctxo/plugin-api` 0.9.0, because the separately staged 0.8.0 release on protocol v1 lands first, and the CLI reaches 0.13 with this work. The peer ranges cover both release orders: `^0.7.3 || ^0.8.0 || ^0.9.0` for the existing plugins and `^0.8.0 || ^0.9.0` for `@ctxo/lang-sql`. PR 1B is rebased onto the staged release before merge, and `changeset status` must show no dependent receiving a major bump.
+- **Release (K40).** Protocol v2 ships in `@ctxo/plugin-api` 0.9.0, because the separately staged 0.8.0 release on protocol v1 lands first, and the CLI reaches 0.13 with this work. The existing plugins accept `^0.7.3 || ^0.8.0 || ^0.9.0`, so they install next to either release. `@ctxo/lang-sql` requires `^0.9.0`: plugin-api 0.8.0 (shipped with CLI 0.12.0) is protocol v1, and its loader cannot load a v2 plugin. PR 1B is rebased onto the staged release before merge, and `changeset status` must show no dependent receiving a major bump.
 - A v1 plugin keeps working unchanged. A v2 plugin's kinds, annotations and facts survive the JSON round trip.
 
 ### 6. Data coupling
@@ -150,7 +150,7 @@ NoSQL and messaging are not implemented here; the design leaves room for them.
 
 - **One-time C# index change.** The first re-index after upgrading rewrites committed index JSON for C# files because annotations are always on.
 - **Older CLIs.** An older CLI reading a v2 index drops the new kinds and edges with a warning.
-- **Core requirement.** `@ctxo/lang-sql` needs a v2 core and declares `^0.8.0 || ^0.9.0` as its plugin-api peer.
+- **Core requirement.** `@ctxo/lang-sql` needs a v2 core and declares `^0.9.0` as its plugin-api peer, because plugin-api 0.8.0 is protocol v1.
 - **Constants only.** SQL held in variables, built dynamically or kept in `static readonly` fields is missed. ORMs and query builders are not covered.
 - **Roslyn fallback (K39).** The Roslyn helper gains a ScriptDom NuGet reference, restored for every C# user. If the restore or build fails (for example a private or offline feed that does not carry the package), `@ctxo/lang-csharp` falls back to the tree-sitter path. Symbols are kept, and the tree-sitter tier still emits attribute annotations, with literal arguments only (strings, numbers, booleans). Only the Roslyn-tier details (the resolved `named.type` and non-literal argument values such as enum constants, `typeof(T)` and arrays) and the SQL call-site edges are lost. `ctxo index` reports the syntax tier, and the `csharp_tier` doctor check probes `dotnet restore` of the helper and warns with the first error line and a fix hint.
 - **Resolution ambiguity.** When several files define the same name, kind-agnostic matching picks one winner, and every data edge points at it. Amended after the fixture run (R2), where 26 of 30 multi-defined names had resolved to a docs or test copy under plain first-path-wins:
