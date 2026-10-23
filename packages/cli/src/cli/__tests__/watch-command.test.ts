@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { SqliteStorageAdapter } from '../../adapters/storage/sqlite-storage-adapter.js';
 import * as detectorModule from '../../core/overlay/community-detector.js';
 import type { FileIndex } from '../../core/types.js';
-import { WatchCommand, buildWatchCommunitySnapshot, buildWatchFileIndex } from '../watch-command.js';
+import { buildWatchCommunitySnapshot, buildWatchFileIndex } from '../watch-command.js';
 
 describe('WatchCommand', () => {
   it('computes relative paths correctly with path.relative', () => {
