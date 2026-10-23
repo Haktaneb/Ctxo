@@ -29,6 +29,8 @@ import {
   type KnownLanguage,
 } from '../core/detection/detect-languages.js';
 import { InstallCommand } from './install-command.js';
+import { cliInstallKind } from '../core/install/install-kind.js';
+import { getCliPackageRoot } from './cli-paths.js';
 import {
   POST_COMMIT_CONTENT,
   POST_MERGE_CONTENT,
@@ -415,7 +417,8 @@ export class InitCommand {
     }
 
     if (parts.has('mcp')) {
-      for (const target of getMcpConfigTargets([...toolIds])) results.push(ensureMcpConfig(root, target, write));
+      const installKind = cliInstallKind(getCliPackageRoot(), root);
+      for (const target of getMcpConfigTargets([...toolIds])) results.push(ensureMcpConfig(root, target, { ...write, installKind }));
     }
 
     if (parts.has('git-hooks')) {

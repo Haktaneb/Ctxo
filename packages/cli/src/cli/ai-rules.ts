@@ -25,6 +25,7 @@ import {
   type TextShape,
 } from '../core/agent-rules/rules-block.js';
 import { loadConfig } from '../core/config/load-config.js';
+import type { CliInstallKind } from '../core/install/install-kind.js';
 
 /* ------------------------------------------------------------------ */
 /*  Claude Code safe-edit gate hook                                    */
@@ -810,7 +811,22 @@ export function ensureConfig(projectRoot: string, options: { readonly dryRun?: b
 /*  MCP server registration                                            */
 /* ------------------------------------------------------------------ */
 
-const CTXO_MCP_ENTRY = { command: 'npx', args: ['-y', '@ctxo/cli'] };
+const NPX_MCP_ENTRY = { command: 'npx', args: ['-y', '@ctxo/cli'] };
+
+/**
+ * The MCP server entry for the ctxo that is running: the global binary (`ctxo`, no args) from a
+ * global install, so the server and the hooks share one copy (K15); `npx -y @ctxo/cli` otherwise.
+ */
+export function ctxoMcpEntry(kind: CliInstallKind): { command: string; args: string[] } {
+  return kind === 'global' ? { command: 'ctxo', args: [] } : { command: NPX_MCP_ENTRY.command, args: [...NPX_MCP_ENTRY.args] };
+}
+
+/** True for ctxo's own npx default entry (any extra fields of the target are ignored). */
+function isNpxDefaultEntry(entry: unknown): boolean {
+  if (!isPlainObject(entry) || entry['command'] !== NPX_MCP_ENTRY.command) return false;
+  const args = entry['args'];
+  return Array.isArray(args) && args.length === NPX_MCP_ENTRY.args.length && args.every((a, i) => a === NPX_MCP_ENTRY.args[i]);
+}
 
 interface McpConfigTarget {
   file: string;
@@ -864,12 +880,14 @@ export function getMcpConfigTargets(selectedPlatformIds: string[]): McpConfigTar
  * object (an array, a string, a number, `null`), and a server map that is neither absent, `null` nor a
  * plain object (such as a string `mcpServers`), so the call never throws on a file's content. A path
  * that cannot be read (a directory, no permission) is `skipped` with a warning and left alone. `dryRun`
- * computes the same action and writes nothing, not even a directory.
+ * computes the same action and writes nothing, not even a directory. With `installKind: 'global'` a new
+ * entry is the global binary, and ctxo's own npx default entry is replaced by it (`updated`); any other
+ * existing entry stays.
  */
 export function ensureMcpConfig(
   projectRoot: string,
   target: McpConfigTarget,
-  options: { readonly dryRun?: boolean } = {},
+  options: { readonly dryRun?: boolean; readonly installKind?: CliInstallKind } = {},
 ): InstallResult {
   const filePath = join(projectRoot, target.file);
   const write = (config: Record<string, unknown>): void => {
@@ -878,9 +896,9 @@ export function ensureMcpConfig(
     writeFileSync(filePath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
   };
 
-  const entry = target.extraFields
-    ? { ...target.extraFields, ...CTXO_MCP_ENTRY }
-    : { ...CTXO_MCP_ENTRY };
+  const kind = options.installKind ?? 'project';
+  const base = ctxoMcpEntry(kind);
+  const entry = target.extraFields ? { ...target.extraFields, ...base } : { ...base };
   const fresh = (): Record<string, unknown> => ({ [target.serverKey]: { ctxo: entry } });
 
   if (!existsSync(filePath)) {
@@ -908,6 +926,11 @@ export function ensureMcpConfig(
   }
 
   if (servers['ctxo']) {
+    // From a global install, ctxo's own npx default moves to the global binary; a custom entry stays.
+    if (kind === 'global' && isNpxDefaultEntry(servers['ctxo'])) {
+      write({ ...parsed, [target.serverKey]: { ...servers, ctxo: entry } });
+      return { file: target.file, action: 'updated' };
+    }
     return { file: target.file, action: 'skipped' };
   }
 

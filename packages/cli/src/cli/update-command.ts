@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getVersion } from './cli-paths.js';
-import { discoverPlugins } from '../adapters/language/plugin-discovery.js';
+import { discoverPlugins, resolvePackageCandidates } from '../adapters/language/plugin-discovery.js';
+import { DOMAIN_MODULE_PACKAGE } from '../adapters/modules/module-loader.js';
 import { loadManifestPath } from './plugin-loader.js';
 import { fetchDistTagsBatch, type HttpsFetcher } from '../core/update/registry-client.js';
 import {
@@ -263,7 +264,8 @@ export class UpdateCommand {
       };
       const merged = { ...(json.dependencies ?? {}), ...(json.devDependencies ?? {}) };
       return Object.keys(merged).some(
-        (name) => name === CTXO_CLI_PACKAGE || name.startsWith('@ctxo/lang-') || name.startsWith('ctxo-lang-'),
+        (name) =>
+          name === CTXO_CLI_PACKAGE || name === DOMAIN_MODULE_PACKAGE || name.startsWith('@ctxo/lang-') || name.startsWith('ctxo-lang-'),
       );
     } catch (err) {
       log.error(`failed to read project package.json: ${(err as Error).message}`);
@@ -283,9 +285,13 @@ export class UpdateCommand {
 export async function defaultDiscoverInstalled(projectRoot: string): Promise<ReadonlyArray<{ name: string; version: string }>> {
   const out: Array<{ name: string; version: string }> = [{ name: CTXO_CLI_PACKAGE, version: getVersion() }];
   const manifestPath = loadManifestPath(projectRoot);
-  if (!manifestPath) return out;
-  const { plugins } = await discoverPlugins({ manifestPath });
-  for (const p of plugins) out.push({ name: p.specifier, version: p.plugin.version });
+  if (manifestPath) {
+    const { plugins } = await discoverPlugins({ manifestPath });
+    for (const p of plugins) out.push({ name: p.specifier, version: p.plugin.version });
+  }
+  // The domain package is not a language plugin; list the copy the CLI would load (the project's, else the CLI's).
+  const domain = resolvePackageCandidates(DOMAIN_MODULE_PACKAGE, projectRoot)[0];
+  if (domain !== undefined) out.push({ name: DOMAIN_MODULE_PACKAGE, version: domain.version });
   return out;
 }
 

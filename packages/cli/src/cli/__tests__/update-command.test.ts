@@ -155,6 +155,34 @@ function makeTempProject(opts: { withCtxoDep?: boolean }): string {
   return dir;
 }
 
+describe('UpdateCommand and @ctxo/domain', () => {
+  it('treats a project that depends on @ctxo/domain as a ctxo project (--print is not forced)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ctxo-update-domain-'));
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'fixture', devDependencies: { '@ctxo/domain': '0.1.0' } }));
+    const cap = makeCapture();
+    try {
+      const cmd = new UpdateCommand(dir, {
+        discoverInstalled: async () => [
+          { name: '@ctxo/cli', version: '0.7.0' },
+          { name: '@ctxo/domain', version: '0.7.0' },
+        ],
+        fetcher: makeFetcher({
+          '@ctxo/cli': { status: 200, body: JSON.stringify({ 'dist-tags': { latest: '0.8.0' } }) },
+          '@ctxo/domain': { status: 200, body: JSON.stringify({ 'dist-tags': { latest: '0.8.0' } }) },
+        }),
+        runner: cap.deps.runner,
+        setExitCode: cap.deps.setExitCode,
+      });
+      await cmd.run({ pm: 'npm' });
+    } finally {
+      cap.restore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+    expect(cap.capture.runs).toHaveLength(1);
+    expect(cap.capture.runs[0]!.args.join(' ')).toContain('@ctxo/domain@0.8.0');
+  });
+});
+
 describe('UpdateCommand', () => {
   it('--check prints the report and never runs the package manager', async () => {
     const dir = makeTempProject({ withCtxoDep: true });

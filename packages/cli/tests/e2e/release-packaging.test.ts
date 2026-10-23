@@ -88,7 +88,7 @@ describe('Release Packaging', () => {
     expect(files.some((f: string) => f === 'package.json')).toBe(true);
   });
 
-  it('tarball size is reasonable (< 2050KB)', { timeout: 30_000 }, () => {
+  it('tarball size is reasonable (< 2100KB)', { timeout: 30_000 }, () => {
     const output = execSync('npm pack --dry-run --json', { cwd: ROOT, encoding: 'utf-8' });
 
     const info = JSON.parse(output);
@@ -125,7 +125,9 @@ describe('Release Packaging', () => {
     // The MCP module seams (the response enricher on six core tools, module tools with their envelope,
     // masking and schema checks, get_why_context through the envelope, shipped as JS plus source maps)
     // crossed the limit at 2024.33KB, so it is 2050KB, the next 50KB step.
-    expect(sizeKB).toBeLessThan(2050);
+    // Global installs (K15: install kinds, `ctxo install domain`, global MCP entries, the install_copies
+    // check, shipped as JS plus source maps) crossed it at 2052.03KB, so it is 2100KB, the next 50KB step.
+    expect(sizeKB).toBeLessThan(2100);
     expect(sizeKB).toBeGreaterThan(1); // Sanity: not empty (dist/ may not exist in CI pre-build)
   });
 });

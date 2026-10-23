@@ -6,7 +6,8 @@ import type { CtxoLanguagePlugin } from '@ctxo/plugin-api';
 
 // Plugin discovery is stubbed, so this stays out of update-command.test.ts, which exercises the real one.
 const discoverPlugins = vi.hoisted(() => vi.fn());
-vi.mock('../../adapters/language/plugin-discovery.js', () => ({ discoverPlugins }));
+const resolvePackageCandidates = vi.hoisted(() => vi.fn((..._args: unknown[]): unknown[] => []));
+vi.mock('../../adapters/language/plugin-discovery.js', () => ({ discoverPlugins, resolvePackageCandidates }));
 
 import { defaultDiscoverInstalled } from '../update-command.js';
 
@@ -27,6 +28,8 @@ describe('defaultDiscoverInstalled', () => {
 
   beforeEach(() => {
     discoverPlugins.mockReset();
+    resolvePackageCandidates.mockReset();
+    resolvePackageCandidates.mockReturnValue([]);
     dir = mkdtempSync(join(tmpdir(), 'ctxo-update-discovery-'));
     writeFileSync(
       join(dir, 'package.json'),
@@ -50,5 +53,32 @@ describe('defaultDiscoverInstalled', () => {
     expect(installed.map((p) => p.name)).toEqual(['@ctxo/cli', '@ctxo/lang-sql']);
     expect(installed.find((p) => p.name === '@ctxo/lang-sql')).toEqual({ name: '@ctxo/lang-sql', version: '0.1.0' });
     expect(discoverPlugins).toHaveBeenCalledTimes(1);
+  });
+
+  it('ctxo update includes @ctxo/domain when a copy is installed', async () => {
+    discoverPlugins.mockResolvedValue({ plugins: [], failures: [] });
+    resolvePackageCandidates.mockReturnValue([{ name: '@ctxo/domain', version: '0.13.1', source: 'project' }]);
+
+    const installed = await defaultDiscoverInstalled(dir);
+
+    expect(installed.map((p) => p.name)).toEqual(['@ctxo/cli', '@ctxo/domain']);
+    expect(installed.find((p) => p.name === '@ctxo/domain')?.version).toBe('0.13.1');
+    expect(resolvePackageCandidates).toHaveBeenCalledWith('@ctxo/domain', dir);
+  });
+
+  it('lists @ctxo/domain even when the project has no package.json (a global install)', async () => {
+    rmSync(join(dir, 'package.json'));
+    discoverPlugins.mockResolvedValue({ plugins: [], failures: [] });
+    resolvePackageCandidates.mockReturnValue([{ name: '@ctxo/domain', version: '0.13.1', source: 'cli' }]);
+
+    const installed = await defaultDiscoverInstalled(dir);
+
+    expect(installed.map((p) => p.name)).toEqual(['@ctxo/cli', '@ctxo/domain']);
+  });
+
+  it('omits @ctxo/domain when no copy exists', async () => {
+    discoverPlugins.mockResolvedValue({ plugins: [], failures: [] });
+
+    expect((await defaultDiscoverInstalled(dir)).map((p) => p.name)).toEqual(['@ctxo/cli']);
   });
 });

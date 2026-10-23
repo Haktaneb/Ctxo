@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, writeFileSy
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { PLATFORMS, generateRules, installRules, detectPlatforms, ensureGitignore, ensureConfig, ensureIndexDir, getMcpConfigTargets, ensureMcpConfig, installSkills, skillStates, SKILLS, SKILL_PLATFORMS, ensureClaudeHook, readClaudeGuardState, resolveRulesTier, gateEnabled, linkedRulesPlatforms, readRulesStates } from '../ai-rules.js';
+import { PLATFORMS, generateRules, installRules, detectPlatforms, ensureGitignore, ensureConfig, ensureIndexDir, getMcpConfigTargets, ensureMcpConfig, ctxoMcpEntry, installSkills, skillStates, SKILLS, SKILL_PLATFORMS, ensureClaudeHook, readClaudeGuardState, resolveRulesTier, gateEnabled, linkedRulesPlatforms, readRulesStates } from '../ai-rules.js';
 import { InitCommand } from '../init-command.js';
 import { applyFixes } from '../doctor-fix.js';
 import { AiRulesCheck, SkillsCheck } from '../../adapters/diagnostics/checks/agent-setup-check.js';
@@ -702,6 +702,60 @@ describe('getMcpConfigTargets', () => {
     expect(targets).toHaveLength(1);
     expect(targets[0].file).toBe('.continue/mcpServers/ctxo.json');
     expect(targets[0].serverKey).toBe('mcpServers');
+  });
+});
+
+describe('ensureMcpConfig install kinds (K15)', () => {
+  const claude = () => getMcpConfigTargets(['claude-code'])[0];
+
+  it('ctxoMcpEntry is ctxo with no args for a global install, npx otherwise', () => {
+    expect(ctxoMcpEntry('global')).toEqual({ command: 'ctxo', args: [] });
+    expect(ctxoMcpEntry('project')).toEqual({ command: 'npx', args: ['-y', '@ctxo/cli'] });
+    expect(ctxoMcpEntry('npx')).toEqual({ command: 'npx', args: ['-y', '@ctxo/cli'] });
+  });
+
+  it('ensureMcpConfig writes the global binary entry from a global install', () => {
+    const dir = makeTempDir();
+    expect(ensureMcpConfig(dir, claude(), { installKind: 'global' }).action).toBe('created');
+    expect(JSON.parse(readFileSync(join(dir, '.mcp.json'), 'utf-8')).mcpServers.ctxo).toEqual({ command: 'ctxo', args: [] });
+
+    const copilotDir = makeTempDir();
+    ensureMcpConfig(copilotDir, getMcpConfigTargets(['github-copilot'])[0], { installKind: 'global' });
+    expect(JSON.parse(readFileSync(join(copilotDir, '.vscode', 'mcp.json'), 'utf-8')).servers.ctxo).toEqual({
+      type: 'stdio',
+      command: 'ctxo',
+      args: [],
+    });
+  });
+
+  it("replaces ctxo's own npx entry from a global install, never a custom entry", () => {
+    const own = makeTempDir();
+    writeFileSync(join(own, '.mcp.json'), JSON.stringify({ mcpServers: { ctxo: { command: 'npx', args: ['-y', '@ctxo/cli'] }, other: { command: 'x' } } }));
+    expect(ensureMcpConfig(own, claude(), { installKind: 'global' }).action).toBe('updated');
+    const config = JSON.parse(readFileSync(join(own, '.mcp.json'), 'utf-8'));
+    expect(config.mcpServers.ctxo).toEqual({ command: 'ctxo', args: [] });
+    expect(config.mcpServers.other).toEqual({ command: 'x' });
+
+    const custom = makeTempDir();
+    const original = JSON.stringify({ mcpServers: { ctxo: { command: 'node', args: ['x.js'] } } });
+    writeFileSync(join(custom, '.mcp.json'), original);
+    expect(ensureMcpConfig(custom, claude(), { installKind: 'global' }).action).toBe('skipped');
+    expect(readFileSync(join(custom, '.mcp.json'), 'utf-8')).toBe(original);
+  });
+
+  it('a dry run reports the replacement and writes nothing', () => {
+    const dir = makeTempDir();
+    const original = JSON.stringify({ mcpServers: { ctxo: { command: 'npx', args: ['-y', '@ctxo/cli'] } } });
+    writeFileSync(join(dir, '.mcp.json'), original);
+    expect(ensureMcpConfig(dir, claude(), { installKind: 'global', dryRun: true }).action).toBe('updated');
+    expect(readFileSync(join(dir, '.mcp.json'), 'utf-8')).toBe(original);
+  });
+
+  it('keeps npx for project installs and leaves an existing entry alone', () => {
+    const dir = makeTempDir();
+    ensureMcpConfig(dir, claude(), { installKind: 'project' });
+    expect(JSON.parse(readFileSync(join(dir, '.mcp.json'), 'utf-8')).mcpServers.ctxo.command).toBe('npx');
+    expect(ensureMcpConfig(dir, claude(), { installKind: 'project' }).action).toBe('skipped');
   });
 });
 

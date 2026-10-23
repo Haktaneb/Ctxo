@@ -12,6 +12,7 @@ import { JavaTierCheck } from '../adapters/diagnostics/checks/java-tier-check.js
 import { CSharpTierCheck } from '../adapters/diagnostics/checks/csharp-tier-check.js';
 import { GitBinaryCheck, GitRepoCheck, GitHooksCheck } from '../adapters/diagnostics/checks/git-check.js';
 import { AiRulesCheck, SkillsCheck, ClaudeGuardHookCheck } from '../adapters/diagnostics/checks/agent-setup-check.js';
+import { InstallCopiesCheck } from '../adapters/diagnostics/checks/install-copies-check.js';
 import {
   IndexDirectoryCheck,
   IndexFreshnessCheck,
@@ -58,6 +59,7 @@ export class DoctorCommand {
       new AiRulesCheck(),
       new SkillsCheck(),
       new ClaudeGuardHookCheck(),
+      new InstallCopiesCheck(),
       new IndexDirectoryCheck(),
       new IndexFreshnessCheck(),
       new SqliteCacheCheck(),
