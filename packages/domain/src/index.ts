@@ -1,4 +1,5 @@
 import type { CtxoModuleRegister } from '@ctxo/cli/internal';
+import { contextsTouchedCommand } from './commands/contexts-touched-command.js';
 import { DOMAIN_PACKAGE, domainVersion, sameMinor } from './version.js';
 
 /**
@@ -19,8 +20,8 @@ export const register: CtxoModuleRegister = async (host) => {
   return {
     id: 'domain',
     indexCapabilities: { facts: true },
-    registerCommands() {
-      // Later tasks add the domain commands.
+    registerCommands(registrar) {
+      registrar.registerCommand(contextsTouchedCommand(host));
     },
   };
 };
