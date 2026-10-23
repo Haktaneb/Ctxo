@@ -11,10 +11,11 @@ const SPEC_INDEX: FileIndex = { file: SPEC, lastModified: 1, symbols: [], edges:
 const graph = buildFixtureGraph({ ...LENDING_FIXTURE, indices: [...INDICES, SPEC_INDEX] });
 const provenance = [{ path: SPEC, title: 'Loan limit', text: 'The limit rose from three to five loans after the renewal study.' }];
 
-function response(ids: readonly [string, number][]): SearchResponse {
+/** A response; each hit's `combinedScore` is its third value, else its relevance score. */
+function response(ids: readonly (readonly [string, number] | readonly [string, number, number])[]): SearchResponse {
   return {
     query: 'q',
-    results: ids.map(([symbolId, relevanceScore]) => ({
+    results: ids.map(([symbolId, relevanceScore, combinedScore]) => ({
       symbolId,
       name: symbolId,
       kind: 'rule',
@@ -23,7 +24,7 @@ function response(ids: readonly [string, number][]): SearchResponse {
       endLine: 0,
       relevanceScore,
       importanceScore: 0,
-      combinedScore: relevanceScore,
+      combinedScore: combinedScore ?? relevanceScore,
     })),
     metrics: { porterHits: ids.length, trigramHits: 0, phase2Activated: false, fuzzyApplied: false, latencyMs: 1 },
   } as SearchResponse;
@@ -129,6 +130,23 @@ describe('packDomainHits', () => {
     expect(results[1]).not.toHaveProperty('line');
     for (const hit of results) expect(estimateTokens(hit)).toBe(hit.tokens);
     expect(totalTokens).toBe(results.reduce((sum, r) => sum + r.tokens, 0));
+  });
+
+  it("orders hits by the engine's combined score, not the raw BM25 relevance", () => {
+    // The bigram boost lifts the spec file above a rule with a higher raw BM25 score.
+    const boosted = packDomainHits(
+      response([
+        [key('rule:LEND-05'), 3, 3],
+        [key(`file:${SPEC}`), 2, 6],
+        [key('rule:LEND-03'), 2.5, 2.5],
+      ]),
+      byId,
+      10_000,
+    );
+    expect(boosted.results.map((r) => r.id)).toEqual([`file:${SPEC}`, 'rule:LEND-05', 'rule:LEND-03']);
+    // Equal combined scores fall back to the key in codepoint order, whatever the relevance.
+    const tied = packDomainHits(response([[key('rule:LEND-04'), 9, 1], [key('rule:LEND-03'), 1, 1]]), byId, 10_000);
+    expect(tied.results.map((r) => r.id)).toEqual(['rule:LEND-03', 'rule:LEND-04']);
   });
 
   it('orders hits by score, then by key in codepoint order', () => {

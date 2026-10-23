@@ -113,7 +113,7 @@ function measured(body: Omit<DomainHit, 'tokens'>): DomainHit {
 }
 
 /**
- * The hits by score, highest first, equal scores in codepoint order of their search key, as domain hits, packed
+ * The hits by the engine's combined score, highest first, equal scores in codepoint order of their search key, as domain hits, packed
  * greedily into `tokenBudget`: a hit that does not fit is skipped and the next ones are tried. A hit whose key is not
  * in `documents` is skipped.
  */
@@ -124,7 +124,8 @@ export function packDomainHits(
 ): { readonly results: DomainHit[]; readonly totalTokens: number } {
   const results: DomainHit[] = [];
   let totalTokens = 0;
-  const ordered = [...response.results].sort((a, b) => b.relevanceScore - a.relevanceScore || compare(a.symbolId, b.symbolId));
+  // The engine's final score (BM25 plus its bigram boost) orders the hits; the raw BM25 score is only reported.
+  const ordered = [...response.results].sort((a, b) => b.combinedScore - a.combinedScore || compare(a.symbolId, b.symbolId));
   for (const result of ordered) {
     const doc = documents.get(result.symbolId);
     if (doc === undefined) continue;

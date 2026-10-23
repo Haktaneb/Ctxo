@@ -60,6 +60,8 @@ export function childEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv 
   delete env['DEBUG'];
   delete env['CI'];
   delete env['CTXO_HTTP_PORT'];
+  // A developer's own response limit would truncate responses the tests read in full.
+  delete env['CTXO_RESPONSE_LIMIT'];
   env['GIT_CONFIG_GLOBAL'] = gitConfig();
   env['GIT_CONFIG_NOSYSTEM'] = '1';
   return { ...env, ...extra };

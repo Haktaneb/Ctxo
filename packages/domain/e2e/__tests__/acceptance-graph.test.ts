@@ -191,14 +191,14 @@ describe.each(VARIANTS)('PR 3 acceptance, %s sample', (variant) => {
       results: { id: string; kind: string; path: string }[];
     };
     expect(byWords.scope).toBe('domain');
-    expect(byWords.results.slice(0, 3).map((r) => r.id)).toContain('rule:LEND-03');
+    expect(byWords.results.find((r) => r.kind === 'rule')?.id).toBe('rule:LEND-03');
 
     const bySpec = (await shared.session.call('get_ranked_context', { query: 'renewal study', scope: 'domain' })) as {
       results: { id: string; kind: string; path: string }[];
     };
-    // LEND-05 ("renewed") and the open question ("renewals") also match "renewal"; only the spec says "study".
-    expect(bySpec.results.filter((r) => r.kind === 'provenance').map((r) => r.path)).toEqual(['docs/specs/loan-limit.md']);
-    expect(bySpec.results.slice(0, 3).map((r) => r.path)).toContain('docs/specs/loan-limit.md');
+    // LEND-05 ("renewed") and the open question ("renewals") also match "renewal"; only the spec has both words in a
+    // row, so the engine's bigram boost puts it first.
+    expect(bySpec.results[0]).toMatchObject({ kind: 'provenance', path: 'docs/specs/loan-limit.md' });
   });
 
   it('generic terms: a two-context term stays in its context and a plural table name matches', async () => {
@@ -417,8 +417,10 @@ describe.each(VARIANTS)('PR 3 acceptance, %s sample', (variant) => {
         _meta: { truncated: boolean; totalItems: number; returnedItems: number; hint?: string };
       };
       expect(card._meta.truncated).toBe(true);
-      expect(card._meta.hint).toContain('get_rule');
+      expect(card._meta.totalItems).toBe(205);
+      expect(card._meta.returnedItems).toBe(card.rules.length);
       expect(card.rules.length).toBeLessThan(205);
+      expect(card._meta.hint).toBe("Use get_rule with a ruleId for one rule's tests, code and decisions.");
     } finally {
       await session.close();
     }
