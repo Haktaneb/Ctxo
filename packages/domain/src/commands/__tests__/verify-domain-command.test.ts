@@ -305,6 +305,19 @@ describe('ctxo verify-domain', () => {
     ]);
   });
 
+  it('a Tests: or Code: value that names a directory is a missing file, reported once', async () => {
+    const dir = await project();
+    put(dir, 'docs/domain/lending.md', CARD('LEND-01', 'Tests: `src/Lending`\nCode: `src/Billing`'));
+    expect(await runCommand(dir, '--json')).toBe(1);
+    const findings = json()
+      .checks.find((c: any) => c.id === '6')
+      .findings.map((f: any) => [f.severity, f.message, f.file, f.line]);
+    expect(findings).toEqual([
+      ['error', 'LEND-01: Tests file "src/Lending" does not exist', 'docs/domain/lending.md', 7],
+      ['error', 'LEND-01: Code file "src/Billing" does not exist', 'docs/domain/lending.md', 9],
+    ]);
+  });
+
   it('a registry with problems fails check 1 and exits 1', async () => {
     const dir = await project({ registry: 'version: 2\ncontexts: []\n' });
     expect(await runCommand(dir)).toBe(1);

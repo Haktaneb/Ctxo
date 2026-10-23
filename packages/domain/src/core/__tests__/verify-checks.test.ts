@@ -258,6 +258,19 @@ describe('runVerifyChecks', () => {
     ]);
   });
 
+  it('check 6 fails once for a Tests: value that names a directory', () => {
+    const card = ruleCard('### LEND-01 X\nTests: `src/Lending`\n');
+    const input = base({
+      ...card,
+      fileExists: (p) => p === 'src/Lending' || p === 'docs/domain/lending/domain.md',
+      isRepoFile: (p) => p === 'docs/domain/lending/domain.md',
+      cardRefProblems: [problem('Tests', 'src/Lending', 'missing-file', 10)],
+    });
+    const out = outcome(input, '6');
+    expect(out.status).toBe('fail');
+    expect(out.findings.map((f) => [f.message, f.line])).toEqual([['LEND-01: Tests file "src/Lending" does not exist', 9]]);
+  });
+
   it('check 6 warns for an unindexed symbol ID and accepts an indexed one', () => {
     const gone = 'src/Lending/Loan.ts::Loan.Gone::method';
     const test = 'src/Lending/Loan.test.ts::LoanTests.Gone::method';

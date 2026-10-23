@@ -390,6 +390,17 @@ describe('rule-id-scan', () => {
     expect(refs.every((r) => r.file === 'src/Loan.ts')).toBe(true);
   });
 
+  it('a single-line JSDoc /** rule: X */ and a block /* rule: X */ are rule: comments', () => {
+    const text = ['/** rule: LEND-03 */', '/* rule: LEND-04 */', '/***rule: LEND-03*/', '/**', ' * rule: LEND-04', ' */'].join('\n');
+    expect(scanRuleComments('src/Loan.ts', text, undefined, options()).map((r) => [r.line, r.id])).toEqual([
+      [1, 'LEND-03'],
+      [2, 'LEND-04'],
+      [3, 'LEND-03'],
+      [5, 'LEND-04'],
+    ]);
+    expect(scanTestText(FILE, '/** rule: LEND-03 */\n', undefined, options()).map((r) => r.kind)).toEqual(['rule-comment']);
+  });
+
   it('a rule: comment with its ID on the next line links nothing (P16)', () => {
     const text = ['// rule:', 'LEND-03 is not here', '#  rule:\t', '\tLEND-04', '//', 'rule: LEND-03'].join('\n');
     expect(scanRuleComments('src/Loan.ts', text, undefined, options())).toEqual([]);

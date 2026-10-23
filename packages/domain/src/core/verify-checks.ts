@@ -39,6 +39,8 @@ export interface VerifyInput {
   /** By card path; undefined when the file is missing. */
   readonly cards: ReadonlyMap<string, ParsedCard | undefined>;
   readonly fileExists: (repoPath: string) => boolean;
+  /** A regular file, not a directory, for `Tests:` values (A39); defaults to `fileExists`. */
+  readonly isRepoFile?: (repoPath: string) => boolean;
   /** Anchors of a markdown target; undefined when the target is not markdown or unreadable. */
   readonly headingSlugs: (repoPath: string) => ReadonlySet<string> | undefined;
   readonly ruleLinks: RuleLinks;
@@ -208,7 +210,7 @@ function check6(registry: DomainRegistry, cards: readonly CardRef[], input: Veri
       }
       for (const test of rule.tests) {
         const file = testPath(test);
-        if (!input.fileExists(file)) findings.push(error('6', `${rule.id}: Tests file "${file}" does not exist`, at));
+        if (!(input.isRepoFile ?? input.fileExists)(file)) findings.push(error('6', `${rule.id}: Tests file "${file}" does not exist`, at));
       }
       const linked = (input.ruleLinks.links.get(rule.id)?.length ?? 0) > 0;
       if (!linked && rule.tests.length === 0 && rule.untested === undefined) {

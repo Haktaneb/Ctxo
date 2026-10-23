@@ -35,8 +35,8 @@ export interface RuleLinks {
   readonly unknown: readonly RuleRef[];
 }
 
-// P16: `[ \t]*`, never `\s*`, so a comment marker, `rule:` and its ID sit on one line.
-const RULE_COMMENT = /(?:\/\/|\/\*|#|--|^[ \t]*\*)[ \t]*rule:[ \t]*([A-Za-z][A-Za-z0-9]*[-_]?\d+)(?![A-Za-z0-9])/gim;
+// P16: `[ \t]*`, never `\s*`, so a comment marker, `rule:` and its ID sit on one line. `\/\*+` covers `/** rule: X */`.
+const RULE_COMMENT = /(?:\/\/|\/\*+|#|--|^[ \t]*\*)[ \t]*rule:[ \t]*([A-Za-z][A-Za-z0-9]*[-_]?\d+)(?![A-Za-z0-9])/gim;
 const TEST_DECLARATION =
   /(?:\b(?:it|test|describe)(?:\.(?:only|skip))?\s*\(|\bt\.Run\s*\(|@DisplayName\s*\(|\[(?:Fact|Theory)\s*\(\s*DisplayName\s*=)\s*(['"`])((?:\\.|(?!\1).)*)\1/g;
 const SHAPED_TOKEN = /^([A-Za-z][A-Za-z0-9]*?)[-_]?(\d+)$/;

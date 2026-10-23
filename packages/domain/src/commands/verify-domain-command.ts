@@ -248,6 +248,7 @@ async function verify(host: CtxoHost, ctx: ModuleCommandContext, options: Option
     makeMatcher,
     cards,
     fileExists: (path) => repoFileExists(projectRoot, path),
+    isRepoFile: (path) => repoIsFile(projectRoot, path),
     headingSlugs: (path) => {
       if (!MARKDOWN.test(path)) return undefined;
       const text = readRepoText(projectRoot, path);
