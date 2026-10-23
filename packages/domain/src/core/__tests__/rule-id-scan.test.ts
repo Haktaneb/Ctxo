@@ -10,6 +10,7 @@ import {
   scanRuleComments,
   scanTestFiles,
   scanTestText,
+  scanTestTitles,
   type ScanOptions,
 } from '../rule-id-scan.js';
 
@@ -489,5 +490,28 @@ describe('rule-id-scan', () => {
     expect(scanTestText(index.file, text, index, options()).filter((r) => r.kind === 'rule-comment').map((r) => r.symbolId)).toEqual([
       'src/Loan.cs::LoanPolicy.CanBorrow::method',
     ]);
+  });
+});
+
+describe('scanTestTitles', () => {
+  it('scanTestTitles captures every declared title with its line', () => {
+    const text = [
+      "describe('LoanPolicy', () => {",
+      "  it('LEND-03 rejects a sixth loan', () => {});",
+      "  test.skip('[characterization] borrow flow', () => {});",
+      '});',
+      '[Fact(DisplayName = "renewal keeps the due date")]',
+      't.Run("LEND-04 hold blocks", func(t *testing.T) {})',
+      '@DisplayName("contract: charge")',
+    ].join('\n');
+    expect(scanTestTitles(FILE, text)).toEqual([
+      { file: FILE, line: 1, title: 'LoanPolicy' },
+      { file: FILE, line: 2, title: 'LEND-03 rejects a sixth loan' },
+      { file: FILE, line: 3, title: '[characterization] borrow flow' },
+      { file: FILE, line: 5, title: 'renewal keeps the due date' },
+      { file: FILE, line: 6, title: 'LEND-04 hold blocks' },
+      { file: FILE, line: 7, title: 'contract: charge' },
+    ]);
+    expect(scanTestTitles(FILE, 'no tests here')).toEqual([]);
   });
 });
