@@ -1,4 +1,5 @@
-import type { SymbolNode, GraphEdge, ComplexityMetrics, SymbolKind, ILanguageAdapter } from '@ctxo/plugin-api';
+import type { CodeFact, SymbolNode, GraphEdge, ComplexityMetrics, SymbolKind, ILanguageAdapter } from '@ctxo/plugin-api';
+import type { FactOptions } from './facts/fact-types.js';
 import { GoAnalyzerAdapter } from './analyzer/analyzer-adapter.js';
 import { GoAdapter } from './go-adapter.js';
 import { createLogger } from './logger.js';
@@ -19,14 +20,18 @@ export class GoCompositeAdapter implements ILanguageAdapter {
   /** True when the analyzer is asked for SQL call sites (`capabilities.sqlCallSites`); full tier only. */
   readonly sqlCallSites: boolean;
 
-  constructor(options: { readonly sqlCallSites?: boolean } = {}) {
+  /** Fact detector options, set when the host requests facts (`capabilities.facts`). */
+  readonly facts: FactOptions | undefined;
+
+  constructor(options: { readonly sqlCallSites?: boolean; readonly facts?: FactOptions } = {}) {
     this.sqlCallSites = options.sqlCallSites === true;
+    this.facts = options.facts;
     this.treeSitter = new GoAdapter();
   }
 
   async initialize(rootDir: string): Promise<void> {
     try {
-      const analyzer = new GoAnalyzerAdapter({ sqlCallSites: this.sqlCallSites });
+      const analyzer = new GoAnalyzerAdapter({ sqlCallSites: this.sqlCallSites, ...(this.facts ? { facts: this.facts } : {}) });
       await analyzer.initialize(rootDir);
       if (analyzer.isReady()) {
         this.analyzer = analyzer;
@@ -61,6 +66,16 @@ export class GoCompositeAdapter implements ILanguageAdapter {
 
   async extractEdges(filePath: string, source: string): Promise<GraphEdge[]> {
     return (await this.delegate()).extractEdges(filePath, source);
+  }
+
+  /**
+   * Code facts (protocol v2): from the analyzer's evidence in the full tier. The syntax tier has no fact
+   * collector yet, so it gives `[]`; without the `facts` option this is always `[]`.
+   */
+  async extractFacts(filePath: string, source: string): Promise<CodeFact[]> {
+    if (!this.facts) return [];
+    const delegate = await this.delegate();
+    return delegate.extractFacts ? delegate.extractFacts(filePath, source) : [];
   }
 
   extractComplexity(filePath: string, source: string): Promise<ComplexityMetrics[]> {

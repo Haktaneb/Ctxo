@@ -23,6 +23,7 @@ import (
 	"github.com/alperhankendi/ctxo/tools/ctxo-go-analyzer/internal/edges"
 	"github.com/alperhankendi/ctxo/tools/ctxo-go-analyzer/internal/emit"
 	"github.com/alperhankendi/ctxo/tools/ctxo-go-analyzer/internal/extends"
+	"github.com/alperhankendi/ctxo/tools/ctxo-go-analyzer/internal/facts"
 	"github.com/alperhankendi/ctxo/tools/ctxo-go-analyzer/internal/implements"
 	"github.com/alperhankendi/ctxo/tools/ctxo-go-analyzer/internal/load"
 	"github.com/alperhankendi/ctxo/tools/ctxo-go-analyzer/internal/reach"
@@ -38,6 +39,7 @@ func main() {
 	root := flag.String("root", "", "module root to analyze (required)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	sqlCallSites := flag.Bool("sql-call-sites", false, "report raw SQL at known database/sql, sqlx, pgx and gorm call sites")
+	factsFlag := flag.String("facts", "", "report fact evidence; base64 of the JSON {\"normalizationMethods\":[...]}")
 	flag.Parse()
 
 	if *showVersion {
@@ -50,22 +52,45 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := run(*root, options{sqlCallSites: *sqlCallSites}, os.Stdout); err != nil {
+	factOpts, warn := parseFactsFlag(*factsFlag)
+	if warn != "" {
+		fmt.Fprintln(os.Stderr, "ctxo-go-analyzer:", warn)
+	}
+
+	if err := run(*root, options{sqlCallSites: *sqlCallSites, facts: factOpts}, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "ctxo-go-analyzer:", err)
 		os.Exit(1)
 	}
 }
 
 type fileAggregate struct {
-	symbols []emit.Symbol
-	edges   []emit.Edge
-	sql     []emit.SqlCallSite
+	symbols    []emit.Symbol
+	edges      []emit.Edge
+	sql        []emit.SqlCallSite
+	facts      []emit.FactEvidence
+	sourceHash string
+}
+
+// parseFactsFlag decodes --facts. An empty value means no fact evidence; a
+// value that does not decode also turns fact evidence off (fail open) and
+// returns the warning to print.
+func parseFactsFlag(value string) (*facts.Options, string) {
+	if value == "" {
+		return nil, ""
+	}
+	opts, err := facts.Decode(value)
+	if err != nil {
+		return nil, fmt.Sprintf("ignoring --facts: %v", err)
+	}
+	return opts, ""
 }
 
 // options holds the command-line switches that change what run reports.
 type options struct {
 	// sqlCallSites adds FileRecord.SqlCallSites and Summary.Sql.
 	sqlCallSites bool
+	// facts, when not nil, adds FileRecord.FactEvidence and FactSourceHash.
+	facts *facts.Options
 }
 
 func run(root string, opts options, stdout io.Writer) error {
@@ -111,6 +136,26 @@ func run(root string, opts options, stdout io.Writer) error {
 		}
 	}
 
+	// Fact evidence is collected in both passes too; collectFacts is nil
+	// without --facts.
+	var collectFacts func(pkg *packages.Package, file *ast.File, rel string)
+	if opts.facts != nil {
+		factOpts := *opts.facts
+		collectFacts = func(pkg *packages.Package, file *ast.File, rel string) {
+			agg := get(rel)
+			agg.facts = append(agg.facts, facts.Collect(pkg, file, rel, factOpts)...)
+			agg.sourceHash = facts.SourceHash(pkg, file)
+		}
+	}
+	collect := func(pkg *packages.Package, file *ast.File, rel string) {
+		if collectSQL != nil {
+			collectSQL(pkg, file, rel)
+		}
+		if collectFacts != nil {
+			collectFacts(pkg, file, rel)
+		}
+	}
+
 	// Production pass: exactly the analysis of a load without tests.
 	for _, pkg := range parts.Prod {
 		for _, fs := range symbols.Extract(pkg, root) {
@@ -126,9 +171,7 @@ func run(root string, opts options, stdout io.Writer) error {
 				continue
 			}
 			get(rel).edges = append(get(rel).edges, ext.Extract(pkg, file)...)
-			if collectSQL != nil {
-				collectSQL(pkg, file, rel)
-			}
+			collect(pkg, file, rel)
 		}
 	}
 
@@ -140,7 +183,7 @@ func run(root string, opts options, stdout io.Writer) error {
 		get(rel).edges = append(get(rel).edges, extEdges...)
 	}
 
-	testPass(root, parts.Tests, ext, get, collectSQL)
+	testPass(root, parts.Tests, ext, get, collect)
 
 	paths := make([]string, 0, len(byFile))
 	for p := range byFile {
@@ -151,10 +194,12 @@ func run(root string, opts options, stdout io.Writer) error {
 		agg := byFile[p]
 		sortSQL(agg.sql)
 		if err := w.File(emit.FileRecord{
-			File:         p,
-			Symbols:      agg.symbols,
-			Edges:        agg.edges,
-			SqlCallSites: agg.sql,
+			File:           p,
+			Symbols:        agg.symbols,
+			Edges:          agg.edges,
+			SqlCallSites:   agg.sql,
+			FactEvidence:   agg.facts,
+			FactSourceHash: agg.sourceHash,
 		}); err != nil {
 			return err
 		}
@@ -198,10 +243,10 @@ func sortSQL(sites []emit.SqlCallSite) {
 // function appears once. implements and extends run inside the variant's own
 // package universe, restricted to the files this variant emits, so a test
 // fake links to the production interface it satisfies. A file's edges are
-// de-duplicated by from, to, kind and typeArgs. collectSQL, when not nil,
-// runs once per emitted file.
+// de-duplicated by from, to, kind and typeArgs. collect runs once per
+// emitted file (SQL call sites and fact evidence, when asked for).
 func testPass(root string, tests []*packages.Package, ext *edges.Extractor, get func(string) *fileAggregate,
-	collectSQL func(*packages.Package, *ast.File, string)) {
+	collect func(*packages.Package, *ast.File, string)) {
 	emitted := make(map[string]bool)
 	for _, pkg := range tests {
 		mine := make(map[string]bool)
@@ -226,9 +271,7 @@ func testPass(root string, tests []*packages.Package, ext *edges.Extractor, get 
 			agg := get(rel)
 			agg.symbols = append(agg.symbols, fs.Symbols...)
 			agg.edges = append(agg.edges, ext.Extract(pkg, file)...)
-			if collectSQL != nil {
-				collectSQL(pkg, file, rel)
-			}
+			collect(pkg, file, rel)
 		}
 		if len(mine) == 0 {
 			continue

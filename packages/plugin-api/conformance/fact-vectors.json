@@ -1254,6 +1254,167 @@
         }
       ]
     },
+    "go": {
+      "$comment": "Run with decodeGoStringLiteral: a raw string `...` is its text as written, with no escapes and every carriage return removed (Go spec); interpreted \"...\" strings and rune literals go through the shared rules, so an escape they do not know (\\x41, \\u0041) is not a constant.",
+      "isTrivialLiteral": [
+        {
+          "input": {
+            "literal": "``",
+            "kind": "string",
+            "trivialLiterals": [
+              ""
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "`gold`",
+            "kind": "string",
+            "trivialLiterals": [
+              "gold"
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "`it's \"q\"`",
+            "kind": "string",
+            "trivialLiterals": [
+              "it's \"q\""
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "`a\\nb`",
+            "kind": "string",
+            "trivialLiterals": [
+              "a\\nb"
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "`a\\nb`",
+            "kind": "string",
+            "trivialLiterals": [
+              "a\nb"
+            ]
+          },
+          "expected": false
+        },
+        {
+          "input": {
+            "literal": "`a\nb`",
+            "kind": "string",
+            "trivialLiterals": [
+              "a\nb"
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "`a\r\nb`",
+            "kind": "string",
+            "trivialLiterals": [
+              "a\nb"
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "`a\rb`",
+            "kind": "string",
+            "trivialLiterals": [
+              "ab"
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "`\r`",
+            "kind": "string",
+            "trivialLiterals": [
+              ""
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "`a`b`",
+            "kind": "string",
+            "trivialLiterals": [
+              "a`b",
+              "a",
+              "b"
+            ]
+          },
+          "expected": false
+        },
+        {
+          "input": {
+            "literal": "\"\\x41\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "A",
+              "\\x41",
+              "x41"
+            ]
+          },
+          "expected": false
+        },
+        {
+          "input": {
+            "literal": "\"\\u0041\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "A",
+              "\\u0041"
+            ]
+          },
+          "expected": false
+        },
+        {
+          "input": {
+            "literal": "\"a\\tb\"",
+            "kind": "string",
+            "trivialLiterals": [
+              "a\tb"
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "'a'",
+            "kind": "char",
+            "trivialLiterals": [
+              "a"
+            ]
+          },
+          "expected": true
+        },
+        {
+          "input": {
+            "literal": "'\\x41'",
+            "kind": "char",
+            "trivialLiterals": [
+              "A",
+              "\\x41"
+            ]
+          },
+          "expected": false
+        }
+      ]
+    },
     "typescript": {
       "$comment": "Run with decodeTypescriptStringLiteral: single-quoted strings and templates without substitutions, with the common escapes plus \\` and \\$ in templates (a CRLF line break in a template is \\n); a template with a substitution, a tagged template and any other escape (\\u0041, \\x41) are not constants.",
       "isTrivialLiteral": [
