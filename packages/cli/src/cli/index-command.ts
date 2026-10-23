@@ -10,12 +10,13 @@ import { InstallCommand } from './install-command.js';
 import { readSourceText } from './read-source.js';
 import { changeLogSize, writeCoChangeMatrix } from './index-cochange.js';
 import { computeAndWriteContextsView } from './index-contexts-view.js';
-import { extractFileFacts, pluginFactRequest, type PluginFactRequest } from './index-facts.js';
+import { dropTestFileRetryTimeouts, extractFileFacts, pluginFactRequest, type PluginFactRequest } from './index-facts.js';
 import {
   communityDetectorOptions,
   loadConfig,
   indexIgnorePatterns,
   indexIgnoreProjectPatterns,
+  indexTestPatterns,
   makeGlobMatcher,
   resolveCoChangeConfig,
   type ResolvedCoChangeConfig,
@@ -364,12 +365,13 @@ export class IndexCommand {
     // Phase 1c: facts, only when requested (index.facts: true, or a module asks). They go into the JSON
     // index, never SQLite.
     if (requestFacts) {
+      const testGlobs = indexTestPatterns(ignore.config);
       for (const entry of pendingIndices) {
         const adapter = registry.getAdapter(entry.relativePath);
         if (!adapter) continue;
         // An adapter with extractFacts always writes the key, `[]` included; one without writes none.
         const facts = await extractFileFacts(adapter, entry.relativePath, entry.source);
-        if (facts) entry.fileIndex.facts = facts;
+        if (facts) entry.fileIndex.facts = dropTestFileRetryTimeouts(entry.relativePath, entry.fileIndex.symbols, facts, testGlobs);
       }
     }
 

@@ -12,10 +12,10 @@ import { RevertDetector } from '../core/why-context/revert-detector.js';
 import { SymbolGraph } from '../core/graph/symbol-graph.js';
 import { PageRankCalculator } from '../core/importance/pagerank-calculator.js';
 import { CommunityDetector, type CommunityDetectorOptions } from '../core/overlay/community-detector.js';
-import { communityDetectorOptions, loadConfig, watchSnapshotMinFileChanges } from '../core/config/load-config.js';
+import { communityDetectorOptions, indexTestPatterns, loadConfig, watchSnapshotMinFileChanges } from '../core/config/load-config.js';
 import type { CtxoConfig } from '../core/config/config-schema.js';
 import type { LoadedModule } from '../ports/i-ctxo-module.js';
-import { extractFileFacts, pluginFactRequest } from './index-facts.js';
+import { dropTestFileRetryTimeouts, extractFileFacts, pluginFactRequest } from './index-facts.js';
 import type {
   FileIndex, CommitIntent, AntiPattern, CommunitySnapshot, SymbolNode, GraphEdge, ComplexityMetrics,
 } from '../core/types.js';
@@ -46,6 +46,8 @@ export class WatchCommand {
     const watchConfig = loadConfig(this.ctxoRoot).config;
     const pluginOptions = watchPluginOptions(watchConfig, options.modules ?? []);
     const watchFacts = pluginOptions.facts === true;
+    // index.tests globs, so watch drops test-file retry-timeout facts exactly as ctxo index does.
+    const testGlobs = indexTestPatterns(watchConfig);
 
     // Plugins via discovery
     const keepAliveByExt = new Map<string, IIncrementalReindex>();
@@ -121,6 +123,7 @@ export class WatchCommand {
               intent,
               antiPatterns,
               facts: watchFacts ? await extractFileFacts(adapter, relativePath, source) : undefined,
+              testGlobs,
             });
 
             writer.write(fileIndex);
@@ -153,6 +156,7 @@ export class WatchCommand {
           intent,
           antiPatterns,
           facts: watchFacts ? await extractFileFacts(adapter, relativePath, source) : undefined,
+          testGlobs,
         });
 
         writer.write(fileIndex);
@@ -259,11 +263,14 @@ export interface WatchFileIndexParts {
   readonly intent: readonly CommitIntent[];
   readonly antiPatterns: readonly AntiPattern[];
   readonly facts?: readonly CodeFact[];
+  /** The `index.tests` globs; with the default test globs they decide which files lose retry-timeout facts. */
+  readonly testGlobs?: readonly string[];
 }
 
 /**
  * The `FileIndex` a watch re-index writes. Symbols are kept whole, so annotations and offsets survive;
- * edges to `ns:` namespace placeholders are dropped; `facts` is set only when given.
+ * edges to `ns:` namespace placeholders are dropped; `facts` is set only when given, without the
+ * retry-timeout facts of a test file (`dropTestFileRetryTimeouts`, the rule `ctxo index` applies).
  */
 export function buildWatchFileIndex(file: string, parts: WatchFileIndexParts): FileIndex {
   const fileIndex: FileIndex = {
@@ -276,7 +283,7 @@ export function buildWatchFileIndex(file: string, parts: WatchFileIndexParts): F
     intent: [...parts.intent],
     antiPatterns: [...parts.antiPatterns],
   };
-  if (parts.facts) fileIndex.facts = [...parts.facts];
+  if (parts.facts) fileIndex.facts = dropTestFileRetryTimeouts(file, parts.symbols, parts.facts, parts.testGlobs ?? []);
   return fileIndex;
 }
 

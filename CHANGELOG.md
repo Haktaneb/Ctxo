@@ -64,6 +64,10 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (ten packages today). Per-pack
   only when facts are requested. An adapter with `extractFacts` that finds nothing now writes
   `facts: []`; an adapter without it writes no `facts` key. `ctxo watch` gets the loaded modules from
   the router and requests facts and options exactly as `ctxo index` does.
+- Test files get no `retry-timeout` facts (#156, PR 4): `ctxo index` and `ctxo watch` drop that kind for
+  files the shared test-file classifier marks as tests (the default test globs, `index.tests` and a
+  test-framework annotation on one of the file's symbols, as verify-domain and dead-code decide). The
+  other fact kinds stay in test files.
 - CI: the domain acceptance tests (`pnpm --filter @ctxo/domain test:e2e`) run in `e2e-tests` and, with
   `CTXO_REQUIRE_DOTNET=1`, in `dotnet-tests` (a C# run that falls back to the syntax tier fails there
   instead of skipping). The e2e job timeout is 15 minutes.
