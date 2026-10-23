@@ -1,6 +1,6 @@
 {
   "name": "@ctxo/domain",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "description": "Ctxo domain knowledge layer: an opt-in module for @ctxo/cli",
   "type": "module",
   "engines": {
