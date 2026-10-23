@@ -5,6 +5,7 @@ import type { LoadedModule } from '../modules/module-loader.js';
 import type { StalenessCheck } from './get-logic-slice.js';
 import { wrapResponse } from '../../core/response-envelope.js';
 import { createLogger } from '../../core/logger.js';
+import { describeError } from '../../core/describe-error.js';
 
 const log = createLogger('ctxo:modules');
 
@@ -108,7 +109,7 @@ export function handleModuleTool(
       return { content };
     } catch (err) {
       // A module's error text is not the core's: it is masked like its payloads.
-      const message = err instanceof Error ? err.message : String(err);
+      const message = describeError(err);
       return { content: [{ type: 'text', text: masking.mask(JSON.stringify({ error: true, message })) }] };
     }
   };

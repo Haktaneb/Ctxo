@@ -80,6 +80,21 @@ describe('handleModuleTool', () => {
     }
   });
 
+  it('handleModuleTool reports a thrown null-prototype object and a thrown string', async () => {
+    const nullProto = Object.create(null) as object;
+    for (const [thrown, expected] of [[nullProto, 'object'], ['plain failure', 'plain failure']] as const) {
+      const stub = tool('domain_stub', () => {
+        throw thrown;
+      });
+
+      const result = await handleModuleTool(stub, new MaskingPipeline(), undefined, () => [])({});
+
+      const payload = JSON.parse(result.content[0]!.text);
+      expect(payload.error).toBe(true);
+      expect(payload.message).toContain(expected);
+    }
+  });
+
   it('handleModuleTool masks the message of a thrown error', async () => {
     const stub = tool('domain_stub', () => {
       throw new Error('bad key AKIAIOSFODNN7EXAMPLE');

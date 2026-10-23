@@ -5,6 +5,7 @@ import { domainGuardHookCommand } from './commands/domain-guard-hook-command.js'
 import { verifyDomainCommand } from './commands/verify-domain-command.js';
 import { domainIndexPass } from './index-pass/domain-index-pass.js';
 import { domainInit } from './init/domain-init.js';
+import { createEnrichers } from './mcp/enrichers.js';
 import { DOMAIN_PACKAGE, domainVersion, sameMinor } from './version.js';
 
 /**
@@ -32,6 +33,7 @@ export const register: CtxoModuleRegister = async (host) => {
       registrar.registerCommand(domainCommand(host));
       registrar.registerCommand(verifyDomainCommand(host));
     },
+    enrich: createEnrichers(host),
     init: domainInit(host),
   };
 };

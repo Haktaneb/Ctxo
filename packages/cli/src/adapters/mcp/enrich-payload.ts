@@ -1,6 +1,7 @@
 import type { CoreToolName, ResponseEnricher } from '../../ports/i-ctxo-module.js';
 import type { LoadedModule } from '../modules/module-loader.js';
 import { createLogger } from '../../core/logger.js';
+import { describeError } from '../../core/describe-error.js';
 
 const log = createLogger('ctxo:modules');
 
@@ -25,15 +26,50 @@ export function applyEnricher(
   if (enrich === undefined) return payload;
   try {
     const enriched: unknown = enrich(structuredClone(payload), args);
-    if (enriched === null || typeof enriched !== 'object' || Array.isArray(enriched)) {
-      log.warn(`The ${tool} enricher returned no payload object; its fields are left out of this response`);
+    if (!isPlainObject(enriched) || !isPlainData(enriched, new Set())) {
+      log.warn(
+        `The ${tool} enricher returned something other than a plain JSON payload object; its fields are left out of this response`,
+      );
       return payload;
     }
-    return enriched as Record<string, unknown>;
+    // The response is serialised with JSON; a value JSON cannot hold (a BigInt) is caught here, not later.
+    JSON.stringify(enriched);
+    return enriched;
   } catch (err) {
-    log.warn(`The ${tool} enricher failed: ${(err as Error).message}; its fields are left out of this response`);
+    log.warn(`The ${tool} enricher failed: ${describeError(err)}; its fields are left out of this response`);
     return payload;
   }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+/**
+ * Whether `value` holds only JSON data: strings, numbers, booleans, null, arrays and plain objects (an
+ * `Object.prototype` or null prototype), nested to any depth and without a cycle. A Promise, Map, Set,
+ * Date, class instance or function fails it.
+ */
+function isPlainData(value: unknown, path: Set<object>): boolean {
+  if (value === null) return true;
+  const type = typeof value;
+  if (type === 'string' || type === 'number' || type === 'boolean') return true;
+  if (type !== 'object') return false;
+  const node = value as object;
+  if (path.has(node)) return false;
+  if (!Array.isArray(node) && !isPlainObject(node)) return false;
+  path.add(node);
+  try {
+    for (const child of Array.isArray(node) ? node : Object.values(node)) {
+      // JSON drops an undefined property; an undefined array slot becomes null. Both are harmless.
+      if (child !== undefined && !isPlainData(child, path)) return false;
+    }
+  } finally {
+    path.delete(node);
+  }
+  return true;
 }
 
 /**
@@ -48,7 +84,7 @@ export function collectEnrichers(modules: readonly LoadedModule[]): Map<CoreTool
     try {
       entries = Object.entries(module.registration.enrich ?? {});
     } catch (err) {
-      log.warn(`${module.name} enrichers could not be read: ${(err as Error).message}`);
+      log.warn(`${module.name} enrichers could not be read: ${describeError(err)}`);
       continue;
     }
     for (const [tool, enrich] of entries) {

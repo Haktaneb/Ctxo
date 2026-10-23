@@ -274,4 +274,41 @@ describe('wrapResponse', () => {
     expect(result.impactScore).toBe(50);
     expect(result.overallRiskScore).toBe(0.85);
   });
+  it('two arrays in one response: the primary array is truncated, the capped additive array is not', () => {
+    process.env['CTXO_RESPONSE_LIMIT'] = '2048';
+    const violation = (i: number) => ({
+      from: { symbolId: `src/a${i}.ts::A${i}::class`, file: `src/a${i}.ts`, context: 'lending' },
+      to: { symbolId: `src/b${i}.ts::B${i}::class`, file: `src/b${i}.ts`, context: 'billing' },
+      edgeKind: 'imports',
+      severity: 'error',
+    });
+    const data = {
+      files: Array.from({ length: 300 }, (_, i) => ({ file: `src/f${i}.ts`, symbols: [] })),
+      contextBoundaryViolations: Array.from({ length: 50 }, (_, i) => violation(i)),
+      contextBoundaryViolationsTotal: 80,
+    };
+
+    const result = wrapResponse(data);
+
+    const meta = result._meta as Record<string, unknown>;
+    expect(meta.truncated).toBe(true);
+    expect(meta.totalItems).toBe(300);
+    expect(String(meta.hint)).toContain('get_changed_symbols');
+    expect((result.files as unknown[]).length).toBeLessThan(300);
+    expect((result.contextBoundaryViolations as unknown[]).length).toBe(50);
+    expect(result.contextBoundaryViolationsTotal).toBe(80);
+  });
+
+  it('contextBoundaryViolations alone is never truncated', () => {
+    process.env['CTXO_RESPONSE_LIMIT'] = '2048';
+    const data = {
+      contextBoundaryViolations: Array.from({ length: 300 }, (_, i) => ({ symbolId: `src/a${i}.ts::A${i}::class` })),
+    };
+
+    const result = wrapResponse(data);
+
+    const meta = result._meta as Record<string, unknown>;
+    expect(meta.truncated).toBe(false);
+    expect((result.contextBoundaryViolations as unknown[]).length).toBe(300);
+  });
 });

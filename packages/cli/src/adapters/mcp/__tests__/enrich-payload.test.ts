@@ -71,6 +71,53 @@ describe('applyEnricher', () => {
   });
 });
 
+describe('applyEnricher guard', () => {
+  it('applyEnricher rejects a Promise, a Map, a Date and a value with a cycle', () => {
+    const cyclic: Record<string, unknown> = { a: 1 };
+    cyclic['self'] = cyclic;
+    const bads: unknown[] = [Promise.resolve({}), new Map(), new Date(), cyclic];
+    for (const bad of bads) {
+      const payload = { results: [1] };
+      const enrich = (() => bad) as unknown as ResponseEnricher;
+      expect(applyEnricher(enrich, payload, {}, 'search_symbols')).toBe(payload);
+    }
+    expect(warnings()).toHaveLength(4);
+  });
+
+  it('applyEnricher rejects a nested Map, Date or function inside an otherwise plain payload', () => {
+    for (const bad of [{ a: { b: new Map() } }, { a: [new Date()] }, { a: () => 1 }, { a: 1n }]) {
+      const payload = { results: [] };
+      const enrich = (() => bad) as unknown as ResponseEnricher;
+      expect(applyEnricher(enrich, payload, {}, 'search_symbols')).toBe(payload);
+    }
+    expect(warnings()).toHaveLength(4);
+  });
+
+  it('applyEnricher accepts plain objects, arrays and null-prototype objects', () => {
+    const nullProto = Object.assign(Object.create(null) as Record<string, unknown>, { x: [{ y: null }] });
+    const enrich = ((payload) => ({ ...payload, extra: nullProto, list: [1, 'a', true, null] })) as ResponseEnricher;
+
+    const result = applyEnricher(enrich, { results: [] }, {}, 'search_symbols');
+
+    expect(result['list']).toEqual([1, 'a', true, null]);
+    expect(warnings()).toEqual([]);
+  });
+
+  it('applyEnricher logs a thrown string and a null-prototype throw without throwing itself', () => {
+    const payload = { results: [] };
+    const nullProto = Object.create(null) as object;
+    for (const thrown of ['plain text failure', nullProto]) {
+      const enrich: ResponseEnricher = () => {
+        throw thrown;
+      };
+      expect(applyEnricher(enrich, payload, {}, 'search_symbols')).toBe(payload);
+    }
+    expect(warnings()).toHaveLength(2);
+    expect(warnings()[0]).toContain('plain text failure');
+    expect(warnings().some((line) => line.includes('undefined'))).toBe(false);
+  });
+});
+
 describe('collectEnrichers', () => {
   it('collectEnrichers composes several modules in load order', () => {
     const order: string[] = [];
