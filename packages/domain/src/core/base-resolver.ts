@@ -11,20 +11,29 @@ import type { DomainConfig } from './domain-config.js';
  *
  * Returns the ref to take the merge base against, or undefined when nothing qualifies.
  */
-export function resolveBaseRef(config: DomainConfig, refs: GitRefs | undefined): string | undefined {
+export function resolveBaseRef(
+  config: { readonly guard: Pick<DomainConfig['guard'], 'base'> },
+  refs: GitRefs | undefined,
+): string | undefined {
   const configured = config.guard.base;
   if (configured !== undefined) return configured;
   if (refs === undefined) return undefined;
 
-  const defaultBranch = refs.originHead !== undefined ? refs.originHead.slice(refs.originHead.indexOf('/') + 1) : undefined;
-  const current = refs.currentBranch;
-  const onDefault =
-    current !== undefined &&
-    (defaultBranch !== undefined ? current === defaultBranch : current === 'main' || current === 'master');
-  if (onDefault && refs.upstream !== undefined) return refs.upstream;
+  if (isOnDefaultBranch(refs) && refs.upstream !== undefined) return refs.upstream;
 
   if (refs.originHead !== undefined) return refs.originHead;
   if (refs.branches.includes('main')) return 'main';
   if (refs.branches.includes('master')) return 'master';
   return undefined;
+}
+
+/**
+ * Whether HEAD is on the default branch: origin/HEAD without its remote, else `main` or `master`. False on
+ * a detached HEAD.
+ */
+export function isOnDefaultBranch(refs: Pick<GitRefs, 'currentBranch' | 'originHead'>): boolean {
+  const current = refs.currentBranch;
+  if (current === undefined) return false;
+  const defaultBranch = refs.originHead !== undefined ? refs.originHead.slice(refs.originHead.indexOf('/') + 1) : undefined;
+  return defaultBranch !== undefined ? current === defaultBranch : current === 'main' || current === 'master';
 }

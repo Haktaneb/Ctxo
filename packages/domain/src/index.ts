@@ -1,5 +1,6 @@
 import type { CtxoModuleRegister } from '@ctxo/cli/internal';
 import { contextsTouchedCommand } from './commands/contexts-touched-command.js';
+import { domainGuardHookCommand } from './commands/domain-guard-hook-command.js';
 import { DOMAIN_PACKAGE, domainVersion, sameMinor } from './version.js';
 
 /**
@@ -22,6 +23,7 @@ export const register: CtxoModuleRegister = async (host) => {
     indexCapabilities: { facts: true },
     registerCommands(registrar) {
       registrar.registerCommand(contextsTouchedCommand(host));
+      registrar.registerCommand(domainGuardHookCommand(host));
     },
   };
 };
