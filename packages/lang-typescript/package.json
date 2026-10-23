@@ -1,6 +1,6 @@
 {
   "name": "@ctxo/lang-typescript",
-  "version": "0.7.2",
+  "version": "0.8.0",
   "description": "Ctxo TypeScript/JavaScript language plugin (ts-morph, full tier)",
   "type": "module",
   "engines": {
