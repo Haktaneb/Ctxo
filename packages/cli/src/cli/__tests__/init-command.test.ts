@@ -210,6 +210,18 @@ describe('InitCommand — hook installation', () => {
     expect(statSync(hookPath(dir, 'post-merge')).mode & 0o111).not.toBe(0);
   });
 
+  // The hook is read once with no existence check first: only a missing file (ENOENT) means "create it".
+  it('installHooks throws when a hook path cannot be read, in a dry run too, and creates no other hook', () => {
+    const dir = makeTempProject();
+    mkdirSync(hookPath(dir));
+
+    for (const dryRun of [true, false]) {
+      expect(() => new InitCommand(dir).installHooks({ dryRun })).toThrow(/EISDIR/);
+    }
+    expect(statSync(hookPath(dir)).isDirectory()).toBe(true);
+    expect(existsSync(hookPath(dir, 'post-merge'))).toBe(false);
+  });
+
   /**
    * Runs `git commit` in `dir` with a stand-in `ctxo` first on PATH. The hook resolves it through
    * `command -v ctxo`; the stand-in appends its arguments to the returned log file.

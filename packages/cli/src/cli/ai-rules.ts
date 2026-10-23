@@ -106,10 +106,22 @@ export interface PlatformRulesState {
   readonly scan: RulesScan;
 }
 
+/**
+ * The scan of one platform's rules file, or `undefined` when there is no such file: nothing at the
+ * path (`ENOENT`) or a directory in its place (`EISDIR`). Any other read error is thrown. The file is
+ * read once, with no check first, so the answer cannot go stale between a check and the read.
+ */
 function platformRulesState(projectRoot: string, platform: Platform): PlatformRulesState | undefined {
   const path = join(projectRoot, platform.file);
-  if (statSync(path, { throwIfNoEntry: false })?.isFile() !== true) return undefined;
-  return { platformId: platform.id, file: platform.file, scan: scanRulesBlocks(readFileSync(path, 'utf-8')) };
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf-8');
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'EISDIR') return undefined;
+    throw err;
+  }
+  return { platformId: platform.id, file: platform.file, scan: scanRulesBlocks(text) };
 }
 
 /**
@@ -709,18 +721,23 @@ export function ensureIndexDir(projectRoot: string, options: { readonly dryRun?:
 /**
  * Adds the `.ctxo/.cache/` entry to `.gitignore`, creating the file when it is missing. A file that
  * already has the entry is `skipped`. `dryRun` computes the same action and writes nothing.
+ * The file is read once, with no check first: `ENOENT` means it is missing, any other read error
+ * (a directory in its place, no permission) is thrown.
  */
 export function ensureGitignore(projectRoot: string, options: { readonly dryRun?: boolean } = {}): InstallResult {
   const filePath = join(projectRoot, '.gitignore');
 
-  if (!existsSync(filePath)) {
+  let existing: string;
+  try {
+    existing = readFileSync(filePath, 'utf-8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
     if (!options.dryRun) {
       writeFileSync(filePath, `# Ctxo local cache (auto-rebuilt, never committed)\n${GITIGNORE_ENTRY}\n`, 'utf-8');
     }
     return { file: '.gitignore', action: 'created' };
   }
 
-  const existing = readFileSync(filePath, 'utf-8');
   if (existing.includes(GITIGNORE_ENTRY)) {
     return { file: '.gitignore', action: 'skipped' };
   }
@@ -768,19 +785,25 @@ gate:
 /**
  * Writes the default `.ctxo/config.yaml`; an existing config is `skipped` and never touched. `dryRun`
  * computes the same action and writes nothing, not even the `.ctxo/` directory.
+ * The real write creates the file in one step (`wx`: fail when anything is already there) instead of
+ * checking first, so an existing config cannot be overwritten between a check and the write.
  */
 export function ensureConfig(projectRoot: string, options: { readonly dryRun?: boolean } = {}): InstallResult {
   const filePath = join(projectRoot, '.ctxo', 'config.yaml');
+  const file = '.ctxo/config.yaml';
 
-  if (existsSync(filePath)) {
-    return { file: '.ctxo/config.yaml', action: 'skipped' };
+  if (options.dryRun) {
+    return { file, action: existsSync(filePath) ? 'skipped' : 'created' };
   }
 
-  if (!options.dryRun) {
-    mkdirSync(dirname(filePath), { recursive: true });
-    writeFileSync(filePath, DEFAULT_CONFIG, 'utf-8');
+  mkdirSync(dirname(filePath), { recursive: true });
+  try {
+    writeFileSync(filePath, DEFAULT_CONFIG, { encoding: 'utf-8', flag: 'wx' });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') return { file, action: 'skipped' };
+    throw err;
   }
-  return { file: '.ctxo/config.yaml', action: 'created' };
+  return { file, action: 'created' };
 }
 
 /* ------------------------------------------------------------------ */
