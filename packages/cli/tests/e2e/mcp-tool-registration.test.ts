@@ -139,4 +139,18 @@ describe('MCP tool registration vs handler schemas', () => {
     expect(overlay).toContain('Both lists hold fewer entries when the response limit requires');
     expect(overlay).toContain('sharedTableCount and dataResourcesTotal');
   });
+
+  it('the four tools the domain graph enriches name their fields (PR 3)', () => {
+    const description = (name: string) => tools.find((t) => t.name === name)?.description ?? '';
+    expect(description('get_blast_radius')).toContain('`rulesAffected` lists the card rules linked to the symbol or its dependents, and `cardsToUpdate`');
+    expect(description('get_why_context')).toContain('`decisions` lists up to five card decisions');
+    expect(description('get_context_for_task')).toContain('`cardExcerpt` adds the card rules linked to the symbol and its neighbours');
+    expect(description('get_context_for_task')).toContain('left out when even an empty excerpt does not fit');
+    const pr = description('get_pr_impact');
+    expect(pr).toContain('`contextsTouched` (the commits after the merge base of `since` and HEAD, plus the working tree)');
+    expect(pr).toContain('`cardsChanged` and `rulesWithoutTests`');
+    for (const name of ['get_blast_radius', 'get_why_context', 'get_context_for_task', 'get_pr_impact']) {
+      expect(description(name), name).toContain('With @ctxo/domain and a domain graph');
+    }
+  });
 });

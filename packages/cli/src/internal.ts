@@ -13,6 +13,8 @@ import type { BlastRadiusCalculator as BlastRadiusCalculatorClass } from './core
 export type {
   CoreToolName,
   ResponseEnricher,
+  TokenReservation,
+  RankedContextScope,
   ModuleToolDefinition,
   ToolRegistrar,
   ModuleCommandContext,
@@ -27,6 +29,7 @@ export type {
   InitPartContext,
   InitContribution,
   CtxoModuleRegistration,
+  DocumentSearch,
   CtxoHostServices,
   CtxoHost,
   CtxoModuleRegister,
@@ -50,6 +53,10 @@ export type {
   GitRefs,
   CoChangeEntry,
   CodeFact,
+  SearchDocument,
+  SearchResponse,
+  SearchResult,
+  SearchMetrics,
 } from './core/types.js';
 
 // Ports

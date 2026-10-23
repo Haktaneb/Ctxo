@@ -139,6 +139,35 @@ Because the safe-edit guard counts `confirmed + likely` dependents, a co-change-
 
 With `@ctxo/domain` and a registry, each entry of `impactedSymbols` also carries `context`, the id of the one named context that owns its file, so you can see which contexts a change reaches. Absent for unowned and multiply owned files, and when there is no registry.
 
+### Domain rules
+
+With `@ctxo/domain`, a registry and a domain graph (built by `ctxo index`), two more fields name the business rules a change may break and the cards to update with it:
+
+- `rulesAffected`: the card rules linked to the target or to an impacted symbol, through a test link (a test that pins the rule) or a code link (a card `Code:` line or a `rule:` comment). Each entry has `ruleId`, `title`, `context`, `card`, `via` (up to five `{ symbolId, link }` entries, `link` is `code` or `test`) and `viaCount`. Rules linked to the target itself come first, then rule ID order.
+- `cardsToUpdate`: each card of those rules once, with the context that owns its rules, in the order the cards appear in `contexts.yaml`.
+
+```json
+{
+  "symbolId": "src/lending/loan-limit.ts::canBorrow::function",
+  "rulesAffected": [
+    {
+      "ruleId": "LEND-03",
+      "title": "A member holds at most five loans",
+      "context": "lending",
+      "card": "docs/domain/lending/domain.md",
+      "via": [
+        { "symbolId": "src/lending/loan-limit.ts::canBorrow::function", "link": "code" },
+        { "symbolId": "src/lending/__tests__/loan-limit.test.ts::loan limit > LEND-03 rejects the sixth loan::function", "link": "test" }
+      ],
+      "viaCount": 2
+    }
+  ],
+  "cardsToUpdate": [{ "context": "lending", "card": "docs/domain/lending/domain.md" }]
+}
+```
+
+Both lists are present, possibly empty, whenever a valid graph exists, and absent without the package, without a registry or when the registry changed since the last `ctxo index`. They are capped at 50 entries at the source, with `rulesAffectedTotal` or `cardsToUpdateTotal` when entries were cut, and are never truncated by the response envelope. Use [`get_rule`](/mcp-tools/get-rule) on a listed rule for its tests and decisions.
+
 ## Killer example: same `impactScore`, different risk
 
 Two candidate refactors both report `impactScore: 10`. Before v0.8, they look identical.

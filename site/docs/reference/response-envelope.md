@@ -84,6 +84,8 @@ Only these array fields are truncatable. Every MCP tool that produces large outp
 
 `impactedSymbols`, `importers`, `deadSymbols`, `unusedExports`, `results`, `rankings`, `context`, `hierarchies`, `scaffolding`, `deadFiles`, `files`, `clusters`, `clustersAffected`, `candidates`
 
+With `@ctxo/domain` installed, the primary arrays of its tools ([`get_domain_context`](/mcp-tools/get-domain-context) and [`get_rule`](/mcp-tools/get-rule)) are truncatable too, each with its own drill-in hint: `rules`, `contexts`, `terms`, `openQuestions`, `tests`, `symbols`, `provenance`, `unresolved`. The domain lists the package adds to core tools (`rulesAffected`, `cardsToUpdate`, `decisions`, `contextsTouched`, `cardsChanged`, `rulesWithoutTests`, `contextBoundaryViolations`) are **not** truncatable: they are capped at the source (50 entries, `decisions` on `get_why_context` at five) with a `<name>Total` count when entries were cut, so truncation always acts on the tool's own primary array.
+
 `candidates` is the list in [`get_architectural_overlay`](/mcp-tools/get-architectural-overlay) `mode: "contexts"`; its truncation hint points to `candidate: <id>` and `ctxo contexts --json`. In that mode `hubs` and `collisions` are **not** truncatable: they are capped at the source (50 each in the summary, with `hubsTotal` and `collisionsTotal`), so they are always returned whole.
 
 Data coupling in the same mode is capped at the source too, and nothing is added to the truncatable fields:

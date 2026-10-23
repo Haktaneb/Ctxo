@@ -13,7 +13,7 @@ import type { StalenessCheck } from './get-logic-slice.js';
 import { buildGraphFromIndices, buildGraphFromStorage } from './get-logic-slice.js';
 import { wrapResponse } from '../../core/response-envelope.js';
 import type { ResponseEnricher } from '../../ports/i-ctxo-module.js';
-import { applyEnricher } from './enrich-payload.js';
+import { applyEnricherAsync } from './enrich-payload.js';
 
 /** The graph of the committed index, or of the SQLite storage when that has no symbols (as `getGraphAndFiles`). */
 function graphOf(indices: readonly FileIndex[], storage: IStoragePort): SymbolGraph {
@@ -123,7 +123,7 @@ export function handleGetWhyContext(
       // The same envelope as every other tool: _meta with the item counts, plus snapshotStaleness when known.
       const stalenessMeta = await buildSnapshotStaleness(storage, git);
       const extras = stalenessMeta ? { snapshotStaleness: stalenessMeta } : undefined;
-      const enriched = applyEnricher(enrich, responsePayload, parsed.data, 'get_why_context');
+      const enriched = await applyEnricherAsync(enrich, responsePayload, parsed.data, 'get_why_context');
       const payload = masking.mask(JSON.stringify(wrapResponse(enriched, extras)));
 
       const content: Array<{ type: 'text'; text: string }> = [];

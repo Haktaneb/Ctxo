@@ -36,7 +36,7 @@ It's not a skill gap. It's a **sensory gap**. The agent is navigating your codeb
 
 The core shift: your agent stops reacting to files it stumbles into and starts planning from a complete map. **Blast radius before the edit. Git intent before the bug fix. Importer list before the rename.**
 
-Ctxo indexes your repo once, kept fresh by file watchers and git hooks, into a deterministic graph: every symbol, every edge (imports, calls, extends, implements, uses, and the data edges reads, writes and executes), every relevant git commit with intent classified, every anti-pattern. All exposed through 14 semantic MCP tools.
+Ctxo indexes your repo once, kept fresh by file watchers and git hooks, into a deterministic graph: every symbol, every edge (imports, calls, extends, implements, uses, and the data edges reads, writes and executes), every relevant git commit with intent classified, every anti-pattern. All exposed through 14 semantic MCP tools, plus 2 domain tools with `@ctxo/domain`.
 
 One `get_blast_radius` call replaces an entire ripgrep/read spiral. One `get_pr_impact` replaces a full review session of "wait, what calls this?"
 
@@ -153,6 +153,15 @@ ctxo verify-domain --since origin/main    # CI gate: registry, cards, rule IDs, 
 ctxo domain rules --write                 # path-scoped rules that point the agent at the card
 ctxo domain discover                      # propose tracker prefixes and test conventions from the repo
 ```
+
+With cards in place, `ctxo index` links each rule to the tests that pin it and the code that implements it, and the agent sees the rules while it works: `get_blast_radius` lists the rules a change may break and the cards to update, `get_why_context` the decisions behind them, `get_context_for_task` a card excerpt, `get_pr_impact` the contexts touched and the rules without tests. Two tools answer domain questions directly:
+
+| Tool | Answers |
+| --- | --- |
+| `get_domain_context` | The card of the context that owns a symbol or file: terms, rules with their tests and code, contracts, decisions |
+| `get_rule` | One rule by ID: the tests that pin it (and how each was found), the symbols that implement it, the decisions behind it |
+
+`get_ranked_context` with `scope: "domain"` searches the cards and the documents they link to.
 
 See [Ctxo domain conventions v1](docs/features/domain-knowledge.md#ctxo-domain-conventions-v1) for the registry, the card template and the adoption ladder.
 

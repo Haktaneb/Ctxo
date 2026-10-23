@@ -12,4 +12,6 @@ public class Account
     public int MemberId { get; }
 
     public int ActiveLoans { get; set; }
+
+    public int UnpaidFineCents { get; set; }
 }

@@ -6,6 +6,110 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (ten packages today). Per-pack
 
 ## [Unreleased]
 
+**Domain graph: rules linked to tests, code and decisions; `get_domain_context`, `get_rule` and the domain search scope (#156 Phase 3, PR 3).**
+
+### Added (domain graph)
+
+- The domain graph: with `@ctxo/domain` and a registry, `ctxo index` (and the post-commit hook, also for a commit
+  that changed only a card) writes `.ctxo/index/domain/graph.json` (`"ctxoArtifact": "domain-graph"`, rewritten only
+  when its content changed, byte-identical for the same input). Nodes are contexts, rules, terms and decisions
+  (`context:<id>`, `rule:<ID>`, `term:<context>/<term>`, `decision:<context>/<date>-<n>`) with the card text the
+  tools return. Code metrics (PageRank, communities, snapshots, dead code, gate percentiles) never read it, and
+  `ctxo watch` does not rebuild it.
+- The link families, each link with its source and the file and line of its evidence: rule to test (xUnit `Trait`
+  with a `domain.tests.ruleTraitKeys` key, NUnit `Category`, MSTest `TestCategory`, JUnit `Tag`; the text scan of
+  test files with ID variants and test titles; `rule:` comments; card `Tests:` lines), rule to symbol (card `Code:`
+  lines; `rule:` comments in indexed non-test files up to 1 MiB, linked to the declaration that starts within three
+  lines below and sits inside the symbol that contains the comment, else the innermost one), decision to provenance (relative links to repository files; `#123`, URLs and
+  tracker keys kept as strings, never fetched) and term to identifiers (symbol and table names that carry the
+  term's words, within the term's context, with plural folding, at most 50 per term with the count).
+- Card format additions, all optional and none needing a code change: `Code:` lines, `**Term**` items in
+  `Language`, glossary items with `(context: <id>)`, and dated decision lines whose rule IDs link the decision.
+- Seven additive fields on core tools, present (possibly empty) whenever a valid graph exists, capped at 50 at the
+  source (`decisions` at five) with `<name>Total`, never truncatable: `rulesAffected` and `cardsToUpdate` on
+  `get_blast_radius`; `decisions` on `get_why_context` (rule-linked first, then newest, with provenance);
+  `cardExcerpt` on `get_context_for_task` (rules, terms and contracts within `tokenBudget`); `contextsTouched`,
+  `cardsChanged` and `rulesWithoutTests` on `get_pr_impact`.
+- `get_domain_context({ symbolId?, path? })`: the card of the named context that owns a symbol or file (terms,
+  rules with tests and code links, contracts, decisions, open questions); with neither parameter, every context with
+  its counts. `get_rule({ ruleId })`: one rule (ID variants accepted, and the `rule:LEND-03` id of a domain-scope hit as is) with its tests and their link sources, the
+  symbols that implement it, decisions and provenance. Both answer `{ found: false, hint }` without a registry or a
+  graph, and add `stale: true` after a card edit not yet indexed. Ctxo now has 14 core tools, 16 with
+  `@ctxo/domain`.
+- `get_ranked_context` gains `scope` when a module provides one: `"code"` (default, unchanged) or, with
+  `@ctxo/domain`, `"domain"`: BM25 over rules, terms, decisions, card sections and the in-repo provenance files
+  decisions link to (read at query time, up to 256 KB each). Without the package the tool's schema and output are
+  unchanged.
+- Document search in the core BM25 engine: `SearchEngine.buildDocumentIndex` (`k1 1.2`, `b 0.75`, no PageRank
+  blend) and `SymbolTokenizer.tokenizeText`. Symbol search is unchanged.
+- Host API additions for the domain graph, all required `CtxoHostServices` members:
+  `dataResourceKinds` (plugin-api's `DATA_RESOURCE_KINDS`, `table` and `view`, one source),
+  `createDocumentSearch(documents)` (BM25 over documents with the core engine, via the new
+  `SearchEngine.buildDocumentIndex`, `DOCUMENT_SEARCH_CONFIG` and `SymbolTokenizer.tokenizeText`; the
+  `DocumentSearch` type) and `splitIdentifier(name)` (`SymbolTokenizer.splitName`). `@ctxo/cli/internal`
+  also exports the `SearchDocument`, `SearchResponse`, `SearchResult` and `SearchMetrics` types. Search
+  behaviour for symbols is unchanged. `createDocumentSearch` hands out only `search`.
+- Module API additions for the domain graph: `ResponseEnricher` may return a Promise.
+  `get_blast_radius`, `get_pr_impact` and `get_why_context` await it (new `applyEnricherAsync`, the
+  same plain-data guard); the synchronous tools drop a Promise result with the warning `<tool> enricher
+  returned a Promise; a synchronous tool cannot wait for it` and swallow its rejection. Several modules'
+  enrichers chain through a Promise. `get_context_for_task` joins the enrich seam as its seventh tool,
+  and the optional `CtxoModuleRegistration.reserveTaskContextTokens` (the `TokenReservation` type,
+  exported from `@ctxo/cli/internal`) keeps tokens back from its budget: the code context is packed into
+  `tokenBudget` minus the reservation (summed over modules, rounded, capped at a quarter of the budget,
+  0 when it throws or is not finite), and the payload still reports the requested `tokenBudget`.
+  With several modules, one whose reservation throws or is not finite is skipped with a warning (a
+  negative one counts as 0) and the others still add up.
+- Module API: the optional `CtxoModuleRegistration.rankedContextScopes` (the `RankedContextScope` type,
+  exported from `@ctxo/cli/internal`) adds scopes to `get_ranked_context`. Only when a module provides
+  one does the tool gain `scope` (`"code"`, the default symbol ranking, then the module scope names in
+  codepoint order); without a module scope its schema and output are unchanged. A module scope gets
+  the validated `query` and `tokenBudget` (at least 100, default 4000; `strategy` and `searchMode` do
+  not apply), its result goes through `_meta` and masking, and its calls are recorded under
+  `get_ranked_context`. `code` and a name already taken are skipped with a warning; an unknown scope
+  answers `{ error: true, message }`.
+- Truncatable fields for the domain tools' primary arrays (`rules`, `contexts`, `terms`,
+  `openQuestions`, `tests`, `symbols`, `provenance`, `unresolved`), each with its drill-in hint. The
+  additive domain lists on core tools stay out of truncation and are capped at their source.
+- The [ADR-018 addendum](docs/architecture/ADR/adr-018-domain-knowledge-layer.md#addendum-pr-3-additions-to-the-internal-api-156)
+  records the internal-API additions and the graph decisions.
+
+### Changed (domain graph)
+
+- `ctxo verify-domain` check 6 reads card lines the way the graph does: a `Code:` file that does not exist is an
+  error (`<ID>: Code file "<file>" does not exist`), as a `Tests:` file already was; a `Tests:` or `Code:` value
+  that names a directory is now an error too (`does not exist`); a value with `::` is a symbol ID, and one the
+  index does not hold is a warning (`<ID>: <field>: "<value>" is not an indexed symbol; it links to its file`).
+  In `@ctxo/domain` 0.14.0 a `Tests:` value could carry a `::name` suffix after the path; write `#name` for a plain
+  test name now, because `::` marks a symbol ID.
+- `ctxo verify-domain` check 6 warns about an unknown rule ID in a `rule:` comment in production code
+  (`rule: comment names unknown rule <ID>`), only when its prefix is a rule prefix (`# rule: E501` stays silent).
+- A `rule:` comment written above a declaration links to that declaration (the symbol that starts within three
+  lines below the comment and sits inside the symbol that contains it), not to the enclosing class; a comment
+  inside a method body stays with that method; the comment marker, `rule:` and the ID must be on one line,
+  and `/** rule: X */` counts.
+- Cards and the glossary are read the way provenance files are: only when their real path lies inside the
+  repository (a card symlinked outside it is not read), through a no-follow open, and up to 1 MiB. A skipped file
+  counts as a missing card, in the graph, in the stale-card check and in `ctxo verify-domain`, and is logged with
+  its reason.
+- An H1 heading now ends the "Rules and invariants" section of a card. A `### X-NN` heading after a stray H1 in
+  that section no longer defines a rule, so `verify-domain` check 6 results can change for such cards.
+- The asynchronous tools (`get_blast_radius`, `get_pr_impact`, `get_why_context`) await asynchronous module
+  enrichers; `@ctxo/domain` bounds its own at 5 seconds and leaves its fields out of a response that would wait
+  longer.
+- `get_pr_impact` with an empty `git diff <since>` goes through the module enrichers, the `_meta`
+  envelope and masking like every other `get_pr_impact` response; it gains `_meta`, and its other fields
+  are unchanged.
+- MCP tool descriptions of `get_blast_radius`, `get_why_context`, `get_context_for_task` and `get_pr_impact` name
+  the new domain fields.
+- The `ctxo-domain-fold` skill tells the agent to call `get_domain_context` and `get_rule` before changing a
+  context's code; its marker is `v0.15`, so `ctxo doctor` reports copies installed by 0.14 as outdated until
+  `ctxo init --only domain` or `ctxo doctor --fix` reinstalls them.
+- `@ctxo/cli` no longer ships source maps in its npm package (unpacked size about 2.1 MB to about 0.8 MB, so the release-packaging limit is 850 KB, it was 2150 KB); stack traces were never mapped without `--enable-source-maps`, so behaviour is unchanged.
+- `pnpm-workspace.yaml` sets `hoistWorkspacePackages: false`, so a workspace package is never resolved
+  through pnpm's hidden hoist; the setting moved out of the root `.npmrc`, so npm no longer warns
+  "Unknown project config".
+
 **Domain knowledge layer: `@ctxo/domain` (#156 Phase 2, PR 2B).**
 
 ### Added (domain knowledge layer)

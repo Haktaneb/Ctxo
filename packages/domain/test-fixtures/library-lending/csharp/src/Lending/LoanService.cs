@@ -14,6 +14,7 @@ public class LoanService
     public bool Borrow(Account account, int bookId)
     {
         if (!LoanLimit.CanBorrow(account)) return false;
+        if (FineCheck.BlocksBorrowing(account)) return false;
         account.ActiveLoans += 1;
         return bookId > 0;
     }

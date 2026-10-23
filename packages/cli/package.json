@@ -11,6 +11,7 @@
   },
   "files": [
     "dist/",
+    "!dist/**/*.map",
     "pages/visualize-template.html",
     "skills/",
     "README.md",

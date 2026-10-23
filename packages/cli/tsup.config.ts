@@ -6,6 +6,7 @@ export default defineConfig({
   splitting: true,
   format: ['esm'],
   dts: true,
+  // Maps are built for local debugging and the import-closure test, but not published (files excludes them).
   sourcemap: true,
   clean: true,
   target: 'node20',

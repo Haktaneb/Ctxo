@@ -114,6 +114,45 @@ If the symbol is missing from the index:
 
 With `@ctxo/domain` and a registry, the response carries `contextDrift` for the named context that owns the symbol's file: `crossShare` (`current`, `previous`, `delta`: the share of the context's edges that cross into other contexts), a `trend` over recent commits, `movedFiles` (files that moved into or out of the context through renames), `distinctCommits` and a `confidence` of `low`, `medium` or `high`. Absent for unowned and multiply owned files, when there is no history yet, and without a registry.
 
+### Card decisions
+
+With a domain graph (built by `ctxo index`), the response also carries `decisions`: the dated decisions of the card of the context that owns the symbol's file, with their provenance. Git history says what changed; the card's decisions say why the rule is what it is.
+
+- At most five. Decisions that mention a rule linked to the symbol come first, then the others, each group newest first, so an older decision about the symbol's own rule is not crowded out by newer unrelated ones. `decisionsTotal` gives the full count when more existed.
+- Each decision has `id` (`decision:<context>/<date>-<n>`), `date`, `text`, `card`, `line`, `rules` (the rule IDs written in it) and `provenance`: `{ kind: "file", path, exists, label? }` for a relative link to a file in the repository, `{ kind: "external", value }` for `#123`, a tracker key or a URL. External provenance is kept as written and never fetched.
+- `[]` when the file has no single owning context; absent without the package, without a registry, without a graph, or when the registry changed since the last `ctxo index`.
+
+```json
+{
+  "decisions": [
+    {
+      "id": "decision:lending/2026-09-12-1",
+      "date": "2026-09-12",
+      "text": "Loan limit raised from 3 to 5 (LEND-03). [spec](../../specs/loan-limit.md), #123, [ADR-007](../../adr/adr-007-loan-limit.md)",
+      "card": "docs/domain/lending/domain.md",
+      "line": 37,
+      "rules": ["LEND-03"],
+      "provenance": [
+        { "kind": "file", "path": "docs/specs/loan-limit.md", "exists": true, "label": "spec" },
+        { "kind": "external", "value": "#123" },
+        { "kind": "file", "path": "docs/adr/adr-007-loan-limit.md", "exists": true, "label": "ADR-007" }
+      ]
+    },
+    {
+      "id": "decision:lending/2026-10-01-1",
+      "date": "2026-10-01",
+      "text": "Any unpaid fine blocks a new loan, whatever the amount (LEND-04). https://example.com/issues/45",
+      "card": "docs/domain/lending/domain.md",
+      "line": 38,
+      "rules": ["LEND-04"],
+      "provenance": [{ "kind": "external", "value": "https://example.com/issues/45" }]
+    }
+  ]
+}
+```
+
+Here the symbol is the loan-limit check, linked to LEND-03, so the older LEND-03 decision comes first.
+
 ## Reading the signal
 
 - **`antiPatternWarnings` is non-empty** — someone already tried something

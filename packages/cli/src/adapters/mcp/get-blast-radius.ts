@@ -13,7 +13,7 @@ import type { CommunitySnapshot } from '../../core/types.js';
 import type { StalenessCheck } from './get-logic-slice.js';
 import { getGraphAndFiles } from './get-logic-slice.js';
 import type { ResponseEnricher } from '../../ports/i-ctxo-module.js';
-import { applyEnricher } from './enrich-payload.js';
+import { applyEnricherAsync } from './enrich-payload.js';
 
 interface ClusterBreakdown {
   readonly byCluster: Record<string, number>;
@@ -140,7 +140,7 @@ export function handleGetBlastRadius(
 
       const stalenessMeta = git ? await buildSnapshotStaleness(storage, git) : undefined;
       const extras = stalenessMeta ? { snapshotStaleness: stalenessMeta } : undefined;
-      const enriched = applyEnricher(enrich, body, parsed.data, 'get_blast_radius');
+      const enriched = await applyEnricherAsync(enrich, body, parsed.data, 'get_blast_radius');
       const payload = masking.mask(JSON.stringify(wrapResponse(enriched, extras)));
 
       const content: Array<{ type: 'text'; text: string }> = [];

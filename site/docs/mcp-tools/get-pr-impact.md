@@ -114,8 +114,10 @@ Review a specific commit range, confirmed impacts only:
 If the diff is empty:
 
 ```json
-{ "since": "HEAD~1", "changedFiles": 0, "changedSymbols": 0, "totalImpact": 0, "riskLevel": "low", "files": [], "summary": { "confirmedTotal": 0, "likelyTotal": 0, "potentialTotal": 0, "highRiskSymbols": [] } }
+{ "since": "HEAD~1", "changedFiles": 0, "changedSymbols": 0, "totalImpact": 0, "riskLevel": "low", "files": [], "summary": { "confirmedTotal": 0, "likelyTotal": 0, "potentialTotal": 0, "highRiskSymbols": [] }, "_meta": { "totalItems": 0, "returnedItems": 0, "truncated": false, "totalBytes": 186 } }
 ```
+
+The empty response goes through the same envelope and masking as every other response, so it carries `_meta`, and module fields (see below) are added to it too.
 
 ## Named contexts
 
@@ -123,6 +125,32 @@ With `@ctxo/domain` and a registry, two fields are added:
 
 - `context` on each changed symbol: the id of the one named context that owns its file.
 - `contextBoundaryViolations`: the cross-context edges that touch a changed symbol and fall outside the source context's `contracts`. Each entry has `from` and `to` (`symbolId`, `file`, `context`), `edgeKind` and `severity` (`error` or `warning`, from `domain.boundaries.enforce` and the contexts' rungs). Capped at 50, with `contextBoundaryViolationsTotal` when more existed. Absent when no edge qualifies, and without a registry.
+
+### Contexts, cards and untested rules
+
+With a domain graph (built by `ctxo index`), three more lists show which named contexts the change touched, which cards it changed and which rules in those contexts have no test:
+
+- `contextsTouched`: each named context with a changed non-test file. Each entry has `id`, `status` (`card-changed`, `acknowledged`, `unresolved` or `no-card`, as in [`ctxo contexts-touched`](/cli/domain#ctxo-contexts-touched)), `card`, `cardChanged`, `acknowledged` (`{ commit, reason? }`, from a `Domain-Unchanged` trailer) when present, `fileCount` and up to 10 `files`.
+- `cardsChanged`: every registry card changed in the range or the working tree, touched context or not, in path order.
+- `rulesWithoutTests`: the rules of the touched contexts that have no test link, each with `ruleId`, `title`, `context`, `card`, and `untested` when the card gives an `Untested:` reason.
+
+```json
+{
+  "contextsTouched": [
+    { "id": "lending", "status": "unresolved", "card": "docs/domain/lending/domain.md", "cardChanged": false, "fileCount": 1, "files": ["src/lending/loan-limit.ts"] }
+  ],
+  "cardsChanged": [],
+  "rulesWithoutTests": [
+    { "ruleId": "LEND-01", "title": "A loan lasts fourteen days", "context": "lending", "card": "docs/domain/lending/domain.md", "untested": "the due date is set by the loan service and has no test yet" }
+  ]
+}
+```
+
+::: info Two meanings of `since`
+`files` and the risk figures come from `git diff <since>`, as before. The three domain lists use the change set of `ctxo contexts-touched`: the commits after the merge base of `since` and HEAD, plus the working tree (staged, unstaged and untracked files). When `since` is an ancestor of HEAD and the working tree is clean the two agree; otherwise, for example with `since` on another branch or with uncommitted edits, the lists can name files that `files` does not.
+:::
+
+The three lists are present, possibly empty, whenever a valid graph exists and git can resolve the range; when git cannot resolve `since` (no merge base, an unknown ref) they are left out with one warning on stderr. Each is capped at 50 entries with `contextsTouchedTotal`, `cardsChangedTotal` or `rulesWithoutTestsTotal` when entries were cut, and is never truncated by the response envelope. If the domain fields take longer than 5 seconds, the response comes back without them.
 
 ## Reading the verdict
 

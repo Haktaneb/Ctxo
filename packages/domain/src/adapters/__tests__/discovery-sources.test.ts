@@ -1,6 +1,6 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createModuleHost, type CtxoHost, type FileIndex, type IGitPort } from '@ctxo/cli/internal';
 import { discoverConventions } from '../../core/discovery.js';
@@ -60,5 +60,39 @@ describe('gatherDiscoveryInput', () => {
 
     expect(input.localBranches).toEqual(['OPS-1']);
     expect(input.remoteBranches).toEqual(['origin/OPS-1']);
+  });
+
+  it('does not feed discovery a card symlinked outside the repository (I2)', async () => {
+    const write = (path: string, text: string): void => {
+      mkdirSync(dirname(join(dir, path)), { recursive: true });
+      writeFileSync(join(dir, path), text, 'utf-8');
+    };
+    write(
+      'docs/domain/contexts.yaml',
+      'version: 1\ncontexts:\n  - id: lending\n    name: Lending\n    card: docs/domain/lending.md\n    paths: ["src/Lending/**"]\n    rung: named\n',
+    );
+    const card = '# Lending\n\n## Rules and invariants\n### LEND-03 A member holds at most five loans\n';
+    const host = hostWith({ readIndex: () => [] });
+    const loaded = host.services.loadConfig(host.ctxoRoot);
+
+    // An in-repo card feeds discovery.
+    write('docs/domain/lending.md', card);
+    const inside = await gatherDiscoveryInput(host, dir, host.ctxoRoot, loaded, DEFAULT_DOMAIN_CONFIG);
+    expect(inside.cards.flatMap((c) => c.rules.map((r) => r.id))).toEqual(['LEND-03']);
+
+    const outside = mkdtempSync(join(tmpdir(), 'ctxo-domain-outside-'));
+    try {
+      writeFileSync(join(outside, 'secret.md'), card, 'utf-8');
+      rmSync(join(dir, 'docs/domain/lending.md'));
+      try {
+        symlinkSync(join(outside, 'secret.md'), join(dir, 'docs/domain/lending.md'), 'file');
+      } catch {
+        return; // Windows without developer mode cannot make the symlink.
+      }
+      const linked = await gatherDiscoveryInput(host, dir, host.ctxoRoot, loaded, DEFAULT_DOMAIN_CONFIG);
+      expect(linked.cards).toEqual([]);
+    } finally {
+      rmSync(outside, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
   });
 });

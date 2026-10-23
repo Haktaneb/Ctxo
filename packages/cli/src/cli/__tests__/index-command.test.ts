@@ -355,6 +355,27 @@ describe('IndexCommand module seams', () => {
     expect(seen).toHaveLength(3);
   });
 
+  it('a commit that changed no indexable file still runs module index passes', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    await new IndexCommand(tempDir).run({ skipHistory: true, modules: [] });
+
+    mkdirSync(join(tempDir, 'docs', 'domain', 'lending'), { recursive: true });
+    writeFileSync(join(tempDir, 'docs', 'domain', 'lending', 'domain.md'), '# Lending\n', 'utf-8');
+    const git = (...args: string[]): void => {
+      execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=Test', '-c', 'user.email=test@test.com', ...args], {
+        cwd: tempDir,
+        stdio: 'ignore',
+      });
+    };
+    git('add', 'docs/domain/lending/domain.md');
+    git('commit', '-m', 'docs: lending card');
+
+    const seen: PassRecord[] = [];
+    await new IndexCommand(tempDir).run({ commit: 'HEAD', modules: [recorder(seen)] });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ indices: 3 });
+  });
+
   it('module index passes run with --skip-community and --skip-history, and never with --check', async () => {
     const seen: PassRecord[] = [];
     vi.spyOn(console, 'error').mockImplementation(() => {});

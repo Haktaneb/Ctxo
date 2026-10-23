@@ -125,7 +125,7 @@ Full config blocks for Cursor, Copilot, Windsurf, and Cline are in
 [MCP Client Setup](/introduction/mcp-client-setup).
 
 Restart your client. You should see `ctxo` listed as a connected MCP server
-with 14 tools and 1 resource (`ctxo://status`).
+with 14 tools (16 with `@ctxo/domain`) and 1 resource (`ctxo://status`).
 
 ## 5. Make your first tool call
 

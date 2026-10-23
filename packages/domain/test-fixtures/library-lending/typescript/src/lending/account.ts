@@ -2,4 +2,5 @@
 export interface Account {
   memberId: number;
   activeLoans: number;
+  unpaidFineCents?: number;
 }
