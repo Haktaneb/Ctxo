@@ -1,0 +1,229 @@
+import { describe, expect, it } from 'vitest';
+import { Project } from 'ts-morph';
+import type { CodeFact, FactKind } from '@ctxo/plugin-api';
+import { TsMorphAdapter } from '../../ts-morph-adapter.js';
+import { ModuleResolver } from '../../sql/module-resolver.js';
+import { readLendingSample } from '../../__tests__/helpers/lending-sample.js';
+import { DEFAULT_FACT_OPTIONS } from '../fact-options.js';
+import { ROUTE_MODULES, collectTsEvidence } from '../ts-evidence.js';
+
+const RULES = 'src/facts/loan-rules.ts';
+const HTTP = 'src/facts/http.ts';
+const FASTIFY = 'src/facts/fastify-routes.ts';
+const CONTROLLER = 'src/loan.controller.ts';
+
+interface Row {
+  readonly file: string;
+  readonly symbol: string;
+  readonly kind: FactKind;
+  readonly text: string;
+  readonly detail: Record<string, string>;
+  /** The fixture text on the evidence's first line. */
+  readonly needle: string;
+}
+
+const ROWS: readonly Row[] = [
+  { file: RULES, symbol: 'MAX_RETRIES::variable', kind: 'retry-timeout', text: 'MAX_RETRIES = 3', detail: { name: 'MAX_RETRIES', value: '3' }, needle: 'MAX_RETRIES = 3' },
+  { file: RULES, symbol: 'canBorrow::function', kind: 'literal-comparison', text: 'openLoans >= 5', detail: { operator: '>=', literal: '5' }, needle: 'openLoans >= 5' },
+  { file: RULES, symbol: 'fee::function', kind: 'literal-comparison', text: "tier case 'gold'", detail: { operator: 'case', literal: "'gold'" }, needle: "case 'gold'" },
+  { file: RULES, symbol: 'key::function', kind: 'normalization', text: 'email.trim()', detail: { method: 'trim' }, needle: 'email.trim()' },
+  { file: RULES, symbol: 'key::function', kind: 'normalization', text: 'email.trim().toLowerCase()', detail: { method: 'toLowerCase' }, needle: 'email.trim().toLowerCase()' },
+  { file: RULES, symbol: 'remind::function', kind: 'retry-timeout', text: 'setTimeout = 30000ms', detail: { name: 'setTimeout', value: '30000ms' }, needle: 'setTimeout(send' },
+  { file: RULES, symbol: 'client::variable', kind: 'retry-timeout', text: 'timeout = 5000', detail: { name: 'timeout', value: '5000' }, needle: 'timeout: 5000' },
+  { file: RULES, symbol: 'label::function', kind: 'literal-comparison', text: 'days > 14', detail: { operator: '>', literal: '14' }, needle: 'days > 14' },
+  { file: HTTP, symbol: 'http::variable', kind: 'endpoint', text: 'GET /holds/:id', detail: { verb: 'GET', route: '/holds/:id' }, needle: "router.get('/holds/:id'" },
+  { file: FASTIFY, symbol: 'routes::function', kind: 'endpoint', text: 'GET /members/:id', detail: { verb: 'GET', route: '/members/:id' }, needle: "app.get('/members/:id'" },
+  { file: FASTIFY, symbol: 'routes::function', kind: 'endpoint', text: 'POST /members', detail: { verb: 'POST', route: '/members' }, needle: 'app.route(' },
+  { file: FASTIFY, symbol: 'routes::function', kind: 'endpoint', text: 'PUT /members', detail: { verb: 'PUT', route: '/members' }, needle: 'app.route(' },
+  { file: CONTROLLER, symbol: 'LoanController.find::method', kind: 'endpoint', text: 'GET /loans/:id', detail: { verb: 'GET', route: '/loans/:id' }, needle: "@Get(':id')" },
+];
+
+const FILES = [...new Set(ROWS.map((row) => row.file))];
+
+function lineOf(source: string, needle: string): number {
+  const line = source.split(/\r?\n/).findIndex((text) => text.includes(needle));
+  if (line < 0) throw new Error(`needle not found: ${needle}`);
+  return line;
+}
+
+function expectedFacts(file: string, sample: Map<string, string>): CodeFact[] {
+  return ROWS.filter((row) => row.file === file).map((row) => ({
+    kind: row.kind,
+    symbolId: `${file}::${row.symbol}`,
+    line: lineOf(sample.get(file)!, row.needle),
+    text: row.text,
+    detail: row.detail,
+  }));
+}
+
+async function sampleFacts(): Promise<Map<string, CodeFact[]>> {
+  const sample = readLendingSample();
+  const adapter = new TsMorphAdapter({ facts: DEFAULT_FACT_OPTIONS });
+  adapter.loadProjectSources(sample);
+  const out = new Map<string, CodeFact[]>();
+  for (const [file, source] of sample) out.set(file, await adapter.extractFacts(file, source));
+  adapter.clearProjectSources();
+  return out;
+}
+
+async function factsOf(file: string, source: string): Promise<CodeFact[]> {
+  return new TsMorphAdapter({ facts: DEFAULT_FACT_OPTIONS }).extractFacts(file, source);
+}
+
+describe('TypeScript fact evidence', () => {
+  it.each(FILES)('the fixtures give the expected facts: %s', async (file) => {
+    const sample = readLendingSample();
+    const facts = await sampleFacts();
+    expect(facts.get(file)).toEqual(expectedFacts(file, sample));
+  });
+
+  it('receiver tracing keeps Map.get and axios.get out', async () => {
+    const facts = (await sampleFacts()).get(HTTP)!;
+    expect(facts.map((f) => f.text)).toEqual(['GET /holds/:id']);
+    expect(ROUTE_MODULES).toEqual(new Set(['express', 'fastify']));
+  });
+
+  it('a route call on an untraced receiver or with a non-literal path gives nothing', async () => {
+    const source = [
+      "import express from 'express';",
+      'const app = express();',
+      'declare const other: { get(path: string): void };',
+      "other.get('/x');",
+      'const path = "/y";',
+      'app.get(path, () => {});',
+      "app.route('/z').get(() => {});",
+      "app.post(`/t${1}`, () => {});",
+      "app.all(`/any`, () => {});",
+    ].join('\n');
+    expect((await factsOf('src/app.ts', source)).map((f) => f.text)).toEqual(['ANY /any']);
+  });
+
+  it('top-level registrations attach to the module symbol', async () => {
+    const source = ["import express from 'express';", 'const app = express();', "app.delete('/holds/:id', () => {});"].join('\n');
+    expect(await factsOf('src/server.ts', source)).toEqual([
+      { kind: 'endpoint', symbolId: 'src/server.ts::server::variable', line: 2, text: 'DELETE /holds/:id', detail: { verb: 'DELETE', route: '/holds/:id' } },
+    ]);
+  });
+
+  it('a non-exported function gets its own symbol id', async () => {
+    const facts = (await sampleFacts()).get(RULES)!;
+    expect(facts.find((f) => f.text === 'days > 14')?.symbolId).toBe(`${RULES}::label::function`);
+
+    const source = [
+      'class Policy {',
+      '  check(n: number) { if (n > 7) return 1; return 2; }',
+      '  limit = 9;',
+      '  get retryDelay() { return n > 8; }',
+      '}',
+      'export class Shown {',
+      '  ctor(n: number) { if (n > 3) {} }',
+      '  constructor(n: number) { if (n < 4) {} }',
+      '}',
+    ].join('\n');
+    const ids = (await factsOf('src/policy.ts', source)).map((f) => [f.text, f.symbolId]);
+    expect(ids).toEqual([
+      ['n > 7', 'src/policy.ts::Policy.check::method'],
+      ['n > 3', 'src/policy.ts::Shown.ctor::method'],
+      ['n < 4', 'src/policy.ts::Shown::class'],
+    ]);
+  });
+
+  it('facts in test files carry test-block ids', async () => {
+    const file = 'src/__tests__/x.test.ts';
+    const source = "describe('limits', () => { it('five', () => { if (n >= 5) {} }) })";
+    expect(await factsOf(file, source)).toEqual([
+      { kind: 'literal-comparison', symbolId: `${file}::limits > five::function`, line: 0, text: 'n >= 5', detail: { operator: '>=', literal: '5' } },
+    ]);
+  });
+
+  it('trivial literals and strings give nothing', async () => {
+    const texts = [...(await sampleFacts()).values()].flat().map((f) => f.text);
+    for (const forbidden of ['member === null', "member !== ''", "case ''", 'settlementDays', 'x > 5', 'cache.get', 'axios']) {
+      expect(texts.some((t) => t.includes(forbidden)), forbidden).toBe(false);
+    }
+
+    const source = [
+      'export function f(a: number, s: string, b: boolean) {',
+      '  if (a === 0 || a !== -1 || a < 1) {}',
+      "  while (s !== '' && s != \"\" && s === ``) {}",
+      '  if (b === true || b !== false || s == null) {}',
+      '  if (a > 0.0 || a >= 1e0 || a == 0x1) {}',
+      '}',
+    ].join('\n');
+    expect(await factsOf('src/f.ts', source)).toEqual([]);
+  });
+
+  it('comparisons are found in every condition form, through &&, || and !', async () => {
+    const source = [
+      'export function g(a: number, s: string) {',
+      '  while (!(a > 2)) {}',
+      '  do {} while (a < 3 || s === `t`);',
+      '  for (let i = 0; i < 10; i++) {}',
+      "  const r = s !== 'z' ? 1 : 2;",
+      '  if (-5 < a) {}',
+      '  const notACondition = a > 99;',
+      '  if (a > b) {}',
+      '}',
+    ].join('\n');
+    expect((await factsOf('src/g.ts', source)).map((f) => [f.text, f.detail])).toEqual([
+      ['a > 2', { operator: '>', literal: '2' }],
+      ['a < 3', { operator: '<', literal: '3' }],
+      ['s === `t`', { operator: '===', literal: '`t`' }],
+      ['i < 10', { operator: '<', literal: '10' }],
+      ["s !== 'z'", { operator: '!==', literal: "'z'" }],
+      ['-5 < a', { operator: '<', literal: '-5' }],
+    ]);
+  });
+
+  it('bindings need a retry or timeout name and a numeric constant; setTimeout needs a second argument', async () => {
+    const source = [
+      'export class Client {',
+      '  requestTimeout = 30 * 1000;',
+      "  'retry-count' = 4;",
+      '  name = 7;',
+      '}',
+      'export function h(o: { backoffMs: number }, run: () => void) {',
+      '  let maxAttempts = 5;',
+      '  o.backoffMs = 250;',
+      '  const cfg = { ttlSeconds: 60, label: 3, delay: x };',
+      '  window.setTimeout(run, 2 * 1000);',
+      '  globalThis.setTimeout(run, 10);',
+      '  setTimeout(run);',
+      '  setTimeout(run, delayMs);',
+      '}',
+    ].join('\n');
+    expect((await factsOf('src/h.ts', source)).map((f) => f.text)).toEqual([
+      'requestTimeout = 30000',
+      'retry-count = 4',
+      'maxAttempts = 5',
+      'backoffMs = 250',
+      'ttlSeconds = 60',
+      'setTimeout = 2000ms',
+      'setTimeout = 10ms',
+    ]);
+  });
+
+  it('a custom normalization list replaces the defaults', async () => {
+    const source = 'export function k(e: string) { return e.trim().toLowerCase().normalize(); }';
+    const adapter = new TsMorphAdapter({ facts: { ...DEFAULT_FACT_OPTIONS, normalizationMethods: ['normalize'] } });
+    expect((await adapter.extractFacts('src/k.ts', source)).map((f) => f.detail)).toEqual([{ method: 'normalize' }]);
+  });
+
+  it('extracting the same file twice gives deep-equal facts', async () => {
+    const sample = readLendingSample();
+    const adapter = new TsMorphAdapter({ facts: DEFAULT_FACT_OPTIONS });
+    const first = await adapter.extractFacts(RULES, sample.get(RULES)!);
+    const second = await adapter.extractFacts(RULES, sample.get(RULES)!);
+    expect(second).toEqual(first);
+    expect(first.length).toBeGreaterThan(0);
+  });
+
+  it('collectTsEvidence works on a bare source file', () => {
+    const project = new Project({ useInMemoryFileSystem: true });
+    const sourceFile = project.createSourceFile('/src/a.ts', 'export function a(n: number) { if (n > 5) {} }');
+    const resolver = new ModuleResolver(project);
+    expect(collectTsEvidence(sourceFile, 'src/a.ts', resolver, DEFAULT_FACT_OPTIONS)).toEqual([
+      { kind: 'comparison', symbolId: 'src/a.ts::a::function', line: 0, text: 'n > 5', operator: '>', literal: '5', literalKind: 'number' },
+    ]);
+  });
+});

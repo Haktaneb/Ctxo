@@ -1,5 +1,5 @@
 import { Node, SyntaxKind } from 'ts-morph';
-import { tableModuleOf } from './known-sql-apis.js';
+import { packageOfSpecifier, tableModuleOf } from './known-sql-apis.js';
 import { isRelativeSpecifier, type ModuleResolver } from './module-resolver.js';
 import { WalkState, declarationOf, exportOf, importBindingOf, unwrapExpression } from './declarations.js';
 
@@ -21,36 +21,48 @@ import { WalkState, declarationOf, exportOf, importBindingOf, unwrapExpression }
  *   module, any other call its callee. `new X(...)`: `X`.
  * - type reference: its leftmost identifier; `import` type of a table module: that module.
  * - anything else: undefined.
+ *
+ * `modules` is the set of packages the walk stops at (a specifier's package, as `packageOfSpecifier` gives it);
+ * without it, the SQL table modules. The fact detectors pass the route modules.
  */
-export function receiverModule(expr: Node, resolver: ModuleResolver): string | undefined {
-  return moduleOfExpression(expr, resolver, new WalkState());
+export function receiverModule(expr: Node, resolver: ModuleResolver, modules?: ReadonlySet<string>): string | undefined {
+  const lookup: ModuleLookup = modules
+    ? (specifier) => {
+        const pkg = packageOfSpecifier(specifier);
+        return modules.has(pkg) ? pkg : undefined;
+      }
+    : tableModuleOf;
+  return moduleOfExpression(expr, resolver, new WalkState(), lookup);
 }
 
-function moduleOfExpression(node: Node, resolver: ModuleResolver, state: WalkState): string | undefined {
+/** The listed module a non-relative specifier belongs to, or undefined. */
+type ModuleLookup = (specifier: string) => string | undefined;
+
+function moduleOfExpression(node: Node, resolver: ModuleResolver, state: WalkState, lookup: ModuleLookup): string | undefined {
   const expr = unwrapExpression(node, true);
 
-  if (Node.isIdentifier(expr)) return moduleOfDeclaration(declarationOf(expr), resolver, state);
-  if (Node.isThisExpression(expr)) return moduleOfDeclaration(enclosingClass(expr), resolver, state);
+  if (Node.isIdentifier(expr)) return moduleOfDeclaration(declarationOf(expr), resolver, state, lookup);
+  if (Node.isThisExpression(expr)) return moduleOfDeclaration(enclosingClass(expr), resolver, state, lookup);
 
   if (Node.isPropertyAccessExpression(expr)) {
     const target = expr.getExpression();
-    if (Node.isThisExpression(target)) return moduleOfDeclaration(thisMember(target, expr.getName()), resolver, state);
-    return moduleOfExpression(target, resolver, state);
+    if (Node.isThisExpression(target)) return moduleOfDeclaration(thisMember(target, expr.getName()), resolver, state, lookup);
+    return moduleOfExpression(target, resolver, state, lookup);
   }
 
   if (Node.isCallExpression(expr)) {
     const callee = expr.getExpression();
     const specifier = loadedSpecifier(callee, expr.getArguments()[0]);
-    if (specifier !== undefined) return isRelativeSpecifier(specifier) ? undefined : tableModuleOf(specifier);
-    return moduleOfExpression(callee, resolver, state);
+    if (specifier !== undefined) return isRelativeSpecifier(specifier) ? undefined : lookup(specifier);
+    return moduleOfExpression(callee, resolver, state, lookup);
   }
 
-  if (Node.isNewExpression(expr)) return moduleOfExpression(expr.getExpression(), resolver, state);
-  if (Node.isExpressionWithTypeArguments(expr)) return moduleOfExpression(expr.getExpression(), resolver, state);
+  if (Node.isNewExpression(expr)) return moduleOfExpression(expr.getExpression(), resolver, state, lookup);
+  if (Node.isExpressionWithTypeArguments(expr)) return moduleOfExpression(expr.getExpression(), resolver, state, lookup);
 
   if (Node.isArrowFunction(expr) || Node.isFunctionExpression(expr)) {
     const returnType = expr.getReturnTypeNode();
-    return returnType ? moduleOfType(returnType, resolver, state) : undefined;
+    return returnType ? moduleOfType(returnType, resolver, state, lookup) : undefined;
   }
   return undefined;
 }
@@ -82,58 +94,58 @@ function thisMember(thisNode: Node, name: string): Node | undefined {
   return undefined;
 }
 
-function moduleOfDeclaration(declaration: Node | undefined, resolver: ModuleResolver, state: WalkState): string | undefined {
+function moduleOfDeclaration(declaration: Node | undefined, resolver: ModuleResolver, state: WalkState, lookup: ModuleLookup): string | undefined {
   if (!declaration || !state.enter(declaration)) return undefined;
 
   const binding = importBindingOf(declaration);
   if (binding) {
-    if (!isRelativeSpecifier(binding.specifier)) return tableModuleOf(binding.specifier);
+    if (!isRelativeSpecifier(binding.specifier)) return lookup(binding.specifier);
     if (binding.exportName === undefined) return undefined;
     const target = resolver.sourceFileFor(binding.file, binding.specifier);
-    return target ? moduleOfDeclaration(exportOf(target, binding.exportName, resolver, state), resolver, state) : undefined;
+    return target ? moduleOfDeclaration(exportOf(target, binding.exportName, resolver, state), resolver, state, lookup) : undefined;
   }
 
   if (Node.isVariableDeclaration(declaration) || Node.isPropertyDeclaration(declaration)) {
     const type = declaration.getTypeNode();
-    if (type) return moduleOfType(type, resolver, state);
+    if (type) return moduleOfType(type, resolver, state, lookup);
     const initializer = declaration.getInitializer();
-    return initializer ? moduleOfExpression(initializer, resolver, state) : undefined;
+    return initializer ? moduleOfExpression(initializer, resolver, state, lookup) : undefined;
   }
   if (Node.isBindingElement(declaration)) {
     const outer = declaration.getFirstAncestor((n) => Node.isVariableDeclaration(n) || Node.isParameterDeclaration(n));
     if (!outer || !Node.isVariableDeclaration(outer)) return undefined;
     const initializer = outer.getInitializer();
-    return initializer ? moduleOfExpression(initializer, resolver, state) : undefined;
+    return initializer ? moduleOfExpression(initializer, resolver, state, lookup) : undefined;
   }
   if (Node.isParameterDeclaration(declaration)) {
     const type = declaration.getTypeNode();
-    return type ? moduleOfType(type, resolver, state) : undefined;
+    return type ? moduleOfType(type, resolver, state, lookup) : undefined;
   }
   if (Node.isClassDeclaration(declaration) || Node.isClassExpression(declaration)) {
     const base = declaration.getExtends();
-    return base ? moduleOfExpression(base.getExpression(), resolver, state) : undefined;
+    return base ? moduleOfExpression(base.getExpression(), resolver, state, lookup) : undefined;
   }
   if (Node.isFunctionDeclaration(declaration) || Node.isMethodDeclaration(declaration) || Node.isFunctionExpression(declaration)) {
     const returnType = declaration.getReturnTypeNode();
-    return returnType ? moduleOfType(returnType, resolver, state) : undefined;
+    return returnType ? moduleOfType(returnType, resolver, state, lookup) : undefined;
   }
-  if (Node.isExportAssignment(declaration)) return moduleOfExpression(declaration.getExpression(), resolver, state);
+  if (Node.isExportAssignment(declaration)) return moduleOfExpression(declaration.getExpression(), resolver, state, lookup);
   return undefined;
 }
 
-function moduleOfType(type: Node, resolver: ModuleResolver, state: WalkState): string | undefined {
-  if (Node.isParenthesizedTypeNode(type)) return moduleOfType(type.getTypeNode(), resolver, state);
+function moduleOfType(type: Node, resolver: ModuleResolver, state: WalkState, lookup: ModuleLookup): string | undefined {
+  if (Node.isParenthesizedTypeNode(type)) return moduleOfType(type.getTypeNode(), resolver, state, lookup);
   if (Node.isTypeReference(type)) {
     let name: Node = type.getTypeName();
     while (Node.isQualifiedName(name)) name = name.getLeft();
-    return moduleOfDeclaration(declarationOf(name), resolver, state);
+    return moduleOfDeclaration(declarationOf(name), resolver, state, lookup);
   }
   if (Node.isImportTypeNode(type)) {
     const argument = type.getArgument();
     const literal = Node.isLiteralTypeNode(argument) ? argument.getLiteral() : undefined;
     if (!literal || !Node.isStringLiteral(literal)) return undefined;
     const specifier = literal.getLiteralValue();
-    return isRelativeSpecifier(specifier) ? undefined : tableModuleOf(specifier);
+    return isRelativeSpecifier(specifier) ? undefined : lookup(specifier);
   }
   return undefined;
 }

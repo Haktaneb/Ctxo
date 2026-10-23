@@ -1,0 +1,767 @@
+{
+  "default": {
+    "src/__tests__/loan-policy.test.ts": {
+      "symbols": [
+        {
+          "symbolId": "src/__tests__/loan-policy.test.ts::LoanPolicy::function",
+          "name": "LoanPolicy",
+          "kind": "function",
+          "startLine": 3,
+          "endLine": 16,
+          "startOffset": 118,
+          "endOffset": 549,
+          "annotations": [
+            {
+              "name": "test"
+            }
+          ]
+        },
+        {
+          "symbolId": "src/__tests__/loan-policy.test.ts::LoanPolicy > LEND-03 a member holds at most five loans::function",
+          "name": "LoanPolicy > LEND-03 a member holds at most five loans",
+          "kind": "function",
+          "startLine": 4,
+          "endLine": 8,
+          "startOffset": 152,
+          "endOffset": 322,
+          "annotations": [
+            {
+              "name": "test"
+            }
+          ]
+        },
+        {
+          "symbolId": "src/__tests__/loan-policy.test.ts::LoanPolicy > renewal::function",
+          "name": "LoanPolicy > renewal",
+          "kind": "function",
+          "startLine": 10,
+          "endLine": 15,
+          "startOffset": 329,
+          "endOffset": 544,
+          "annotations": [
+            {
+              "name": "test"
+            }
+          ]
+        },
+        {
+          "symbolId": "src/__tests__/loan-policy.test.ts::LoanPolicy > renewal > extends by seven days::function",
+          "name": "LoanPolicy > renewal > extends by seven days",
+          "kind": "function",
+          "startLine": 11,
+          "endLine": 14,
+          "startOffset": 362,
+          "endOffset": 537,
+          "annotations": [
+            {
+              "name": "test"
+            }
+          ]
+        }
+      ],
+      "complexity": [],
+      "edges": [
+        {
+          "from": "src/__tests__/loan-policy.test.ts::loan-policy.test::variable",
+          "to": "src/loan-policy.ts::MAX_LOANS::variable",
+          "kind": "imports"
+        },
+        {
+          "from": "src/__tests__/loan-policy.test.ts::loan-policy.test::variable",
+          "to": "src/loan-policy.ts::canBorrow::function",
+          "kind": "imports"
+        },
+        {
+          "from": "src/__tests__/loan-policy.test.ts::loan-policy.test::variable",
+          "to": "src/loan-policy.ts::renewalDue::function",
+          "kind": "imports"
+        },
+        {
+          "from": "src/__tests__/loan-policy.test.ts::LoanPolicy > LEND-03 a member holds at most five loans::function",
+          "to": "src/loan-policy.ts::canBorrow::function",
+          "kind": "calls"
+        },
+        {
+          "from": "src/__tests__/loan-policy.test.ts::LoanPolicy > LEND-03 a member holds at most five loans::function",
+          "to": "src/loan-policy.ts::MAX_LOANS::variable",
+          "kind": "uses"
+        },
+        {
+          "from": "src/__tests__/loan-policy.test.ts::LoanPolicy > LEND-03 a member holds at most five loans::function",
+          "to": "src/loan-policy.ts::canBorrow::function",
+          "kind": "uses"
+        },
+        {
+          "from": "src/__tests__/loan-policy.test.ts::LoanPolicy > renewal > extends by seven days::function",
+          "to": "src/loan-policy.ts::renewalDue::function",
+          "kind": "calls"
+        },
+        {
+          "from": "src/__tests__/loan-policy.test.ts::LoanPolicy > renewal > extends by seven days::function",
+          "to": "src/loan-policy.ts::renewalDue::function",
+          "kind": "uses"
+        }
+      ]
+    },
+    "src/db.ts": {
+      "symbols": [
+        {
+          "symbolId": "src/db.ts::pool::variable",
+          "name": "pool",
+          "kind": "variable",
+          "startLine": 1,
+          "endLine": 1,
+          "startOffset": 41,
+          "endOffset": 58
+        }
+      ],
+      "complexity": [],
+      "edges": []
+    },
+    "src/loan-policy.ts": {
+      "symbols": [
+        {
+          "symbolId": "src/loan-policy.ts::canBorrow::function",
+          "name": "canBorrow",
+          "kind": "function",
+          "startLine": 3,
+          "endLine": 5,
+          "startOffset": 63,
+          "endOffset": 158
+        },
+        {
+          "symbolId": "src/loan-policy.ts::renewalDue::function",
+          "name": "renewalDue",
+          "kind": "function",
+          "startLine": 7,
+          "endLine": 11,
+          "startOffset": 162,
+          "endOffset": 331
+        },
+        {
+          "symbolId": "src/loan-policy.ts::MAX_LOANS::variable",
+          "name": "MAX_LOANS",
+          "kind": "variable",
+          "startLine": 0,
+          "endLine": 0,
+          "startOffset": 13,
+          "endOffset": 26
+        },
+        {
+          "symbolId": "src/loan-policy.ts::RENEWAL_DAYS::variable",
+          "name": "RENEWAL_DAYS",
+          "kind": "variable",
+          "startLine": 1,
+          "endLine": 1,
+          "startOffset": 42,
+          "endOffset": 58
+        }
+      ],
+      "complexity": [
+        {
+          "symbolId": "src/loan-policy.ts::canBorrow::function",
+          "cyclomatic": 1
+        },
+        {
+          "symbolId": "src/loan-policy.ts::renewalDue::function",
+          "cyclomatic": 1
+        }
+      ],
+      "edges": []
+    },
+    "src/loan.controller.ts": {
+      "symbols": [
+        {
+          "symbolId": "src/loan.controller.ts::LoanController::class",
+          "name": "LoanController",
+          "kind": "class",
+          "startLine": 3,
+          "endLine": 12,
+          "startOffset": 123,
+          "endOffset": 355,
+          "annotations": [
+            {
+              "name": "Controller",
+              "args": [
+                "loans"
+              ]
+            }
+          ]
+        },
+        {
+          "symbolId": "src/loan.controller.ts::LoanController.find::method",
+          "name": "LoanController.find",
+          "kind": "method",
+          "startLine": 7,
+          "endLine": 11,
+          "startOffset": 238,
+          "endOffset": 352,
+          "annotations": [
+            {
+              "name": "Get",
+              "args": [
+                ":id"
+              ]
+            },
+            {
+              "name": "HttpCode"
+            }
+          ]
+        }
+      ],
+      "complexity": [
+        {
+          "symbolId": "src/loan.controller.ts::LoanController.find::method",
+          "cyclomatic": 1
+        }
+      ],
+      "edges": [
+        {
+          "from": "src/loan.controller.ts::LoanController::class",
+          "to": "src/loan.repository::LoanRepository::class",
+          "kind": "imports"
+        },
+        {
+          "from": "src/loan.controller.ts::LoanController::class",
+          "to": "src/loan.repository::LoanRepository::class",
+          "kind": "uses"
+        }
+      ]
+    },
+    "src/loan.entity.ts": {
+      "symbols": [
+        {
+          "symbolId": "src/loan.entity.ts::Loan::class",
+          "name": "Loan",
+          "kind": "class",
+          "startLine": 2,
+          "endLine": 11,
+          "startOffset": 69,
+          "endOffset": 258,
+          "annotations": [
+            {
+              "name": "Entity",
+              "args": [
+                "loans"
+              ]
+            },
+            {
+              "name": "PrimaryGeneratedColumn",
+              "named": {
+                "member": "id"
+              }
+            },
+            {
+              "name": "Column",
+              "named": {
+                "member": "memberId",
+                "name": "member_id"
+              }
+            }
+          ]
+        }
+      ],
+      "complexity": [],
+      "edges": []
+    },
+    "src/loan.repository.ts": {
+      "symbols": [
+        {
+          "symbolId": "src/loan.repository.ts::LoanRepository::class",
+          "name": "LoanRepository",
+          "kind": "class",
+          "startLine": 4,
+          "endLine": 22,
+          "startOffset": 105,
+          "endOffset": 621
+        },
+        {
+          "symbolId": "src/loan.repository.ts::LoanRepository.active::method",
+          "name": "LoanRepository.active",
+          "kind": "method",
+          "startLine": 5,
+          "endLine": 7,
+          "startOffset": 138,
+          "endOffset": 201
+        },
+        {
+          "symbolId": "src/loan.repository.ts::LoanRepository.archive::method",
+          "name": "LoanRepository.archive",
+          "kind": "method",
+          "startLine": 9,
+          "endLine": 11,
+          "startOffset": 207,
+          "endOffset": 341
+        },
+        {
+          "symbolId": "src/loan.repository.ts::LoanRepository.close::method",
+          "name": "LoanRepository.close",
+          "kind": "method",
+          "startLine": 13,
+          "endLine": 17,
+          "startOffset": 347,
+          "endOffset": 493
+        },
+        {
+          "symbolId": "src/loan.repository.ts::LoanRepository.byMember::method",
+          "name": "LoanRepository.byMember",
+          "kind": "method",
+          "startLine": 19,
+          "endLine": 21,
+          "startOffset": 499,
+          "endOffset": 618
+        }
+      ],
+      "complexity": [
+        {
+          "symbolId": "src/loan.repository.ts::LoanRepository.active::method",
+          "cyclomatic": 1
+        },
+        {
+          "symbolId": "src/loan.repository.ts::LoanRepository.archive::method",
+          "cyclomatic": 1
+        },
+        {
+          "symbolId": "src/loan.repository.ts::LoanRepository.close::method",
+          "cyclomatic": 1
+        },
+        {
+          "symbolId": "src/loan.repository.ts::LoanRepository.byMember::method",
+          "cyclomatic": 1
+        }
+      ],
+      "edges": [
+        {
+          "from": "src/loan.repository.ts::LoanRepository::class",
+          "to": "src/db.ts::pool::function",
+          "kind": "imports"
+        },
+        {
+          "from": "src/loan.repository.ts::LoanRepository::class",
+          "to": "src/queries.ts::ACTIVE_LOANS_SQL::variable",
+          "kind": "imports"
+        },
+        {
+          "from": "src/loan.repository.ts::LoanRepository::class",
+          "to": "src/db.ts::pool::function",
+          "kind": "uses"
+        },
+        {
+          "from": "src/loan.repository.ts::LoanRepository::class",
+          "to": "src/queries.ts::ACTIVE_LOANS_SQL::variable",
+          "kind": "uses"
+        }
+      ]
+    },
+    "src/queries.ts": {
+      "symbols": [
+        {
+          "symbolId": "src/queries.ts::ACTIVE_LOANS_SQL::variable",
+          "name": "ACTIVE_LOANS_SQL",
+          "kind": "variable",
+          "startLine": 0,
+          "endLine": 0,
+          "startOffset": 13,
+          "endOffset": 131
+        }
+      ],
+      "complexity": [],
+      "edges": []
+    }
+  },
+  "sqlCallSites": {
+    "src/__tests__/loan-policy.test.ts": {
+      "symbols": [
+        {
+          "symbolId": "src/__tests__/loan-policy.test.ts::LoanPolicy::function",
+          "name": "LoanPolicy",
+          "kind": "function",
+          "startLine": 3,
+          "endLine": 16,
+          "startOffset": 118,
+          "endOffset": 549,
+          "annotations": [
+            {
+              "name": "test"
+            }
+          ]
+        },
+        {
+          "symbolId": "src/__tests__/loan-policy.test.ts::LoanPolicy > LEND-03 a member holds at most five loans::function",
+          "name": "LoanPolicy > LEND-03 a member holds at most five loans",
+          "kind": "function",
+          "startLine": 4,
+          "endLine": 8,
+          "startOffset": 152,
+          "endOffset": 322,
+          "annotations": [
+            {
+              "name": "test"
+            }
+          ]
+        },
+        {
+          "symbolId": "src/__tests__/loan-policy.test.ts::LoanPolicy > renewal::function",
+          "name": "LoanPolicy > renewal",
+          "kind": "function",
+          "startLine": 10,
+          "endLine": 15,
+          "startOffset": 329,
+          "endOffset": 544,
+          "annotations": [
+            {
+              "name": "test"
+            }
+          ]
+        },
+        {
+          "symbolId": "src/__tests__/loan-policy.test.ts::LoanPolicy > renewal > extends by seven days::function",
+          "name": "LoanPolicy > renewal > extends by seven days",
+          "kind": "function",
+          "startLine": 11,
+          "endLine": 14,
+          "startOffset": 362,
+          "endOffset": 537,
+          "annotations": [
+            {
+              "name": "test"
+            }
+          ]
+        }
+      ],
+      "complexity": [],
+      "edges": [
+        {
+          "from": "src/__tests__/loan-policy.test.ts::loan-policy.test::variable",
+          "to": "src/loan-policy.ts::MAX_LOANS::variable",
+          "kind": "imports"
+        },
+        {
+          "from": "src/__tests__/loan-policy.test.ts::loan-policy.test::variable",
+          "to": "src/loan-policy.ts::canBorrow::function",
+          "kind": "imports"
+        },
+        {
+          "from": "src/__tests__/loan-policy.test.ts::loan-policy.test::variable",
+          "to": "src/loan-policy.ts::renewalDue::function",
+          "kind": "imports"
+        },
+        {
+          "from": "src/__tests__/loan-policy.test.ts::LoanPolicy > LEND-03 a member holds at most five loans::function",
+          "to": "src/loan-policy.ts::canBorrow::function",
+          "kind": "calls"
+        },
+        {
+          "from": "src/__tests__/loan-policy.test.ts::LoanPolicy > LEND-03 a member holds at most five loans::function",
+          "to": "src/loan-policy.ts::MAX_LOANS::variable",
+          "kind": "uses"
+        },
+        {
+          "from": "src/__tests__/loan-policy.test.ts::LoanPolicy > LEND-03 a member holds at most five loans::function",
+          "to": "src/loan-policy.ts::canBorrow::function",
+          "kind": "uses"
+        },
+        {
+          "from": "src/__tests__/loan-policy.test.ts::LoanPolicy > renewal > extends by seven days::function",
+          "to": "src/loan-policy.ts::renewalDue::function",
+          "kind": "calls"
+        },
+        {
+          "from": "src/__tests__/loan-policy.test.ts::LoanPolicy > renewal > extends by seven days::function",
+          "to": "src/loan-policy.ts::renewalDue::function",
+          "kind": "uses"
+        }
+      ]
+    },
+    "src/db.ts": {
+      "symbols": [
+        {
+          "symbolId": "src/db.ts::pool::variable",
+          "name": "pool",
+          "kind": "variable",
+          "startLine": 1,
+          "endLine": 1,
+          "startOffset": 41,
+          "endOffset": 58
+        }
+      ],
+      "complexity": [],
+      "edges": []
+    },
+    "src/loan-policy.ts": {
+      "symbols": [
+        {
+          "symbolId": "src/loan-policy.ts::canBorrow::function",
+          "name": "canBorrow",
+          "kind": "function",
+          "startLine": 3,
+          "endLine": 5,
+          "startOffset": 63,
+          "endOffset": 158
+        },
+        {
+          "symbolId": "src/loan-policy.ts::renewalDue::function",
+          "name": "renewalDue",
+          "kind": "function",
+          "startLine": 7,
+          "endLine": 11,
+          "startOffset": 162,
+          "endOffset": 331
+        },
+        {
+          "symbolId": "src/loan-policy.ts::MAX_LOANS::variable",
+          "name": "MAX_LOANS",
+          "kind": "variable",
+          "startLine": 0,
+          "endLine": 0,
+          "startOffset": 13,
+          "endOffset": 26
+        },
+        {
+          "symbolId": "src/loan-policy.ts::RENEWAL_DAYS::variable",
+          "name": "RENEWAL_DAYS",
+          "kind": "variable",
+          "startLine": 1,
+          "endLine": 1,
+          "startOffset": 42,
+          "endOffset": 58
+        }
+      ],
+      "complexity": [
+        {
+          "symbolId": "src/loan-policy.ts::canBorrow::function",
+          "cyclomatic": 1
+        },
+        {
+          "symbolId": "src/loan-policy.ts::renewalDue::function",
+          "cyclomatic": 1
+        }
+      ],
+      "edges": []
+    },
+    "src/loan.controller.ts": {
+      "symbols": [
+        {
+          "symbolId": "src/loan.controller.ts::LoanController::class",
+          "name": "LoanController",
+          "kind": "class",
+          "startLine": 3,
+          "endLine": 12,
+          "startOffset": 123,
+          "endOffset": 355,
+          "annotations": [
+            {
+              "name": "Controller",
+              "args": [
+                "loans"
+              ]
+            }
+          ]
+        },
+        {
+          "symbolId": "src/loan.controller.ts::LoanController.find::method",
+          "name": "LoanController.find",
+          "kind": "method",
+          "startLine": 7,
+          "endLine": 11,
+          "startOffset": 238,
+          "endOffset": 352,
+          "annotations": [
+            {
+              "name": "Get",
+              "args": [
+                ":id"
+              ]
+            },
+            {
+              "name": "HttpCode"
+            }
+          ]
+        }
+      ],
+      "complexity": [
+        {
+          "symbolId": "src/loan.controller.ts::LoanController.find::method",
+          "cyclomatic": 1
+        }
+      ],
+      "edges": [
+        {
+          "from": "src/loan.controller.ts::LoanController::class",
+          "to": "src/loan.repository::LoanRepository::class",
+          "kind": "imports"
+        },
+        {
+          "from": "src/loan.controller.ts::LoanController::class",
+          "to": "src/loan.repository::LoanRepository::class",
+          "kind": "uses"
+        }
+      ]
+    },
+    "src/loan.entity.ts": {
+      "symbols": [
+        {
+          "symbolId": "src/loan.entity.ts::Loan::class",
+          "name": "Loan",
+          "kind": "class",
+          "startLine": 2,
+          "endLine": 11,
+          "startOffset": 69,
+          "endOffset": 258,
+          "annotations": [
+            {
+              "name": "Entity",
+              "args": [
+                "loans"
+              ]
+            },
+            {
+              "name": "PrimaryGeneratedColumn",
+              "named": {
+                "member": "id"
+              }
+            },
+            {
+              "name": "Column",
+              "named": {
+                "member": "memberId",
+                "name": "member_id"
+              }
+            }
+          ]
+        }
+      ],
+      "complexity": [],
+      "edges": []
+    },
+    "src/loan.repository.ts": {
+      "symbols": [
+        {
+          "symbolId": "src/loan.repository.ts::LoanRepository::class",
+          "name": "LoanRepository",
+          "kind": "class",
+          "startLine": 4,
+          "endLine": 22,
+          "startOffset": 105,
+          "endOffset": 621
+        },
+        {
+          "symbolId": "src/loan.repository.ts::LoanRepository.active::method",
+          "name": "LoanRepository.active",
+          "kind": "method",
+          "startLine": 5,
+          "endLine": 7,
+          "startOffset": 138,
+          "endOffset": 201
+        },
+        {
+          "symbolId": "src/loan.repository.ts::LoanRepository.archive::method",
+          "name": "LoanRepository.archive",
+          "kind": "method",
+          "startLine": 9,
+          "endLine": 11,
+          "startOffset": 207,
+          "endOffset": 341
+        },
+        {
+          "symbolId": "src/loan.repository.ts::LoanRepository.close::method",
+          "name": "LoanRepository.close",
+          "kind": "method",
+          "startLine": 13,
+          "endLine": 17,
+          "startOffset": 347,
+          "endOffset": 493
+        },
+        {
+          "symbolId": "src/loan.repository.ts::LoanRepository.byMember::method",
+          "name": "LoanRepository.byMember",
+          "kind": "method",
+          "startLine": 19,
+          "endLine": 21,
+          "startOffset": 499,
+          "endOffset": 618
+        }
+      ],
+      "complexity": [
+        {
+          "symbolId": "src/loan.repository.ts::LoanRepository.active::method",
+          "cyclomatic": 1
+        },
+        {
+          "symbolId": "src/loan.repository.ts::LoanRepository.archive::method",
+          "cyclomatic": 1
+        },
+        {
+          "symbolId": "src/loan.repository.ts::LoanRepository.close::method",
+          "cyclomatic": 1
+        },
+        {
+          "symbolId": "src/loan.repository.ts::LoanRepository.byMember::method",
+          "cyclomatic": 1
+        }
+      ],
+      "edges": [
+        {
+          "from": "src/loan.repository.ts::LoanRepository::class",
+          "to": "src/db.ts::pool::function",
+          "kind": "imports"
+        },
+        {
+          "from": "src/loan.repository.ts::LoanRepository::class",
+          "to": "src/queries.ts::ACTIVE_LOANS_SQL::variable",
+          "kind": "imports"
+        },
+        {
+          "from": "src/loan.repository.ts::LoanRepository::class",
+          "to": "src/db.ts::pool::function",
+          "kind": "uses"
+        },
+        {
+          "from": "src/loan.repository.ts::LoanRepository::class",
+          "to": "src/queries.ts::ACTIVE_LOANS_SQL::variable",
+          "kind": "uses"
+        },
+        {
+          "from": "src/loan.repository.ts::LoanRepository.active::method",
+          "to": "dbo.loans::table",
+          "kind": "reads"
+        },
+        {
+          "from": "src/loan.repository.ts::LoanRepository.active::method",
+          "to": "dbo.members::table",
+          "kind": "reads"
+        },
+        {
+          "from": "src/loan.repository.ts::LoanRepository.archive::method",
+          "to": "dbo.loans::table",
+          "kind": "reads"
+        },
+        {
+          "from": "src/loan.repository.ts::LoanRepository.archive::method",
+          "to": "dbo.loanarchive::table",
+          "kind": "writes"
+        },
+        {
+          "from": "src/loan.repository.ts::LoanRepository.close::method",
+          "to": "dbo.usp_closeloan::procedure",
+          "kind": "executes"
+        }
+      ]
+    },
+    "src/queries.ts": {
+      "symbols": [
+        {
+          "symbolId": "src/queries.ts::ACTIVE_LOANS_SQL::variable",
+          "name": "ACTIVE_LOANS_SQL",
+          "kind": "variable",
+          "startLine": 0,
+          "endLine": 0,
+          "startOffset": 13,
+          "endOffset": 131
+        }
+      ],
+      "complexity": [],
+      "edges": []
+    }
+  }
+}
