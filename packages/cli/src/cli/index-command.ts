@@ -10,10 +10,9 @@ import { InstallCommand } from './install-command.js';
 import { readSourceText } from './read-source.js';
 import { changeLogSize, writeCoChangeMatrix } from './index-cochange.js';
 import { computeAndWriteContextsView } from './index-contexts-view.js';
-import { extractFileFacts } from './index-facts.js';
+import { extractFileFacts, pluginFactRequest, type PluginFactRequest } from './index-facts.js';
 import {
   communityDetectorOptions,
-  factsRequested,
   loadConfig,
   indexIgnorePatterns,
   indexIgnoreProjectPatterns,
@@ -178,14 +177,15 @@ export class IndexCommand {
     const commitChanges = options.commit !== undefined ? await readCommitChanges(gitAdapter, options.commit) : [];
 
     // Facts are requested by index.facts: true, or by a loaded module that asks for them. The one answer
-    // serves both sites: the capability handed to the plugins and the Phase 1c extraction.
+    // serves both sites: the capability (and a module's detector options) handed to the plugins, and the
+    // Phase 1c extraction.
     const modules = options.modules ?? [];
-    const requestFacts =
-      factsRequested(ignore.config) || modules.some((module) => module.registration.indexCapabilities?.facts === true);
+    const factRequest = pluginFactRequest(ignore.config, modules);
+    const requestFacts = factRequest.facts;
 
     // Set up adapters via plugin discovery (TS, Go, C# all plugin-backed)
     const registry = new LanguageAdapterRegistry();
-    const plugins = await this.registerDiscoveredPlugins(registry, ignore.ignoreProjectPatterns, requestFacts);
+    const plugins = await this.registerDiscoveredPlugins(registry, ignore.ignoreProjectPatterns, factRequest);
     const { tsMorphLike, roslynAdapter, csharpComposite, goTier, javaTier } = plugins;
     // The C# tier as loaded; re-read after the Roslyn batch, which can switch it to the syntax tier.
     const csharpTierAtLoad = plugins.csharpTier;
@@ -367,6 +367,7 @@ export class IndexCommand {
       for (const entry of pendingIndices) {
         const adapter = registry.getAdapter(entry.relativePath);
         if (!adapter) continue;
+        // An adapter with extractFacts always writes the key, `[]` included; one without writes none.
         const facts = await extractFileFacts(adapter, entry.relativePath, entry.source);
         if (facts) entry.fileIndex.facts = facts;
       }
@@ -740,7 +741,7 @@ export class IndexCommand {
   private async registerDiscoveredPlugins(
     registry: LanguageAdapterRegistry,
     ignoreProjectPatterns: string[] = [],
-    facts = false,
+    factRequest: PluginFactRequest = { facts: false },
   ): Promise<{
     tsMorphLike: TsMorphLike | undefined;
     roslynAdapter: RoslynLike | null;
@@ -749,7 +750,7 @@ export class IndexCommand {
     goTier: string;
     javaTier: string;
   }> {
-    const loaded = await loadPlugins(this.projectRoot, { ignoreProjects: ignoreProjectPatterns, facts });
+    const loaded = await loadPlugins(this.projectRoot, { ignoreProjects: ignoreProjectPatterns, ...factRequest });
     let tsMorphLike: TsMorphLike | undefined;
     let roslynAdapter: RoslynLike | null = null;
     let csharpComposite: CSharpCompositeLike | null = null;

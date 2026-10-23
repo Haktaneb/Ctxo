@@ -57,6 +57,13 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (ten packages today). Per-pack
   represent (a `Date`, a `Map`, a `Promise`) and drops the enrichment with one warning, and
   `JsonIndexWriter.deleteEntryFile`, which refuses to delete a `ctxoArtifact` JSON file, and the
   optional `ModuleCommand.usage` (the full text `ctxo <command> --help` prints for a module command).
+- Fact detector options (#156, PR 4): `CtxoModuleRegistration.indexCapabilities.factOptions`
+  (`FactDetectorOptions`: `trivialLiterals`, `normalizationMethods`), the types `TrivialLiteral`,
+  `FactDetectorOptions` and `CodeFact` in `@ctxo/cli/internal`, and `LoadPluginsOptions.factOptions`.
+  The first module that declares options hands them to every plugin as `PluginContext.config.facts`,
+  only when facts are requested. An adapter with `extractFacts` that finds nothing now writes
+  `facts: []`; an adapter without it writes no `facts` key. `ctxo watch` gets the loaded modules from
+  the router and requests facts and options exactly as `ctxo index` does.
 - CI: the domain acceptance tests (`pnpm --filter @ctxo/domain test:e2e`) run in `e2e-tests` and, with
   `CTXO_REQUIRE_DOTNET=1`, in `dotnet-tests` (a C# run that falls back to the syntax tier fails there
   instead of skipping). The e2e job timeout is 15 minutes.

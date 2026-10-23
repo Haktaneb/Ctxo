@@ -123,7 +123,7 @@ export class CliRouter {
 
   /**
    * The opt-in modules (@ctxo/domain), loaded on first use and only by the routes that need them: the
-   * help, module and unknown commands, `index` and `doctor` (`version` reports them through its own
+   * help, module and unknown commands, `index`, `watch` and `doctor` (`version` reports them through its own
    * loader call, which shares this load). Never rejects; a failed load means no module.
    */
   private loadModules(): Promise<readonly LoadedModule[]> {
@@ -255,7 +255,7 @@ export class CliRouter {
         break;
 
       case 'watch':
-        await new WatchCommand(this.projectRoot).run();
+        await new WatchCommand(this.projectRoot).run({ modules: await this.loadModules() });
         break;
 
       case 'verify-index':

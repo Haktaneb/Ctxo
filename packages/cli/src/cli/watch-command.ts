@@ -1,7 +1,7 @@
 import { join, extname, relative } from 'node:path';
 import { readSourceText } from './read-source.js';
 import { LanguageAdapterRegistry } from '../adapters/language/language-adapter-registry.js';
-import { loadPlugins } from './plugin-loader.js';
+import { loadPlugins, type LoadPluginsOptions } from './plugin-loader.js';
 import { JsonIndexWriter } from '../adapters/storage/json-index-writer.js';
 import { SqliteStorageAdapter } from '../adapters/storage/sqlite-storage-adapter.js';
 import { ChokidarWatcherAdapter } from '../adapters/watcher/chokidar-watcher-adapter.js';
@@ -12,8 +12,10 @@ import { RevertDetector } from '../core/why-context/revert-detector.js';
 import { SymbolGraph } from '../core/graph/symbol-graph.js';
 import { PageRankCalculator } from '../core/importance/pagerank-calculator.js';
 import { CommunityDetector, type CommunityDetectorOptions } from '../core/overlay/community-detector.js';
-import { communityDetectorOptions, factsRequested, loadConfig, watchSnapshotMinFileChanges } from '../core/config/load-config.js';
-import { extractFileFacts } from './index-facts.js';
+import { communityDetectorOptions, loadConfig, watchSnapshotMinFileChanges } from '../core/config/load-config.js';
+import type { CtxoConfig } from '../core/config/config-schema.js';
+import type { LoadedModule } from '../ports/i-ctxo-module.js';
+import { extractFileFacts, pluginFactRequest } from './index-facts.js';
 import type {
   FileIndex, CommitIntent, AntiPattern, CommunitySnapshot, SymbolNode, GraphEdge, ComplexityMetrics,
 } from '../core/types.js';
@@ -31,18 +33,23 @@ export class WatchCommand {
     this.ctxoRoot = join(projectRoot, '.ctxo');
   }
 
-  async run(): Promise<void> {
+  /**
+   * `modules` are the opt-in modules the router loaded (@ctxo/domain); a module's fact request reaches the
+   * plugins exactly as in `ctxo index`.
+   */
+  async run(options: { modules?: readonly LoadedModule[] } = {}): Promise<void> {
     console.error('[ctxo] Starting file watcher...');
 
     const registry = new LanguageAdapterRegistry();
 
     // Config is read before the plugins load, so the facts capability reaches every createAdapter.
     const watchConfig = loadConfig(this.ctxoRoot).config;
-    const watchFacts = factsRequested(watchConfig);
+    const pluginOptions = watchPluginOptions(watchConfig, options.modules ?? []);
+    const watchFacts = pluginOptions.facts === true;
 
     // Plugins via discovery
     const keepAliveByExt = new Map<string, IIncrementalReindex>();
-    for (const { plugin, adapter } of await loadPlugins(this.projectRoot, { facts: watchFacts })) {
+    for (const { plugin, adapter } of await loadPlugins(this.projectRoot, pluginOptions)) {
       if (typeof adapter.initialize === 'function') {
         try {
           await adapter.initialize(this.projectRoot);
@@ -235,6 +242,11 @@ export class WatchCommand {
     process.on('SIGTERM', cleanup);
   }
 
+}
+
+/** The options `ctxo watch` loads the plugins with: the same fact request as `ctxo index`. */
+export function watchPluginOptions(config: CtxoConfig, modules: readonly LoadedModule[]): LoadPluginsOptions {
+  return pluginFactRequest(config, modules);
 }
 
 /** What a watch re-index gathers for one file, before it becomes a `FileIndex`. */

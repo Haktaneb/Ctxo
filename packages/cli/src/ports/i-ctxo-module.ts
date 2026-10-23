@@ -142,11 +142,26 @@ export interface InitContribution {
   apply(ctx: InitPartContext): Promise<readonly InitFileResult[]>;
 }
 
+/** A literal value a fact detector treats as trivial (not worth a fact on its own). */
+export type TrivialLiteral = number | string | boolean | null;
+
+/**
+ * Options a module hands the fact detectors of every plugin. The CLI passes them to each plugin as
+ * `PluginContext.config.facts`, and only when facts are requested.
+ */
+export interface FactDetectorOptions {
+  readonly trivialLiterals: readonly TrivialLiteral[];
+  readonly normalizationMethods: readonly string[];
+}
+
 /** What a module contributes. Every member is optional; the CLI uses the ones present. */
 export interface CtxoModuleRegistration {
   readonly id: 'domain';
-  /** Capabilities `ctxo index` requests from the plugins on the module's behalf. */
-  readonly indexCapabilities?: { readonly facts?: boolean };
+  /**
+   * Capabilities `ctxo index` and `ctxo watch` request from the plugins on the module's behalf. `factOptions`
+   * reaches the plugins only with a fact request; the first module (load order) that declares them wins.
+   */
+  readonly indexCapabilities?: { readonly facts?: boolean; readonly factOptions?: FactDetectorOptions };
   indexPass?(ctx: IndexPassContext): Promise<void>;
   registerTools?(registrar: ToolRegistrar): void;
   readonly enrich?: Partial<Record<CoreToolName, ResponseEnricher>>;

@@ -5,7 +5,10 @@ import { tmpdir } from 'node:os';
 import { SqliteStorageAdapter } from '../../adapters/storage/sqlite-storage-adapter.js';
 import * as detectorModule from '../../core/overlay/community-detector.js';
 import type { FileIndex } from '../../core/types.js';
-import { buildWatchCommunitySnapshot, buildWatchFileIndex } from '../watch-command.js';
+import { buildWatchCommunitySnapshot, buildWatchFileIndex, watchPluginOptions } from '../watch-command.js';
+import { pluginFactRequest } from '../index-facts.js';
+import type { CtxoConfig } from '../../core/config/config-schema.js';
+import type { FactDetectorOptions, LoadedModule } from '../../ports/i-ctxo-module.js';
 
 describe('WatchCommand', () => {
   it('computes relative paths correctly with path.relative', () => {
@@ -124,5 +127,23 @@ describe('buildWatchFileIndex', () => {
     const fact = { kind: 'endpoint' as const, symbolId: 'a.fake::p::procedure', line: 1, text: 'GET /x' };
     expect('facts' in buildWatchFileIndex('a.fake', { ...base, symbols: [], edges: [] })).toBe(false);
     expect(buildWatchFileIndex('a.fake', { ...base, symbols: [], edges: [], facts: [fact] }).facts).toEqual([fact]);
+  });
+});
+
+describe('watchPluginOptions', () => {
+  const O: FactDetectorOptions = { trivialLiterals: [0, ''], normalizationMethods: ['trim'] };
+  const domain: LoadedModule = {
+    name: '@ctxo/domain',
+    version: '0.0.0',
+    registration: { id: 'domain', indexCapabilities: { facts: true, factOptions: O } },
+  };
+  const noConfig = {} as CtxoConfig;
+
+  // Review Focus 3: the plugins a watch loads get the same fact request as an index run.
+  it('watch requests facts like index', () => {
+    expect(watchPluginOptions(noConfig, [domain])).toEqual({ facts: true, factOptions: O });
+    expect(watchPluginOptions(noConfig, [domain])).toEqual(pluginFactRequest(noConfig, [domain]));
+    expect(watchPluginOptions(noConfig, [])).toEqual({ facts: false });
+    expect(watchPluginOptions({ index: { facts: true } } as unknown as CtxoConfig, [])).toEqual({ facts: true });
   });
 });
