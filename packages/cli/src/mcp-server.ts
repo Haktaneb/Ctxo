@@ -6,7 +6,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { startHttpTransport } from './adapters/transport/http-server-transport.js';
-import { z } from 'zod';
+import { z, type ZodRawShape } from 'zod';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,6 +35,7 @@ import { SessionRecorderAdapter } from './adapters/stats/session-recorder-adapte
 import { withRecording } from './adapters/stats/with-recording.js';
 import { collectEnrichers, collectTaskContextReservation } from './adapters/mcp/enrich-payload.js';
 import { CORE_TOOL_NAMES, collectModuleTools, handleModuleTool, moduleInputShape } from './adapters/mcp/module-tool-handler.js';
+import { CODE_SCOPE, collectRankedScopes, rankedScopeDescription, rankedScopeNames, withRankedScopes } from './adapters/mcp/ranked-scope-handler.js';
 import type { StalenessCheck } from './adapters/mcp/get-logic-slice.js';
 import type { LoadedModule } from './adapters/modules/module-loader.js';
 import type { ISessionRecorderPort } from './ports/i-session-recorder-port.js';
@@ -138,8 +139,8 @@ export async function startMcpServer(options: StartMcpServerOptions = {}): Promi
 
 /**
  * Registers the 14 core tools, then the tools of the loaded modules, on `server`. A module's enrichers
- * reach the seven core tools with an enrich seam, and their token reservations reach get_context_for_task;
- * a module tool named like a core tool, or one whose input schema cannot be built, is skipped with a
+ * reach the seven core tools with an enrich seam, their token reservations reach get_context_for_task and
+ * their ranked-context scopes reach get_ranked_context (its `scope` parameter exists only then); a module tool named like a core tool, or one whose input schema cannot be built, is skipped with a
  * warning. Exported for tests.
  */
 export function registerTools(
@@ -156,6 +157,7 @@ export function registerTools(
 ): void {
   const enrichers = collectEnrichers(modules);
   const taskContextReservation = collectTaskContextReservation(modules);
+  const rankedScopes = collectRankedScopes(modules);
 
   // Tool annotations — all Ctxo tools are read-only index queries
   const toolAnnotations = {
@@ -276,7 +278,19 @@ export function registerTools(
     (args) => contextForTaskHandler(args),
   );
 
-  const rankedContextHandler = withRecording('get_ranked_context', handleGetRankedContext(storage, masking, staleness, ctxoRoot), recorder);
+  // Module scopes wrap the unchanged code handler inside the recording, so their calls are recorded under
+  // get_ranked_context. The `scope` parameter exists only when a module provides a scope.
+  const rankedContextHandler = withRecording('get_ranked_context', withRankedScopes(handleGetRankedContext(storage, masking, staleness, ctxoRoot), rankedScopes, masking), recorder);
+  const rankedScopeShape: ZodRawShape =
+    rankedScopes.size === 0
+      ? {}
+      : {
+          scope: z
+            .enum([CODE_SCOPE, ...rankedScopeNames(rankedScopes)] as [string, ...string[]])
+            .optional()
+            .default(CODE_SCOPE)
+            .describe(rankedScopeDescription(rankedScopes)),
+        };
 
   server.registerTool(
     'get_ranked_context',
@@ -287,6 +301,7 @@ export function registerTools(
         tokenBudget: z.number().optional().default(4000).describe('Max tokens for results (default 4000)'),
         strategy: z.enum(['combined', 'dependency', 'importance']).optional().default('combined').describe('Ranking strategy'),
         searchMode: z.enum(['fts', 'legacy']).optional().default('fts').describe('"fts" (default): BM25 ranking with camelCase splitting, trigram fallback and typo correction; "legacy": substring matching; strategy "importance" always uses legacy matching'),
+        ...rankedScopeShape,
       },
       annotations: toolAnnotations,
     },

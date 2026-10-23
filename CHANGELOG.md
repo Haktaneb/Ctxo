@@ -73,6 +73,19 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (ten packages today). Per-pack
   exported from `@ctxo/cli/internal`) keeps tokens back from its budget: the code context is packed into
   `tokenBudget` minus the reservation (summed over modules, rounded, capped at a quarter of the budget,
   0 when it throws or is not finite), and the payload still reports the requested `tokenBudget`.
+  With several modules, one whose reservation throws or is not finite is skipped with a warning (a
+  negative one counts as 0) and the others still add up.
+- Module API: the optional `CtxoModuleRegistration.rankedContextScopes` (the `RankedContextScope` type,
+  exported from `@ctxo/cli/internal`) adds scopes to `get_ranked_context`. Only when a module provides
+  one does the tool gain `scope` (`"code"`, the default symbol ranking, then the module scope names in
+  codepoint order); without a module scope its schema and output are unchanged. A module scope gets
+  the validated `query` and `tokenBudget` (at least 100, default 4000; `strategy` and `searchMode` do
+  not apply), its result goes through `_meta` and masking, and its calls are recorded under
+  `get_ranked_context`. `code` and a name already taken are skipped with a warning; an unknown scope
+  answers `{ error: true, message }`.
+- Truncatable fields for the domain tools' primary arrays (`rules`, `contexts`, `terms`,
+  `openQuestions`, `tests`, `symbols`, `provenance`, `unresolved`), each with its drill-in hint. The
+  additive domain lists on core tools stay out of truncation and are capped at their source.
 - CI: the domain acceptance tests (`pnpm --filter @ctxo/domain test:e2e`) run in `e2e-tests` and, with
   `CTXO_REQUIRE_DOTNET=1`, in `dotnet-tests` (a C# run that falls back to the syntax tier fails there
   instead of skipping). The e2e job timeout is 15 minutes.

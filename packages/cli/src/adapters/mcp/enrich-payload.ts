@@ -184,10 +184,12 @@ async function finishAsync(
 /**
  * The token reservation of the loaded modules for `get_context_for_task`: the sum of each module's
  * `reserveTaskContextTokens`, undefined when no module reserves any. The handler caps and guards the sum
- * (`reservedTokens`). A module whose reservation cannot be read contributes nothing.
+ * (`reservedTokens`). A module whose reservation cannot be read contributes nothing; with several modules,
+ * one whose reservation throws or returns anything but a finite number is skipped for that call with a
+ * warning, and a negative value counts as 0, so the other modules' reservations still add up.
  */
 export function collectTaskContextReservation(modules: readonly LoadedModule[]): TokenReservation | undefined {
-  const reservations: TokenReservation[] = [];
+  const reservations: Array<{ readonly name: string; readonly reserve: TokenReservation }> = [];
   for (const module of modules) {
     let reserve: unknown;
     try {
@@ -196,9 +198,27 @@ export function collectTaskContextReservation(modules: readonly LoadedModule[]):
       log.warn(`${module.name} token reservation could not be read: ${describeError(err)}`);
       continue;
     }
-    if (typeof reserve === 'function') reservations.push(reserve as TokenReservation);
+    if (typeof reserve === 'function') reservations.push({ name: module.name, reserve: reserve as TokenReservation });
   }
   if (reservations.length === 0) return undefined;
-  if (reservations.length === 1) return reservations[0]!;
-  return (args) => reservations.reduce((sum, reserve) => sum + reserve(args), 0);
+  // One module: the handler's own guard (`reservedTokens`) covers a throw or a non-finite value.
+  if (reservations.length === 1) return reservations[0]!.reserve;
+  return (args) => {
+    let sum = 0;
+    for (const { name, reserve } of reservations) {
+      let value: unknown;
+      try {
+        value = reserve(args);
+      } catch (err) {
+        log.warn(`${name} token reservation failed: ${describeError(err)}; it is skipped`);
+        continue;
+      }
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        log.warn(`${name} token reservation is not a finite number; it is skipped`);
+        continue;
+      }
+      sum += Math.max(value, 0);
+    }
+    return sum;
+  };
 }

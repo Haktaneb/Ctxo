@@ -50,6 +50,20 @@ export type ResponseEnricher = (
  */
 export type TokenReservation = (args: Readonly<Record<string, unknown>>) => number;
 
+/**
+ * A scope of `get_ranked_context` a module contributes (`scope: "<name>"`). The tool gains its `scope`
+ * parameter only when a module provides one; `"code"`, the symbol ranking, stays the default. The CLI
+ * validates `query` and `tokenBudget` (at least 100, default 4000), then wraps the result in the `_meta`
+ * envelope and masks it. `strategy` and `searchMode` do not reach a module scope.
+ */
+export interface RankedContextScope {
+  /** The scope name, never `code`. */
+  readonly scope: string;
+  /** One sentence appended to the `scope` parameter description, such as `"domain": card sections.` */
+  readonly description: string;
+  search(args: { readonly query: string; readonly tokenBudget: number }): Promise<Record<string, unknown>> | Record<string, unknown>;
+}
+
 /** An MCP tool a module contributes. The CLI wraps the handler with the envelope, masking and recording. */
 export interface ModuleToolDefinition {
   readonly name: string;
@@ -162,6 +176,8 @@ export interface CtxoModuleRegistration {
   readonly enrich?: Partial<Record<CoreToolName, ResponseEnricher>>;
   /** Tokens kept back from `get_context_for_task`'s budget for this module's enriched fields. */
   readonly reserveTaskContextTokens?: TokenReservation;
+  /** Extra `get_ranked_context` scopes; a name already taken, or `code`, is skipped with a warning. */
+  readonly rankedContextScopes?: readonly RankedContextScope[];
   registerCommands?(registrar: CommandRegistrar): void;
   readonly init?: InitContribution;
   readonly doctorChecks?: readonly IHealthCheck[];

@@ -10,7 +10,14 @@ import { SqliteStorageAdapter } from '../adapters/storage/sqlite-storage-adapter
 import { MaskingPipeline } from '../core/masking/masking-pipeline.js';
 import { CORE_TOOL_NAMES } from '../adapters/mcp/module-tool-handler.js';
 import type { LoadedModule } from '../adapters/modules/module-loader.js';
-import type { CoreToolName, CtxoModuleRegistration, ModuleToolDefinition, ResponseEnricher } from '../ports/i-ctxo-module.js';
+import { handleGetRankedContext } from '../adapters/mcp/get-ranked-context.js';
+import type {
+  CoreToolName,
+  CtxoModuleRegistration,
+  ModuleToolDefinition,
+  RankedContextScope,
+  ResponseEnricher,
+} from '../ports/i-ctxo-module.js';
 import type { IGitPort } from '../ports/i-git-port.js';
 import type { FileIndex } from '../core/types.js';
 
@@ -55,6 +62,10 @@ function stubTool(seen: Array<Record<string, unknown>>): ModuleToolDefinition {
     },
   };
 }
+
+/** get_ranked_context as the tip before ranked scopes lists it, byte for byte. */
+const RANKED_CONTEXT_TOOL_WITHOUT_SCOPES =
+  "{\"name\":\"get_ranked_context\",\"description\":\"Search and rank symbols by relevance to a natural language query, packed within a token budget. Uses BM25 text matching + PageRank importance scoring. Results include `_meta` with truncation info. Use this when you have a question or topic but do not know which specific symbol to look at. For exact symbol name search, use search_symbols instead.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"minLength\":1,\"description\":\"Search query (matches symbol names)\"},\"tokenBudget\":{\"default\":4000,\"description\":\"Max tokens for results (default 4000)\",\"type\":\"number\"},\"strategy\":{\"default\":\"combined\",\"description\":\"Ranking strategy\",\"type\":\"string\",\"enum\":[\"combined\",\"dependency\",\"importance\"]},\"searchMode\":{\"default\":\"fts\",\"description\":\"\\\"fts\\\" (default): BM25 ranking with camelCase splitting, trigram fallback and typo correction; \\\"legacy\\\": substring matching; strategy \\\"importance\\\" always uses legacy matching\",\"type\":\"string\",\"enum\":[\"fts\",\"legacy\"]}},\"required\":[\"query\"],\"$schema\":\"http://json-schema.org/draft-07/schema#\"},\"annotations\":{\"readOnlyHint\":true,\"destructiveHint\":false,\"idempotentHint\":true,\"openWorldHint\":false},\"execution\":{\"taskSupport\":\"forbidden\"}}";
 
 function moduleWith(registration: Omit<CtxoModuleRegistration, 'id'>): LoadedModule {
   return { name: '@ctxo/domain', version: '0.0.0', registration: { id: 'domain', ...registration } };
@@ -187,28 +198,30 @@ describe('registerTools with modules', () => {
     expect(warnings().some((line) => line.includes('domain_not_zod') && line.includes('zod types'))).toBe(true);
   });
 
-  it('module enrichers reach the six core tools they name', async () => {
-    const SIX: readonly CoreToolName[] = [
+  it('module enrichers reach the seven core tools they name', async () => {
+    const SEVEN: readonly CoreToolName[] = [
       'search_symbols',
       'get_blast_radius',
       'find_importers',
       'get_logic_slice',
       'get_pr_impact',
       'get_why_context',
+      'get_context_for_task',
     ];
     const enrich: Partial<Record<CoreToolName, ResponseEnricher>> = {};
-    for (const tool of SIX) enrich[tool] = (payload) => ({ ...payload, enrichedBy: tool });
+    for (const tool of SEVEN) enrich[tool] = (payload) => ({ ...payload, enrichedBy: tool });
     const client = await connect([moduleWith({ enrich })]);
 
-    const calls: Record<(typeof SIX)[number], Record<string, unknown>> = {
+    const calls: Record<(typeof SEVEN)[number], Record<string, unknown>> = {
       search_symbols: { pattern: 'B' },
       get_blast_radius: { symbolId: 'src/b.ts::B::class' },
       find_importers: { symbolId: 'src/b.ts::B::class' },
       get_logic_slice: { symbolId: 'src/a.ts::A::function' },
       get_pr_impact: {},
       get_why_context: { symbolId: 'src/a.ts::A::function' },
+      get_context_for_task: { symbolId: 'src/a.ts::A::function', taskType: 'understand' },
     };
-    for (const tool of SIX) {
+    for (const tool of SEVEN) {
       const payload = await call(client, tool, calls[tool]);
       expect(payload['error'], tool).toBeUndefined();
       expect(payload['enrichedBy'], tool).toBe(tool);
@@ -235,5 +248,75 @@ describe('registerTools with modules', () => {
     expect(payload['tokenBudget']).toBe(4000);
     expect(payload['_meta']).toBeDefined();
     expect(reserveArgs).toEqual([{ symbolId: 'src/a.ts::A::function', taskType: 'understand', tokenBudget: 4000 }]);
+  });
+
+  it('get_ranked_context registers scope only when a module provides one', async () => {
+    const seen: Array<{ query: string; tokenBudget: number }> = [];
+    const domain: RankedContextScope = {
+      scope: 'domain',
+      description: '"domain": card sections from a stub.',
+      search: (args) => {
+        seen.push(args);
+        return { query: args.query, scope: 'domain', results: [{ id: 'card:lending' }] };
+      },
+    };
+    const without = await connect();
+    const withScope = await connect([moduleWith({ rankedContextScopes: [domain] })]);
+
+    const rankedOf = async (client: Client) => (await client.listTools()).tools.find((t) => t.name === 'get_ranked_context')!;
+    const plainProps = (await rankedOf(without)).inputSchema.properties as Record<string, unknown>;
+    const scopedProps = (await rankedOf(withScope)).inputSchema.properties as Record<string, Record<string, unknown>>;
+
+    expect(plainProps['scope']).toBeUndefined();
+    expect(scopedProps['scope']).toMatchObject({
+      enum: ['code', 'domain'],
+      default: 'code',
+      description: 'Where to search. "code" (default): rank symbols. "domain": card sections from a stub.',
+    });
+
+    const payload = await call(withScope, 'get_ranked_context', { query: 'loans', scope: 'domain' });
+    expect(seen).toEqual([{ query: 'loans', tokenBudget: 4000 }]);
+    expect(payload['results']).toEqual([{ id: 'card:lending' }]);
+    expect(payload['scope']).toBe('domain');
+    expect(payload['_meta']).toMatchObject({ totalItems: 1, returnedItems: 1, truncated: false });
+
+    // scope "code" (the default) still ranks symbols.
+    const code = await call(withScope, 'get_ranked_context', { query: 'B' });
+    expect(code['query']).toBe('B');
+    expect(code['scope']).toBeUndefined();
+  });
+
+  it('get_ranked_context lists several scopes in name order', async () => {
+    const stub = (scope: string): RankedContextScope => ({ scope, description: `"${scope}": stub.`, search: () => ({}) });
+    const client = await connect([moduleWith({ rankedContextScopes: [stub('zeta'), stub('domain')] })]);
+
+    const ranked = (await client.listTools()).tools.find((t) => t.name === 'get_ranked_context')!;
+    const scopeProp = (ranked.inputSchema.properties as Record<string, Record<string, unknown>>)['scope'];
+
+    expect(scopeProp).toMatchObject({
+      enum: ['code', 'domain', 'zeta'],
+      description: 'Where to search. "code" (default): rank symbols. "domain": stub. "zeta": stub.',
+    });
+  });
+
+  it('without a module scope get_ranked_context lists and answers exactly as before', async () => {
+    const plain = await connect();
+    const noScopes = await connect([moduleWith({ enrich: { search_symbols: (payload) => payload } })]);
+
+    for (const client of [plain, noScopes]) {
+      const ranked = (await client.listTools()).tools.find((t) => t.name === 'get_ranked_context');
+      expect(JSON.stringify(ranked)).toBe(RANKED_CONTEXT_TOOL_WITHOUT_SCOPES);
+
+      const args = { query: 'B', tokenBudget: 4000, strategy: 'combined', searchMode: 'fts' };
+      const served = await client.callTool({ name: 'get_ranked_context', arguments: args });
+      const direct = handleGetRankedContext(storage, new MaskingPipeline(), undefined, tempDir)(args);
+      // Byte for byte except the measured search latency (and the byte count its digits change).
+      const stable = (content: Array<{ type: string; text: string }>) =>
+        content.map((c) => ({
+          ...c,
+          text: c.text.replace(/"latencyMs":[0-9.e+-]+/, '"latencyMs":0').replace(/"totalBytes":\d+/, '"totalBytes":0'),
+        }));
+      expect(stable((served as { content: Array<{ type: string; text: string }> }).content)).toEqual(stable(direct.content));
+    }
   });
 });

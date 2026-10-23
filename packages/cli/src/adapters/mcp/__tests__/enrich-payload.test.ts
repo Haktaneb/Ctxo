@@ -363,4 +363,26 @@ describe('collectTaskContextReservation', () => {
     expect(reserve!({})).toBe(80);
     expect(warnings().some((line) => line.includes('getter exploded'))).toBe(true);
   });
+
+  it('one module whose reservation throws or is not finite is skipped and the rest still sum', () => {
+    const named = (name: string, reserve: unknown): LoadedModule => ({ ...reserving(reserve), name });
+    const reserve = collectTaskContextReservation([
+      named('@ctxo/throws', () => {
+        throw new Error('reservation exploded');
+      }),
+      named('@ctxo/nan', () => Number.NaN),
+      named('@ctxo/infinite', () => Number.POSITIVE_INFINITY),
+      named('@ctxo/text', () => '200'),
+      named('@ctxo/negative', () => -500),
+      named('@ctxo/domain', () => 120),
+      named('@ctxo/other', () => 30),
+    ]);
+
+    expect(reserve!({})).toBe(150);
+    const lines = warnings();
+    expect(lines.some((line) => line.includes('@ctxo/throws') && line.includes('reservation exploded'))).toBe(true);
+    for (const name of ['@ctxo/nan', '@ctxo/infinite', '@ctxo/text']) {
+      expect(lines.some((line) => line.includes(name) && line.includes('not a finite number')), name).toBe(true);
+    }
+  });
 });

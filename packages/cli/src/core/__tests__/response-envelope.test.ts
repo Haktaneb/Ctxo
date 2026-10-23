@@ -312,3 +312,65 @@ describe('wrapResponse', () => {
     expect((result.contextBoundaryViolations as unknown[]).length).toBe(300);
   });
 });
+
+describe('wrapResponse: domain fields', () => {
+  const originalEnv = process.env['CTXO_RESPONSE_LIMIT'];
+  afterEach(() => {
+    if (originalEnv === undefined) {
+      delete process.env['CTXO_RESPONSE_LIMIT'];
+    } else {
+      process.env['CTXO_RESPONSE_LIMIT'] = originalEnv;
+    }
+  });
+
+  const items = (count: number) => Array.from({ length: count }, (_, i) => `item-${String(i).padStart(3, '0')}-`.padEnd(40, 'x'));
+
+  it.each([
+    ['rules', "Use get_rule with a ruleId for one rule's tests, code and decisions."],
+    ['contexts', "Use get_domain_context with a symbolId or path for one context's card."],
+    ['terms', `Read the card's Language section, or use get_ranked_context with scope "domain".`],
+    ['openQuestions', "Read the card's Open questions section for the full list."],
+    ['tests', "Use search_symbols with a test file path as filePattern to list one file's tests."],
+    ['symbols', 'Use get_blast_radius on one linked symbol for its impact.'],
+    ['provenance', 'Open the linked files directly; external references are never fetched.'],
+    ['unresolved', 'Run "ctxo verify-domain --json" for every unresolved card reference.'],
+  ])("the new tools' arrays are truncatable with their hints: %s", (field, hint) => {
+    process.env['CTXO_RESPONSE_LIMIT'] = '1024';
+
+    const result = wrapResponse({ [field]: items(100) });
+
+    const meta = result._meta as Record<string, unknown>;
+    expect(meta.truncated).toBe(true);
+    expect(meta.totalItems).toBe(100);
+    expect(meta.hint).toBe(hint);
+    expect((result[field] as unknown[]).length).toBeLessThan(100);
+  });
+
+  it.each(['rulesAffected', 'cardsToUpdate', 'decisions', 'contextsTouched', 'cardsChanged', 'rulesWithoutTests'])(
+    'the additive domain fields are not truncatable: %s',
+    (field) => {
+      process.env['CTXO_RESPONSE_LIMIT'] = '1024';
+
+      const result = wrapResponse({ [field]: items(100) });
+
+      const meta = result._meta as Record<string, unknown>;
+      expect(meta.truncated).toBe(false);
+      expect((result[field] as unknown[]).length).toBe(100);
+    },
+  );
+
+  it('two arrays in one response: the primary array is truncated, the capped additive array is not', () => {
+    process.env['CTXO_RESPONSE_LIMIT'] = '2048';
+    const rulesAffected = items(50);
+
+    const result = wrapResponse({ impactedSymbols: items(200), rulesAffected, rulesAffectedTotal: 80 });
+
+    const meta = result._meta as Record<string, unknown>;
+    expect(meta.truncated).toBe(true);
+    expect(meta.totalItems).toBe(200);
+    expect(String(meta.hint)).toContain('get_blast_radius with a confidence filter');
+    expect((result.impactedSymbols as unknown[]).length).toBeLessThan(200);
+    expect(result.rulesAffected).toEqual(rulesAffected);
+    expect(result.rulesAffectedTotal).toBe(80);
+  });
+});

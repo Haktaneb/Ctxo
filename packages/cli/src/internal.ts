@@ -14,6 +14,7 @@ export type {
   CoreToolName,
   ResponseEnricher,
   TokenReservation,
+  RankedContextScope,
   ModuleToolDefinition,
   ToolRegistrar,
   ModuleCommandContext,
