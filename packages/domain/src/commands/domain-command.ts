@@ -137,6 +137,7 @@ export function domainCommand(host: CtxoHost): ModuleCommand {
   return {
     name: NAME,
     help: HELP_LINES,
+    usage: USAGE,
     async run(args: readonly string[], ctx: ModuleCommandContext): Promise<number> {
       const [sub, ...rest] = args;
       if (sub === '--help' || sub === '-h' || (sub !== undefined && rest.some((a) => a === '--help' || a === '-h'))) {

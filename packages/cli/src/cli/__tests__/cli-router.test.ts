@@ -535,6 +535,7 @@ export async function register() {
       registrar.registerCommand({
         name: 'verify-domain',
         help: ['ctxo verify-domain [--json]   Check the domain registry (stub)'],
+        usage: ['Usage: ctxo verify-domain [--json]', '', 'Exit codes: 0 no errors, 1 errors.'],
         async run(args) {
           (globalThis.__ctxoRouterRuns ??= []).push(args);
           return 4;
@@ -687,14 +688,15 @@ export async function register() {
     expect(exitSpy).not.toHaveBeenCalled();
   });
 
-  it.each(['--help', '-h'])('ctxo verify-domain %s prints the command usage, not the global help, and runs nothing', async (flag) => {
+  it.each(['--help', '-h'])('ctxo verify-domain %s prints the full command usage, not the global help, and runs nothing', async (flag) => {
     const project = tempDir();
     writeStubDomainPackage(project, STUB);
 
     await routerFor(project).route(['verify-domain', flag]);
 
-    expect(printed()).toContain('ctxo verify-domain [--json]   Check the domain registry (stub)');
-    expect(printed()).not.toContain('Usage:');
+    expect(printed()).toContain('Usage: ctxo verify-domain [--json]');
+    expect(printed()).toContain('Exit codes');
+    expect(printed()).not.toContain('ctxo --help');
     expect(runs()).toEqual([]);
     expect(process.exitCode ?? 0).toBe(0);
   });

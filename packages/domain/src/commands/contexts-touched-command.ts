@@ -68,6 +68,7 @@ export function contextsTouchedCommand(host: CtxoHost): ModuleCommand {
   return {
     name: NAME,
     help: [HELP_LINE],
+    usage: USAGE,
     async run(args: readonly string[], ctx: ModuleCommandContext): Promise<number> {
       const parsed = parseArgs(args);
       if (parsed === 'help') {

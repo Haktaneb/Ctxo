@@ -199,8 +199,16 @@ contextsView:                  # candidate contexts (file level), see ADR-016 ad
   resolution: 1.0
   minCandidateFiles: 3         # smaller groups fold into a neighbour
   technicalTerms: []           # replaces the default list of dropped words
+domain:                        # read only when @ctxo/domain is installed (ADR-018)
+  registry: docs/domain/contexts.yaml
+  coverage: { unowned: warn }  # warn | error
+  boundaries: { enforce: by-rung, blockingRungs: [bounded, boring] }   # by-rung | report
+  rules: { idPattern: "^[A-Z][A-Z0-9]*-\d+$", trackerPrefixes: [] }
+  tests: { ruleTraitKeys: [Rule] }
+  guard: { enabled: true, subagents: false }   # base: <ref> is optional
 ```
 
+* `domain`: every key and default in [config-schema.md](site/docs/reference/config-schema.md#domain).
 * `index.ignore`: per-file picomatch globs, matched against repo-relative forward-slash paths.
 * `index.ignoreProjects`: matched against workspace paths; skipped workspaces are never enumerated and their plugin deps are never imported.
 * `cochange`: see [ADR-016](docs/architecture/ADR/adr-016-co-change-engine-and-snapshot-policy.md). One `git log` pass builds `co-changes.json` (window recorded under `window`) and every blast-radius path reads it. Overrides: `--cochange-commits`, `--cochange-since`.

@@ -50,7 +50,7 @@ TypeScript and JavaScript, Java (JDT full tier) and Go (analyzer full tier).
 Without it, no language emits SQL edges. Annotations and test symbols do not
 depend on it.
 
-## The domain package and global installs without a package.json
+## Global installs
 
 `domain` is not a language. `ctxo install domain` installs the opt-in
 [`@ctxo/domain`](/concepts/domain-knowledge) package, pinned to the running CLI's version (the two always

@@ -100,7 +100,7 @@ async function readAllStdin(): Promise<string> {
 /**
  * Runs the module command `command` with `args` (the words after the command name) and resolves to its
  * exit code, or to undefined when no loaded module registers it. `--help` or `-h` prints the command's
- * own usage lines and runs nothing. A throwing command rejects; the caller decides the exit code.
+ * full usage (`usage`, else `help`) and runs nothing. A throwing command rejects; the caller decides the exit code.
  */
 export async function runModuleCommand(
   command: string,
@@ -110,7 +110,7 @@ export async function runModuleCommand(
   const found = collectModuleCommands(options.modules, CORE_COMMANDS).get(command);
   if (found === undefined) return undefined;
   if (args.some((arg) => arg === '--help' || arg === '-h')) {
-    console.error(found.help.join('\n'));
+    console.error((found.usage ?? found.help).join('\n'));
     return 0;
   }
   const ctx: ModuleCommandContext = {

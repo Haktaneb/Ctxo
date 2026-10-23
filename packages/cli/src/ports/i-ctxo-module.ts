@@ -64,6 +64,8 @@ export interface ModuleCommand {
   readonly name: string;
   /** Usage lines for `ctxo <name> --help` and `ctxo --help`. */
   readonly help: readonly string[];
+  /** The full usage for `ctxo <name> --help` (flags, exit codes); `help` is printed when absent. */
+  readonly usage?: readonly string[];
   /** Left out of `ctxo --help` (hook commands). */
   readonly hidden?: boolean;
   /** Resolves to the exit code. */
