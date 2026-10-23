@@ -113,14 +113,23 @@ const LEADING_SYMBOL_LINES = 3;
 
 /**
  * The symbol a `rule:` comment on the 1-based `line` belongs to (F4): the symbol starting within three lines below
- * it (nearest start, then smallest span, then index order), else the innermost symbol spanning the line.
+ * it (nearest start, then smallest span, then index order), else the innermost symbol spanning the line. A symbol
+ * below counts only when it sits inside the innermost symbol that spans the comment (or no symbol spans it), so a
+ * comment at the end of a short method body stays with that method and never links to the next declaration.
  */
 export function leadingSymbol(index: FileIndex | undefined, line: number): string | undefined {
   if (index === undefined) return undefined;
+  const spanning = innermostSymbol(index, line);
   let best: SymbolNode | undefined;
   for (const symbol of index.symbols) {
     const start = symbol.startLine + 1;
     if (start <= line || start > line + LEADING_SYMBOL_LINES) continue;
+    if (
+      spanning !== undefined &&
+      (symbol === spanning || symbol.startLine < spanning.startLine || symbol.endLine > spanning.endLine)
+    ) {
+      continue;
+    }
     if (
       best === undefined ||
       symbol.startLine < best.startLine ||
@@ -129,7 +138,7 @@ export function leadingSymbol(index: FileIndex | undefined, line: number): strin
       best = symbol;
     }
   }
-  return (best ?? innermostSymbol(index, line))?.symbolId;
+  return (best ?? spanning)?.symbolId;
 }
 
 /** Scan options from the domain config, the card rule IDs and the registry `rulePrefix` values. */

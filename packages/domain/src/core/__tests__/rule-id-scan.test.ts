@@ -273,6 +273,61 @@ describe('rule-id-scan', () => {
     expect(leadingSymbol(index, 2)).toBe('narrow');
   });
 
+  it('a rule: comment inside a short method body links to its own method, not to the next one (I1)', () => {
+    // File lines: 1 class, 2 canBorrow(a) {, 3 // rule: LEND-03, 4 return, 5 }, 6 other() {...}, 8 }.
+    const index = fileIndex([
+      { symbolId: 'class', name: 'C', kind: 'class', startLine: 0, endLine: 7 },
+      { symbolId: 'canBorrow', name: 'canBorrow', kind: 'method', startLine: 1, endLine: 4 },
+      { symbolId: 'other', name: 'other', kind: 'method', startLine: 5, endLine: 6 },
+    ]);
+    expect(leadingSymbol(index, 3)).toBe('canBorrow');
+    const text = [
+      'class C {',
+      '  canBorrow(a) {',
+      '    // rule: LEND-03',
+      '    return a.activeLoans < 5;',
+      '  }',
+      '  other() {',
+      '  }',
+      '}',
+    ].join('\n');
+    expect(scanRuleComments('src/c.ts', text, index, options()).map((r) => r.symbolId)).toEqual(['canBorrow']);
+  });
+
+  it('a rule: comment on the last body line, followed by } and the next declaration, stays with its method (I1)', () => {
+    const index = fileIndex([
+      { symbolId: 'class', name: 'C', kind: 'class', startLine: 0, endLine: 8 },
+      { symbolId: 'first', name: 'first', kind: 'method', startLine: 1, endLine: 4 },
+      { symbolId: 'second', name: 'second', kind: 'method', startLine: 5, endLine: 7 },
+    ]);
+    // File line 4 is the last body line of `first`; `second` starts two lines later.
+    expect(leadingSymbol(index, 4)).toBe('first');
+    // Two adjacent methods with no blank line: a comment on `first`'s line 2 sees `second` three lines down.
+    const tight = fileIndex([
+      { symbolId: 'first', name: 'first', kind: 'method', startLine: 0, endLine: 2 },
+      { symbolId: 'second', name: 'second', kind: 'method', startLine: 3, endLine: 5 },
+    ]);
+    expect(leadingSymbol(tight, 2)).toBe('first');
+    // Between two top-level methods no symbol spans the comment, so the declaration below it wins.
+    const gap = fileIndex([
+      { symbolId: 'first', name: 'first', kind: 'method', startLine: 0, endLine: 1 },
+      { symbolId: 'second', name: 'second', kind: 'method', startLine: 3, endLine: 5 },
+    ]);
+    expect(leadingSymbol(gap, 3)).toBe('second');
+  });
+
+  it('a rule: comment inside a test body links to its own test, not to the next one (I1)', () => {
+    const index = fileIndex([
+      { symbolId: 'tests/LoanTests.cs::LoanTests::class', name: 'LoanTests', kind: 'class', startLine: 0, endLine: 8 },
+      { symbolId: 'tests/LoanTests.cs::LoanTests.A::method', name: 'A', kind: 'method', startLine: 1, endLine: 4 },
+      { symbolId: 'tests/LoanTests.cs::LoanTests.B::method', name: 'B', kind: 'method', startLine: 5, endLine: 7 },
+    ]);
+    const text = ['class LoanTests {', '  void A() {', '    // rule: LEND-03', '    Assert();', '  }', '  void B() {', '  }', '  ', '}'].join('\n');
+    expect(scanTestText(index.file, text, index, options()).filter((r) => r.kind === 'rule-comment').map((r) => r.symbolId)).toEqual([
+      'tests/LoanTests.cs::LoanTests.A::method',
+    ]);
+  });
+
   it('a rule: comment above a test method links to the method', () => {
     const index = fileIndex([
       { symbolId: 'tests/LoanTests.cs::LoanTests::class', name: 'LoanTests', kind: 'class', startLine: 0, endLine: 6 },
