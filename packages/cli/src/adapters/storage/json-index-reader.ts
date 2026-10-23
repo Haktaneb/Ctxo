@@ -25,6 +25,20 @@ export const INDEX_ARTIFACT_FILES: readonly string[] = [
 /** The folder of archived community snapshots inside the index folder: not entries either. */
 export const COMMUNITY_HISTORY_DIR = 'communities.history';
 
+/**
+ * True for a JSON value that is a module artifact rather than an index entry: an object with a string
+ * `ctxoArtifact` marker (the `@ctxo/domain` artifacts under `index/domain/`, ADR-018). The marker, not the
+ * folder, decides, so a source folder named `domain/` keeps its entries.
+ */
+export function isMarkedArtifact(data: unknown): boolean {
+  return (
+    data !== null &&
+    typeof data === 'object' &&
+    !Array.isArray(data) &&
+    typeof (data as Record<string, unknown>)['ctxoArtifact'] === 'string'
+  );
+}
+
 /** One index entry and the JSON file on disk it was read from. */
 export interface IndexEntry {
   readonly path: string;
@@ -69,6 +83,8 @@ export class JsonIndexReader {
     try {
       const raw = readFileSync(absolutePath, 'utf-8');
       const data: unknown = JSON.parse(raw);
+      // A module artifact is not an entry and not a broken one: skip it without a word.
+      if (isMarkedArtifact(data)) return undefined;
       const result = FileIndexSchema.safeParse(data);
 
       if (result.success) {
