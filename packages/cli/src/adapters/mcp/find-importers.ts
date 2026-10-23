@@ -6,6 +6,8 @@ import { getGraphAndFiles } from './get-logic-slice.js';
 import { wrapResponse } from '../../core/response-envelope.js';
 import { filterByIntent } from '../../core/intent-filter.js';
 import { EdgeKindSchema, type EdgeKind } from '../../core/types.js';
+import type { ResponseEnricher } from '../../ports/i-ctxo-module.js';
+import { applyEnricher } from './enrich-payload.js';
 
 export const InputSchema = z.object({
   symbolId: z.string().min(1),
@@ -20,6 +22,7 @@ export function handleFindImporters(
   masking: IMaskingPort,
   staleness?: StalenessCheck,
   ctxoRoot = '.ctxo',
+  enrich?: ResponseEnricher,
 ) {
   const getGraph = () => getGraphAndFiles(ctxoRoot, storage);
 
@@ -122,11 +125,12 @@ export function handleFindImporters(
       // Apply intent filter if requested
       const filtered = filterByIntent(importers, parsed.data.intent);
 
-      const payload = masking.mask(JSON.stringify(wrapResponse({
+      const body = applyEnricher(enrich, {
         symbolId,
         importerCount: filtered.length,
         importers: filtered,
-      })));
+      }, parsed.data, 'find_importers');
+      const payload = masking.mask(JSON.stringify(wrapResponse(body)));
 
       const content: Array<{ type: 'text'; text: string }> = [];
       if (staleness) {

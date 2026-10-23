@@ -435,7 +435,7 @@ export class CliRouter {
    */
   private async dispatchModuleCommand(command: string, args: readonly string[]): Promise<boolean> {
     if (FAST_ROUTE_COMMANDS.has(command)) {
-      process.exitCode = await runFastRoute(args, this.projectRoot);
+      process.exitCode = await runFastRoute(args, this.projectRoot, { cliAnchor: this.cliAnchor });
       return true;
     }
     let code: number | undefined;
@@ -450,7 +450,8 @@ export class CliRouter {
       return true;
     }
     if (code !== undefined) {
-      process.exitCode = code;
+      // The fast route's Number.isInteger guard: Node throws on a non-integer exit code, so such a result exits 1.
+      process.exitCode = typeof code === 'number' && Number.isInteger(code) ? code : 1;
       return true;
     }
     if (isKnownModuleCommand(command)) {

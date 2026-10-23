@@ -135,8 +135,10 @@ export function moduleHelpLines(modules: readonly LoadedModule[]): string[] {
 }
 
 /**
- * The loaded modules for `projectRoot` in `mode`, or none when loading fails. The module host and the
- * loader are imported here, on demand, so a run that needs no module never loads them.
+ * The loaded modules for `projectRoot` in `mode`, or none when loading fails. The loader is imported here,
+ * on demand, and the module host (with the zod and graph code it pulls in) only when a copy of the module
+ * exists, so a run without `@ctxo/domain` (the post-commit `ctxo index --commit HEAD`, `--help`, `doctor`,
+ * the hook route) never loads it.
  */
 export async function loadModulesFor(
   projectRoot: string,
@@ -144,10 +146,12 @@ export async function loadModulesFor(
   options: { readonly cliAnchor?: string } = {},
 ): Promise<readonly LoadedModule[]> {
   try {
-    const [{ createModuleHost }, { loadCtxoModules }] = await Promise.all([
-      import('./module-host.js'),
+    const [{ DOMAIN_MODULE_PACKAGE, loadCtxoModules }, { resolvePackageCandidates }] = await Promise.all([
       import('../adapters/modules/module-loader.js'),
+      import('../adapters/language/plugin-discovery.js'),
     ]);
+    if (resolvePackageCandidates(DOMAIN_MODULE_PACKAGE, projectRoot, options.cliAnchor).length === 0) return [];
+    const { createModuleHost } = await import('./module-host.js');
     const { modules } = await loadCtxoModules(createModuleHost({ projectRoot, mode }), { cliAnchor: options.cliAnchor });
     return modules;
   } catch (err) {
@@ -156,16 +160,21 @@ export async function loadModulesFor(
   }
 }
 
+export interface FastRouteOptions {
+  /** A directory standing in for the CLI's location when modules are looked up (tests); defaults to the running CLI. */
+  readonly cliAnchor?: string;
+}
+
 /**
  * The fast route for hook commands (`FAST_ROUTE_COMMANDS`): finds the project root, loads the modules in
  * hook mode and runs the command, without the CLI router or the MCP stack. Fails open: resolves to 0 when
  * the module or the command is missing, or on any error (reported on stderr, never on stdout).
  */
-export async function runFastRoute(args: readonly string[], cwd: string): Promise<number> {
+export async function runFastRoute(args: readonly string[], cwd: string, options: FastRouteOptions = {}): Promise<number> {
   const command = args[0] ?? '';
   try {
     const projectRoot = locateGitRoot(cwd) ?? cwd;
-    const modules = await loadModulesFor(projectRoot, 'hook');
+    const modules = await loadModulesFor(projectRoot, 'hook', { cliAnchor: options.cliAnchor });
     const code = await runModuleCommand(command, args.slice(1), { projectRoot, modules });
     return typeof code === 'number' && Number.isInteger(code) ? code : 0;
   } catch (err) {

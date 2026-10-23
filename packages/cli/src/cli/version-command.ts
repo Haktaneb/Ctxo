@@ -116,15 +116,18 @@ export function formatJson(info: VersionInfo): string {
 /**
  * What the module loader reports for this project. Without any copy of the module it is `not-installed`
  * and the host is never built; otherwise the host is imported on demand. Never throws:
- * a failure while loading is reported as `load-failed`.
+ * a failure while loading is reported as `load-failed`. `cliAnchor` stands in for the CLI's location (tests).
  */
-export async function collectModuleReports(projectRoot: string): Promise<readonly ModuleReport[]> {
+export async function collectModuleReports(
+  projectRoot: string,
+  options: { readonly cliAnchor?: string } = {},
+): Promise<readonly ModuleReport[]> {
   try {
-    if (resolvePackageCandidates(DOMAIN_MODULE_PACKAGE, projectRoot).length === 0) {
+    if (resolvePackageCandidates(DOMAIN_MODULE_PACKAGE, projectRoot, options.cliAnchor).length === 0) {
       return [{ name: DOMAIN_MODULE_PACKAGE, status: 'not-installed' }];
     }
     const { createModuleHost } = await import('./module-host.js');
-    const { reports } = await loadCtxoModules(createModuleHost({ projectRoot, mode: 'cli' }));
+    const { reports } = await loadCtxoModules(createModuleHost({ projectRoot, mode: 'cli' }), { cliAnchor: options.cliAnchor });
     return reports;
   } catch (err) {
     return [{ name: DOMAIN_MODULE_PACKAGE, status: 'load-failed', reason: (err as Error).message }];

@@ -6,6 +6,7 @@ import { SqliteStorageAdapter } from '../../storage/sqlite-storage-adapter.js';
 import { MaskingPipeline } from '../../../core/masking/masking-pipeline.js';
 import { handleSearchSymbols } from '../search-symbols.js';
 import type { FileIndex } from '../../../core/types.js';
+import type { ResponseEnricher } from '../../../ports/i-ctxo-module.js';
 
 function buildIndices(): FileIndex[] {
   return [
@@ -185,5 +186,29 @@ describe('SearchSymbolsHandler', () => {
     const result = handler({ pattern: 'AKIA' });
 
     expect(result.content[0]!.text).toContain('[REDACTED:AWS_KEY]');
+  });
+
+  it('applies the enricher before the envelope and masking', () => {
+    const seen: Array<{ hadMeta: boolean; args: Readonly<Record<string, unknown>> }> = [];
+    const enrich: ResponseEnricher = (payload, args) => {
+      seen.push({ hadMeta: '_meta' in payload, args });
+      const results = (payload['results'] as Array<Record<string, unknown>>).map((entry) => ({ ...entry, enrichedBy: 'stub' }));
+      return { ...payload, results, enrichedBy: 'stub', enrichedSecret: 'AKIAIOSFODNN7EXAMPLE' };
+    };
+    const handler = handleSearchSymbols(storage, new MaskingPipeline(), undefined, tempDir, undefined, enrich);
+
+    for (const mode of ['regex', 'fts'] as const) {
+      const result = handler({ pattern: 'SymbolGraph', mode });
+      expect(result.content[0]!.text).not.toContain('AKIAIOSFODNN7EXAMPLE');
+      const payload = JSON.parse(result.content[0]!.text);
+      expect(payload.enrichedBy, mode).toBe('stub');
+      expect(payload.enrichedSecret, mode).toBe('[REDACTED:AWS_KEY]');
+      expect(payload.results.length, mode).toBeGreaterThan(0);
+      expect(payload.results.every((r: { enrichedBy?: string }) => r.enrichedBy === 'stub'), mode).toBe(true);
+      expect(payload._meta.totalItems, mode).toBe(payload.results.length);
+    }
+    expect(seen.map((s) => s.hadMeta)).toEqual([false, false]);
+    expect(seen[0]!.args).toMatchObject({ pattern: 'SymbolGraph', mode: 'regex' });
+    expect(seen[1]!.args).toMatchObject({ pattern: 'SymbolGraph', mode: 'fts' });
   });
 });

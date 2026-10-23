@@ -8,6 +8,7 @@ import { CoChangeReader } from '../../storage/co-change-reader.js';
 import { MaskingPipeline } from '../../../core/masking/masking-pipeline.js';
 import { handleGetBlastRadius } from '../get-blast-radius.js';
 import type { CoChangeEntry, FileIndex } from '../../../core/types.js';
+import type { ResponseEnricher } from '../../../ports/i-ctxo-module.js';
 
 function buildGraphIndices(): FileIndex[] {
   return [
@@ -278,6 +279,29 @@ describe('GetBlastRadiusHandler', () => {
     expect(await blast('dbo.loans::table')).toEqual(winner);
     // A losing copy has the same dependents; its own cluster (none here) is the root of the cluster count.
     expect((await blast(DOCS_COPY)).impactedSymbols).toEqual(winner.impactedSymbols);
+  });
+
+  it('applies the enricher before the envelope and masking', async () => {
+    const seen: Array<{ hadMeta: boolean; args: Readonly<Record<string, unknown>> }> = [];
+    const enrich: ResponseEnricher = (payload, args) => {
+      seen.push({ hadMeta: '_meta' in payload, args });
+      const impactedSymbols = (payload['impactedSymbols'] as Array<Record<string, unknown>>).map((entry) => ({ ...entry, enrichedBy: 'stub' }));
+      return { ...payload, impactedSymbols, enrichedBy: 'stub', enrichedSecret: 'AKIAIOSFODNN7EXAMPLE' };
+    };
+    const handler = handleGetBlastRadius(storage, new MaskingPipeline(), undefined, tempDir, undefined, undefined, undefined, enrich);
+
+    const result = await handler({ symbolId: 'src/c.ts::C::interface' });
+
+    expect(result.content[0]!.text).not.toContain('AKIAIOSFODNN7EXAMPLE');
+    const payload = JSON.parse(result.content[0]!.text);
+    expect(payload.enrichedBy).toBe('stub');
+    expect(payload.enrichedSecret).toBe('[REDACTED:AWS_KEY]');
+    expect(payload.impactedSymbols.map((e: { symbolId: string }) => e.symbolId)).toEqual(['src/b.ts::B::class', 'src/a.ts::A::function']);
+    expect(payload.impactedSymbols.every((e: { enrichedBy?: string }) => e.enrichedBy === 'stub')).toBe(true);
+    expect(payload._meta.totalItems).toBe(2);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.hadMeta).toBe(false);
+    expect(seen[0]!.args).toMatchObject({ symbolId: 'src/c.ts::C::interface' });
   });
 });
 

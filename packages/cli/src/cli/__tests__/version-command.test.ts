@@ -312,10 +312,20 @@ describe('collectModuleReports', () => {
     const hostModule = await import('../module-host.js');
     const createHost = vi.spyOn(hostModule, 'createModuleHost');
 
-    const reports = await collectModuleReports(tempDir());
+    // The CLI anchor is an empty directory too, so the result does not depend on what packages/cli can resolve.
+    const reports = await collectModuleReports(tempDir(), { cliAnchor: tempDir() });
 
     expect(reports).toEqual([{ name: '@ctxo/domain', status: 'not-installed' }]);
     expect(createHost).not.toHaveBeenCalled();
+  });
+
+  it('reports the copy next to the CLI anchor', async () => {
+    const anchor = tempDir();
+    writeStubDomainPackage(anchor, "export async function register() { return { id: 'domain' }; }\n");
+
+    const reports = await collectModuleReports(tempDir(), { cliAnchor: anchor });
+
+    expect(reports).toEqual([expect.objectContaining({ name: '@ctxo/domain', status: 'active', source: 'cli' })]);
   });
 
   it('reports load-failed instead of throwing when the module host cannot be built', async () => {

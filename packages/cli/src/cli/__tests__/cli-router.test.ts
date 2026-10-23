@@ -611,6 +611,51 @@ export async function register() {
     expect(exitSpy).not.toHaveBeenCalled();
   });
 
+  it("ctxo domain-guard-hook looks for @ctxo/domain next to the router's cliAnchor", async () => {
+    const anchor = tempDir();
+    writeStubDomainPackage(
+      anchor,
+      `export async function register() {
+  return {
+    id: 'domain',
+    registerCommands(registrar) {
+      registrar.registerCommand({ name: 'domain-guard-hook', help: ['hook'], hidden: true, async run() { return 5; } });
+    },
+  };
+}
+`,
+    );
+
+    await new CliRouter(tempDir(), { cliAnchor: anchor }).route(['domain-guard-hook']);
+
+    expect(process.exitCode).toBe(5);
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([['2.5', '2.5'], ['a string', "'two'"], ['NaN', 'Number.NaN']])(
+    'a module command exit code that is not an integer (%s) sets exit code 1',
+    async (_label, returned) => {
+      const project = tempDir();
+      writeStubDomainPackage(
+        project,
+        `export async function register() {
+  return {
+    id: 'domain',
+    registerCommands(registrar) {
+      registrar.registerCommand({ name: 'verify-domain', help: ['verify'], async run() { return ${returned}; } });
+    },
+  };
+}
+`,
+      );
+
+      await routerFor(project).route(['verify-domain']);
+
+      expect(process.exitCode).toBe(1);
+      expect(exitSpy).not.toHaveBeenCalled();
+    },
+  );
+
   it('an unknown command that no module knows keeps the existing message and process.exit(1)', async () => {
     const project = tempDir();
     writeStubDomainPackage(project, STUB);

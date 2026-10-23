@@ -11,6 +11,8 @@ import { buildSnapshotStaleness } from '../../core/overlay/snapshot-staleness.js
 import type { ClusterLabelMasker } from '../../core/overlay/cluster-label-masker.js';
 import { wrapResponse } from '../../core/response-envelope.js';
 import type { CommunitySnapshot } from '../../core/types.js';
+import type { ResponseEnricher } from '../../ports/i-ctxo-module.js';
+import { applyEnricher } from './enrich-payload.js';
 
 export const InputSchema = z.object({
   since: z.string().optional().default('HEAD~1'),
@@ -45,6 +47,7 @@ export function handleGetPrImpact(
   ctxoRoot = '.ctxo',
   clusterLabelMasker?: ClusterLabelMasker,
   coChange?: ICoChangePort,
+  enrich?: ResponseEnricher,
 ) {
   const calculator = new BlastRadiusCalculator();
   const getGraph = () => getGraphAndFiles(ctxoRoot, storage);
@@ -232,7 +235,8 @@ export function handleGetPrImpact(
 
       const stalenessMeta = await buildSnapshotStaleness(storage, git);
       const extras = stalenessMeta ? { snapshotStaleness: stalenessMeta } : undefined;
-      const payload = masking.mask(JSON.stringify(wrapResponse(body, extras)));
+      const enriched = applyEnricher(enrich, body, parsed.data, 'get_pr_impact');
+      const payload = masking.mask(JSON.stringify(wrapResponse(enriched, extras)));
 
       const content: Array<{ type: 'text'; text: string }> = [];
       if (staleness) {

@@ -7,6 +7,7 @@ import { MaskingPipeline } from '../../../core/masking/masking-pipeline.js';
 import { handleGetWhyContext } from '../get-why-context.js';
 import type { FileIndex, CommitRecord, ChurnData, CommunitySnapshot } from '../../../core/types.js';
 import type { IGitPort } from '../../../ports/i-git-port.js';
+import type { ResponseEnricher } from '../../../ports/i-ctxo-module.js';
 
 function buildTestIndex(): FileIndex {
   return {
@@ -250,5 +251,74 @@ describe('GetWhyContextHandler', () => {
     expect(payload.driftSignals.distinctCommits).toBe(2);
     expect(payload.driftSignals.snapshotsAvailable).toBe(3);
     expect(payload.driftSignals.confidence).toBe('low');
+  });
+
+  it('get_why_context wraps its payload in the _meta envelope', async () => {
+    const symbolId = 'src/foo.ts::processPayment::function';
+    const git = createMockGit([{ hash: 'abc', message: 'fix: rotate AKIAIOSFODNN7EXAMPLE key', date: '2024-01-01', author: 'dev' }]);
+    const handler = handleGetWhyContext(storage, git, new MaskingPipeline(), undefined, tempDir);
+
+    // A plain response: the envelope fields, no snapshot staleness, the secret still masked after wrapping.
+    const plainText = (await handler({ symbolId })).content[0]!.text;
+    expect(plainText).not.toContain('AKIAIOSFODNN7EXAMPLE');
+    const plain = JSON.parse(plainText);
+    expect(plain.commitHistory[0].message).toBe('fix: rotate [REDACTED:AWS_KEY] key');
+    expect(plain._meta).toMatchObject({ totalItems: 0, returnedItems: 0, truncated: false, totalBytes: expect.any(Number) });
+    expect(plain._meta.totalBytes).toBeGreaterThan(0);
+    expect(plain._meta.snapshotStaleness).toBeUndefined();
+
+    // A stale snapshot: snapshotStaleness sits next to the envelope fields.
+    storage.writeCommunities({
+      version: 1,
+      computedAt: '2026-04-16T10:00:00.000Z',
+      commitSha: 'abc1234',
+      modularity: 0.5,
+      communities: [{ symbolId, communityId: 0, communityLabel: 'billing' }],
+      godNodes: [],
+      edgeQuality: 'full',
+      crossClusterEdges: 0,
+    });
+    const staleGit: IGitPort = {
+      ...git,
+      getHeadSha: async () => 'def5678',
+      countCommitsBetween: async () => 3,
+    };
+    const staleHandler = handleGetWhyContext(storage, staleGit, new MaskingPipeline(), undefined, tempDir);
+    const staleText = (await staleHandler({ symbolId })).content[0]!.text;
+    expect(staleText).not.toContain('AKIAIOSFODNN7EXAMPLE');
+    const stale = JSON.parse(staleText);
+    expect(stale._meta).toMatchObject({
+      totalItems: 0,
+      returnedItems: 0,
+      truncated: false,
+      totalBytes: expect.any(Number),
+      snapshotStaleness: { snapshotCommit: 'abc1234', currentHeadCommit: 'def5678', commitsBehind: 3 },
+    });
+    expect(stale._meta.snapshotStaleness.hint).toMatch(/behind HEAD/);
+  });
+
+  it('applies the enricher before the envelope and masking', async () => {
+    const symbolId = 'src/foo.ts::processPayment::function';
+    const seen: Array<{ hadMeta: boolean; args: Readonly<Record<string, unknown>> }> = [];
+    const enrich: ResponseEnricher = (payload, args) => {
+      seen.push({ hadMeta: '_meta' in payload, args });
+      return { ...payload, enrichedBy: 'stub', enrichedSecret: 'AKIAIOSFODNN7EXAMPLE' };
+    };
+    const git = createMockGit([{ hash: 'abc', message: 'feat: add payment', date: '2024-01-01', author: 'dev' }]);
+    const handler = handleGetWhyContext(storage, git, new MaskingPipeline(), undefined, tempDir, undefined, enrich);
+
+    const result = await handler({ symbolId, maxCommits: 5 });
+
+    expect(result.content[0]!.text).not.toContain('AKIAIOSFODNN7EXAMPLE');
+    const payload = JSON.parse(result.content[0]!.text);
+    expect(payload.enrichedBy).toBe('stub');
+    expect(payload.enrichedSecret).toBe('[REDACTED:AWS_KEY]');
+    expect(payload.commitHistory).toHaveLength(1);
+    expect(payload._meta).toMatchObject({ truncated: false, totalBytes: expect.any(Number) });
+    expect(seen).toEqual([{ hadMeta: false, args: { symbolId, maxCommits: 5 } }]);
+
+    // Without an enricher the payload carries no added field.
+    const plain = JSON.parse((await handleGetWhyContext(storage, git, new MaskingPipeline(), undefined, tempDir)({ symbolId })).content[0]!.text);
+    expect(plain.enrichedBy).toBeUndefined();
   });
 });

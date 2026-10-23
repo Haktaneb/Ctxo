@@ -33,12 +33,20 @@ import { handleGetSymbolImportance } from './adapters/mcp/get-symbol-importance.
 import { handleGetPrImpact } from './adapters/mcp/get-pr-impact.js';
 import { SessionRecorderAdapter } from './adapters/stats/session-recorder-adapter.js';
 import { withRecording } from './adapters/stats/with-recording.js';
+import { collectEnrichers } from './adapters/mcp/enrich-payload.js';
+import { CORE_TOOL_NAMES, collectModuleTools, handleModuleTool, moduleInputShape } from './adapters/mcp/module-tool-handler.js';
+import type { StalenessCheck } from './adapters/mcp/get-logic-slice.js';
+import type { LoadedModule } from './adapters/modules/module-loader.js';
 import type { ISessionRecorderPort } from './ports/i-session-recorder-port.js';
 import type { ICoChangePort } from './ports/i-co-change-port.js';
+import type { IStoragePort } from './ports/i-storage-port.js';
+import type { IGitPort } from './ports/i-git-port.js';
+import type { IMaskingPort } from './ports/i-masking-port.js';
 import { detectWorkspace } from './adapters/workspace/single-package-workspace.js';
 import { setWorkspaceMeta } from './core/response-envelope.js';
 import { loadConfig, maskingClusterLabelPatterns, statsEnabled } from './core/config/load-config.js';
 import { ClusterLabelMasker } from './core/overlay/cluster-label-masker.js';
+import { loadModulesFor } from './cli/module-commands.js';
 
 const log = createLogger('ctxo:mcp');
 
@@ -109,13 +117,17 @@ export async function startMcpServer(options: StartMcpServerOptions = {}): Promi
   const { StalenessDetector } = await import('./core/staleness/staleness-detector.js');
   const staleness = new StalenessDetector(process.cwd(), ctxoRoot);
 
-  registerTools(server, storage, masking, git, staleness, recorder, ctxoRoot, clusterLabelMasker, coChange);
+  // Opt-in modules (@ctxo/domain), loaded once for the server and every HTTP session. The project root is
+  // the directory whose .ctxo the server reads. Never rejects: without a module the core runs unchanged.
+  const modules = await loadModulesFor(workspace.root, 'mcp');
+
+  registerTools(server, storage, masking, git, staleness, recorder, ctxoRoot, clusterLabelMasker, coChange, modules);
 
   // Start MCP server — HTTP mode or stdio mode
   if (options.httpPort !== undefined) {
     await startHttpTransport(async () => {
       const s = new McpServer({ name: 'ctxo', version: PKG_VERSION });
-      registerTools(s, storage, masking, git, staleness, recorder, ctxoRoot, clusterLabelMasker, coChange);
+      registerTools(s, storage, masking, git, staleness, recorder, ctxoRoot, clusterLabelMasker, coChange, modules);
       return s;
     }, options.httpPort);
   } else {
@@ -124,18 +136,25 @@ export async function startMcpServer(options: StartMcpServerOptions = {}): Promi
   }
 }
 
-function registerTools(
+/**
+ * Registers the 14 core tools, then the tools of the loaded modules, on `server`. A module's enrichers
+ * reach the six core tools with an enrich seam; a module tool named like a core tool, or one whose input
+ * schema cannot be built, is skipped with a warning. Exported for tests.
+ */
+export function registerTools(
   server: McpServer,
-  storage: SqliteStorageAdapter,
-  masking: MaskingPipeline,
-  git: SimpleGitAdapter,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  staleness: any,
+  storage: IStoragePort,
+  masking: IMaskingPort,
+  git: IGitPort,
+  staleness: StalenessCheck | undefined,
   recorder: ISessionRecorderPort | null,
   ctxoRoot = '.ctxo',
   clusterLabelMasker?: ClusterLabelMasker,
   coChange?: ICoChangePort,
-) {
+  modules: readonly LoadedModule[] = [],
+): void {
+  const enrichers = collectEnrichers(modules);
+
   // Tool annotations — all Ctxo tools are read-only index queries
   const toolAnnotations = {
     readOnlyHint: true,
@@ -148,8 +167,8 @@ function registerTools(
   const SYMBOL_ID_FORMAT = 'format: file::name::kind; a SQL table, view or procedure also as name::kind, for example dbo.loans::table';
 
   // Register tools — each handler wrapped with session recording
-  const logicSliceHandler = withRecording('get_logic_slice', handleGetLogicSlice(storage, masking, staleness, ctxoRoot), recorder);
-  const whyContextHandler = withRecording('get_why_context', handleGetWhyContext(storage, git, masking, staleness, ctxoRoot, clusterLabelMasker), recorder);
+  const logicSliceHandler = withRecording('get_logic_slice', handleGetLogicSlice(storage, masking, staleness, ctxoRoot, enrichers.get('get_logic_slice')), recorder);
+  const whyContextHandler = withRecording('get_why_context', handleGetWhyContext(storage, git, masking, staleness, ctxoRoot, clusterLabelMasker, enrichers.get('get_why_context')), recorder);
   const changeIntelligenceHandler = withRecording('get_change_intelligence', handleGetChangeIntelligence(storage, git, masking, staleness, ctxoRoot), recorder);
 
   server.registerTool(
@@ -192,7 +211,7 @@ function registerTools(
     (args) => changeIntelligenceHandler(args),
   );
 
-  const blastRadiusHandler = withRecording('get_blast_radius', handleGetBlastRadius(storage, masking, staleness, ctxoRoot, git, clusterLabelMasker, coChange), recorder);
+  const blastRadiusHandler = withRecording('get_blast_radius', handleGetBlastRadius(storage, masking, staleness, ctxoRoot, git, clusterLabelMasker, coChange, enrichers.get('get_blast_radius')), recorder);
 
   server.registerTool(
     'get_blast_radius',
@@ -272,7 +291,7 @@ function registerTools(
     (args) => rankedContextHandler(args),
   );
 
-  const searchSymbolsHandler = withRecording('search_symbols', handleSearchSymbols(storage, masking, staleness, ctxoRoot), recorder);
+  const searchSymbolsHandler = withRecording('search_symbols', handleSearchSymbols(storage, masking, staleness, ctxoRoot, undefined, enrichers.get('search_symbols')), recorder);
 
   server.registerTool(
     'search_symbols',
@@ -305,7 +324,7 @@ function registerTools(
     (args) => changedSymbolsHandler(args),
   );
 
-  const findImportersHandler = withRecording('find_importers', handleFindImporters(storage, masking, staleness, ctxoRoot), recorder);
+  const findImportersHandler = withRecording('find_importers', handleFindImporters(storage, masking, staleness, ctxoRoot, enrichers.get('find_importers')), recorder);
 
   server.registerTool(
     'find_importers',
@@ -355,7 +374,7 @@ function registerTools(
     (args) => symbolImportanceHandler(args),
   );
 
-  const prImpactHandler = withRecording('get_pr_impact', handleGetPrImpact(storage, git, masking, staleness, ctxoRoot, clusterLabelMasker, coChange), recorder);
+  const prImpactHandler = withRecording('get_pr_impact', handleGetPrImpact(storage, git, masking, staleness, ctxoRoot, clusterLabelMasker, coChange, enrichers.get('get_pr_impact')), recorder);
 
   server.registerTool(
     'get_pr_impact',
@@ -370,6 +389,22 @@ function registerTools(
     },
     (args) => prImpactHandler(args),
   );
+
+  // Module tools (ADR-018) come after the core tools, with the same annotations and session recording; the
+  // handler adds the envelope, masking and the staleness warning. A tool that fails to register is skipped.
+  const indexedFiles = () => storage.listIndexedFiles();
+  for (const tool of collectModuleTools(modules, CORE_TOOL_NAMES)) {
+    try {
+      const moduleToolHandler = withRecording(tool.name, handleModuleTool(tool, masking, staleness, indexedFiles), recorder);
+      server.registerTool(
+        tool.name,
+        { description: tool.description, inputSchema: moduleInputShape(tool, z), annotations: toolAnnotations },
+        (args) => moduleToolHandler(args),
+      );
+    } catch (err) {
+      log.warn(`Module tool "${tool.name}" was not registered: ${(err as Error).message}`);
+    }
+  }
 
   // Register empty resource/prompt capabilities to prevent -32601 errors
   // from MCP clients that unconditionally call listResources/listPrompts

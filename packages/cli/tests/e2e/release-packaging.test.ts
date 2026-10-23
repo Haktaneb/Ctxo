@@ -88,7 +88,7 @@ describe('Release Packaging', () => {
     expect(files.some((f: string) => f === 'package.json')).toBe(true);
   });
 
-  it('tarball size is reasonable (< 2000KB)', { timeout: 30_000 }, () => {
+  it('tarball size is reasonable (< 2050KB)', { timeout: 30_000 }, () => {
     const output = execSync('npm pack --dry-run --json', { cwd: ROOT, encoding: 'utf-8' });
 
     const info = JSON.parse(output);
@@ -121,7 +121,11 @@ describe('Release Packaging', () => {
     // PR 2A alone measured 1587.18KB at that change.
     // PR 2B (#156) adds the `@ctxo/cli/internal` entry (its bundled declarations, about 31KB, and the code
     // splitting shares between the two entries): 1905.87KB before it, 1946.30KB after, still under 2000KB.
-    expect(sizeKB).toBeLessThan(2000);
+    // The fast hook route and the module seams (index pass, commands, doctor checks) measured 1999.45KB.
+    // The MCP module seams (the response enricher on six core tools, module tools with their envelope,
+    // masking and schema checks, get_why_context through the envelope, shipped as JS plus source maps)
+    // crossed the limit at 2024.33KB, so it is 2050KB, the next 50KB step.
+    expect(sizeKB).toBeLessThan(2050);
     expect(sizeKB).toBeGreaterThan(1); // Sanity: not empty (dist/ may not exist in CI pre-build)
   });
 });

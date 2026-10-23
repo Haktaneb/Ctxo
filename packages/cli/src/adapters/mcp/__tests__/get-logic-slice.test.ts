@@ -6,6 +6,7 @@ import { SqliteStorageAdapter } from '../../storage/sqlite-storage-adapter.js';
 import { MaskingPipeline } from '../../../core/masking/masking-pipeline.js';
 import { handleGetLogicSlice } from '../get-logic-slice.js';
 import type { FileIndex } from '../../../core/types.js';
+import type { ResponseEnricher } from '../../../ports/i-ctxo-module.js';
 
 function buildTestFileIndex(): FileIndex {
   return {
@@ -198,5 +199,43 @@ describe('GetLogicSliceHandler', () => {
 
     expect(result.content.length).toBeGreaterThanOrEqual(2);
     expect(result.content[0]!.text).toContain('stale');
+  });
+
+  it('applies the enricher before the envelope and masking', () => {
+    const seen: Array<{ hadMeta: boolean; args: Readonly<Record<string, unknown>> }> = [];
+    const markRoot = (slice: Record<string, unknown>) =>
+      slice['root'] ? { ...slice, root: { ...(slice['root'] as Record<string, unknown>), enrichedBy: 'stub' } } : slice;
+    // Enriches the root of a single slice, or the root of every slice in a batch.
+    const enrich: ResponseEnricher = (payload, args) => {
+      seen.push({ hadMeta: '_meta' in payload, args });
+      const body = Array.isArray(payload['results'])
+        ? { ...payload, results: (payload['results'] as Array<Record<string, unknown>>).map(markRoot) }
+        : markRoot(payload);
+      return { ...body, enrichedBy: 'stub', enrichedSecret: 'AKIAIOSFODNN7EXAMPLE' };
+    };
+    const enriched = handleGetLogicSlice(storage, new MaskingPipeline(), undefined, tempDir, enrich);
+
+    const single = enriched({ symbolId: 'src/foo.ts::processPayment::function' });
+    expect(single.content[0]!.text).not.toContain('AKIAIOSFODNN7EXAMPLE');
+    const singlePayload = JSON.parse(single.content[0]!.text);
+    expect(singlePayload.root).toMatchObject({ symbolId: 'src/foo.ts::processPayment::function', enrichedBy: 'stub' });
+    expect(singlePayload.enrichedBy).toBe('stub');
+    expect(singlePayload.enrichedSecret).toBe('[REDACTED:AWS_KEY]');
+    expect(singlePayload._meta).toBeDefined();
+
+    const batch = enriched({ symbolIds: ['src/foo.ts::processPayment::function', 'src/bar.ts::TokenValidator::class'] });
+    const batchPayload = JSON.parse(batch.content[0]!.text);
+    expect(batchPayload.batch).toBe(true);
+    expect(batchPayload.enrichedBy).toBe('stub');
+    expect(batchPayload.results.map((r: { root: { enrichedBy?: string } }) => r.root.enrichedBy)).toEqual(['stub', 'stub']);
+    expect(batchPayload._meta.totalItems).toBe(2);
+
+    expect(seen.map((s) => s.hadMeta)).toEqual([false, false]);
+    expect(seen[0]!.args).toMatchObject({ symbolId: 'src/foo.ts::processPayment::function', level: 3 });
+
+    // Without an enricher the slice carries no added field.
+    const plain = JSON.parse(handler({ symbolId: 'src/foo.ts::processPayment::function' }).content[0]!.text);
+    expect(plain.enrichedBy).toBeUndefined();
+    expect(plain.root.enrichedBy).toBeUndefined();
   });
 });

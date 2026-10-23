@@ -10,6 +10,7 @@ import { handleGetPrImpact } from '../get-pr-impact.js';
 import type { ICoChangePort } from '../../../ports/i-co-change-port.js';
 import type { IGitPort } from '../../../ports/i-git-port.js';
 import type { CommunitySnapshot, FileIndex } from '../../../core/types.js';
+import type { ResponseEnricher } from '../../../ports/i-ctxo-module.js';
 
 function buildIndices(): FileIndex[] {
   return [
@@ -355,5 +356,34 @@ describe('handleGetPrImpact', () => {
     expect(payload.boundaryViolations.distinctCommits).toBe(2);
     expect(payload.boundaryViolations.snapshotsAvailable).toBe(3);
     expect(payload.boundaryViolations.confidence).toBe('low');
+  });
+
+  it('applies the enricher before the envelope and masking', async () => {
+    const seen: Array<{ hadMeta: boolean; args: Readonly<Record<string, unknown>> }> = [];
+    // Marks every changed symbol, under files[].symbols[].
+    const enrich: ResponseEnricher = (payload, args) => {
+      seen.push({ hadMeta: '_meta' in payload, args });
+      const files = (payload['files'] as Array<{ symbols: Array<Record<string, unknown>> }>).map((file) => ({
+        ...file,
+        symbols: file.symbols.map((symbol) => ({ ...symbol, enrichedBy: 'stub' })),
+      }));
+      return { ...payload, files, enrichedBy: 'stub', enrichedSecret: 'AKIAIOSFODNN7EXAMPLE' };
+    };
+    const git = createMockGit(['src/b.ts', 'src/c.ts']);
+    const handler = handleGetPrImpact(storage, git, new MaskingPipeline(), undefined, tempDir, undefined, undefined, enrich);
+
+    const result = await handler({ since: 'HEAD~1' });
+
+    expect(result.content[0]!.text).not.toContain('AKIAIOSFODNN7EXAMPLE');
+    const payload = JSON.parse(result.content[0]!.text);
+    expect(payload.enrichedBy).toBe('stub');
+    expect(payload.enrichedSecret).toBe('[REDACTED:AWS_KEY]');
+    const symbols = payload.files.flatMap((f: { symbols: Array<{ symbolId: string; enrichedBy?: string }> }) => f.symbols);
+    expect(symbols.map((s: { symbolId: string }) => s.symbolId)).toEqual(['src/b.ts::B::class', 'src/c.ts::C::interface']);
+    expect(symbols.every((s: { enrichedBy?: string }) => s.enrichedBy === 'stub')).toBe(true);
+    expect(payload._meta.totalItems).toBe(2);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.hadMeta).toBe(false);
+    expect(seen[0]!.args).toMatchObject({ since: 'HEAD~1', maxFiles: 50 });
   });
 });

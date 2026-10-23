@@ -7,6 +7,7 @@ import {
   FAST_ROUTE_COMMANDS,
   MODULE_COMMAND_PACKAGES,
   collectModuleCommands,
+  loadModulesFor,
   moduleHelpLines,
   runFastRoute,
   runModuleCommand,
@@ -195,10 +196,43 @@ export async function register(host) {
 }
 `;
 
+describe('loadModulesFor', () => {
+  it('loadModulesFor builds no module host when @ctxo/domain is not installed', async () => {
+    const hostModule = await import('../module-host.js');
+    const createHost = vi.spyOn(hostModule, 'createModuleHost');
+
+    const modules = await loadModulesFor(tempDir(), 'cli', { cliAnchor: tempDir() });
+
+    expect(modules).toEqual([]);
+    expect(createHost).not.toHaveBeenCalled();
+  });
+
+  it('loadModulesFor builds the host and loads the module when a copy is installed', async () => {
+    const root = tempDir();
+    writeStubDomainPackage(root, "export async function register() { return { id: 'domain' }; }\n");
+    const hostModule = await import('../module-host.js');
+    const createHost = vi.spyOn(hostModule, 'createModuleHost');
+
+    const modules = await loadModulesFor(root, 'cli', { cliAnchor: tempDir() });
+
+    expect(modules.map((m) => m.name)).toEqual(['@ctxo/domain']);
+    expect(createHost).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('runFastRoute', () => {
   it('runFastRoute exits 0 when @ctxo/domain is not installed', async () => {
-    const code = await runFastRoute(['domain-guard-hook'], tempDir());
+    const code = await runFastRoute(['domain-guard-hook'], tempDir(), { cliAnchor: tempDir() });
     expect(code).toBe(0);
+  });
+
+  it('runFastRoute finds the copy next to the CLI anchor', async () => {
+    const anchor = tempDir();
+    writeStubDomainPackage(anchor, FAST_ROUTE_STUB('return 6;'));
+
+    const code = await runFastRoute(['domain-guard-hook'], tempDir(), { cliAnchor: anchor });
+
+    expect(code).toBe(6);
   });
 
   it("runFastRoute runs the module's command and returns its exit code", async () => {

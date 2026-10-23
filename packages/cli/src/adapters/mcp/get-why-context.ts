@@ -11,6 +11,9 @@ import type { AntiPattern, CommitIntent, FileIndex } from '../../core/types.js';
 import type { SymbolGraph } from '../../core/graph/symbol-graph.js';
 import type { StalenessCheck } from './get-logic-slice.js';
 import { buildGraphFromIndices, buildGraphFromStorage } from './get-logic-slice.js';
+import { wrapResponse } from '../../core/response-envelope.js';
+import type { ResponseEnricher } from '../../ports/i-ctxo-module.js';
+import { applyEnricher } from './enrich-payload.js';
 
 /** The graph of the committed index, or of the SQLite storage when that has no symbols (as `getGraphAndFiles`). */
 function graphOf(indices: readonly FileIndex[], storage: IStoragePort): SymbolGraph {
@@ -30,6 +33,7 @@ export function handleGetWhyContext(
   staleness?: StalenessCheck,
   ctxoRoot = '.ctxo',
   clusterLabelMasker?: ClusterLabelMasker,
+  enrich?: ResponseEnricher,
 ) {
   const revertDetector = new RevertDetector();
   const indexReader = new JsonIndexReader(ctxoRoot);
@@ -116,12 +120,11 @@ export function handleGetWhyContext(
         }
       }
 
+      // The same envelope as every other tool: _meta with the item counts, plus snapshotStaleness when known.
       const stalenessMeta = await buildSnapshotStaleness(storage, git);
-      if (stalenessMeta) {
-        responsePayload._meta = { snapshotStaleness: stalenessMeta };
-      }
-
-      const payload = masking.mask(JSON.stringify(responsePayload));
+      const extras = stalenessMeta ? { snapshotStaleness: stalenessMeta } : undefined;
+      const enriched = applyEnricher(enrich, responsePayload, parsed.data, 'get_why_context');
+      const payload = masking.mask(JSON.stringify(wrapResponse(enriched, extras)));
 
       const content: Array<{ type: 'text'; text: string }> = [];
       if (staleness) {
