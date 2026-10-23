@@ -88,12 +88,12 @@ function leadingId(text: string, variants: readonly Variant[], options: ScanOpti
   return id === undefined ? undefined : { id, raw: shaped[1]! };
 }
 
-/** The innermost symbol spanning the line: smallest span, then index order. */
+/** The innermost symbol spanning the 1-based line (index lines are 0-based): smallest span, then index order. */
 function innermostSymbol(index: FileIndex | undefined, line: number): SymbolNode | undefined {
   if (index === undefined) return undefined;
   let best: SymbolNode | undefined;
   for (const symbol of index.symbols) {
-    if (line < symbol.startLine || line > symbol.endLine) continue;
+    if (line < symbol.startLine + 1 || line > symbol.endLine + 1) continue;
     if (best === undefined || symbol.endLine - symbol.startLine < best.endLine - best.startLine) best = symbol;
   }
   return best;
@@ -118,7 +118,7 @@ export function annotationRefs(index: FileIndex, options: ScanOptions): RuleRef[
       if (kind === undefined || value === undefined) continue;
       const found = leadingId(value, variants, options);
       if (found === undefined) continue;
-      refs.push({ file: index.file, line: symbol.startLine, raw: found.raw, id: found.id, kind, symbolId: symbol.symbolId });
+      refs.push({ file: index.file, line: symbol.startLine + 1, raw: found.raw, id: found.id, kind, symbolId: symbol.symbolId });
     }
   }
   return refs;
@@ -188,7 +188,7 @@ export function scanTestText(file: string, text: string, index: FileIndex | unde
       // A mention of the same id inside the annotated symbol adds nothing to the structured reference.
       for (let i = refs.length - 1; i >= 0; i--) {
         const r = refs[i]!;
-        if (r.kind === 'mention' && r.id === ref.id && symbol !== undefined && r.line >= symbol.startLine && r.line <= symbol.endLine) {
+        if (r.kind === 'mention' && r.id === ref.id && symbol !== undefined && r.line >= symbol.startLine + 1 && r.line <= symbol.endLine + 1) {
           refs.splice(i, 1);
         }
       }

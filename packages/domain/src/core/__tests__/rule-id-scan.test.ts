@@ -88,8 +88,8 @@ describe('rule-id-scan', () => {
         symbolId: 'tests/LoanTests.cs::RejectsSixth::method',
         name: 'RejectsSixth',
         kind: 'method',
-        startLine: 4,
-        endLine: 9,
+        startLine: 3,
+        endLine: 8,
         annotations: [{ name: 'Fact' }, { name: 'Trait', args: ['Rule', 'LEND-03'] }],
       },
     ]);
@@ -182,8 +182,8 @@ describe('rule-id-scan', () => {
 
   it('links to the innermost symbol spanning the line, else to the file', () => {
     const index = fileIndex([
-      { symbolId: 'outer', name: 'outer', kind: 'class', startLine: 1, endLine: 10 },
-      { symbolId: 'inner', name: 'inner', kind: 'method', startLine: 3, endLine: 5 },
+      { symbolId: 'outer', name: 'outer', kind: 'class', startLine: 0, endLine: 9 },
+      { symbolId: 'inner', name: 'inner', kind: 'method', startLine: 2, endLine: 4 },
     ]);
     const text = ['', '// LEND-03 in outer', '// LEND-04 in inner', '', '', '', '', '', '', '', '', '// LEND-03 outside'].join('\n');
     const refs = scanTestText(index.file, text, index, options());
@@ -191,6 +191,19 @@ describe('rule-id-scan', () => {
       [2, 'outer'],
       [3, 'inner'],
       [12, undefined],
+    ]);
+  });
+
+  it('index lines are 0-based: the line above a symbol is not in it, its last line is', () => {
+    const index = fileIndex([{ symbolId: 'sym', name: 'sym', kind: 'method', startLine: 3, endLine: 5 }]);
+    // 1-based file lines 4..6 belong to the symbol.
+    const text = ['', '', '// LEND-03 above', '// LEND-03 first', '', '// LEND-03 last', '// LEND-03 below'].join('\n');
+    const refs = scanTestText(index.file, text, index, options());
+    expect(refs.map((r) => [r.line, r.symbolId])).toEqual([
+      [3, undefined],
+      [4, 'sym'],
+      [6, 'sym'],
+      [7, undefined],
     ]);
   });
 
