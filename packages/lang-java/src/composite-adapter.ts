@@ -29,7 +29,8 @@ export class JavaCompositeAdapter implements ILanguageAdapter {
   constructor(options: { readonly sqlCallSites?: boolean; readonly facts?: FactOptions } = {}) {
     this.sqlCallSites = options.sqlCallSites === true;
     this.facts = options.facts;
-    this.treeSitter = new JavaAdapter();
+    // Q8: the syntax tier gets the facts option too (its only construction site).
+    this.treeSitter = new JavaAdapter(this.facts ? { facts: this.facts } : {});
   }
 
   async initialize(rootDir: string): Promise<void> {
@@ -69,13 +70,12 @@ export class JavaCompositeAdapter implements ILanguageAdapter {
 
   /**
    * Code facts from the active tier: the JDT analyzer's evidence and annotation routes in the full
-   * tier; the syntax tier's own `extractFacts` when it has one, else `[]`. `[]` without the `facts` option.
+   * tier; the tree-sitter CST evidence and annotation routes in the syntax tier. `[]` without the `facts` option.
    */
   async extractFacts(filePath: string, source: string): Promise<CodeFact[]> {
     if (!this.facts) return [];
     if (this.analyzer) return this.analyzer.extractFacts(filePath, source);
-    const syntax = this.treeSitter as ILanguageAdapter;
-    return typeof syntax.extractFacts === 'function' ? syntax.extractFacts(filePath, source) : [];
+    return this.treeSitter.extractFacts(filePath, source);
   }
 
   isSupported(filePath: string): boolean { return filePath.toLowerCase().endsWith('.java'); }

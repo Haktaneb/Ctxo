@@ -64,17 +64,13 @@ function enclosingType(method: SymbolNode, symbols: readonly SymbolNode[]): Symb
  * `route` evidence for Spring and JAX-RS methods. Spring: one route per verb and path of each
  * `GetMapping`, `PostMapping`, `PutMapping`, `DeleteMapping`, `PatchMapping` and `RequestMapping`
  * of a method (paths from `args`, else `named.path`, else `named.value`); `RequestMapping` verbs come
- * from `named.method` (`RequestMethod.GET` gives `GET`, comma-separated values one route each), else
- * from `requestMethods` (verbs per method symbol ID that a tier read from the source because its
- * annotations lack enum values), else `ANY`. The innermost enclosing type's `RequestMapping` paths
+ * from `named.method` (`RequestMethod.GET` gives `GET`, comma-separated values one route each; both
+ * tiers keep the enum text there), else `ANY`. The innermost enclosing type's `RequestMapping` paths
  * are the prefixes. JAX-RS: one route per `GET`, `POST`, `PUT`, `DELETE`, `PATCH`, `HEAD` or
  * `OPTIONS` annotation, the type's `Path` joined with the method's `Path`. Class and method paths are
  * always concatenated. The line is the method's `startLine` (its first annotation).
  */
-export function annotationRouteEvidence(
-  symbols: readonly SymbolNode[],
-  requestMethods?: ReadonlyMap<string, readonly string[]>,
-): FactEvidence[] {
+export function annotationRouteEvidence(symbols: readonly SymbolNode[]): FactEvidence[] {
   const evidence: FactEvidence[] = [];
   for (const method of symbols) {
     if (method.kind !== 'method' || !method.annotations) continue;
@@ -98,8 +94,8 @@ export function annotationRouteEvidence(
         const declared = split(annotation.named?.['method']).map(verbOf);
         const verbs = fixed !== undefined
           ? [fixed]
-          : declared.length > 0 ? declared : requestMethods?.get(method.symbolId)?.map(verbOf) ?? ['ANY'];
-        for (const verb of verbs.length > 0 ? verbs : ['ANY']) {
+          : declared.length > 0 ? declared : ['ANY'];
+        for (const verb of verbs) {
           for (const prefix of prefixes) {
             for (const path of springPaths(annotation)) push(verb, joinRoute(prefix, path));
           }

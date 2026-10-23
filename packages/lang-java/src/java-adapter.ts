@@ -3,7 +3,11 @@ import type { SyntaxNode } from 'tree-sitter';
 import { TreeSitterAdapter } from './tree-sitter-adapter.js';
 import { createLogger } from './logger.js';
 import { annotationsFromModifiers } from './tree-sitter-annotations.js';
-import type { SymbolNode, GraphEdge, ComplexityMetrics, SymbolKind } from '@ctxo/plugin-api';
+import type { SymbolNode, GraphEdge, ComplexityMetrics, SymbolKind, CodeFact } from '@ctxo/plugin-api';
+import type { FactOptions } from './facts/fact-types.js';
+import { finishFacts } from './facts/finish-facts.js';
+import { decodeJavaStringLiteral } from './facts/java-string-literal.js';
+import { collectTreeSitterEvidence } from './facts/tree-sitter-evidence.js';
 
 const log = createLogger('ctxo:lang-java');
 
@@ -36,20 +40,47 @@ const JAVA_BRANCH_TYPES = [
 export class JavaAdapter extends TreeSitterAdapter {
   readonly extensions = ['.java'] as const;
 
-  constructor() {
+  /** Fact detector options: set when the host requests facts; without them `extractFacts` returns `[]`. */
+  readonly facts: FactOptions | undefined;
+
+  constructor(options: { readonly facts?: FactOptions } = {}) {
     super(JavaLanguage);
+    this.facts = options.facts;
   }
 
   // ── Task 4: extractSymbols ──────────────────────────────────
 
   async extractSymbols(filePath: string, source: string): Promise<SymbolNode[]> {
     try {
-      const tree = this.parse(source);
-      const symbols: SymbolNode[] = [];
-      this.walkTypeDecls(tree.rootNode, filePath, symbols);
-      return symbols;
+      return this.symbolsOf(this.parse(source).rootNode, filePath);
     } catch (err) {
       log.error(`Symbol extraction failed for ${filePath}: ${(err as Error).message}`);
+      return [];
+    }
+  }
+
+  private symbolsOf(root: SyntaxNode, filePath: string): SymbolNode[] {
+    const symbols: SymbolNode[] = [];
+    this.walkTypeDecls(root, filePath, symbols);
+    return symbols;
+  }
+
+  // ── PR 4 (#156): extractFacts ───────────────────────────────
+
+  /**
+   * Code facts of the syntax tier: the CST evidence of `collectTreeSitterEvidence` (the JDT tier's
+   * rules, from the literals alone) and the annotation routes, finished by the shared rules with the
+   * Java string decoder. `[]` without the `facts` option.
+   */
+  async extractFacts(filePath: string, source: string): Promise<CodeFact[]> {
+    if (!this.facts) return [];
+    try {
+      const root = this.parse(source).rootNode;
+      const symbols = this.symbolsOf(root, filePath);
+      const evidence = collectTreeSitterEvidence(root, filePath, symbols, this.facts);
+      return finishFacts(filePath, evidence, symbols, this.facts, decodeJavaStringLiteral);
+    } catch (err) {
+      log.error(`Fact extraction failed for ${filePath}: ${(err as Error).message}`);
       return [];
     }
   }

@@ -15,8 +15,8 @@ function method(name: string, line: number, annotations?: SymbolNode['annotation
   return { symbolId: `${FILE}::${name}::method`, name, kind: 'method', startLine: line, endLine: line + 3, ...(annotations ? { annotations } : {}) };
 }
 
-function endpoints(symbols: readonly SymbolNode[], requestMethods?: ReadonlyMap<string, readonly string[]>): string[] {
-  return finishFacts(FILE, annotationRouteEvidence(symbols, requestMethods), symbols, DEFAULT_FACT_OPTIONS, decodeJavaStringLiteral)
+function endpoints(symbols: readonly SymbolNode[]): string[] {
+  return finishFacts(FILE, annotationRouteEvidence(symbols), symbols, DEFAULT_FACT_OPTIONS, decodeJavaStringLiteral)
     .map((f) => `${f.line} ${f.symbolId.slice(FILE.length + 2)} ${f.text}`);
 }
 
@@ -60,16 +60,6 @@ describe('annotationRouteEvidence (Spring, JAX-RS)', () => {
       '12 any::method ANY /holds/any',
       '16 bare::method PUT /holds',
     ]);
-  });
-
-  it('RequestMapping verbs the annotations do not carry come from requestMethods (the syntax tier drops enum values)', () => {
-    const symbols = [
-      cls('HoldController', 0, 40, [{ name: 'RequestMapping', args: ['/holds'] }]),
-      method('renew', 3, [{ name: 'RequestMapping', named: { value: '/renew' } }]),
-      method('both', 8, [{ name: 'RequestMapping', args: ['x'], named: { method: 'RequestMethod.DELETE' } }]),
-    ];
-    const verbs = new Map([[`${FILE}::renew::method`, ['POST']], [`${FILE}::both::method`, ['GET']]]);
-    expect(endpoints(symbols, verbs)).toEqual(['3 renew::method POST /holds/renew', '8 both::method DELETE /holds/x']);
   });
 
   it('JAX-RS verbs pair with Path on the class and the method', () => {
