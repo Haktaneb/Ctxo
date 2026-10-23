@@ -1,4 +1,3 @@
-import { statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { CoreToolName, CtxoHost, ResponseEnricher } from '@ctxo/cli/internal';
 import { DomainArtifactStore, type BoundariesArtifact, type ContextsArtifact } from '../adapters/artifact-store.js';
@@ -8,7 +7,7 @@ import { contextDrift, type ContextHistoryEntry } from '../core/context-metrics.
 import { resolveDomainConfig } from '../core/domain-config.js';
 import { ADDITIVE_CAP } from '../core/limits.js';
 import { registryHash } from '../core/registry.js';
-import type { DomainState } from './domain-state.js';
+import { createRacyStamper, type DomainState, type DomainStateOptions } from './domain-state.js';
 import { blastRadiusDomainFields, taskContextDomainFields, whyContextDomainFields } from './graph-enrichers.js';
 import { prImpactDomainFields } from './pr-impact-fields.js';
 
@@ -103,16 +102,6 @@ function fileOfSymbolId(id: string): string | undefined {
   return parts.length >= 3 && parts[0] !== '' ? parts[0] : undefined;
 }
 
-/** A cheap change stamp for a file or folder: mtime and size, or 'missing'. */
-function stampOf(path: string): string {
-  try {
-    const stat = statSync(path);
-    return `${stat.mtimeMs}:${stat.size}`;
-  } catch {
-    return 'missing';
-  }
-}
-
 /** A value reloaded only when its stamp changes. */
 class Cached<T> {
   private stamp: string | undefined;
@@ -139,14 +128,20 @@ interface DomainView {
 
 /**
  * The response enrichers: PR 2B's context fields (spec 10.5 to 10.7) composed with the domain graph fields of
- * `state` (spec 11.3). Registry hash, artifacts and history are cached by file mtime and size. Without a registry,
- * or when `contexts.json` was built from another registry text, PR 2B's enrichers return the payload unchanged
- * (E3); the graph fields follow `state.load()` the same way. The enrichers of the asynchronous tools are bounded by
- * `ENRICHER_TIMEOUT_MS` (`withTimeout`).
+ * `state` (spec 11.3). Registry hash, artifacts and history are cached by file mtime and size, with the racy-stamp
+ * rule of `createRacyStamper`. Without a registry, or when `contexts.json` was built from another registry text,
+ * PR 2B's enrichers return the payload unchanged (E3); the graph fields follow `state.load()` the same way. The
+ * enrichers of the asynchronous tools are bounded by `ENRICHER_TIMEOUT_MS` (`withTimeout`).
  */
-export function createEnrichers(host: CtxoHost, state: DomainState): Partial<Record<CoreToolName, ResponseEnricher>> {
+export function createEnrichers(
+  host: CtxoHost,
+  state: DomainState,
+  options: DomainStateOptions = {},
+): Partial<Record<CoreToolName, ResponseEnricher>> {
   const store = new DomainArtifactStore(host.ctxoRoot);
   const domainDir = join(host.ctxoRoot, 'index', 'domain');
+  /** The shared racy-stamp rule (M6): mtime and size, 'missing', or a one-off value for a file modified within 2 s. */
+  const stampOf = createRacyStamper(options.now);
 
   const configCache = new Cached<ReturnType<typeof resolveDomainConfig>>();
   const hashCache = new Cached<string | undefined>();

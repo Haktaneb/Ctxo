@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -361,7 +361,8 @@ describe('createEnrichers', () => {
     const base = createModuleHost({ projectRoot: dir, mode: 'cli' });
     const loadConfig = vi.fn(base.services.loadConfig);
     const spied = { ...base, services: { ...base.services, loadConfig } };
-    const e = createEnrichers(spied, createDomainState(spied));
+    // A clock well past every mtime, so no stamp is racy.
+    const e = createEnrichers(spied, createDomainState(spied), { now: () => Date.now() + 60_000 });
     const payload = { results: [{ symbolId: 'a', file: 'src/Lending/Loan.ts' }] };
 
     e.search_symbols!(structuredClone(payload), {});
@@ -372,6 +373,26 @@ describe('createEnrichers', () => {
     writeFileSync(configPath, 'version: "1.0"\nstats:\n  enabled: false\n');
     e.search_symbols!(structuredClone(payload), {});
     expect(loadConfig).toHaveBeenCalledTimes(2);
+  });
+
+  it('sees a same-size registry edit within one mtime tick (the shared racy-stamp rule, M6)', () => {
+    const e = enrichers();
+    const registryPath = join(dir, 'docs', 'domain', 'contexts.yaml');
+    // One whole-second mtime for both texts, as a coarse file system would record it (inside the 2 s window).
+    const tick = Math.floor(Date.now() / 1000);
+    utimesSync(registryPath, tick, tick);
+    const payload = { results: [{ symbolId: 'a', file: 'src/Lending/Loan.ts' }] };
+    expect(run(e, 'search_symbols', payload)['results']).toEqual([{ symbolId: 'a', file: 'src/Lending/Loan.ts', context: 'lending' }]);
+
+    // Same size, same mtime: only the racy rule tells the two registry texts apart.
+    const edited = REGISTRY.replace('name: Lending', 'name: Lendinx');
+    expect(edited.length).toBe(REGISTRY.length);
+    writeFileSync(registryPath, edited);
+    utimesSync(registryPath, tick, tick);
+    expect(statSync(registryPath).size).toBe(Buffer.byteLength(REGISTRY));
+
+    // contexts.json was built from the old text, so the PR 2B fields stop (E3) instead of serving the old registry.
+    expect(run(e, 'search_symbols', payload)).toEqual(payload);
   });
 
   it("createEnrichers composes PR 2B's fields with the graph fields", async () => {
