@@ -1,6 +1,7 @@
-import type { CtxoModuleRegister } from '@ctxo/cli/internal';
+import type { CtxoHost, CtxoModuleRegister } from '@ctxo/cli/internal';
 import { contextsTouchedCommand } from './commands/contexts-touched-command.js';
 import { domainCommand } from './commands/domain-command.js';
+import { DEFAULT_DOMAIN_CONFIG, resolveDomainConfig, toFactDetectorOptions, type DomainConfig } from './core/domain-config.js';
 import { domainGuardHookCommand } from './commands/domain-guard-hook-command.js';
 import { verifyDomainCommand } from './commands/verify-domain-command.js';
 import { domainDoctorChecks } from './doctor/domain-checks.js';
@@ -12,6 +13,20 @@ import { domainTools } from './mcp/domain-tools.js';
 import { createEnrichers } from './mcp/enrichers.js';
 import { taskContextReservation } from './mcp/graph-enrichers.js';
 import { DOMAIN_PACKAGE, domainVersion, sameMinor } from './version.js';
+
+/**
+ * The domain config at register time, for the fact request. Silent on purpose (W7): the hook route runs
+ * `register` and must keep stderr empty, and config problems are reported by the index pass and doctor.
+ * Any failure gives the defaults.
+ */
+function registrationConfig(host: CtxoHost): DomainConfig {
+  try {
+    const loaded = host.services.loadConfig(host.ctxoRoot);
+    return resolveDomainConfig((loaded.config as Record<string, unknown>)['domain']).config;
+  } catch {
+    return DEFAULT_DOMAIN_CONFIG;
+  }
+}
 
 /**
  * The module entry the CLI loads (ADR-018). The module runs only against the CLI minor it was built for;
@@ -32,7 +47,7 @@ export const register: CtxoModuleRegister = async (host) => {
   const state = createDomainState(host);
   return {
     id: 'domain',
-    indexCapabilities: { facts: true },
+    indexCapabilities: { facts: true, factOptions: toFactDetectorOptions(registrationConfig(host)) },
     indexPass: domainIndexPass(host),
     registerCommands(registrar) {
       registrar.registerCommand(contextsTouchedCommand(host));

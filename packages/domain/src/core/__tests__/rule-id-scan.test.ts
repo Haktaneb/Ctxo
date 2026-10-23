@@ -353,7 +353,7 @@ describe('rule-id-scan', () => {
     const config: DomainConfig = {
       ...DEFAULT_DOMAIN_CONFIG,
       rules: { idPattern: '^[A-Z]+-\\d+$', trackerPrefixes: ['JIRA'] },
-      tests: { ruleTraitKeys: ['Rule', 'Requirement'] },
+      tests: { ...DEFAULT_DOMAIN_CONFIG.tests, ruleTraitKeys: ['Rule', 'Requirement'] },
     };
     const context = (id: string, rulePrefix?: string) => ({
       id,

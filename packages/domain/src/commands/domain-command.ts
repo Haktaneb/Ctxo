@@ -119,6 +119,8 @@ async function discover(args: readonly string[], host: CtxoHost, ctx: ModuleComm
     printAdded('domain.rules.trackerPrefixes', proposal.trackerPrefixes, config.rules.trackerPrefixes);
     printAdded('domain.tests.ruleTraitKeys', proposal.ruleTraitKeys, config.tests.ruleTraitKeys);
     printAdded('index.tests', proposal.indexTests, input.indexTests);
+    printAdded('domain.tests.characterization.paths', proposal.characterizationPaths, config.tests.characterization.paths);
+    printAdded('domain.tests.contract.paths', proposal.contractPaths, config.tests.contract.paths);
     return 0;
   } catch (err) {
     console.error(`[ctxo] domain discover failed: ${(err as Error).message}`);

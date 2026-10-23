@@ -1,24 +1,120 @@
+import type { FactDetectorOptions, TrivialLiteral } from '@ctxo/cli/internal';
 import { RULE_PREFIX_PATTERN, RUNGS, type Rung } from './registry.js';
+import { parseAnnotationMatcher } from './test-conventions.js';
 
 export type BoundaryMode = 'by-rung' | 'report';
+
+/** A K13a convention (spec 12.3): a test is of the kind when an annotation, a path glob or a name marker matches. */
+export interface TestConvention {
+  readonly annotations: readonly string[];
+  readonly paths: readonly string[];
+  readonly names: readonly string[];
+}
 
 export interface DomainConfig {
   readonly registry: string;
   readonly coverage: { readonly unowned: 'warn' | 'error' };
   readonly boundaries: { readonly enforce: BoundaryMode; readonly blockingRungs: readonly Rung[] };
   readonly rules: { readonly idPattern: string; readonly trackerPrefixes: readonly string[] };
-  readonly tests: { readonly ruleTraitKeys: readonly string[] };
+  readonly tests: {
+    readonly ruleTraitKeys: readonly string[];
+    readonly characterization: TestConvention;
+    readonly contract: TestConvention;
+  };
+  readonly rungs: { readonly pinnedCoverage: number };
+  readonly facts: {
+    readonly trivialLiterals: readonly TrivialLiteral[];
+    readonly normalizationMethods: readonly string[];
+    readonly textScanExtensions: readonly string[];
+  };
   readonly guard: { readonly enabled: boolean; readonly base?: string; readonly subagents: boolean };
 }
+
+/** The extensions the text fallback scans in tracked files no plugin indexes (H2), in codepoint order. */
+export const DEFAULT_TEXT_SCAN_EXTENSIONS: readonly string[] = [
+  '.dart',
+  '.ex',
+  '.exs',
+  '.groovy',
+  '.kt',
+  '.kts',
+  '.php',
+  '.py',
+  '.rb',
+  '.rs',
+  '.scala',
+  '.swift',
+];
+
+/**
+ * A `normalizationMethods` entry: a method name, optionally qualified, with an optional trailing `*`.
+ * The same expression as the plugins' `METHOD_PATTERN` (`src/facts/fact-options.ts` of each official plugin); a test pins it.
+ */
+export const NORMALIZATION_METHOD_PATTERN = /^(?:[A-Za-z_][A-Za-z0-9_]*\.)?[A-Za-z_$][A-Za-z0-9_$]*\*?$/;
+
+const EXTENSION_PATTERN = /^\.[A-Za-z0-9]+$/;
+
+/**
+ * The spec 12.1 fact lists. A copy of the plugins' `DEFAULT_FACT_OPTIONS` (the domain cannot import a plugin);
+ * a test pins both to the `defaults` block of `packages/plugin-api/conformance/fact-vectors.json`.
+ */
+const DEFAULT_TRIVIAL_LITERALS: readonly TrivialLiteral[] = [0, 1, -1, null, true, false, ''];
+const DEFAULT_NORMALIZATION_METHODS: readonly string[] = [
+  'ToLower*',
+  'ToUpper*',
+  'Trim*',
+  'Normalize',
+  'toLowerCase',
+  'toUpperCase',
+  'trim',
+  'strings.ToLower',
+  'strings.TrimSpace',
+  'equalsIgnoreCase',
+];
 
 export const DEFAULT_DOMAIN_CONFIG: DomainConfig = {
   registry: 'docs/domain/contexts.yaml',
   coverage: { unowned: 'warn' },
   boundaries: { enforce: 'by-rung', blockingRungs: ['bounded', 'boring'] },
   rules: { idPattern: '^[A-Z][A-Z0-9]*-\\d+$', trackerPrefixes: [] },
-  tests: { ruleTraitKeys: ['Rule'] },
+  tests: {
+    ruleTraitKeys: ['Rule'],
+    characterization: {
+      annotations: ['Trait:Kind=Characterization', 'Tag:characterization'],
+      paths: ['**/Characterization/**'],
+      names: ['[characterization]'],
+    },
+    contract: {
+      annotations: ['Trait:Kind=Contract', 'Tag:contract'],
+      paths: ['**/Contract/**', '**/Contracts.Tests/**'],
+      names: ['[contract]'],
+    },
+  },
+  rungs: { pinnedCoverage: 0.8 },
+  facts: {
+    trivialLiterals: DEFAULT_TRIVIAL_LITERALS,
+    normalizationMethods: DEFAULT_NORMALIZATION_METHODS,
+    textScanExtensions: DEFAULT_TEXT_SCAN_EXTENSIONS,
+  },
   guard: { enabled: true, subagents: false },
 };
+
+/** The fact request's options (`indexCapabilities.factOptions`): the two lists the plugins' detectors read. */
+export function toFactDetectorOptions(config: DomainConfig): FactDetectorOptions {
+  return {
+    trivialLiterals: [...config.facts.trivialLiterals],
+    normalizationMethods: [...config.facts.normalizationMethods],
+  };
+}
+
+function isTrivialLiteral(value: unknown): value is TrivialLiteral {
+  return (
+    value === null ||
+    typeof value === 'string' ||
+    typeof value === 'boolean' ||
+    (typeof value === 'number' && Number.isFinite(value))
+  );
+}
 
 export interface ConfigProblem {
   readonly path: string;
@@ -122,6 +218,59 @@ export function resolveDomainConfig(raw: unknown): { readonly config: DomainConf
 
   const tests = section('tests');
   const ruleTraitKeys = stringArray(tests['ruleTraitKeys'], 'domain.tests.ruleTraitKeys', d.tests.ruleTraitKeys);
+  const convention = (key: 'characterization' | 'contract'): TestConvention => {
+    const fallback = d.tests[key];
+    const value = tests[key];
+    if (value === undefined) return fallback;
+    if (!isRecord(value)) {
+      bad(`domain.tests.${key}`, 'must be a mapping');
+      return fallback;
+    }
+    const path = `domain.tests.${key}`;
+    return {
+      annotations: stringArray(
+        value['annotations'],
+        `${path}.annotations`,
+        fallback.annotations,
+        (s) => parseAnnotationMatcher(s) !== undefined,
+        'matchers of the form Name, Name:value or Name:key=value',
+      ),
+      paths: stringArray(value['paths'], `${path}.paths`, fallback.paths),
+      names: stringArray(value['names'], `${path}.names`, fallback.names),
+    };
+  };
+  const characterization = convention('characterization');
+  const contract = convention('contract');
+
+  const rungs = section('rungs');
+  let pinnedCoverage = d.rungs.pinnedCoverage;
+  if (rungs['pinnedCoverage'] !== undefined) {
+    const v = rungs['pinnedCoverage'];
+    if (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1) pinnedCoverage = v;
+    else bad('domain.rungs.pinnedCoverage', 'must be a number from 0 to 1');
+  }
+
+  const facts = section('facts');
+  let trivialLiterals = d.facts.trivialLiterals;
+  if (facts['trivialLiterals'] !== undefined) {
+    const v = facts['trivialLiterals'];
+    if (Array.isArray(v) && v.every(isTrivialLiteral)) trivialLiterals = [...(v as TrivialLiteral[])];
+    else bad('domain.facts.trivialLiterals', 'must be an array of numbers, strings, booleans or null');
+  }
+  const normalizationMethods = stringArray(
+    facts['normalizationMethods'],
+    'domain.facts.normalizationMethods',
+    d.facts.normalizationMethods,
+    (s) => NORMALIZATION_METHOD_PATTERN.test(s),
+    `method names matching ${NORMALIZATION_METHOD_PATTERN.source}`,
+  );
+  const textScanExtensions = stringArray(
+    facts['textScanExtensions'],
+    'domain.facts.textScanExtensions',
+    d.facts.textScanExtensions,
+    (s) => EXTENSION_PATTERN.test(s),
+    `extensions matching ${EXTENSION_PATTERN.source}`,
+  ).map((ext) => ext.toLowerCase());
 
   const guard = section('guard');
   let enabled = d.guard.enabled;
@@ -146,7 +295,9 @@ export function resolveDomainConfig(raw: unknown): { readonly config: DomainConf
       coverage: { unowned },
       boundaries: { enforce, blockingRungs },
       rules: { idPattern, trackerPrefixes },
-      tests: { ruleTraitKeys },
+      tests: { ruleTraitKeys, characterization, contract },
+      rungs: { pinnedCoverage },
+      facts: { trivialLiterals, normalizationMethods, textScanExtensions },
       guard: { enabled, ...(base !== undefined ? { base } : {}), subagents },
     },
     problems,

@@ -1,6 +1,7 @@
 import type { FileIndex } from '@ctxo/cli/internal';
 import type { ParsedCard } from './card-parser.js';
 import { DEFAULT_DOMAIN_CONFIG, type DomainConfig } from './domain-config.js';
+import type { GlobMatcherFactory } from './ownership.js';
 import type { DomainRegistry } from './registry.js';
 
 /** Tracker-like keys: Jira, Linear and YouTrack ids such as `LEND-456`. */
@@ -27,6 +28,10 @@ export interface DiscoveryProposal {
   readonly trackerPrefixes: readonly string[];
   readonly ruleTraitKeys: readonly string[];
   readonly indexTests: readonly string[];
+  /** Characterization folders no `domain.tests.characterization.paths` glob covers, as `<folder>/**` (H17). */
+  readonly characterizationPaths: readonly string[];
+  /** Contract folders no `domain.tests.contract.paths` glob covers, as `<folder>/**` (H17). */
+  readonly contractPaths: readonly string[];
 }
 
 export interface DiscoveryInput {
@@ -44,6 +49,8 @@ export interface DiscoveryInput {
   readonly indexTests: readonly string[];
   /** The host's test-framework annotation names (`host.services.testFrameworkAnnotations`). */
   readonly testFrameworkAnnotations: readonly string[];
+  /** The host's glob matcher (`host.services.makeGlobMatcher`), for the configured test convention paths. */
+  readonly makeGlobMatcher: GlobMatcherFactory;
 }
 
 const CHARACTERIZATION_NAMES: ReadonlySet<string> = new Set(['Characterization']);
@@ -173,6 +180,16 @@ function folderCounts(files: readonly string[], names: ReadonlySet<string>, case
   return [...counts.entries()].map(([folder, n]) => ({ folder, files: n })).sort((a, b) => compare(a.folder, b.folder));
 }
 
+/** `<folder>/**` for each folder no configured glob covers; the probe path is `<folder>/x` (H17). */
+function uncoveredConventionPaths(folders: readonly FolderCount[], globs: readonly string[], makeMatcher: GlobMatcherFactory): string[] {
+  // The host matcher takes a mutable string[] (PF26): hand it a copy of the readonly list.
+  const covered = globs.length > 0 ? makeMatcher([...globs]) : () => false;
+  return folders
+    .filter((f) => !covered(`${f.folder}/x`))
+    .map((f) => `${f.folder}/**`)
+    .sort(compare);
+}
+
 /** Reads conventions from the repository (spec 10.9): tracker prefixes, test tag keys, test folders and doc folders. */
 export function discoverConventions(input: DiscoveryInput): { readonly evidence: DiscoveryEvidence; readonly proposal: DiscoveryProposal } {
   const idPattern = idRegExp(input.config.rules.idPattern);
@@ -203,6 +220,12 @@ export function discoverConventions(input: DiscoveryInput): { readonly evidence:
       traits.filter((t) => t.idLikeValues >= 1).map((t) => t.key),
     ),
     indexTests: sortedUnion(input.indexTests, uncovered.map((f) => f.folder)),
+    characterizationPaths: uncoveredConventionPaths(
+      evidence.characterizationFolders,
+      input.config.tests.characterization.paths,
+      input.makeGlobMatcher,
+    ),
+    contractPaths: uncoveredConventionPaths(evidence.contractFolders, input.config.tests.contract.paths, input.makeGlobMatcher),
   };
   return { evidence, proposal };
 }
@@ -252,11 +275,17 @@ export function formatDiscovery(evidence: DiscoveryEvidence, proposal: Discovery
   );
   folderParts.push(evidence.contractFolders.length > 0 ? `Contract: ${folderList(evidence.contractFolders)}` : 'no Contract folders');
   lines.push(row('Test folders', folderParts.join('; ')));
+  for (const path of proposal.characterizationPaths) lines.push(row('', `${path}   <- not covered by domain.tests.characterization.paths`));
+  for (const path of proposal.contractPaths) lines.push(row('', `${path}   <- not covered by domain.tests.contract.paths`));
   lines.push(row('Provenance folders', evidence.provenanceFolders.length > 0 ? folderList(evidence.provenanceFolders) : 'none'));
 
   lines.push('', 'Proposed config (.ctxo/config.yaml)');
   lines.push('  domain:', '    rules:', `      trackerPrefixes: ${flow(proposal.trackerPrefixes)}`);
   lines.push('    tests:', `      ruleTraitKeys: ${flow(proposal.ruleTraitKeys)}`);
+  if (proposal.characterizationPaths.length > 0) {
+    lines.push('      characterization:', `        paths: ${flow(proposal.characterizationPaths)}`);
+  }
+  if (proposal.contractPaths.length > 0) lines.push('      contract:', `        paths: ${flow(proposal.contractPaths)}`);
   lines.push('  index:', `    tests: ${flow(proposal.indexTests)}`);
   return lines.join('\n');
 }
@@ -270,6 +299,8 @@ export function proposalAddsSomething(proposal: DiscoveryProposal, config: Domai
   return (
     missing(proposal.trackerPrefixes, config.rules.trackerPrefixes) ||
     missing(proposal.ruleTraitKeys, config.tests.ruleTraitKeys) ||
-    missing(proposal.indexTests, indexTests)
+    missing(proposal.indexTests, indexTests) ||
+    missing(proposal.characterizationPaths, config.tests.characterization.paths) ||
+    missing(proposal.contractPaths, config.tests.contract.paths)
   );
 }
