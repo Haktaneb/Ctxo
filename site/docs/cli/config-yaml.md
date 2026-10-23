@@ -45,7 +45,16 @@ contextsView:             # candidate contexts, see `ctxo contexts`
   resolution: 1.0
   minCandidateFiles: 3
   technicalTerms: []
+domain:                   # read only when @ctxo/domain is installed
+  registry: docs/domain/contexts.yaml
+  coverage: { unowned: warn }
+  boundaries: { enforce: by-rung, blockingRungs: [bounded, boring] }
+  rules: { idPattern: "^[A-Z][A-Z0-9]*-\\d+$", trackerPrefixes: [] }
+  tests: { ruleTraitKeys: [Rule] }
+  guard: { enabled: true, subagents: false }
 ```
+
+The `domain:` block configures the opt-in [domain knowledge layer](/concepts/domain-knowledge): where the registry is, whether unowned files warn or fail, how boundary violations are enforced, the rule ID shape and tracker prefixes, the `Trait` keys that carry rule IDs, and the fold guard. See the [Config schema](/reference/config-schema#domain).
 
 The `cochange:` block sets the window and thresholds of the co-change matrix that `ctxo index` builds from git history. It is independent of `ctxo index --max-history`, which only controls how many commits each file keeps in its `intent[]`. `exclude` also removes files that `include` added.
 

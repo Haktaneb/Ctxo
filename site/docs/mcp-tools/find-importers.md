@@ -78,6 +78,10 @@ list of edge kinds per importer is in `edgeKinds`. In **transitive mode**, each
 hop appears once with a single `edgeKind` and a `depth` counter.
 :::
 
+### Named contexts
+
+With `@ctxo/domain` and a registry, each importer also carries `context`, the id of the one named context that owns its file. Absent for unowned and multiply owned files, and when there is no registry.
+
 ## When to use
 
 - **Rename / delete safety check** -- zero importers? Safe. Many? Use [`get_blast_radius`](/mcp-tools/get-blast-radius) for the risk score.

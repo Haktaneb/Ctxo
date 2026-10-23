@@ -141,6 +141,21 @@ ctxo contexts --json   # the full contexts-view.json
 
 Agents get the same view from `get_architectural_overlay(mode: "contexts")`, and one candidate in full with `candidate: <id>`.
 
+## Cards that go stale
+
+An agent changes the lending rules in code, and the card that describes them stays as it was. Name your bounded contexts in a registry, and Ctxo checks the structure, never the meaning: a context's code changed in the session without a card update or a `Domain-Unchanged` commit trailer, a rule ID that no card defines, a card link that no longer resolves, an edge that crosses a context boundary outside its contracts. The opt-in `@ctxo/domain` package adds the commands and a Claude Code guard; Ctxo never writes the cards.
+
+```shell
+ctxo install domain                       # the opt-in @ctxo/domain package
+ctxo init --domain                        # registry skeleton, fold guard, skill, domain config
+ctxo contexts-touched --since origin/main # which named contexts a branch changed, and which are resolved
+ctxo verify-domain --since origin/main    # CI gate: registry, cards, rule IDs, loader rules, boundaries
+ctxo domain rules --write                 # path-scoped rules that point the agent at the card
+ctxo domain discover                      # propose tracker prefixes and test conventions from the repo
+```
+
+See [Ctxo domain conventions v1](docs/features/domain-knowledge.md#ctxo-domain-conventions-v1) for the registry, the card template and the adoption ladder.
+
 ## Supported Languages
 
 | Language | Plugin | Tier | Notes |
@@ -156,6 +171,7 @@ Install via the CLI shortcut:
 ```bash
 ctxo install typescript go csharp   # syntax or full tier auto-detected
 ctxo install sql                    # T-SQL plugin (alias tsql)
+ctxo install domain                 # opt-in domain knowledge layer (@ctxo/domain)
 ctxo install java                   # installs syntax tier; adds full-tier analyzer when JRE 11+ detected
 ctxo install java --full-tier       # force full-tier analyzer install
 ctxo install java --syntax-only     # skip analyzer, syntax tier only

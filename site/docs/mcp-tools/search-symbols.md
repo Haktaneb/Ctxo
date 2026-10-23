@@ -63,6 +63,10 @@ Full-text search (typo-tolerant):
 Regex mode returns rows in insertion order with no ranking.
 :::
 
+### Named contexts
+
+With `@ctxo/domain` and a registry, each result also carries `context`, the id of the one named context that owns the symbol's file. It is absent for unowned and multiply owned files, and for every result when there is no registry.
+
 ## When to use
 
 - **Resolving a symbol id** -- required input for [`get_blast_radius`](/mcp-tools/get-blast-radius), [`get_why_context`](/mcp-tools/get-why-context), [`get_logic_slice`](/mcp-tools/get-logic-slice), [`find_importers`](/mcp-tools/find-importers), [`get_context_for_task`](/mcp-tools/get-context-for-task).

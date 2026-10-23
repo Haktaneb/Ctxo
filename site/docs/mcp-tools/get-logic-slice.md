@@ -41,6 +41,10 @@ truncated to fit a token budget. Supports four detail levels (L1-L4).
 }
 ```
 
+## Named contexts
+
+With `@ctxo/domain` and a registry, the root symbol (each root of a batch) also carries `context`, the id of the one named context that owns its file. Absent for unowned and multiply owned files, and when there is no registry.
+
 ## Annotations
 
 Symbols can carry `annotations` (C# attributes, the `columns` of a SQL table).

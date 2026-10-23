@@ -22,6 +22,7 @@ ctxo                       # Start MCP server (stdio)
 - `@ctxo/lang-csharp` - Roslyn plugin (attribute annotations; SQL edges at known call sites when `@ctxo/lang-sql` is installed)
 - `@ctxo/lang-java` - tree-sitter Java plugin (syntax tier built-in; full tier via `@ctxo/lang-java-analyzer` companion, requires JRE 11+)
 - `@ctxo/lang-sql` - T-SQL plugin for `.sql` files (protocol v2): tables, views, procedures, functions and their reads/writes/executes
+- `@ctxo/domain` - opt-in domain knowledge layer (ADR-018): named contexts, cards, the fold guard and the `verify-domain` CI gate; loaded by the CLI through `@ctxo/cli/internal`, shares one version with `@ctxo/cli`
 - `@ctxo/sql-extract` - zero-dependency T-SQL tokenizer and recognizers (a library, not a plugin; the one dependency plugins may take besides `@ctxo/plugin-api`)
 
 Language adapters ship as separate npm packages and are discovered by scanning the project `package.json` for `@ctxo/lang-*` or `ctxo-lang-*` dependencies.
@@ -54,6 +55,16 @@ Language adapters ship as separate npm packages and are discovered by scanning t
 - Finding unused code? -> find_dead_code
 - Safe to delete? -> find_importers
 - Preparing a context map? -> get_architectural_overlay(mode: "contexts")
+
+## Unreleased: domain knowledge layer, `@ctxo/domain` (#156, PR 2B)
+
+- Install: `ctxo install domain` (globally when the project has no `package.json`), then `ctxo init --domain`. Opt-in: without the package or a registry, no commands, fields or hooks, and the domain commands print a hint and exit 0 (a known domain command name without the package exits 1).
+- Registry `docs/domain/contexts.yaml`: contexts with `id`, `name`, `card`, `paths`, `rung` (fear, pinned, named, bounded, boring), `rulePrefix`, `contracts`; `unowned.allow`, `glossary`, `contextMap`. A card has five H2 headings (Language; Rules and invariants; Boundary contracts; Decisions; Open questions) and rules as `### LEND-03 title` with optional `Tests:`, `Code:` and `Untested:` lines.
+- Commands: `ctxo contexts-touched [--since <ref>] [--committed | --staged] [--json] [--check]`; `ctxo verify-domain [--since <ref>] [--boundaries by-rung|report] [--json]` (exit 0, 1 or 2; `--json` stdout is empty on exit 2 and with no registry); `ctxo domain rules --write | --check`; `ctxo domain discover [--json] [--write]`; `ctxo init --domain [--boundaries <mode>]` and `--only domain`.
+- Fold guard (Claude Code): `ctxo domain-guard-hook` on SessionStart, Stop and TaskCompleted blocks once when the session's commits changed a context without a card change; resolve with a card commit or the trailer `Domain-Unchanged: <id>[, <id>] (reason)`.
+- Config `domain:` in `.ctxo/config.yaml`: `registry`, `coverage.unowned` (warn | error), `boundaries.enforce` (by-rung | report) and `blockingRungs`, `rules.idPattern` and `trackerPrefixes`, `tests.ruleTraitKeys`, `guard.enabled`, `guard.base`, `guard.subagents`.
+- Additive fields with `@ctxo/domain` and a registry: `context` on search_symbols, get_blast_radius, find_importers, get_logic_slice and get_pr_impact entries; `contextBoundaryViolations` on get_pr_impact; `contextDrift` on get_why_context. `ctxo index` writes `.ctxo/index/domain/`.
+- Doctor: `domain_registry`, `domain_agent_setup`, `domain_conventions`, and `install_copies` (MCP entry and hooks start the same copy). Feature doc: docs/features/domain-knowledge.md ("Ctxo domain conventions v1").
 
 ## Unreleased: language parity for TypeScript, Java and Go (#156, PR 1C)
 

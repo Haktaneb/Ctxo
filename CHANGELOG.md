@@ -6,6 +6,80 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (nine packages today). Per-pac
 
 ## [Unreleased]
 
+**Domain knowledge layer: `@ctxo/domain` (#156 Phase 2, PR 2B).**
+
+### Added (domain knowledge layer)
+
+- `@ctxo/domain`, an opt-in package that lets a team name its bounded contexts. A registry
+  (`docs/domain/contexts.yaml`) gives each context an ID, paths, a markdown card, a rung and contracts.
+  Without the package, the core is unchanged (#156, [ADR-018](docs/architecture/ADR/adr-018-domain-knowledge-layer.md)).
+- `ctxo contexts-touched [--since <ref>] [--committed | --staged] [--json] [--check]`: which named
+  contexts a set of changes touched, and whether each has a card change or a `Domain-Unchanged` trailer
+  (statuses `card-changed`, `acknowledged`, `unresolved`, `no-card`).
+- The domain fold guard, `ctxo domain-guard-hook` (hidden), a Claude Code hook on `SessionStart`,
+  `Stop` and `TaskCompleted` (`SubagentStop` with `domain.guard.subagents`): it judges only the commits
+  of the current session, blocks once per fingerprint, and fails open. The `Domain-Unchanged: <id>
+  [(reason)]` commit trailer acknowledges a change that left behaviour as it was.
+- `ctxo verify-domain [--since <ref>] [--boundaries by-rung|report] [--json]`: the CI gate with eleven
+  checks (registry, cards, path globs, ownership, card headings, rule IDs and test links, card links,
+  generated loader rules, the context map, boundaries, and the fold since a ref). Exit 0, 1 or 2; with
+  `--json` stdout stays empty on exit 2 and when there is no registry.
+- `ctxo domain rules --write | --check`: generated path-scoped loader rules per context
+  (`.claude/rules/ctxo-context-<id>.md`, and `.cursor/rules/ctxo-context-<id>.mdc` when `.cursor/`
+  exists). `--check` fails on missing, outdated, stale and blocked files.
+- `ctxo domain discover [--json] [--write]`: proposes tracker prefixes, rule trait keys and test
+  folders from the repository; `ctxo init --domain` shows the proposal and asks for confirmation.
+- `ctxo init --domain`, `--boundaries <by-rung|report>` and the `domain` part for `--only` and
+  `--skip`: the `domain:` config defaults, the registry skeleton, the guard hooks and the
+  `ctxo-domain-fold` skill (Claude Code and Cursor).
+- Boundaries and drift by named context: `ctxo index` writes `.ctxo/index/domain/` (`contexts.json`,
+  `boundaries.json`, a rotating `history/` of per-commit metrics), each artifact with a `ctxoArtifact`
+  marker that the index reader skips.
+- Additive fields, present only with `@ctxo/domain` and a registry: `context` on `search_symbols`,
+  `get_blast_radius`, `find_importers`, `get_logic_slice` and `get_pr_impact` entries,
+  `contextBoundaryViolations` on `get_pr_impact`, and `contextDrift` on `get_why_context`.
+- Three doctor checks (`domain_registry`, `domain_agent_setup`, `domain_conventions`) and the
+  `install_copies` check, which warns when the MCP entries and the hooks start different copies of ctxo.
+- `ctxo install domain`, and `ctxo install` without a `package.json`, which installs globally and says
+  so; `ctxo init` run from a global install writes MCP entries that call the global `ctxo` binary
+  instead of `npx -y @ctxo/cli` (only ctxo's own default entry is replaced).
+- `@ctxo/cli/internal`, the type-only internal API that `@ctxo/domain` builds against (plus
+  `createModuleHost`); the one runtime function. `@ctxo/cli` and `@ctxo/domain` share one version
+  (a changesets `fixed` group).
+- A `domain:` section in `.ctxo/config.yaml` (`registry`, `coverage`, `boundaries`, `rules`, `tests`,
+  `guard`), and the documented "Ctxo domain conventions v1" (JSON Schema, card template, rule ID
+  rules, trailer, adoption ladder) in `docs/features/domain-knowledge.md`.
+- Core-visible additions the module needs, each inert without it: `CtxoHostServices.testFrameworkAnnotations`
+  (the test-framework annotation list, one source), `GitRefs.localBranches` and `remoteBranches`
+  (separate refs, so discovery counts a branch once), an enrich guard that rejects values JSON cannot
+  represent (a `Date`, a `Map`, a `Promise`) and drops the enrichment with one warning, and
+  `JsonIndexWriter.deleteEntryFile`, which refuses to delete a `ctxoArtifact` JSON file.
+- CI: the domain acceptance tests (`pnpm --filter @ctxo/domain test:e2e`) run in `e2e-tests` and, with
+  `CTXO_REQUIRE_DOTNET=1`, in `dotnet-tests` (a C# run that falls back to the syntax tier fails there
+  instead of skipping). The e2e job timeout is 15 minutes.
+
+### Changed (domain knowledge layer)
+
+- `packages/cli/src/index.ts` is a thin argv router; the MCP wiring moved to `mcp-server.ts` (the MCP
+  composition root). `ctxo domain-guard-hook` takes a fast route that loads neither the MCP SDK nor the
+  tool handlers.
+- `ctxo --help` lists the domain commands when `@ctxo/domain` is installed and ends with one install
+  hint line when it is not; `ctxo version` shows a `Modules:` line for an installed module. A known
+  domain command name without the package (`verify-domain`, `contexts-touched`, `domain`) prints an
+  install hint and exits 1, so CI never passes silently; `ctxo domain-guard-hook` exits 0 without output.
+- `get_why_context` responses gain the `_meta` envelope the other tools already carry.
+- `ctxo install <name>` with an unknown name still exits 1; its message now lists `domain` among the
+  known names.
+- The root `.npmrc` sets `hoist-workspace-packages=false`, so a workspace package is never resolved
+  through pnpm's hidden hoist; `@ctxo/lang-java` declares `@ctxo/lang-java-analyzer` as a devDependency
+  for the test that resolves it.
+- The CLI tarball limit in the release-packaging test is 2150 KB (it was 2100 KB).
+- MCP tool descriptions of `search_symbols`, `get_blast_radius`, `find_importers`, `get_logic_slice`,
+  `get_pr_impact` and `get_why_context` name the new additive field.
+- `ctxo domain rules --check` fails on blocked files (a hand-written file at a generated path) as well
+  as missing, outdated and stale ones, and prints the blocked advice instead of the "run --write" hint
+  when only blocked files exist.
+
 **Language parity for TypeScript, Java and Go (#156 Phase 1, PR 1C).**
 
 ### Added (language parity)

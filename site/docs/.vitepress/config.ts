@@ -102,6 +102,7 @@ export default defineConfig({
             { text: 'Architectural Intelligence', link: '/concepts/architectural-intelligence' },
             { text: 'Masking Pipeline', link: '/concepts/masking' },
             { text: 'Safe-Edit Guard', link: '/concepts/safe-edit-guard' },
+            { text: 'Domain Knowledge Layer', link: '/concepts/domain-knowledge' },
           ],
         },
         {
@@ -121,6 +122,7 @@ export default defineConfig({
             { text: 'ctxo blast-radius', link: '/cli/blast-radius' },
             { text: 'ctxo gate', link: '/cli/gate' },
             { text: 'ctxo contexts', link: '/cli/contexts' },
+            { text: 'Domain commands', link: '/cli/domain' },
             { text: 'config.yaml reference', link: '/cli/config-yaml' },
             { text: 'Environment variables', link: '/cli/env-vars' },
           ],

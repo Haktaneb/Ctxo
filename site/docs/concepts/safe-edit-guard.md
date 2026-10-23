@@ -143,6 +143,10 @@ Cursor gets meaningful protection through skills (the model reads `ctxo-safe-edi
 before editing) and rules, but the edit cannot be blocked deterministically the
 way it can in Claude Code.
 
+## The domain fold guard
+
+A second, separate guard comes with the opt-in `@ctxo/domain` package: `ctxo domain-guard-hook` blocks a Claude Code session once when its commits changed a named context's code without a card update or a `Domain-Unchanged` trailer. It judges committed changes of the current session only, never uncommitted work, and fails open. It is independent of the pre-edit guard above. See the [Domain Knowledge Layer](/concepts/domain-knowledge).
+
 ## Setup
 
 ```shell

@@ -65,6 +65,23 @@ contextsView:             # candidate contexts (file level)
   resolution: 1.0
   minCandidateFiles: 3
   technicalTerms: []      # replaces the default list
+
+domain:                   # read only when @ctxo/domain is installed
+  registry: docs/domain/contexts.yaml
+  coverage:
+    unowned: warn         # warn | error
+  boundaries:
+    enforce: by-rung      # by-rung | report
+    blockingRungs: [bounded, boring]
+  rules:
+    idPattern: "^[A-Z][A-Z0-9]*-\\d+$"
+    trackerPrefixes: []
+  tests:
+    ruleTraitKeys: [Rule]
+  guard:
+    enabled: true
+    # base: origin/main   # optional
+    subagents: false
 ```
 
 ## Fields
@@ -103,6 +120,20 @@ contextsView:             # candidate contexts (file level)
 | `contextsView.resolution` | number > 0 | `1.0` | Louvain resolution for the file graph. |
 | `contextsView.minCandidateFiles` | integer >= 1 | `3` | Candidates with fewer files fold into the neighbour with the strongest weight. |
 | `contextsView.technicalTerms` | string[] | built-in list | Words dropped from candidate terms (`Service`, `Repository`, `Controller`, `Handler`, `Manager`, `Dto`, `Impl`, `Async`). Replaces the default list. |
+| `domain.registry` | string | `docs/domain/contexts.yaml` | Path of the context registry, relative to the repository root. |
+| `domain.coverage.unowned` | `warn` \| `error` | `warn` | Severity of `verify-domain` check 4b: indexed files that belong to no context and are not in `unowned.allow`. |
+| `domain.boundaries.enforce` | `by-rung` \| `report` | `by-rung` | `by-rung`: an edge outside the contracts is an error when either context's rung is in `blockingRungs`, else a warning. `report`: always a warning. |
+| `domain.boundaries.blockingRungs` | string[] of rungs | `[bounded, boring]` | Rungs (`fear`, `pinned`, `named`, `bounded`, `boring`) that make a boundary violation an error in `by-rung` mode. |
+| `domain.rules.idPattern` | regular expression | `^[A-Z][A-Z0-9]*-\d+$` | Shape of a rule ID in a card. |
+| `domain.rules.trackerPrefixes` | string[] (`^[A-Z][A-Z0-9]*$`) | `[]` | Issue-tracker prefixes. A plain mention of an ID with such a prefix never links to a rule or raises an unknown-ID error; only structured references count. |
+| `domain.tests.ruleTraitKeys` | string[] | `[Rule]` | `Trait` annotation keys whose value is a rule ID, for example `[Trait("Rule", "LEND-03")]`. |
+| `domain.guard.enabled` | boolean | `true` | `false` turns the domain fold guard off. |
+| `domain.guard.base` | string (a ref) | unset | Base ref of the branch range for the guard and for `contexts-touched` without `--since`. Else the merge base with `origin/HEAD`, else `main` or `master`. |
+| `domain.guard.subagents` | boolean | `false` | Also run the guard on `SubagentStop`. |
+
+### domain
+
+The `domain` section is read by [`@ctxo/domain`](/concepts/domain-knowledge); without the package it is ignored. Each invalid key falls back to its default and is reported by [`ctxo verify-domain`](/cli/domain) (check 1) and by `ctxo doctor` (`domain_registry`), not by the core config check. `ctxo init --domain` writes the defaults and never changes an existing value. `ctxo domain discover --write` adds `domain.rules.trackerPrefixes`, `domain.tests.ruleTraitKeys` and `index.tests` values and removes none.
 
 ### cochange
 
