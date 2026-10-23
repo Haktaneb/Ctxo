@@ -189,6 +189,13 @@ describe('resolveDomainConfig', () => {
     expect(problems).toEqual([]);
     expect(config.facts.textScanExtensions).toEqual(['.py']);
   });
+
+  it('extensions are deduplicated after lower-casing, first seen first', () => {
+    const { config, problems } = resolveDomainConfig({ facts: { textScanExtensions: ['.rb', '.py', '.PY', '.Rb', '.kt'] } });
+
+    expect(problems).toEqual([]);
+    expect(config.facts.textScanExtensions).toEqual(['.rb', '.py', '.kt']);
+  });
 });
 
 describe('fact defaults stay in line with the plugins (W6)', () => {

@@ -95,7 +95,7 @@ async function discover(args: readonly string[], host: CtxoHost, ctx: ModuleComm
     const { evidence, proposal } = discoverConventions(input);
 
     if (json) process.stdout.write(`${JSON.stringify({ evidence, proposal }, null, 2)}\n`);
-    else console.error(formatDiscovery(evidence, proposal));
+    else console.error(formatDiscovery(evidence, proposal, config));
 
     if (!write) {
       if (proposalAddsSomething(proposal, config, input.indexTests)) {

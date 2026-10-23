@@ -256,7 +256,7 @@ describe('formatDiscovery', () => {
         trackedFiles: ['docs/adr/a.md'],
       }),
     );
-    const text = formatDiscovery(evidence, proposal);
+    const text = formatDiscovery(evidence, proposal, DEFAULT_DOMAIN_CONFIG);
     for (const label of ['Rule IDs', 'card prefixes:', 'tracker-like keys:', 'Test tagging', 'Test folders', 'Provenance folders', 'Proposed config']) {
       expect(text).toContain(label);
     }
@@ -273,12 +273,27 @@ describe('formatDiscovery', () => {
     const { evidence, proposal } = discoverConventions(
       input({ trackedFiles: ['tests/Contracts/ChargeTests.cs', 'src/Golden/Characterization/A.cs'] }),
     );
-    const lines = formatDiscovery(evidence, proposal).split('\n');
+    const lines = formatDiscovery(evidence, proposal, DEFAULT_DOMAIN_CONFIG).split('\n');
     const at = lines.findIndex((line) => line.startsWith('Test folders'));
     expect(lines[at + 1]).toBe(`${' '.repeat(22)}tests/Contracts/**   <- not covered by domain.tests.contract.paths`);
     expect(lines.some((line) => line.includes('<- not covered by domain.tests.characterization.paths'))).toBe(false);
     expect(lines).toContain('      contract:');
-    expect(lines).toContain('        paths: [tests/Contracts/**]');
+    // The configured globs plus the new ones: the list --write writes, so a hand-pasted block keeps the defaults.
+    expect(lines).toContain('        paths: [**/Contract/**, **/Contracts.Tests/**, tests/Contracts/**]');
+    expect(lines.some((line) => line.trim() === 'characterization:')).toBe(false);
+  });
+
+  it('prints the configured characterization globs with the new ones, in the order --write keeps', () => {
+    const config = {
+      ...DEFAULT_DOMAIN_CONFIG,
+      tests: {
+        ...DEFAULT_DOMAIN_CONFIG.tests,
+        characterization: { ...DEFAULT_DOMAIN_CONFIG.tests.characterization, paths: ['zz/**', 'golden/**'] },
+      },
+    };
+    const { evidence, proposal } = discoverConventions(input({ config, trackedFiles: ['src/Characterization/B.cs'] }));
+    const lines = formatDiscovery(evidence, proposal, config).split('\n');
+    expect(lines).toContain('        paths: [zz/**, golden/**, src/Characterization/**]');
   });
 });
 

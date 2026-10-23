@@ -79,6 +79,21 @@ describe('register', () => {
     }
   });
 
+  it('register does not load the config; the fact request loads it once, on first use', async () => {
+    const host = createModuleHost({ cliVersion: domainVersion(), mode: 'cli', projectRoot: process.cwd() });
+    const loadConfig = vi.fn(host.services.loadConfig);
+
+    const registration = await register({ ...host, services: { ...host.services, loadConfig } });
+
+    // Commands and the hook route register the module but never read indexCapabilities.
+    expect(loadConfig).not.toHaveBeenCalled();
+    const first = registration?.indexCapabilities;
+    const second = registration?.indexCapabilities;
+    expect(loadConfig).toHaveBeenCalledTimes(1);
+    expect(second).toBe(first);
+    expect(first?.facts).toBe(true);
+  });
+
   it('register warns and resolves undefined when the minors differ', async () => {
     const host = createModuleHost({ cliVersion: '0.0.0', mode: 'cli', projectRoot: process.cwd() });
     const warn = vi.fn();

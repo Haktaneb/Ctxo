@@ -1,4 +1,4 @@
-import type { CtxoHost, CtxoModuleRegister } from '@ctxo/cli/internal';
+import type { CtxoHost, CtxoModuleRegister, FactDetectorOptions } from '@ctxo/cli/internal';
 import { contextsTouchedCommand } from './commands/contexts-touched-command.js';
 import { domainCommand } from './commands/domain-command.js';
 import { DEFAULT_DOMAIN_CONFIG, resolveDomainConfig, toFactDetectorOptions, type DomainConfig } from './core/domain-config.js';
@@ -15,11 +15,12 @@ import { taskContextReservation } from './mcp/graph-enrichers.js';
 import { DOMAIN_PACKAGE, domainVersion, sameMinor } from './version.js';
 
 /**
- * The domain config at register time, for the fact request. Silent on purpose (W7): the hook route runs
- * `register` and must keep stderr empty, and config problems are reported by the index pass and doctor.
- * Any failure gives the defaults.
+ * The domain config for the fact request. Read only when the CLI asks for `indexCapabilities` (`ctxo index`,
+ * `ctxo watch`), never at register time, so commands and the hook route do not read the config a second
+ * time (the CLI's `loadConfig` logs its own warnings). Silent otherwise (W7): config problems are reported
+ * by the index pass and doctor. Any failure gives the defaults.
  */
-function registrationConfig(host: CtxoHost): DomainConfig {
+function factRequestConfig(host: CtxoHost): DomainConfig {
   try {
     const loaded = host.services.loadConfig(host.ctxoRoot);
     return resolveDomainConfig((loaded.config as Record<string, unknown>)['domain']).config;
@@ -45,9 +46,14 @@ export const register: CtxoModuleRegister = async (host) => {
   }
   // One state for the enrichers, the reservation, the tools and the scope; it does no I/O until a first load (P19).
   const state = createDomainState(host);
+  let capabilities: { readonly facts: true; readonly factOptions: FactDetectorOptions } | undefined;
   return {
     id: 'domain',
-    indexCapabilities: { facts: true, factOptions: toFactDetectorOptions(registrationConfig(host)) },
+    // Lazy and read once: the config is loaded on the first fact request only.
+    get indexCapabilities() {
+      capabilities ??= { facts: true, factOptions: toFactDetectorOptions(factRequestConfig(host)) };
+      return capabilities;
+    },
     indexPass: domainIndexPass(host),
     registerCommands(registrar) {
       registrar.registerCommand(contextsTouchedCommand(host));

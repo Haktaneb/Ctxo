@@ -235,8 +235,8 @@ const row = (label: string, value: string): string => `${label.padEnd(LABEL_WIDT
 const folderList = (folders: readonly FolderCount[]): string => folders.map((f) => `${f.folder} (${f.files})`).join(', ');
 const flow = (values: readonly string[]): string => `[${values.join(', ')}]`;
 
-/** The human report in the spec 10.9 layout, followed by the proposed config. */
-export function formatDiscovery(evidence: DiscoveryEvidence, proposal: DiscoveryProposal): string {
+/** The human report in the spec 10.9 layout, followed by the proposed config; `config` is the resolved domain config. */
+export function formatDiscovery(evidence: DiscoveryEvidence, proposal: DiscoveryProposal, config: DomainConfig): string {
   const lines: string[] = ['Rule IDs'];
   lines.push(
     row(
@@ -282,10 +282,15 @@ export function formatDiscovery(evidence: DiscoveryEvidence, proposal: Discovery
   lines.push('', 'Proposed config (.ctxo/config.yaml)');
   lines.push('  domain:', '    rules:', `      trackerPrefixes: ${flow(proposal.trackerPrefixes)}`);
   lines.push('    tests:', `      ruleTraitKeys: ${flow(proposal.ruleTraitKeys)}`);
+  // The configured globs first, then the new ones: the list `--write` leaves, so a hand-pasted block keeps the defaults.
+  const withConfigured = (configured: readonly string[], added: readonly string[]): string[] => [...new Set([...configured, ...added])];
   if (proposal.characterizationPaths.length > 0) {
-    lines.push('      characterization:', `        paths: ${flow(proposal.characterizationPaths)}`);
+    const paths = withConfigured(config.tests.characterization.paths, proposal.characterizationPaths);
+    lines.push('      characterization:', `        paths: ${flow(paths)}`);
   }
-  if (proposal.contractPaths.length > 0) lines.push('      contract:', `        paths: ${flow(proposal.contractPaths)}`);
+  if (proposal.contractPaths.length > 0) {
+    lines.push('      contract:', `        paths: ${flow(withConfigured(config.tests.contract.paths, proposal.contractPaths))}`);
+  }
   lines.push('  index:', `    tests: ${flow(proposal.indexTests)}`);
   return lines.join('\n');
 }

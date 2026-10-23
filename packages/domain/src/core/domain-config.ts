@@ -264,13 +264,18 @@ export function resolveDomainConfig(raw: unknown): { readonly config: DomainConf
     (s) => NORMALIZATION_METHOD_PATTERN.test(s),
     `method names matching ${NORMALIZATION_METHOD_PATTERN.source}`,
   );
-  const textScanExtensions = stringArray(
-    facts['textScanExtensions'],
-    'domain.facts.textScanExtensions',
-    d.facts.textScanExtensions,
-    (s) => EXTENSION_PATTERN.test(s),
-    `extensions matching ${EXTENSION_PATTERN.source}`,
-  ).map((ext) => ext.toLowerCase());
+  // Lower-cased, then deduplicated in first-seen order.
+  const textScanExtensions = [
+    ...new Set(
+      stringArray(
+        facts['textScanExtensions'],
+        'domain.facts.textScanExtensions',
+        d.facts.textScanExtensions,
+        (s) => EXTENSION_PATTERN.test(s),
+        `extensions matching ${EXTENSION_PATTERN.source}`,
+      ).map((ext) => ext.toLowerCase()),
+    ),
+  ];
 
   const guard = section('guard');
   let enabled = d.guard.enabled;
