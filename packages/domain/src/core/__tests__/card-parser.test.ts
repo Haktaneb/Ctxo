@@ -86,6 +86,16 @@ describe('card parser', () => {
     ]);
   });
 
+  it('collects both targets of a nested image link and keeps balanced parentheses', () => {
+    const text = ['[![badge](img.svg)](target.md)', '[x](a_(b).md) and [y](plain.md)'].join('\n');
+    expect(parseCard(text).links).toEqual([
+      { target: 'img.svg', line: 1 },
+      { target: 'target.md', line: 1 },
+      { target: 'a_(b).md', line: 2 },
+      { target: 'plain.md', line: 2 },
+    ]);
+  });
+
   it('CRLF and a BOM parse like LF', () => {
     const lf = parseCard(SPEC_CARD);
     const crlf = parseCard('﻿' + SPEC_CARD.replace(/\n/g, '\r\n'));

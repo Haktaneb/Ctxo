@@ -37,7 +37,9 @@ const RULES_H2 = 'Rules and invariants';
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 const ATX_HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
 const REF_DEFINITION = /^\s{0,3}\[[^\]]+\]:\s*(\S+)/;
-const INLINE_LINK = /!?\[[^\]]*\]\(\s*(<[^>]*>|[^\s)]*)/g;
+// Scans for `](` so a link wrapping an image (`[![alt](img)](target)`) yields both targets; an unbracketed
+// target may hold one level of balanced parentheses (`a_(b).md`).
+const INLINE_LINK = /\]\(\s*(<[^>]*>|(?:[^\s()]|\([^\s()]*\))*)/g;
 const CODE_SPAN = /(`+)[\s\S]*?\1/g;
 
 interface Line {
