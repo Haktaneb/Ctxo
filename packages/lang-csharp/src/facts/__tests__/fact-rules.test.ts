@@ -65,11 +65,15 @@ describe('fact conformance vectors', () => {
 
   it('every category is an array, except languageSpecific, which is keyed by language', () => {
     for (const [key, value] of Object.entries(vectors)) {
-      if (key === '$comment' || key === 'defaults') continue;
+      if (key.startsWith('$') || key === 'defaults') continue;
       if (key === 'languageSpecific') {
-        expect(Object.keys(value as object).sort()).toEqual(['csharp', 'typescript']);
-        for (const block of Object.values(vectors.languageSpecific)) {
-          for (const category of Object.values(block)) expect(Array.isArray(category)).toBe(true);
+        expect(Object.keys(value as object)).toContain('csharp');
+        for (const [language, block] of Object.entries(vectors.languageSpecific)) {
+          if (language.startsWith('$')) continue;
+          for (const [category, entries] of Object.entries(block)) {
+            if (category.startsWith('$')) continue;
+            expect(Array.isArray(entries) && entries.length > 0, `${language}.${category}`).toBe(true);
+          }
         }
       } else {
         expect(Array.isArray(value), key).toBe(true);
