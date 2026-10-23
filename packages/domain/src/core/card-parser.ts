@@ -101,8 +101,8 @@ const LANGUAGE_H2 = 'Language';
 const CONTRACTS_H2 = 'Boundary contracts';
 const DECISIONS_H2 = 'Decisions';
 const OPEN_QUESTIONS_H2 = 'Open questions';
-const LIST_ITEM = /^ {0,3}[-*+][ \t]+(.*)$/;
-const CONTINUATION = /^ {2}/;
+// A list marker line at any indent; a bare marker (`-`) opens an empty item that continuation lines can fill.
+const LIST_MARKER = /^[ \t]*[-*+](?:[ \t]+(.*))?$/;
 const TERM_ITEM = /^\*\*(.+?)\*\*(.*)$/;
 const CONTEXT_PREFIX = /^\(context:[ \t]*([^\s()]+)[ \t]*\)/;
 const DECISION_ITEM = /^(\d{4})-(\d{2})-(\d{2})[ \t]*:[ \t]*(.*)$/;
@@ -291,14 +291,34 @@ function collectSections(lines: readonly Line[]): SectionRange[] {
   return sections;
 }
 
+/** Width of the leading whitespace; a tab advances to the next multiple of four columns. */
+function indentOf(text: string): number {
+  let width = 0;
+  for (const char of text) {
+    if (char === ' ') width++;
+    else if (char === '\t') width += 4 - (width % 4);
+    else break;
+  }
+  return width;
+}
+
+interface ListScan {
+  readonly items: CardItem[];
+  /** True when the range holds at least one item marker line, even one that stayed empty. */
+  readonly sawMarker: boolean;
+}
+
 /**
- * List items in the lines `[start, end)`: `- `, `* ` or `+ ` with up to three spaces of indent. Following non-blank
- * lines indented by at least two spaces continue the item (joined with one space); a blank line, another item, a
- * heading, a fence or an unindented line ends it.
+ * List items in the lines `[start, end)`. An item starts at a `-`, `*` or `+` marker indented by at most three
+ * columns. A following non-blank line continues the item (joined with one space, text as written) when it is
+ * indented by at least two columns, except that a marker line less than two columns deeper than the item's own
+ * marker starts a new item: a nested list (two or more columns deeper) folds into its parent, links and refs
+ * included. A blank line, a heading, a fence or an unindented line ends the item. Items left empty are dropped.
  */
-function listItems(lines: readonly Line[], start: number, end: number): CardItem[] {
+function scanList(lines: readonly Line[], start: number, end: number): ListScan {
   const items: CardItem[] = [];
-  let current: { parts: string[]; line: number } | undefined;
+  let sawMarker = false;
+  let current: { parts: string[]; line: number; indent: number } | undefined;
   const flush = (): void => {
     if (current) {
       const text = current.parts.filter((part) => part !== '').join(' ');
@@ -312,18 +332,25 @@ function listItems(lines: readonly Line[], start: number, end: number): CardItem
       flush();
       continue;
     }
-    const item = LIST_ITEM.exec(line.text);
-    if (item) {
+    const indent = indentOf(line.text);
+    const marker = LIST_MARKER.exec(line.text);
+    const startsItem = marker !== null && indent <= 3 && (!current || indent < current.indent + 2);
+    if (startsItem) {
       flush();
-      current = { parts: [item[1]!.trim()], line: line.number };
-    } else if (current && CONTINUATION.test(line.text)) {
+      sawMarker = true;
+      current = { parts: [(marker[1] ?? '').trim()], line: line.number, indent };
+    } else if (current && indent >= 2) {
       current.parts.push(line.text.trim());
     } else {
       flush();
     }
   }
   flush();
-  return items;
+  return { items, sawMarker };
+}
+
+function listItems(lines: readonly Line[], start: number, end: number): CardItem[] {
+  return scanList(lines, start, end).items;
 }
 
 function parseTerm(item: CardItem, glossary: boolean): GlossaryItem | undefined {
@@ -348,7 +375,10 @@ function inside(position: number, ranges: readonly (readonly [number, number])[]
   return ranges.some(([start, end]) => position >= start && position < end);
 }
 
-/** Inline links outside code spans, then bare URLs and `#123` references outside link targets, in text order. */
+/**
+ * Inline links outside code spans, then bare URLs and `#123` references outside link targets and the labels of
+ * non-image links, in text order, each value once.
+ */
 function decisionRefs(text: string): { links: CardDecisionLink[]; externalRefs: string[] } {
   const stripped = text.replace(CODE_SPAN, (span) => ' '.repeat(span.length));
   const links: CardDecisionLink[] = [];
@@ -358,6 +388,7 @@ function decisionRefs(text: string): { links: CardDecisionLink[]; externalRefs: 
     const labelEnd = labelStart + match[2]!.length;
     targets.push([labelEnd + 1, match.index + match[0].length]);
     if (match[1] === '!') continue;
+    targets.push([labelStart, labelEnd]);
     const target = unwrapTarget(match[3]!);
     if (target) links.push({ label: text.slice(labelStart, labelEnd).trim(), target });
   }
@@ -375,7 +406,7 @@ function decisionRefs(text: string): { links: CardDecisionLink[]; externalRefs: 
     found.push({ index: match.index, value: match[0] });
   }
   found.sort((a, b) => a.index - b.index);
-  return { links, externalRefs: found.map((ref) => ref.value) };
+  return { links, externalRefs: [...new Set(found.map((ref) => ref.value))] };
 }
 
 function parseDecision(item: CardItem): CardDecision | undefined {
@@ -396,12 +427,10 @@ function openQuestionsOf(lines: readonly Line[], sections: readonly SectionRange
   const questions: CardItem[] = [];
   for (const section of sections) {
     if (section.heading !== OPEN_QUESTIONS_H2) continue;
-    const items = listItems(lines, section.start, section.end);
-    if (items.length > 0) {
-      questions.push(...items);
-      continue;
-    }
-    if (!section.text) continue;
+    const { items, sawMarker } = scanList(lines, section.start, section.end);
+    questions.push(...items);
+    // The whole section is one question only when it has no list at all (an empty `- ` is still a list).
+    if (sawMarker || !section.text) continue;
     let first = section.start;
     while (lines[first]!.text.trim() === '') first++;
     questions.push({ text: section.text, line: lines[first]!.number });

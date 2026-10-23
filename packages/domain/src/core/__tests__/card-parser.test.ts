@@ -377,6 +377,77 @@ describe('card parser', () => {
     expect(card.openQuestions).toEqual([{ text: '```\n- fenced\n```', line: 10 }]);
   });
 
+  it('a nested decision item at 2 or 4 spaces folds into its parent with its links and refs', () => {
+    for (const indent of ['  ', '    ']) {
+      const text = ['## Decisions', '- 2026-09-12: Raised.', `${indent}- see [spec](a.md), #9`, '- 2026-10-01: Next.'].join('\n');
+      expect(parseCard(text).decisions).toEqual([
+        { date: '2026-09-12', text: 'Raised. - see [spec](a.md), #9', line: 2, links: [{ label: 'spec', target: 'a.md' }], externalRefs: ['#9'] },
+        { date: '2026-10-01', text: 'Next.', line: 4, links: [], externalRefs: [] },
+      ]);
+    }
+  });
+
+  it('a nested open question at 2 or 4 spaces folds into its parent; a 1-space item is a sibling', () => {
+    const text = ['## Open questions', '- one', '  - detail', '- two', '    - deeper', '- three', ' - sibling', '   - three deep'].join('\n');
+    expect(parseCard(text).openQuestions).toEqual([
+      { text: 'one - detail', line: 2 },
+      { text: 'two - deeper', line: 4 },
+      { text: 'three', line: 6 },
+      { text: 'sibling - three deep', line: 7 },
+    ]);
+  });
+
+  it('a nested glossary item folds into its parent term', () => {
+    const text = ['- **Loan** (context: lending): lent', '  - **Sub**: x', '- **Fine**: owed'].join('\n');
+    expect(parseGlossary(text)).toEqual([
+      { term: 'Loan', context: 'lending', definition: 'lent - **Sub**: x', line: 1 },
+      { term: 'Fine', definition: 'owed', line: 3 },
+    ]);
+  });
+
+  it('a nested list in terms folds into the parent term', () => {
+    const text = ['## Language', '- **Loan**: lent copy', '  - **Renewal**: extends a loan', '    - plain detail'].join('\n');
+    expect(parseCard(text).terms).toEqual([{ term: 'Loan', definition: 'lent copy - **Renewal**: extends a loan - plain detail', line: 2 }]);
+  });
+
+  it('link labels give no external refs', () => {
+    const text = ['## Decisions', '- 2026-09-12: [https://a.com/x](https://a.com/x) and [#12](https://b.com/y) but ![#13](i.png)'].join('\n');
+    const [decision] = parseCard(text).decisions;
+    expect(decision!.links).toEqual([
+      { label: 'https://a.com/x', target: 'https://a.com/x' },
+      { label: '#12', target: 'https://b.com/y' },
+    ]);
+    expect(decision!.externalRefs).toEqual(['#13']);
+  });
+
+  it('external refs keep only the first occurrence of each value', () => {
+    const text = ['## Decisions', '- 2026-09-12: #5, https://a.com/p and #5 again, https://a.com/p.', '  #6 #5'].join('\n');
+    expect(parseCard(text).decisions[0]!.externalRefs).toEqual(['#5', 'https://a.com/p', '#6']);
+  });
+
+  it('an unclosed fence swallows the rest of the card', () => {
+    const text = ['## Decisions', '- 2026-01-01: a', '```', '- 2026-01-02: b', '## Open questions', '- q'].join('\n');
+    const card = parseCard(text);
+    expect(card.decisions.map((d) => d.text)).toEqual(['a']);
+    expect(card.sections.map((s) => s.heading)).toEqual(['Decisions']);
+    expect(card.openQuestions).toEqual([]);
+  });
+
+  it('an empty item gives no item and no section-text fallback', () => {
+    expect(parseCard(['## Open questions', '- ', '- two'].join('\n')).openQuestions).toEqual([{ text: 'two', line: 3 }]);
+    expect(parseCard(['## Open questions', '- '].join('\n')).openQuestions).toEqual([]);
+    expect(parseGlossary('- ')).toEqual([]);
+  });
+
+  it('a bare marker followed by an indented line is one item', () => {
+    expect(parseCard(['## Open questions', '-', '  foo', '*'].join('\n')).openQuestions).toEqual([{ text: 'foo', line: 2 }]);
+  });
+
+  it('a tab-indented line continues the item', () => {
+    const text = ['## Language', '- **Loan**: first', '\tsecond', '\t- nested'].join('\n');
+    expect(parseCard(text).terms).toEqual([{ term: 'Loan', definition: 'first second - nested', line: 2 }]);
+  });
+
   it('sections keep H3 headings and fences as written and end at the next H2', () => {
     const text = ['# T', '## A', 'a1', '### Sub', '```', '## fenced', '```', '', '## B', '', 'b1', ''].join('\n');
     expect(parseCard(text).sections).toEqual([
