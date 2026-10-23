@@ -1,6 +1,7 @@
 import { relative } from 'node:path';
 import type { SymbolNode, GraphEdge, ComplexityMetrics, SymbolKind, ILanguageAdapter } from '@ctxo/plugin-api';
 import { createLogger } from '../logger.js';
+import { structTagAnnotations } from '../struct-tags.js';
 import { detectGoToolchain } from './toolchain-detect.js';
 import { discoverGoModule, findCtxoGoAnalyzerSource } from './module-discovery.js';
 import { ensureAnalyzerBinary } from './binary-build.js';
@@ -99,15 +100,19 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
     if (!file) return [];
     return file.symbols
       .filter((s) => VALID_SYMBOL_ID.test(s.symbolId))
-      .map((s) => ({
-        symbolId: s.symbolId,
-        name: s.name,
-        kind: s.kind as SymbolKind,
-        startLine: s.startLine,
-        endLine: s.endLine,
-        ...(s.startOffset != null ? { startOffset: s.startOffset } : {}),
-        ...(s.endOffset != null ? { endOffset: s.endOffset } : {}),
-      }));
+      .map((s) => {
+        const annotations = s.tags ? structTagAnnotations(s.tags) : undefined;
+        return {
+          symbolId: s.symbolId,
+          name: s.name,
+          kind: s.kind as SymbolKind,
+          startLine: s.startLine,
+          endLine: s.endLine,
+          ...(s.startOffset != null ? { startOffset: s.startOffset } : {}),
+          ...(s.endOffset != null ? { endOffset: s.endOffset } : {}),
+          ...(annotations ? { annotations } : {}),
+        };
+      });
   }
 
   async extractEdges(filePath: string, _source: string): Promise<GraphEdge[]> {

@@ -11,16 +11,26 @@ import (
 	"sync"
 )
 
+// FieldTag is one struct field's raw tag text (decoded from the Go string
+// literal). The TypeScript side parses it into annotations, so both tiers
+// share one parser.
+type FieldTag struct {
+	Field string `json:"field"`
+	Tag   string `json:"tag"`
+}
+
 // Symbol is the wire shape for a declared symbol. Matches SymbolNode in
-// @ctxo/plugin-api with optional byte offsets.
+// @ctxo/plugin-api with optional byte offsets. Tags is set on struct symbols
+// only, in field order.
 type Symbol struct {
-	SymbolID    string `json:"symbolId"`
-	Name        string `json:"name"`
-	Kind        string `json:"kind"`
-	StartLine   int    `json:"startLine"`
-	EndLine     int    `json:"endLine"`
-	StartOffset *int   `json:"startOffset,omitempty"`
-	EndOffset   *int   `json:"endOffset,omitempty"`
+	SymbolID    string     `json:"symbolId"`
+	Name        string     `json:"name"`
+	Kind        string     `json:"kind"`
+	StartLine   int        `json:"startLine"`
+	EndLine     int        `json:"endLine"`
+	StartOffset *int       `json:"startOffset,omitempty"`
+	EndOffset   *int       `json:"endOffset,omitempty"`
+	Tags        []FieldTag `json:"tags,omitempty"`
 }
 
 // Edge is the wire shape for a dependency relationship. Kind is one of
@@ -51,9 +61,9 @@ type FileRecord struct {
 
 // ProjectRecord is emitted once per run to describe module-level edges.
 type ProjectRecord struct {
-	Type     string           `json:"type"`
-	Projects []ProjectEntry   `json:"projects"`
-	Edges    []ProjectEdge    `json:"edges"`
+	Type     string         `json:"type"`
+	Projects []ProjectEntry `json:"projects"`
+	Edges    []ProjectEdge  `json:"edges"`
 }
 
 type ProjectEntry struct {

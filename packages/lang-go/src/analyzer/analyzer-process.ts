@@ -11,6 +11,8 @@ export interface AnalyzerSymbol {
   endLine: number;
   startOffset?: number;
   endOffset?: number;
+  /** Raw struct field tags (struct symbols only); parsed by struct-tags.ts. */
+  tags?: Array<{ field: string; tag: string }>;
 }
 
 export interface AnalyzerEdge {

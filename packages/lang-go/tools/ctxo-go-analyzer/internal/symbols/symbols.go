@@ -8,6 +8,7 @@ import (
 	"go/token"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
@@ -74,7 +75,11 @@ func Extract(pkg *packages.Package, rootDir string) []FileSymbols {
 							continue
 						}
 						kind := typeSpecKind(ts.Type)
-						fs.Symbols = append(fs.Symbols, makeSymbol(pkg.Fset, rel, ts.Name.Name, kind, ts.Pos(), ts.End()))
+						sym := makeSymbol(pkg.Fset, rel, ts.Name.Name, kind, ts.Pos(), ts.End())
+						if st, ok := ts.Type.(*ast.StructType); ok {
+							sym.Tags = structTags(st)
+						}
+						fs.Symbols = append(fs.Symbols, sym)
 					}
 				case token.VAR, token.CONST:
 					for _, spec := range d.Specs {
@@ -122,6 +127,56 @@ func receiverTypeName(expr ast.Expr) string {
 			expr = x.X
 		case *ast.IndexListExpr: // generic with multiple type params: Map[K, V]
 			expr = x.X
+		case *ast.Ident:
+			return x.Name
+		default:
+			return ""
+		}
+	}
+}
+
+// structTags returns one entry per field name that carries a tag, in field
+// order. An embedded field is named after its type's last identifier. The
+// literal is decoded with strconv.Unquote; a failed or empty decode is skipped.
+func structTags(st *ast.StructType) []emit.FieldTag {
+	if st.Fields == nil {
+		return nil
+	}
+	var out []emit.FieldTag
+	for _, f := range st.Fields.List {
+		if f.Tag == nil {
+			continue
+		}
+		tag, err := strconv.Unquote(f.Tag.Value)
+		if err != nil || tag == "" {
+			continue
+		}
+		if len(f.Names) == 0 {
+			if name := embeddedFieldName(f.Type); name != "" {
+				out = append(out, emit.FieldTag{Field: name, Tag: tag})
+			}
+			continue
+		}
+		for _, n := range f.Names {
+			out = append(out, emit.FieldTag{Field: n.Name, Tag: tag})
+		}
+	}
+	return out
+}
+
+// embeddedFieldName reduces an embedded field type (T, *T, pkg.T, T[X]) to the
+// last identifier.
+func embeddedFieldName(expr ast.Expr) string {
+	for {
+		switch x := expr.(type) {
+		case *ast.StarExpr:
+			expr = x.X
+		case *ast.IndexExpr:
+			expr = x.X
+		case *ast.IndexListExpr:
+			expr = x.X
+		case *ast.SelectorExpr:
+			return x.Sel.Name
 		case *ast.Ident:
 			return x.Name
 		default:
