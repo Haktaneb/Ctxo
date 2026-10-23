@@ -25,7 +25,8 @@ describe('@ctxo/sql-extract package', () => {
     const pkg = JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf8'));
     expect(pkg.dependencies).toBeUndefined();
     expect(pkg.peerDependencies).toBeUndefined();
-    expect(pkg.version).toBe('0.0.0');
+    // Changesets owns the version, so only its shape is checked.
+    expect(pkg.version).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
   it('source modules import only relative paths', () => {
