@@ -3,7 +3,7 @@ import { isRelativeSpecifier, type ModuleResolver } from './module-resolver.js';
 import { WalkState, declarationOf, exportOf, importBindingOf, unwrapExpression } from './declarations.js';
 
 /**
- * The compile-time constant string an expression evaluates to, or undefined (spec 8A.2, designer call 7).
+ * The compile-time constant string an expression evaluates to, or undefined.
  * At most 8 declaration steps; a declaration costs a step on its first visit only, so the same constant may
  * appear several times in one expression, and a declaration that depends on itself has no text.
  *

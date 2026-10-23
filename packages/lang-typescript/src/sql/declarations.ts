@@ -7,7 +7,7 @@ import { isRelativeSpecifier, type ModuleResolver } from './module-resolver.js';
  * the type checker.
  */
 
-/** The walk budget: at most `MAX_STEPS` declaration hops (QR8). */
+/** The walk budget: at most `MAX_STEPS` declaration hops. */
 export const MAX_STEPS = 8;
 
 export class WalkState {

@@ -124,6 +124,9 @@ export class JdtAnalyzerAdapter implements ILanguageAdapter {
         constant: (this.sqlStats?.constant ?? 0) + result.sql.constant,
         nonConstant: (this.sqlStats?.nonConstant ?? 0) + result.sql.nonConstant,
       };
+      log.debug(`Java analyzer SQL arguments: ${result.sql.constant} constant, ${result.sql.nonConstant} non-constant`);
+    } else if (this.sqlCallSites) {
+      log.warn('Java analyzer reported no SQL statistics although --sql-call-sites was requested (analyzer too old?)');
     }
     this.cache.clear();
     for (const file of result.files) this.cache.set(this.norm(file.file), file);

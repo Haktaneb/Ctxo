@@ -107,7 +107,7 @@ class AnnotationsTest {
     assertEquals("[{\"name\":\"Unknown\",\"args\":[\"x\"],\"named\":{\"level\":\"2\"}}]",
         annotationsJson(lending, DOMAIN + "Loan.java::audited::method"));
 
-    // Review Focus 5: no stubs and no dependency JARs, so JUnit and JPA types do not resolve.
+    // no stubs and no dependency JARs, so JUnit and JPA types do not resolve.
     Path test = LENDING.resolve("src/test/java/lending/LoanPolicyTest.java");
     Path loan = LENDING.resolve(DOMAIN + "Loan.java");
     write(tmp, "src/test/java/lending/LoanPolicyTest.java", Files.readString(test));
@@ -128,7 +128,7 @@ class AnnotationsTest {
 
   @Test
   void memberNamedTypeIsDropped(@TempDir Path tmp) throws IOException {
-    // `named.type` is reserved in every language (QR1): a member named `type` is dropped.
+    // `named.type` is reserved in every language: a member named `type` is dropped.
     write(tmp, "t/Typed.java", String.join("\n",
         "package t;",
         "@interface Col { String type() default \"\"; String name() default \"\"; }",

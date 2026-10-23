@@ -157,7 +157,7 @@ export class TsMorphAdapter implements ILanguageAdapter {
   async extractEdges(filePath: string, source: string): Promise<GraphEdge[]> {
     const sourceFile = this.parseSource(filePath, source);
     if (!sourceFile) return [];
-    // Files the resolver reads from disk live only for this call (Review Focus 1); preloaded files stay.
+    // Files the resolver reads from disk live only for this call; preloaded files stay.
     const resolver = this.sqlCallSites ? new ModuleResolver(this.project, this.projectRoot) : undefined;
 
     try {

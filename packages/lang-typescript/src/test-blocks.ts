@@ -102,7 +102,7 @@ function cutTitle(title: string): string {
 
 /**
  * Whitespace runs become one space, then trim; runs of `:` become one `:`; an empty title becomes
- * `(untitled)`; the title is cut at 200 characters; a trailing `:` is dropped (QR2). Repeated until stable,
+ * `(untitled)`; the title is cut at 200 characters; a trailing `:` is dropped. Repeated until stable,
  * so no title ends in `:` or holds `::`, and every ID splits into exactly three `::` parts.
  */
 function normaliseTitle(raw: string): string {

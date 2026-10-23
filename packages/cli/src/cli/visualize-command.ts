@@ -204,7 +204,8 @@ export class VisualizeCommand {
     // 8. Inject into template
     const templatePath = this.getTemplatePath();
     const template = readFileSync(templatePath, 'utf-8');
-    const html = template.replace('/*__CTXO_DATA__*/null', JSON.stringify(payload));
+    // A function replacer keeps `$&` and `$'` in names literal; `<` is escaped so a title cannot close the script block.
+    const html = template.replace('/*__CTXO_DATA__*/null', () => JSON.stringify(payload).replace(/</g, '\\u003c'));
 
     // 9. Write output
     const outputPath = options.output ?? join(this.ctxoRoot, 'visualize.html');

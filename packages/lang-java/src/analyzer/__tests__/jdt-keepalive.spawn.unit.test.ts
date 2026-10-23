@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 
-// Its own file (QR7): a file-level mock of node:child_process would break the tests of
+// Its own file: a file-level mock of node:child_process would break the tests of
 // jdt-keepalive.unit.test.ts that rely on a real failed spawn.
 vi.mock('node:child_process', () => ({ spawn: vi.fn() }));
 

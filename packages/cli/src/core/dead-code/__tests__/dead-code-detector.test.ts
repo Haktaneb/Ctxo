@@ -448,6 +448,21 @@ describe('DeadCodeDetector test files (shared classifier)', () => {
     expect(result.totalSymbols).toBe(1);
   });
 
+  it('C# name-only test globs stop deciding once .cs symbols carry annotations (as in the contexts view)', () => {
+    const graph = new SymbolGraph();
+    const abTest = 'src/Lending/LoanTest.cs::Lending.LoanTest::class';
+    graph.addNode(makeNode(abTest));
+    graph.addNode({
+      ...makeNode('src/Lending/Loan.cs::Lending.Loan::class'),
+      annotations: [{ name: 'Serializable' }],
+    });
+
+    const result = detector.detect(graph);
+
+    expect(result.totalSymbols).toBe(2);
+    expect(result.deadSymbols.map((d) => d.symbolId)).toContain(abTest);
+  });
+
   it('fixture folders stay excluded', () => {
     const graph = new SymbolGraph();
     graph.addNode(makeNode('src/a.ts::A::function'));

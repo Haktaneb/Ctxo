@@ -187,6 +187,12 @@ describe.skipIf(!ENABLED)('SQL call sites in TypeScript, Java and Go reach the l
     cleanupTempProjects();
   });
 
+  // In CI the toolchains must be there: a broken setup-java or setup-go must fail the job, not skip the Java
+  // and Go cases.
+  it.runIf(Boolean(process.env['CI']))('the Java and Go toolchains are available in CI', () => {
+    expect({ go: HAS_GO, jdt: CAN_RUN_JDT }).toEqual({ go: true, jdt: true });
+  });
+
   it('without @ctxo/lang-sql the call-site files are indexed (positive control)', () => {
     const indices = readIndex(withoutSql.dir);
     expect(symbolIdsOf(indices, TS_FILE)).toContain(TS_SYMBOL);

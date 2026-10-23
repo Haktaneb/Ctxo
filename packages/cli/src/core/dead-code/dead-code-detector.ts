@@ -76,9 +76,15 @@ export class DeadCodeDetector {
     options: { includeTests?: boolean; sourceContents?: Map<string, string> } = {},
   ): DeadCodeResult {
     const allNodes = graph.allNodes();
+    // Same refinement as the contexts view: once `.cs` symbols carry annotations, the name-only C# globs
+    // (`*Test.cs`) no longer decide on their own.
+    const annotationAware = allNodes.some(
+      (n) => (n.symbolId.split('::')[0] ?? '').endsWith('.cs') && (n.annotations?.length ?? 0) > 0,
+    );
     const isTestFile = createTestFileClassifier(
       [],
       filesWithTestAnnotations(allNodes.map((n) => ({ file: n.symbolId.split('::')[0] ?? '', symbols: [n] }))),
+      { annotationAware },
     );
     const isExcluded = (file: string): boolean =>
       isTestFile(file) || FIXTURE_PATTERN.test(file) || this.matchesAny(file, CONFIG_PATTERNS);

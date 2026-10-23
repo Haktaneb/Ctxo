@@ -8,7 +8,7 @@ import java.util.regex.Pattern;
 
 /**
  * Finds the SQL text at the {@link KnownSqlApis} call sites and annotations of one method or
- * constructor body ({@code --sql-call-sites}, designer call 8).
+ * constructor body ({@code --sql-call-sites}).
  *
  * <p>A call matches when a row lists its member for the receiver's static type, the method
  * binding's declaring class or any of their supertypes. Without a binding (the dependency is not
@@ -18,7 +18,7 @@ import java.util.regex.Pattern;
  *
  * <p>The text is the first argument, and every argument of an all-String {@code batchUpdate}.
  * With a method binding, a member whose first parameter is not {@code java.lang.String} is no
- * call site and is not counted; without one, the argument's own type decides (QR9). Only
+ * call site and is not counted; without one, the argument's own type decides. Only
  * compile-time constants (JDT constant evaluation: literals, {@code static final} fields,
  * concatenation, text blocks) give a {@link Dtos.SqlSite}; every other text counts as
  * non-constant. A JDBC call escape ({@code {call name(...)}} or {@code {? = call name(...)}})

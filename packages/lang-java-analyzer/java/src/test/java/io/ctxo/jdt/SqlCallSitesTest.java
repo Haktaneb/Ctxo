@@ -197,7 +197,7 @@ class SqlCallSitesTest {
 
   @Test
   void missingClasspathTypesMatchThroughDeclaredTypesAndImports(@TempDir Path tmp) throws IOException {
-    // Review Focus 5: no stub and no dependency JAR, so JdbcTemplate does not resolve.
+    // no stub and no dependency JAR, so JdbcTemplate does not resolve.
     Analyzer missing = new Analyzer(MISSING.toString(), new String[0], true);
     List<Dtos.FileResult> r = missing.analyze(Main.discoverJavaFiles(MISSING.toString()));
     assertEquals(List.of(
@@ -293,7 +293,7 @@ class SqlCallSitesTest {
 
   @Test
   void nonAsciiSqlTextIsReadAsUtf8(@TempDir Path tmp) throws IOException {
-    // QR22: JDT reads the sources as UTF-8, whatever the platform encoding is.
+    // JDT reads the sources as UTF-8, whatever the platform encoding is.
     String sql = "UPDATE dbo.Üyeler SET Ad = 'Şule çığ' WHERE Id = 1";
     write(tmp, "src/main/java/u/Members.java", String.join("\n",
         "package u;",

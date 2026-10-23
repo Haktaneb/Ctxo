@@ -4,11 +4,11 @@ import { isRelativeSpecifier, type ModuleResolver } from './module-resolver.js';
 import { WalkState, declarationOf, exportOf, importBindingOf, unwrapExpression } from './declarations.js';
 
 /**
- * Receiver provenance (designer call 7): the known-API module an expression traces to, or undefined.
+ * Receiver provenance: the known-API module an expression traces to, or undefined.
  *
  * A step is one hop from an identifier to its declaration or from an import binding to the export it names;
  * unwrapping parentheses, `await`, assertions and `!`, and following a call chain's receiver inside one
- * expression are free. At most 8 steps, never the same declaration twice (QR8).
+ * expression are free. At most 8 steps, never the same declaration twice.
  *
  * - identifier: its declaration. An import of a table module gives that module; a relative import continues
  *   at the same-named export of the resolved file, following re-exports. A variable or property gives its

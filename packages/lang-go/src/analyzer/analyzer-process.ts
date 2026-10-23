@@ -42,6 +42,8 @@ export interface AnalyzerBatchResult {
   elapsed: string;
   /** Constant and non-constant SQL arguments counted by the run; only with `--sql-call-sites`. */
   sql?: { constant: number; nonConstant: number };
+  /** True when the process failed to start, exited non-zero or was killed (for example by the timeout). */
+  failed?: boolean;
 }
 
 export interface GoAnalyzerRunOptions {
@@ -58,8 +60,9 @@ export function buildGoAnalyzerArgs(moduleRoot: string, options: GoAnalyzerRunOp
 
 /**
  * Spawn the analyzer binary in batch mode and parse its JSONL stream.
- * Failures resolve to an empty result so the composite adapter can fall
- * back to tree-sitter without throwing.
+ * Failures resolve to an empty result with `failed: true` so the adapter can
+ * report the analyzer as unavailable and the composite falls back to
+ * tree-sitter without throwing.
  */
 export async function runBatchAnalyze(
   binaryPath: string,
@@ -68,7 +71,7 @@ export async function runBatchAnalyze(
 ): Promise<AnalyzerBatchResult> {
   return new Promise((resolve) => {
     const empty: AnalyzerBatchResult = {
-      files: [], dead: [], hasMain: false, timeout: false, totalFiles: 0, elapsed: '',
+      files: [], dead: [], hasMain: false, timeout: false, totalFiles: 0, elapsed: '', failed: true,
     };
     const proc = spawn(binaryPath, buildGoAnalyzerArgs(moduleRoot, options), {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -124,9 +127,9 @@ export async function runBatchAnalyze(
       stderr += chunk.toString();
     });
 
-    proc.on('close', (code) => {
+    proc.on('close', (code, signal) => {
       if (code !== 0) {
-        log.error(`ctxo-go-analyzer exited with code ${code}: ${stderr.trim().slice(0, 500)}`);
+        log.error(`ctxo-go-analyzer exited with code ${code}${signal ? ` (signal ${signal})` : ''}: ${stderr.trim().slice(0, 500)}`);
         resolve(empty);
         return;
       }

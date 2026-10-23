@@ -24,6 +24,12 @@ describe('typescript plugin', () => {
     expect(adapters.map((adapter) => (adapter as TsMorphAdapter).sqlCallSites)).toEqual([false, false, true]);
   });
 
+  it('createAdapter passes ctx.projectRoot to the adapter, so incremental runs resolve like full runs', () => {
+    const adapter = plugin.createAdapter(context({ sqlCallSites: true })) as unknown as { projectRoot: string | undefined };
+
+    expect(adapter.projectRoot).toBe('/work/lending');
+  });
+
   it('the plugin keeps apiVersion 1', () => {
     expect(plugin.apiVersion).toBe('1');
     expect(plugin.id).toBe('typescript');

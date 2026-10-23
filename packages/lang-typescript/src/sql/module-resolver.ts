@@ -28,7 +28,7 @@ function candidatesFor(base: string): string[] {
 }
 
 /**
- * Resolves relative module specifiers for the SQL call-site walk (designer call 7, Review Focus 1). A file the
+ * Resolves relative module specifiers for the SQL call-site walk. A file the
  * in-memory project holds is served as is; otherwise, with a `projectRoot`, the candidate is read from disk and
  * added to the project until `release()`, so one re-extracted file resolves its imports as in a full run.
  * Paths stay inside `projectRoot`.

@@ -301,7 +301,7 @@ describe('GoAdapter — isSupported', () => {
   });
 });
 
-describe('GoAdapter — struct tag annotations', () => {
+describe('GoAdapter - struct tag annotations', () => {
   const adapter = new GoAdapter();
   const loanSource = readFileSync(
     join(import.meta.dirname, '..', '..', 'test-fixtures', 'lending-module', 'loans', 'loan.go'),

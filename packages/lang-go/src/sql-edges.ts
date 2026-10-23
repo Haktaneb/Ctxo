@@ -9,7 +9,7 @@ export interface SqlCallSite {
   readonly kind: SqlTextKind;
 }
 
-/** Call-site texts longer than this (1 MiB in UTF-16 units) are skipped, like oversized `.sql` files (QR18). */
+/** Call-site texts longer than this (1 MiB in UTF-16 units) are skipped, like oversized `.sql` files. */
 export const MAX_SQL_TEXT_LENGTH = 1_048_576;
 
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);

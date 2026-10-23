@@ -79,7 +79,7 @@ class ContractIT {
         .analyze(Main.discoverJavaFiles(root.toString()));
     assertFalse(Main.json(fileResult(off, repository)).contains("sqlCallSites"));
 
-    // QR21: a non-ASCII SQL text goes through the ASCII line too.
+    // a non-ASCII SQL text goes through the ASCII line too.
     String sql = "UPDATE dbo.Üyeler SET Flag = 1";
     String site = Main.json(new Dtos.SqlSite("A.java::rename::method", 3, sql, "statement"));
     assertTrue(site.chars().allMatch(c -> c < 0x80), site);

@@ -57,7 +57,7 @@ function toAnnotation(node: SyntaxNode): SymbolAnnotation | undefined {
       args.push(...values);
       return;
     }
-    if (values.length === 0 || member === RESERVED_TYPE || member in named) return;
+    if (values.length === 0 || member === RESERVED_TYPE || Object.hasOwn(named, member)) return;
     if (namedCount === MAX_ENTRIES) return;
     named[member] = cut(values.join(','));
     namedCount++;

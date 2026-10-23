@@ -31,6 +31,7 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
   private deadSymbolIds = new Set<string>();
   private hasMain = false;
   private timedOut = false;
+  private batchFailed = false;
   private batchPromise: Promise<void> | null = null;
   private initialized = false;
   private readonly sqlCallSites: boolean;
@@ -109,6 +110,22 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
     return this.timedOut;
   }
 
+  /** True once a batch run failed or was killed. */
+  hasBatchFailed(): boolean {
+    return this.batchFailed;
+  }
+
+  /**
+   * Runs the batch if it has not run yet and tells whether the analyzer result can be used. False when the
+   * process failed, crashed or was killed: the composite then indexes with tree-sitter instead of storing
+   * an empty full-tier result.
+   */
+  async isUsable(): Promise<boolean> {
+    if (!this.isReady()) return false;
+    await this.ensureBatch();
+    return !this.batchFailed;
+  }
+
   async extractSymbols(filePath: string, _source: string): Promise<SymbolNode[]> {
     if (!this.isReady()) return [];
     await this.ensureBatch();
@@ -144,7 +161,7 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
         kind: e.kind as GraphEdge['kind'],
       }));
     // Data edges are built from the already rewritten call-site ids and skip the 3-part `to` filter above:
-    // their targets are canonical names such as `dbo.loans::table` (QR5).
+    // their targets are canonical names such as `dbo.loans::table`.
     if (file.sqlCallSites?.length) edges.push(...sqlEdgesFromCallSites(file.sqlCallSites));
     return edges;
   }
@@ -171,7 +188,19 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
   private async runBatch(): Promise<void> {
     if (!this.binaryPath || !this.moduleRoot) return;
     const result = await runBatchAnalyze(this.binaryPath, this.moduleRoot, { sqlCallSites: this.sqlCallSites });
+    if (result.failed) {
+      this.batchFailed = true;
+      log.warn('Go analyzer run failed or timed out; these files fall back to the tree-sitter syntax tier');
+      return;
+    }
     this.absorbBatch(result);
+    if (this.sqlCallSites) {
+      if (result.sql) {
+        log.debug(`Go analyzer SQL arguments: ${result.sql.constant} constant, ${result.sql.nonConstant} non-constant`);
+      } else {
+        log.warn('Go analyzer reported no SQL statistics although --sql-call-sites was requested (analyzer too old?)');
+      }
+    }
     log.info(`Go analyzer batch: ${result.totalFiles} files in ${result.elapsed}, ${result.dead.length} dead`);
   }
 

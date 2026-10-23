@@ -166,12 +166,21 @@ describe('JavaAdapter annotations (syntax tier)', () => {
     expect(await annotationsOf(source, 'c::method')).toEqual([{ name: 'K', args: ['\\u0041 \\q'] }]);
   });
 
-  it('a member named type is dropped, a member named member is kept (QR1, QR23); first duplicate wins', async () => {
+  it('a member named type is dropped, a member named member is kept; first duplicate wins', async () => {
     const source = `class A {
   @M(type = "t", member = "m", name = "first", name = "second") void a() {}
 }`;
     expect(await annotationsOf(source, 'a::method')).toEqual([
       { name: 'M', named: { member: 'm', name: 'first' } },
+    ]);
+  });
+
+  it('a member named like an Object.prototype property is kept', async () => {
+    const source = `class A {
+  @M(constructor = "c", toString = "t") void a() {}
+}`;
+    expect(await annotationsOf(source, 'a::method')).toEqual([
+      { name: 'M', named: { constructor: 'c', toString: 't' } },
     ]);
   });
 
