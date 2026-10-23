@@ -571,7 +571,7 @@ The CI gate. It checks structure, never meaning.
 | 4a | No file owned by two contexts | error |
 | 4b | No unowned file outside `unowned.allow` | `domain.coverage.unowned`: `warn` (default) or `error` |
 | 5 | Cards have the five template H2 headings in order | error |
-| 6 | Rule IDs match `domain.rules.idPattern`, are unique across cards and match `rulePrefix`; IDs in structured test references exist in cards; every rule has a test link, a `Tests:` line or an `Untested:` line | error |
+| 6 | Rule IDs match `domain.rules.idPattern`, are unique across cards and match `rulePrefix`; IDs in structured test references exist in cards; every rule has a test link, a `Tests:` line or an `Untested:` line; `Tests:` and `Code:` files exist; symbol IDs in card lines are indexed and unknown IDs in production `rule:` comments of a rule prefix (both warnings, see [check 6 and the graph](#verify-domain-check-6-and-the-graph)) | error |
 | 7 | Relative links and heading anchors in cards resolve (external URLs are not fetched) | error |
 | 8 | Generated loader files match what `ctxo domain rules` would write, and no hand-written file blocks an expected path | error |
 | 9 | `context-map.md` has a table with `Context` and `Rung` columns that agrees with the registry (a missing file while contexts exist is a warning) | error |
@@ -638,6 +638,8 @@ With `@ctxo/domain` and a registry, existing tools gain fields. Every one is add
 | `get_why_context` | `contextDrift` for the symbol's context: `crossShare` (`current`, `previous`, `delta`), `trend`, `movedFiles`, `distinctCommits`, `confidence` |
 
 `context` is set only when exactly one context owns the symbol's file. A throwing enricher drops its fields, never the response. A core payload that holds a value JSON cannot represent (a `Date`, a `Map`) drops all enrichment with one warning.
+
+With a domain graph, `get_blast_radius`, `get_why_context`, `get_context_for_task` and `get_pr_impact` gain seven more fields; see [Fields on core tools](#fields-on-core-tools).
 
 ### `ctxo init --domain`
 
@@ -716,6 +718,161 @@ With `@ctxo/domain` installed, `ctxo doctor` adds three checks, all `pass` or `w
 
 A repository with neither a `.claude/` nor a `.cursor/` folder is checked as a Claude Code setup, so it gets a standing `domain_agent_setup` warning until `ctxo init --only domain` registers the hooks and installs the skill. `ctxo doctor --fix` repairs the agent setup.
 
+The bundled `ctxo-domain-fold` skill carries a version marker (`<!-- ctxo-skill v0.15 -->` in this release, which adds the `get_domain_context` and `get_rule` step). A copy installed by an earlier release is reported as outdated until `ctxo init --only domain` or `ctxo doctor --fix` installs the new one.
+
+## The domain graph
+
+A card that nobody reads at the moment of a change does not protect the rule it states. With `@ctxo/domain` and a registry, `ctxo index` turns the cards and the glossary into a graph that links each rule to the tests that pin it and the code that implements it, each decision to its provenance, and each term to the identifiers that carry it. The core tools then put the relevant rules, cards and decisions in front of the agent while it works on the code, and two new tools answer domain questions directly. Ctxo still never writes domain text: every node is text a person wrote in a card, and every link is evidence found in the repository.
+
+### Cards, the consumer contract
+
+The card format is the contract between a team and Ctxo. Everything below is optional on top of the five template headings: a card with headings only is valid, and each element adds links when it is there.
+
+```markdown
+# Lending
+
+## Language
+- **Loan**: one book held by one member until its due date.
+- **Fine**: an unpaid charge for a late return that Lending was told about.
+
+## Rules and invariants
+### LEND-03 A member holds at most five loans
+Tests: `tests/Lending.Tests/LoanLimitTests.cs`
+Code: `src/Lending/LoanLimit.cs`
+
+The sixth loan is refused at the desk and online alike.
+
+### LEND-04 A member with an unpaid fine cannot borrow
+Untested: the unpaid-fine check has no test yet
+
+## Boundary contracts
+Lending asks Billing to charge a fine through the charge service only (`src/Billing/IChargeService.cs`).
+
+## Decisions
+- 2026-09-12: Loan limit raised from 3 to 5 (LEND-03). [spec](../../specs/loan-limit.md), #123, [ADR-007](../../adr/adr-007-loan-limit.md)
+- 2026-10-01: Any unpaid fine blocks a new loan, whatever the amount (LEND-04). https://example.com/issues/45
+
+## Open questions
+- Should renewals count as new loans?
+```
+
+- **Rule headings.** `### <ID> <title>` under `Rules and invariants`. IDs are permanent. The rule text is the body under the heading, without its rule lines, up to the next heading of level 1 to 3. An H1 or H2 ends the `Rules and invariants` section, so a `### X-NN` heading after a stray H1 there is not a rule.
+- **`Tests:` and `Code:` lines** at the start of a rule body: comma-separated, backticked, repo-relative values. A value is a file path (`src/Lending/LoanLimit.cs`) or a symbol ID (`src/lending/loan-limit.ts::canBorrow::function`, anything with `::`). For a plain test name write `file#Name` (`tests/Lending.Tests/LoanLimitTests.cs#RejectsTheSixthLoan`); `::` always means a symbol ID. The file part must be a file that exists; a directory does not count.
+- **`Untested:` line**: why the rule has no test (it satisfies check 6 for that rule, and `get_pr_impact` reports the reason).
+- **Term items**: list items starting with `**Term**` in `Language` (`- **Loan**: definition`). A definition can continue on indented lines.
+- **Glossary items**: the same items anywhere in `glossary.md`, under any heading. `- **Loan** (context: lending): one copy lent to a member` adds a definition to the `lending` term; an item without `(context: <id>)` (or with an unknown id, which warns) is a repo-wide term.
+- **Decision lines**: list items starting with an ISO date and a colon (`- 2026-09-12: ...`). Rule IDs written in the line link the decision to those rules. Relative links are provenance files; `#123`, URLs and tracker keys are external provenance strings. A nested list under a decision folds into it, so provenance written as a sub-bullet still counts.
+- **Open questions**: list items, or the whole section as one question when it has no list.
+
+"Ctxo domain conventions v1" (below) carries the same format; the `Code:` line, term items, decision lines and the glossary form are additions to it, and none of them asks for a code change, so no level of the adoption ladder does either.
+
+### The graph
+
+`ctxo index` writes `.ctxo/index/domain/graph.json` next to the PR 2B artifacts, with the marker `"ctxoArtifact": "domain-graph"` (the core index reader skips it, and only a marked file is ever overwritten or deleted). It holds:
+
+| Node | ID | Holds |
+|---|---|---|
+| Context | `context:lending` | Name, rung, card, `rulePrefix` |
+| Rule | `rule:LEND-03` | Title, text, card, line, `untested` |
+| Term | `term:lending/member-account` | The term, its definitions (card or glossary origin), the identifier count. The key is the term lowercased with whitespace runs as `-`; repo-wide glossary terms use the context `*` |
+| Decision | `decision:lending/2026-09-12-1` | Date, text, card, line; `n` counts that card's decisions of the same date in document order from 1 |
+| Section | `section:<card>:<line>` | The other card sections (intro, contracts, open questions), for search only |
+
+Links form one sorted `links` array; every link carries its `kind`, `from`, `to`, its `source` and, except term links, the location `at` (file, 1-based line) where the evidence is:
+
+| Kind | Sources |
+|---|---|
+| `rule-test` | `annotation`, `category`, `test-title`, `rule-comment`, `mention`, `card-tests` |
+| `rule-symbol` | `card-code`, `rule-comment` |
+| `decision-provenance` | `card-link` (a markdown link), `card-text` (`#123`, a URL, a tracker key) |
+| `decision-rule` | `card-text` |
+| `term-identifier` | `symbol-name`, `table-name` (with `match`: `exact` or `partial`) |
+
+Card values that resolve to nothing are kept in `unresolved` (`missing-file` or `not-a-symbol`). The graph also stores `registryHash` (the registry text it was built from) and `cardsHash` (the cards and the glossary).
+
+- **What never reads it.** PageRank, communities, snapshots, dead code and the gate's percentiles work on the code graph only, so editing a card never shifts code clusters or blast-radius scores.
+- **When it is rebuilt.** On every `ctxo index` that refreshes the product, including the post-commit hook's `ctxo index --commit HEAD`, also for a commit that changed only a card. `ctxo watch` runs no module pass and does not rebuild it. The file is written only when its content changed, and the same input gives a byte-identical file.
+- **Staleness.** When the registry changed since the graph was built, the domain fields are left out and the tools answer with the hint to run `ctxo index`. When only cards or the glossary changed, the tools still answer from the graph and add `stale: true` and the hint `Cards or the glossary changed since the last "ctxo index"; run it to refresh rule links.`
+- **Shared cards.** When two contexts name the same card, its rules belong to the first context by id, and `ctxo index` and `ctxo verify-domain` warn once. The other context still lists the card's terms, decisions and open questions, and counts them in its `decisionCount`.
+- **Teammates on different analysis tiers.** Term links carry symbol IDs, and C# IDs differ between the Roslyn and tree-sitter tiers, so a committed `graph.json` can differ between machines in the same way the index JSON does.
+
+### Linking rules to tests and code
+
+A link is created only to an ID that a card defines. The test side:
+
+| Framework | Annotation | Value |
+|---|---|---|
+| xUnit | `[Trait("Rule", "LEND-03")]`, with a key in `domain.tests.ruleTraitKeys` (default `Rule`) | The rule ID (source `annotation`) |
+| NUnit | `[Category("LEND-03")]` | Starts with a rule ID (source `category`) |
+| MSTest | `[TestCategory("LEND-03")]` | Starts with a rule ID (source `category`) |
+| JUnit 5 | `@Tag("LEND-03")` | Starts with a rule ID (source `category`) |
+
+- **The text scan of test files** finds rule IDs that exist in cards, with the variants `LEND-03`, `LEND03`, `Lend03` and `lend_03` at token boundaries. A hit links to the innermost indexed symbol spanning the line, else to the file. When the line declares a test (`it(`, `test(`, `describe(`, `t.Run(`, `@DisplayName(`, `[Fact(DisplayName =`), its title becomes the link's `testName` (source `test-title`); a `rule: LEND-03` comment gives `rule-comment`, any other hit `mention`. Without a captured title, `testName` is the linked symbol's name.
+- **The card's `Tests:` line** gives `card-tests`; the card's `Code:` line gives `card-code`.
+- **`rule:` comments in production code.** A comment `rule: LEND-03` in any comment style (`//`, `/* */`, `/** */`, `#`, `--`, a `*` line) in an indexed non-test file up to 1 MiB links the rule to code. It links to the symbol that starts within three lines below the comment (attributes and decorators count as part of the declaration), else to the innermost symbol spanning it, so the usual style, a comment right above a method, links the method and not its class. Marker, `rule:` and ID must be on one line.
+- **Symbol IDs that are not in the index.** A `Tests:` or `Code:` value with `::` that the index does not hold links to its file (`fallback: true`), and check 6 warns. C# IDs differ between the analysis tiers (Roslyn writes `Ns.LoanLimit.CanBorrow`, tree-sitter `Ns.LoanLimit.CanBorrow(1)`), so C# teams should prefer file paths in `Code:` lines.
+- **Tracker safeguards.** With a rule prefix that is also a tracker prefix (`domain.rules.trackerPrefixes`), only structured references link: annotations, titles, `rule:` comments and card lines, never a plain mention. An unknown ID in a production `rule:` comment is a check 6 warning only when its prefix is a rule prefix, so `# rule: E501` in a linter comment stays silent.
+
+### Decisions and provenance
+
+- A relative link in a decision line is resolved against the card's folder to a repository file (`{ kind: "file", path, exists, label }`). A link that leaves the repository is kept as an external string and never read; a pure anchor (`#section`) and a folder are not provenance.
+- `#123`, URLs and tracker keys with a configured `domain.rules.trackerPrefixes` prefix that are not rule IDs are external strings (`{ kind: "external", value }`), stored as written and never fetched (ADR-004).
+- Rule IDs written exactly in a decision line link the decision to the rule, even when their prefix is also a tracker prefix (cards are curated text); only IDs that exist in cards link.
+
+### Terms
+
+A term links to identifiers whose name carries its words:
+
+- The last `.` segment of a symbol name (namespaces and the C# parameter suffix dropped), split with the core tokenizer (camelCase and snake_case), must contain the term's tokens as a contiguous run, case-insensitively, with plural folding both ways (`s`, `es`, `y` to `ies`): `Loan` matches `LoanService` and the table `dbo.loans`, `Late fees` matches `LateFee`.
+- A context term matches only symbols in non-test files of its own context; a repo-wide glossary term matches all non-test files. Namespace segments never match.
+- Terms whose tokens are all shorter than three characters (`ID`) link nothing.
+- At most 50 identifiers per term are stored (exact matches and types first), with the full `identifierCount`.
+
+### Fields on core tools
+
+With a valid graph, seven additive fields appear on four core tools, possibly empty. Without the package, a registry or a graph, or with a registry that changed since the last index, they are absent. Each list is capped at 50 at the source (`decisions` at five) with a `<name>Total` count when entries were cut, and none is truncatable, so the envelope always truncates the tool's own primary array.
+
+| Tool | Field | Example (synthetic library-lending sample) |
+|---|---|---|
+| `get_blast_radius` | `rulesAffected`: rules linked to the root or an impacted symbol, root first, each with `via` (up to five `{ symbolId, link }`, `link` is `code` or `test`) and `viaCount` | `{ "ruleId": "LEND-03", "title": "A member holds at most five loans", "context": "lending", "card": "docs/domain/lending/domain.md", "via": [{ "symbolId": "src/lending/loan-limit.ts::canBorrow::function", "link": "code" }], "viaCount": 1 }` |
+| `get_blast_radius` | `cardsToUpdate`: the cards of those rules, in registry order | `{ "context": "lending", "card": "docs/domain/lending/domain.md" }` |
+| `get_why_context` | `decisions`: up to five decisions of the symbol's context with provenance, those naming a rule linked to the symbol first, each group newest first | `{ "id": "decision:lending/2026-09-12-1", "date": "2026-09-12", "rules": ["LEND-03"], "provenance": [{ "kind": "external", "value": "#123" }] }` |
+| `get_context_for_task` | `cardExcerpt`: target rules (text up to 600 characters), neighbour rules (titles), terms, contracts, within the token budget | `{ "context": "lending", "rules": [{ "ruleId": "LEND-03", "linkedTo": "target" }], "terms": [{ "term": "Loan", "definition": "..." }], "tokens": 204, "omitted": 0 }` |
+| `get_pr_impact` | `contextsTouched`: named contexts the change touched, with status, card and up to 10 files | `{ "id": "lending", "status": "unresolved", "cardChanged": false, "fileCount": 1, "files": ["src/lending/loan-limit.ts"] }` |
+| `get_pr_impact` | `cardsChanged`: registry cards changed in the range or the working tree | `"docs/domain/lending/domain.md"` |
+| `get_pr_impact` | `rulesWithoutTests`: rules of the touched contexts without a test link, with the `Untested:` reason | `{ "ruleId": "LEND-04", "context": "lending", "untested": "the unpaid-fine check has no test yet" }` |
+
+- **`cardExcerpt` and the budget.** The domain module reserves up to a quarter of `tokenBudget` before the code context is packed, and the excerpt fills what the code context left, so `totalTokens + cardExcerpt.tokens` never exceeds `tokenBudget`. The excerpt is left out only when even an empty one does not fit (a very small `tokenBudget`); otherwise it is always present with a valid graph.
+- **`get_pr_impact` and `since`.** The three lists use the change set of `ctxo contexts-touched` (the commits after the merge base of `since` and HEAD, plus the working tree), while `files` stays `git diff <since>`. When git cannot resolve `since`, the lists are left out with a warning.
+- **Async enrichment.** `get_pr_impact` needs git for its fields, so module enrichers on the asynchronous tools (`get_blast_radius`, `get_why_context`, `get_pr_impact`) may return a Promise. `@ctxo/domain` bounds them at 5 seconds; a slower one leaves its fields out of that response.
+
+### The two tools
+
+Ctxo has 14 core tools; with `@ctxo/domain` it has 16 (PR 4 adds 2 more). The two tools are registered whenever the package is loaded and answer `{ found: false, hint }` without a registry or a graph.
+
+- **`get_domain_context({ symbolId?, path? })`**: the card of the named context that owns a symbol or file: the context (id, name, rung, card, paths), its terms with definitions and up to 15 identifiers each, its rules with up to 10 tests and 10 code links each (and the counts), contracts (outbound, inbound, the contracts text and its references), decisions with provenance and open questions. `symbolId` wins over `path`, its file part selects the context and the symbol need not exist; a card path selects that card's context. With neither parameter it lists every context with its counts.
+- **`get_rule({ ruleId })`**: one rule (`LEND-03`; `LEND03`, `Lend03` and `lend_03` also match): its text and context, every test linked to it with the source of each link, the symbols that implement it, the decisions that mention it and their provenance, and the card values that did not resolve.
+
+Their primary arrays (`contexts`, `terms`, `rules`, `openQuestions`, `tests`, `symbols`, `provenance`, `unresolved`) are truncatable with drill-in hints. See the [`get_domain_context`](../../site/docs/mcp-tools/get-domain-context.md) and [`get_rule`](../../site/docs/mcp-tools/get-rule.md) pages for full responses.
+
+### The domain search scope
+
+With the package, `get_ranked_context` gains `scope`: `"code"` (the default, the symbol ranking, unchanged) or `"domain"`. The domain scope runs the core BM25 engine (`k1 1.2`, `b 0.75`, no PageRank blend) over rules, terms, decisions and card sections from `graph.json`, and over the in-repo provenance files that decisions link to, read at query time (regular files inside the repository up to 256 KB, cached by modification time). Hits carry `id` (the node id, or `file:<path>`), `kind`, `title`, `context`, `path`, `line`, an `excerpt` of up to 300 characters and `relevanceScore`, packed into `tokenBudget`. `strategy` and `searchMode` do not apply. Without the package the tool has no `scope` parameter and behaves exactly as before.
+
+```json
+{ "query": "five loans", "scope": "domain" }
+```
+
+returns `rule:LEND-03` first, then the spec and the ADR the LEND-03 decision links to.
+
+### `verify-domain` check 6 and the graph
+
+Check 6 reads card values and production comments the same way the graph does:
+
+- A `Tests:` or `Code:` value whose file part does not exist, or is a directory, is an error: `LEND-03: Tests file "<file>" does not exist`, `LEND-03: Code file "<file>" does not exist`.
+- A value with `::` that the index does not hold is a warning: `LEND-03: Code: "<value>" is not an indexed symbol; it links to its file`.
+- An unknown rule ID in a production `rule:` comment is a warning, `rule: comment names unknown rule LEND-09`, only when its prefix is a rule prefix. In a test file an unknown ID in a `rule:` comment stays an error, as in PR 2B.
+
 ## Ctxo domain conventions v1
 
 This is the contract a repository follows to use the domain layer. Nothing in it needs a code change: cards, a registry and, optionally, test links.
@@ -785,31 +942,32 @@ Headings only: the checks read structure, never the prose under it. Rules are H3
 # Lending
 
 ## Language
-- **Loan**: ...
+- **Loan**: one book held by one member until its due date.
 
 ## Rules and invariants
 ### LEND-03 A member holds at most five loans
-Tests: `src/Lending.Tests/LoanLimitTests.cs`
-Code: `src/Lending/LoanPolicy.cs`
+Tests: `tests/Lending.Tests/LoanLimitTests.cs`
+Code: `src/Lending/LoanLimit.cs`
 
 Free text written by people.
 
-### LEND-04 A hold expires after seven days
-Untested: covered by manual QA until the scheduler migration lands
+### LEND-04 A member with an unpaid fine cannot borrow
+Untested: the unpaid-fine check has no test yet
 
 ## Boundary contracts
 Free text; references to contract files.
 
 ## Decisions
-- 2026-09-12: Loan limit raised from 3 to 5. [spec](../../specs/loan-limit.md), #123
+- 2026-09-12: Loan limit raised from 3 to 5 (LEND-03). [spec](../../specs/loan-limit.md), #123
 
 ## Open questions
 - ...
 ```
 
-- A rule heading is `### <ID> <title>`. The optional lines `Tests:`, `Code:` and `Untested:` come at the start of the rule body; their values are comma-separated backticked paths or symbol IDs. A `Tests:` value may carry a `::name` or `#name` suffix after the path; the path must exist.
+- A rule heading is `### <ID> <title>`. The optional lines `Tests:`, `Code:` and `Untested:` come at the start of the rule body; their values are comma-separated backticked repo-relative paths or symbol IDs. Use `#name` after a path for a plain test name (`LoanLimitTests.cs#RejectsTheSixthLoan`); a value with `::` is a symbol ID (`src/lending/loan-limit.ts::canBorrow::function`), and one the index does not hold links to its file with a check 6 warning. The file part must be a file that exists (a directory is an error).
 - `Untested:` states why a rule has no test; it satisfies the "every rule has a test link" requirement of check 6 for that rule. A rule must have one of: a test link found by the scan, a `Tests:` line, or an `Untested:` line.
-- Terms are list items starting with `**Term**` under `Language`; decisions are list items starting with an ISO date and a colon. Relative links point to provenance files and are checked (check 7); `#123` and URLs are external strings, never fetched.
+- Terms are list items starting with `**Term**` under `Language`; `glossary.md` holds the same items under any heading, and `- **Term** (context: <id>): definition` ties a glossary item to one context (without it the term is repo-wide). Decisions are list items starting with an ISO date and a colon; rule IDs written in a decision link it to those rules. Relative links point to provenance files and are checked (check 7); `#123` and URLs are external strings, never fetched.
+- `Code:` lines, term items, decision lines and the glossary form feed the [domain graph](#the-domain-graph). They are additions to v1 that need no code change, so no level of the adoption ladder asks for one.
 
 ### Rule IDs
 
@@ -824,7 +982,7 @@ How a test is linked to a rule (a link exists only to an ID that a card defines)
 - **The text scan** of test files (the shared test-file classifier): comments of the form `rule: LEND-03`, test titles that start with an ID (`it('LEND-03 limits loans', ...)`, `t.Run`, `@DisplayName`, `[Fact(DisplayName = ...)]`), and plain mentions. Variants `LEND-03`, `LEND03`, `Lend03` and `lend_03` match at token boundaries. A hit links to the innermost indexed symbol spanning the line, else to the file, and records the declaring test's title as the test name.
 - **The card's `Tests:` line.**
 
-Adoption never needs a code change: the test names or framework tags a team already has, or a `Tests:` line in the card, are enough.
+Adoption never needs a code change: the test names or framework tags a team already has, or a `Tests:` line in the card, are enough. On the code side, a `Code:` line in the card links a rule to its implementation; a `rule: LEND-03` comment above a declaration does the same from the code.
 
 ### The trailer
 

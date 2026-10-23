@@ -202,7 +202,7 @@ This avoids network resolution on every client start.
 After restarting your client:
 
 1. Confirm `ctxo` shows up as a connected MCP server.
-2. Confirm 14 tools are listed (`get_logic_slice`, `get_blast_radius`, ...).
+2. Confirm 14 tools are listed (16 with `@ctxo/domain`) (`get_logic_slice`, `get_blast_radius`, ...).
 3. Confirm 1 resource is exposed: `ctxo://status`.
 4. In your agent, ask: *"Call `ctxo://status` and show me the result."*
 

@@ -103,6 +103,39 @@ as `likely`. The field is only set on dependents, so dependencies and type
 definitions do not have it. Co-change changes the tier shown; it does not add
 entries or change their ranking.
 
+### `cardExcerpt`
+
+With `@ctxo/domain`, a registry and a domain graph (built by `ctxo index`), the response carries `cardExcerpt`: the part of the domain card that matters for the symbol, inside the same `tokenBudget`.
+
+- **Budget.** Before the code context is packed, the domain module may hold back up to a quarter of `tokenBudget` for the excerpt (the size of the excerpt for the target alone). The code context is packed into what is left, the excerpt into `tokenBudget - totalTokens`, so `totalTokens + cardExcerpt.tokens` never exceeds `tokenBudget`. `totalTokens` and `tokenBudget` keep their meaning: the code context's size and the budget you asked for.
+- **Content, in packing order:** the rules linked to the target (`linkedTo: "target"`, with their text capped at 600 characters), the rules linked only to symbols of the code context (`linkedTo: "neighbour"`, title only), the terms of the target's context (terms that name the target or a neighbour first, definitions capped at 200 characters) and the context's outbound contracts with the `Boundary contracts` text (capped at 400 characters). An entry that does not fit is skipped and counted in `omitted`; `tokens` is the excerpt's measured size.
+- `context` and `card` are absent when the target's file has no single owning context (rules still come through their links).
+- **When it is absent:** without the package, a registry or a graph, when the registry changed since the last `ctxo index`, and when even an empty excerpt does not fit the budget left (a very small `tokenBudget`). Otherwise it is always present when a valid graph exists.
+
+```json
+{
+  "totalTokens": 259,
+  "tokenBudget": 4000,
+  "cardExcerpt": {
+    "context": "lending",
+    "card": "docs/domain/lending/domain.md",
+    "rules": [{ "ruleId": "LEND-03", "title": "A member holds at most five loans", "linkedTo": "target" }],
+    "terms": [
+      { "term": "Loan", "definition": "one book held by one member until its due date. / one copy lent to a member" },
+      { "term": "Fine", "definition": "an unpaid charge for a late return that Lending was told about." }
+    ],
+    "contracts": {
+      "outbound": [{ "target": "billing", "files": ["src/billing/charge-service.ts"] }],
+      "text": "Lending asks Billing to charge a fine through the charge service only (`src/billing/charge-service.ts`)."
+    },
+    "tokens": 204,
+    "omitted": 0
+  }
+}
+```
+
+For the whole card use [`get_domain_context`](/mcp-tools/get-domain-context), for one rule [`get_rule`](/mcp-tools/get-rule).
+
 ## When to use
 
 - **Fixing a bug** -- `taskType: "fix"` pulls deps plus revert/anti-pattern history from [`get_why_context`](/mcp-tools/get-why-context).

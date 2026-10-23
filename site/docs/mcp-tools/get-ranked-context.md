@@ -24,6 +24,7 @@ which takes a name or regex.
 | `tokenBudget` | number (min 100)                              | no       | Packing budget. Default `4000`                                     |
 | `strategy`    | `"combined" \| "dependency" \| "importance"` | no       | Ranking blend. Default `"combined"`                                |
 | `searchMode`  | `"fts" \| "legacy"`                          | no       | `fts` = BM25 engine, `legacy` = substring matcher. Default `"fts"` |
+| `scope`       | `"code" \| "domain"`                         | no       | Only with `@ctxo/domain`: `code` (default) ranks symbols; `domain` searches the domain cards. See [The domain scope](#the-domain-scope) |
 
 ### Strategies
 
@@ -76,6 +77,57 @@ which takes a name or regex.
 4. **Typo correction** -- in `fts` mode typo correction runs automatically and is reported in `fuzzyCorrection`.
 5. **Importance blend** -- final score mixes BM25 relevance with normalized reverse-edge count (a lightweight PageRank proxy).
 6. **Token packing** -- greedy pack until `tokenBudget` is reached.
+
+## The domain scope
+
+With `@ctxo/domain` installed, the tool gains a `scope` parameter. `"code"`, the default, is the symbol ranking above, unchanged. `"domain"` runs the same BM25 engine (with `k1 1.2`, `b 0.75` and no PageRank blend) over the domain knowledge of the repository:
+
+- card rules (`<ID> <title>` and the rule text), terms from the cards' `Language` sections and the glossary, dated decisions and the other card sections (intro, boundary contracts, open questions), all from the domain graph `ctxo index` writes;
+- in-repo provenance files: the files a card decision links to, read at query time (regular files inside the repository, up to 256 KB each, cached by modification time). External provenance (`#123`, URLs) is never fetched.
+
+Without the package the parameter does not exist and the tool's schema and output are exactly as before. `strategy` and `searchMode` do not apply to the domain scope. Punctuation in the query is ignored; rule IDs keep their shape (`LEND-03`).
+
+```json
+{ "query": "five loans", "scope": "domain" }
+```
+
+```json
+{
+  "query": "five loans",
+  "scope": "domain",
+  "results": [
+    {
+      "id": "rule:LEND-03",
+      "kind": "rule",
+      "title": "LEND-03 A member holds at most five loans",
+      "context": "lending",
+      "path": "docs/domain/lending/domain.md",
+      "line": 20,
+      "excerpt": "",
+      "relevanceScore": 3.929,
+      "tokens": 51
+    },
+    {
+      "id": "file:docs/specs/loan-limit.md",
+      "kind": "provenance",
+      "title": "Loan limit",
+      "path": "docs/specs/loan-limit.md",
+      "excerpt": "# Loan limit The limit rose from three to five loans after the renewal study.",
+      "relevanceScore": 3.275,
+      "tokens": 60
+    }
+  ],
+  "totalTokens": 111,
+  "tokenBudget": 4000,
+  "searchMetrics": { "porterHits": 5, "trigramHits": 0, "phase2Activated": false, "fuzzyApplied": false, "latencyMs": 0.18 },
+  "_meta": { "totalItems": 2, "returnedItems": 2, "truncated": false }
+}
+```
+
+- `kind` is `rule`, `term`, `decision`, `section` or `provenance`; `id` is the graph node id (`rule:LEND-03`, `term:lending/loan`, `decision:lending/2026-09-12-1`, `section:<card>:<line>`, `file:<path>`). Glossary terms without a `(context: <id>)` have the context `*`.
+- `excerpt` is the text with whitespace collapsed, cut at 300 characters. Hits are ordered by the engine's final score, highest first, and packed greedily into `tokenBudget`.
+- Without a registry or a graph the response is `{ found: false, hint }`; after a card edit not yet indexed it adds `stale: true` and a hint to run `ctxo index`.
+- Follow a rule hit with [`get_rule`](/mcp-tools/get-rule), a card hit with [`get_domain_context`](/mcp-tools/get-domain-context).
 
 ## When to use
 

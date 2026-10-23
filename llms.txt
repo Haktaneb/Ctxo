@@ -27,7 +27,7 @@ ctxo                       # Start MCP server (stdio)
 
 Language adapters ship as separate npm packages and are discovered by scanning the project `package.json` for `@ctxo/lang-*` or `ctxo-lang-*` dependencies.
 
-## 14 Tools
+## Tools: 14 core, plus 2 with @ctxo/domain
 
 - get_logic_slice: Symbol + transitive dependencies (L1-L4 detail levels)
 - get_blast_radius: What breaks if a symbol changes (3-tier: confirmed/likely/potential; data edges are confirmed)
@@ -43,6 +43,8 @@ Language adapters ship as separate npm packages and are discovered by scanning t
 - get_class_hierarchy: Class inheritance tree (ancestors + descendants)
 - get_symbol_importance: PageRank centrality ranking
 - get_pr_impact: Full PR risk assessment in a single call
+- get_domain_context (with @ctxo/domain): the card of the named context that owns a symbol or file: terms, rules with tests and code links, contracts, decisions, open questions. Parameters: `symbolId?`, `path?`; with neither, every context
+- get_rule (with @ctxo/domain): one rule by ID (`ruleId`, variants such as LEND03 also match): text, context, tests with the source of each link, implementing symbols, decisions and provenance
 
 ## Tool Selection Guide
 
@@ -55,6 +57,16 @@ Language adapters ship as separate npm packages and are discovered by scanning t
 - Finding unused code? -> find_dead_code
 - Safe to delete? -> find_importers
 - Preparing a context map? -> get_architectural_overlay(mode: "contexts")
+- Need the business rules or decisions behind code? -> get_domain_context, then get_rule (with @ctxo/domain)
+
+## New in the next release: the domain graph (#156, PR 3)
+
+- `ctxo index` builds `.ctxo/index/domain/graph.json` from the cards and the glossary: rules linked to tests (xUnit `Trait` with a `domain.tests.ruleTraitKeys` key, NUnit `Category`, MSTest `TestCategory`, JUnit `Tag`, test titles, `rule:` comments, ID mentions in test files, card `Tests:` lines) and to code (card `Code:` lines, `rule: LEND-03` comments above declarations), decisions linked to provenance (repo files; `#123` and URLs kept as strings, never fetched), terms linked to symbol and table names. Rebuilt by `ctxo index` and the post-commit hook, not by `ctxo watch`; after a card edit the tools add `stale: true`.
+- Fields with a graph (capped at 50, `decisions` at 5, `<name>Total` when cut, not truncatable): get_blast_radius `rulesAffected`, `cardsToUpdate`; get_why_context `decisions` (rule-linked first, then newest, with provenance); get_context_for_task `cardExcerpt` (target and neighbour rules, terms, contracts; within `tokenBudget`, up to a quarter reserved); get_pr_impact `contextsTouched` (merge base of `since` and HEAD plus the working tree), `cardsChanged`, `rulesWithoutTests`.
+- Two tools, get_domain_context and get_rule: 14 core tools, 16 with `@ctxo/domain`. Both answer `{ found: false, hint }` without a registry or a graph.
+- get_ranked_context gains `scope` with `@ctxo/domain`: `"code"` (default, unchanged) or `"domain"` (BM25 over rules, terms, decisions, card sections and in-repo provenance files; `strategy` and `searchMode` do not apply). Without the package there is no `scope` parameter.
+- Card format additions (no code change needed): `Code:` lines, `**Term**` items, glossary `(context: <id>)`, dated decision lines. `Tests:`/`Code:` values with `::` are symbol IDs; use `file#Name` for a plain test name. `verify-domain` check 6 also errors on missing `Code:` files and directories, and warns on unindexed symbol IDs and unknown IDs in production `rule:` comments of a rule prefix.
+- `@ctxo/cli` no longer publishes source maps (tarball about 0.8 MB unpacked). Internal API: async enrichers, `reserveTaskContextTokens`, `rankedContextScopes`, host services `createDocumentSearch`, `splitIdentifier`, `dataResourceKinds` (ADR-018 addendum).
 
 ## Unreleased: domain knowledge layer, `@ctxo/domain` (#156, PR 2B)
 

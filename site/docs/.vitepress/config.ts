@@ -172,6 +172,14 @@ export default defineConfig({
                 { text: 'find_dead_code', link: '/mcp-tools/find-dead-code' },
               ],
             },
+            {
+              text: 'Domain (@ctxo/domain)',
+              collapsed: true,
+              items: [
+                { text: 'get_domain_context', link: '/mcp-tools/get-domain-context' },
+                { text: 'get_rule', link: '/mcp-tools/get-rule' },
+              ],
+            },
           ],
         },
         {

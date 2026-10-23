@@ -56,6 +56,10 @@ Checking if safe to delete or rename?
 
 Working with inheritance?
   -> get_class_hierarchy (extends / implements tree)
+
+Need the business rules or decisions behind code? (with @ctxo/domain)
+  -> get_domain_context (the card of the context that owns the symbol or file)
+  -> then get_rule      (one rule: its tests, code and decisions)
 ```
 
 ## By task type
@@ -97,6 +101,10 @@ Combine [`find_importers`](/mcp-tools/find-importers) (direct reverse deps) with
 - [`find_dead_code`](/mcp-tools/find-dead-code) for unreachable symbols and orphan files.
 - [`get_change_intelligence`](/mcp-tools/get-change-intelligence) for high-churn high-complexity files that deserve attention.
 
+### Business rules and decisions
+
+Need the business rules or decisions behind code? With `@ctxo/domain` installed, use [`get_domain_context`](/mcp-tools/get-domain-context) with the symbol or file, then [`get_rule`](/mcp-tools/get-rule) for each rule it lists that your change may affect. To find a rule by words, use [`get_ranked_context`](/mcp-tools/get-ranked-context#the-domain-scope) with `scope: "domain"`.
+
 ### Class hierarchies
 
 [`get_class_hierarchy`](/mcp-tools/get-class-hierarchy) resolves both ancestors and descendants in one call — much faster than walking `extends` / `implements` edges by hand.
@@ -113,5 +121,5 @@ Combine [`find_importers`](/mcp-tools/find-importers) (direct reverse deps) with
 
 ## See also
 
-- [MCP Tools Overview](/mcp-tools/overview) — all 14 tools grouped by category
+- [MCP Tools Overview](/mcp-tools/overview) - 14 core tools, plus 2 with `@ctxo/domain`, grouped by category
 - [Response Format](/mcp-tools/response-format) — `_meta`, truncation, intent filtering

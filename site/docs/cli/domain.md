@@ -44,6 +44,16 @@ ctxo verify-domain [--since <ref>] [--boundaries by-rung|report] [--json]
 | 10 | Boundaries: edges outside `contracts` | error for `blockingRungs` in `by-rung` mode, else warning |
 | 11 | With `--since`: no unresolved touched contexts | error |
 
+Check 6 also covers the links of the domain graph:
+
+- A `Tests:` or `Code:` value whose file does not exist (or names a directory) is an error:
+  `LEND-03: Tests file "<file>" does not exist`, `LEND-03: Code file "<file>" does not exist`.
+- A value with `::` is a symbol ID. One the index does not hold is a warning, and the link falls back to its file:
+  `LEND-03: Code: "<value>" is not an indexed symbol; it links to its file`. C# symbol IDs differ between the
+  Roslyn and tree-sitter tiers, so C# cards are safer with file paths in `Code:` lines.
+- A `rule:` comment in production code that names an unknown rule warns (`rule: comment names unknown rule
+  LEND-09`), but only when its prefix is a rule prefix, so `# rule: E501` in a linter comment stays silent.
+
 A registry that does not parse or validate skips checks 2 to 11. Day one is green: with the init skeleton (no contexts) or a partial registry,
 unowned files and a missing context map are warnings until you set `domain.coverage.unowned: error`.
 

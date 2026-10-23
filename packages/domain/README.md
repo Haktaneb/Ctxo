@@ -17,9 +17,13 @@ ctxo init --domain       # config defaults, registry skeleton, fold guard, skill
 - `ctxo domain discover`: proposes tracker prefixes, rule trait keys and test folders from the repository.
 - Boundaries and drift by named context, written to `.ctxo/index/domain/` by `ctxo index`.
 - Additive fields on core tools: `context`, `contextBoundaryViolations`, `contextDrift`.
+- The domain graph, `.ctxo/index/domain/graph.json`, built by `ctxo index` from the cards and the glossary: rules linked to tests (framework annotations, test titles, `rule:` comments, card `Tests:` lines) and to code (card `Code:` lines, `rule:` comments), decisions linked to provenance, terms linked to identifiers.
+- Fields from the graph on core tools: `rulesAffected` and `cardsToUpdate` on `get_blast_radius`, `decisions` on `get_why_context`, `cardExcerpt` on `get_context_for_task` (within its token budget), `contextsTouched`, `cardsChanged` and `rulesWithoutTests` on `get_pr_impact`.
+- Two MCP tools: `get_domain_context({ symbolId?, path? })`, the card of the context that owns a symbol or file, and `get_rule({ ruleId })`, one rule with its tests, symbols, decisions and provenance. Ctxo has 14 core tools; with this package, 16.
+- The `domain` scope of `get_ranked_context` (`scope: "domain"`): BM25 over rules, terms, decisions, card sections and the in-repo files decisions link to.
 - The `ctxo-domain-fold` skill and three `ctxo doctor` checks.
 
-Without a registry, the commands print a hint and exit 0, and no fields are added.
+Without a registry, the commands print a hint and exit 0, no fields are added, and the two tools answer `{ found: false, hint }`.
 
 ## Version line
 
@@ -30,3 +34,4 @@ Without a registry, the commands print a hint and exit 0, and no fields are adde
 - Feature doc and "Ctxo domain conventions v1": [docs/features/domain-knowledge.md](https://github.com/alperhankendi/Ctxo/blob/master/docs/features/domain-knowledge.md)
 - Design record: [ADR-018](https://github.com/alperhankendi/Ctxo/blob/master/docs/architecture/ADR/adr-018-domain-knowledge-layer.md)
 - Commands: [ctxo.dev domain commands](https://github.com/alperhankendi/Ctxo/blob/master/site/docs/cli/domain.md)
+- Tools: [get_domain_context](https://github.com/alperhankendi/Ctxo/blob/master/site/docs/mcp-tools/get-domain-context.md), [get_rule](https://github.com/alperhankendi/Ctxo/blob/master/site/docs/mcp-tools/get-rule.md)
