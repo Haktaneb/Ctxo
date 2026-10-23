@@ -161,7 +161,7 @@ export function tokenizeSql(source: string): SqlToken[] {
 /** GO is a batch separator only alone on its line: optional count, optional trailing `--` comment. */
 function isBatchSeparator(source: string, start: number, end: number, lineStart: number): boolean {
   for (let k = lineStart; k < start; k++) {
-    if (!isBlank(source[k]) && source[k] !== '\r' && source[k] !== '﻿') return false;
+    if (!isBlank(source[k]) && source[k] !== '\r' && source[k] !== '\uFEFF') return false;
   }
   let k = end;
   while (isBlank(source[k])) k++;

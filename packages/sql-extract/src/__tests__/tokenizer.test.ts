@@ -49,9 +49,9 @@ describe('tokenizeSql', () => {
   });
 
   it('ignores a leading byte order mark', () => {
-    const toks = tokenizeSql('﻿SELECT 1');
+    const toks = tokenizeSql('\uFEFFSELECT 1');
     expect(toks.map((t) => t.text)).toEqual(['SELECT', '1']);
-    expect(tokenizeSql('﻿GO')[0]!.kind).toBe('batch');
+    expect(tokenizeSql('\uFEFFGO')[0]!.kind).toBe('batch');
   });
 
   it('does not throw on an unterminated string, comment or bracket', () => {
@@ -63,7 +63,7 @@ describe('tokenizeSql', () => {
   });
 
   it('reports offsets that slice back to each token\'s text', () => {
-    const src = "﻿SELECT [Ödünç Kaydı].x, N'a''b', @p, #t, 12 /* c */\nGO 2\nEXEC dbo.Üye;";
+    const src = "\uFEFFSELECT [Ödünç Kaydı].x, N'a''b', @p, #t, 12 /* c */\nGO 2\nEXEC dbo.Üye;";
     const toks = tokenizeSql(src);
     expect(toks.length).toBeGreaterThan(10);
     for (const t of toks) expect(src.slice(t.start, t.end)).toBe(t.text);
