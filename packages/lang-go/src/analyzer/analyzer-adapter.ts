@@ -5,6 +5,7 @@ import { structTagAnnotations } from '../struct-tags.js';
 import { detectGoToolchain } from './toolchain-detect.js';
 import { discoverGoModule, findCtxoGoAnalyzerSource } from './module-discovery.js';
 import { ensureAnalyzerBinary } from './binary-build.js';
+import { sqlEdgesFromCallSites } from '../sql-edges.js';
 import { runBatchAnalyze, type AnalyzerFileResult, type AnalyzerBatchResult } from './analyzer-process.js';
 
 const log = createLogger('ctxo:lang-go');
@@ -32,6 +33,21 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
   private timedOut = false;
   private batchPromise: Promise<void> | null = null;
   private initialized = false;
+  private readonly sqlCallSites: boolean;
+  private sqlStats: { constant: number; nonConstant: number } | undefined;
+
+  constructor(options: { readonly sqlCallSites?: boolean } = {}) {
+    this.sqlCallSites = options.sqlCallSites === true;
+  }
+
+  /**
+   * SQL argument counts reported by the analyzer (`constant` ones gave a call-site record, `nonConstant`
+   * ones did not). Undefined until a batch ran with `sqlCallSites`. Cumulative per adapter instance: a full
+   * index run creates fresh adapters, and `ctxo watch` never reports these stats.
+   */
+  getSqlStats(): { constant: number; nonConstant: number } | undefined {
+    return this.sqlStats ? { ...this.sqlStats } : undefined;
+  }
 
   isSupported(filePath: string): boolean {
     return filePath.endsWith('.go');
@@ -120,13 +136,17 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
     await this.ensureBatch();
     const file = this.cache.get(this.normalizePath(filePath));
     if (!file) return [];
-    return file.edges
+    const edges: GraphEdge[] = file.edges
       .filter((e) => VALID_SYMBOL_ID.test(e.from) && VALID_SYMBOL_ID.test(e.to))
       .map((e) => ({
         from: e.from,
         to: e.to,
         kind: e.kind as GraphEdge['kind'],
       }));
+    // Data edges are built from the already rewritten call-site ids and skip the 3-part `to` filter above:
+    // their targets are canonical names such as `dbo.loans::table` (QR5).
+    if (file.sqlCallSites?.length) edges.push(...sqlEdgesFromCallSites(file.sqlCallSites));
+    return edges;
   }
 
   async extractComplexity(_filePath: string, _source: string): Promise<ComplexityMetrics[]> {
@@ -150,7 +170,7 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
 
   private async runBatch(): Promise<void> {
     if (!this.binaryPath || !this.moduleRoot) return;
-    const result = await runBatchAnalyze(this.binaryPath, this.moduleRoot);
+    const result = await runBatchAnalyze(this.binaryPath, this.moduleRoot, { sqlCallSites: this.sqlCallSites });
     this.absorbBatch(result);
     log.info(`Go analyzer batch: ${result.totalFiles} files in ${result.elapsed}, ${result.dead.length} dead`);
   }
@@ -173,7 +193,17 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
           from: rewriteId(e.from, file.file, projectRel),
           to: rewriteIdAcrossModule(e.to, this.modulePathPrefix),
         })),
+        // Only the enclosing symbol gets the module prefix; the table targets are built later from the text.
+        ...(file.sqlCallSites
+          ? { sqlCallSites: file.sqlCallSites.map((s) => ({ ...s, symbolId: rewriteIdAcrossModule(s.symbolId, this.modulePathPrefix) })) }
+          : {}),
       });
+    }
+    if (result.sql) {
+      this.sqlStats = {
+        constant: (this.sqlStats?.constant ?? 0) + result.sql.constant,
+        nonConstant: (this.sqlStats?.nonConstant ?? 0) + result.sql.nonConstant,
+      };
     }
     for (const id of result.dead) {
       this.deadSymbolIds.add(rewriteIdAcrossModule(id, this.modulePathPrefix));

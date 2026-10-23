@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createLogger } from '../logger.js';
+import type { SqlCallSite } from '../sql-edges.js';
 
 const log = createLogger('ctxo:lang-go');
 
@@ -28,6 +29,8 @@ export interface AnalyzerFileResult {
   symbols: AnalyzerSymbol[];
   edges: AnalyzerEdge[];
   complexity: unknown[];
+  /** Raw SQL at known database call sites; only with `--sql-call-sites`, omitted when the file has none. */
+  sqlCallSites?: SqlCallSite[];
 }
 
 export interface AnalyzerBatchResult {
@@ -37,6 +40,20 @@ export interface AnalyzerBatchResult {
   timeout: boolean;
   totalFiles: number;
   elapsed: string;
+  /** Constant and non-constant SQL arguments counted by the run; only with `--sql-call-sites`. */
+  sql?: { constant: number; nonConstant: number };
+}
+
+export interface GoAnalyzerRunOptions {
+  /** Pass `--sql-call-sites`: the analyzer reports raw SQL at known call sites. */
+  readonly sqlCallSites?: boolean;
+  /** Kill the analyzer after this long (default 120_000). */
+  readonly timeoutMs?: number;
+}
+
+/** The analyzer's command line for one module; `--sql-call-sites` only when the option asks for it. */
+export function buildGoAnalyzerArgs(moduleRoot: string, options: GoAnalyzerRunOptions = {}): string[] {
+  return options.sqlCallSites === true ? ['--root', moduleRoot, '--sql-call-sites'] : ['--root', moduleRoot];
 }
 
 /**
@@ -47,15 +64,15 @@ export interface AnalyzerBatchResult {
 export async function runBatchAnalyze(
   binaryPath: string,
   moduleRoot: string,
-  timeoutMs = 120_000,
+  options: GoAnalyzerRunOptions = {},
 ): Promise<AnalyzerBatchResult> {
   return new Promise((resolve) => {
     const empty: AnalyzerBatchResult = {
       files: [], dead: [], hasMain: false, timeout: false, totalFiles: 0, elapsed: '',
     };
-    const proc = spawn(binaryPath, ['--root', moduleRoot], {
+    const proc = spawn(binaryPath, buildGoAnalyzerArgs(moduleRoot, options), {
       stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: timeoutMs,
+      timeout: options.timeoutMs ?? 120_000,
     });
 
     const files: AnalyzerFileResult[] = [];
@@ -64,6 +81,7 @@ export async function runBatchAnalyze(
     let timeout = false;
     let totalFiles = 0;
     let elapsed = '';
+    let sql: AnalyzerBatchResult['sql'];
     let stderr = '';
     let buffer = '';
 
@@ -91,6 +109,9 @@ export async function runBatchAnalyze(
             case 'summary':
               totalFiles = Number(obj.totalFiles ?? 0);
               elapsed = String(obj.elapsed ?? '');
+              if (obj.sql && typeof obj.sql === 'object') {
+                sql = { constant: Number(obj.sql.constant ?? 0), nonConstant: Number(obj.sql.nonConstant ?? 0) };
+              }
               break;
           }
         } catch {
@@ -109,7 +130,7 @@ export async function runBatchAnalyze(
         resolve(empty);
         return;
       }
-      resolve({ files, dead, hasMain, timeout, totalFiles, elapsed });
+      resolve({ files, dead, hasMain, timeout, totalFiles, elapsed, ...(sql ? { sql } : {}) });
     });
 
     proc.on('error', (err) => {

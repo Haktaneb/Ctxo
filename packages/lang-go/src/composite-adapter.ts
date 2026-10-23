@@ -15,13 +15,17 @@ export class GoCompositeAdapter implements ILanguageAdapter {
   private analyzer: GoAnalyzerAdapter | null = null;
   private treeSitter: GoAdapter;
 
-  constructor() {
+  /** True when the analyzer is asked for SQL call sites (`capabilities.sqlCallSites`); full tier only. */
+  readonly sqlCallSites: boolean;
+
+  constructor(options: { readonly sqlCallSites?: boolean } = {}) {
+    this.sqlCallSites = options.sqlCallSites === true;
     this.treeSitter = new GoAdapter();
   }
 
   async initialize(rootDir: string): Promise<void> {
     try {
-      const analyzer = new GoAnalyzerAdapter();
+      const analyzer = new GoAnalyzerAdapter({ sqlCallSites: this.sqlCallSites });
       await analyzer.initialize(rootDir);
       if (analyzer.isReady()) {
         this.analyzer = analyzer;

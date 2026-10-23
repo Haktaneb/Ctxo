@@ -1,0 +1,82 @@
+package corpus
+
+import (
+	"context"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jmoiron/sqlx"
+	"gorm.io/gorm"
+)
+
+type Row struct{ ID int }
+
+// SqlxSelect: sqlx DB.Select.
+func SqlxSelect(db *sqlx.DB) ([]Row, error) {
+	var rows []Row
+	err := db.Select(&rows, "SELECT Id FROM dbo.Holds")
+	return rows, err
+}
+
+// SqlxGet: sqlx DB.Get.
+func SqlxGet(db *sqlx.DB) (Row, error) {
+	var r Row
+	err := db.Get(&r, "SELECT Id FROM dbo.Loans WHERE Id = ?", 1)
+	return r, err
+}
+
+// SqlxQueryx: sqlx DB.Queryx.
+func SqlxQueryx(db *sqlx.DB) (*sqlx.Rows, error) {
+	return db.Queryx("SELECT Id FROM dbo.Members")
+}
+
+// SqlxNamedExec: sqlx DB.NamedExec.
+func SqlxNamedExec(db *sqlx.DB, r Row) error {
+	_, err := db.NamedExec("INSERT INTO dbo.LoanArchive (Id) VALUES (:id)", r)
+	return err
+}
+
+// SqlxMustExec: sqlx DB.MustExec.
+func SqlxMustExec(db *sqlx.DB) {
+	db.MustExec("DELETE FROM dbo.Holds WHERE ExpiresAt < CURRENT_TIMESTAMP")
+}
+
+// SqlxPackageGet: the package function sqlx.Get.
+func SqlxPackageGet(db *sqlx.DB) (Row, error) {
+	var r Row
+	err := sqlx.Get(db, &r, "SELECT Id FROM dbo.Loans WHERE Id = ?", 2)
+	return r, err
+}
+
+// PgxQuery: pgx Conn.Query.
+func PgxQuery(ctx context.Context, conn *pgx.Conn) (pgx.Rows, error) {
+	return conn.Query(ctx, "SELECT Id FROM dbo.Members WHERE Id = $1", 1)
+}
+
+// PgxPoolExec: pgxpool Pool.Exec.
+func PgxPoolExec(ctx context.Context, pool *pgxpool.Pool) error {
+	_, err := pool.Exec(ctx, "DELETE FROM dbo.Holds WHERE Id = $1", 1)
+	return err
+}
+
+// PgxTxQueryRow: pgx Tx.QueryRow.
+func PgxTxQueryRow(ctx context.Context, tx pgx.Tx) pgx.Row {
+	return tx.QueryRow(ctx, "SELECT Id FROM dbo.Loans WHERE Id = $1", 1)
+}
+
+// GormRaw: gorm Raw.
+func GormRaw(g *gorm.DB) *gorm.DB {
+	return g.Raw("SELECT Id FROM dbo.Holds WHERE MemberId = ?", 1)
+}
+
+// GormExec: gorm Exec.
+func GormExec(g *gorm.DB) {
+	g.Exec("INSERT INTO dbo.LoanArchive (Id) SELECT Id FROM dbo.Loans")
+}
+
+// GormModel: a model chain has no raw SQL and gives nothing.
+func GormModel(g *gorm.DB) []Row {
+	var rows []Row
+	g.Where("member_id = ?", 1).Find(&rows)
+	return rows
+}

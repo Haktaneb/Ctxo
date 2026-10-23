@@ -7,7 +7,7 @@ vi.mock('node:child_process', () => ({
 }));
 
 import { spawn } from 'node:child_process';
-import { runBatchAnalyze } from '../analyzer/analyzer-process.js';
+import { buildGoAnalyzerArgs, runBatchAnalyze } from '../analyzer/analyzer-process.js';
 
 const mockedSpawn = vi.mocked(spawn);
 
@@ -107,5 +107,48 @@ describe('runBatchAnalyze — JSONL parsing', () => {
     const result = await runBatchAnalyze('/fake/binary', '/some/module');
     expect(result.timeout).toBe(true);
     expect(result.hasMain).toBe(false);
+  });
+});
+
+describe('SQL call sites', () => {
+  beforeEach(() => {
+    mockedSpawn.mockReset();
+  });
+
+  it('buildGoAnalyzerArgs adds --sql-call-sites only when enabled', () => {
+    expect(buildGoAnalyzerArgs('/m')).toEqual(['--root', '/m']);
+    expect(buildGoAnalyzerArgs('/m', {})).toEqual(['--root', '/m']);
+    expect(buildGoAnalyzerArgs('/m', { sqlCallSites: false })).toEqual(['--root', '/m']);
+    expect(buildGoAnalyzerArgs('/m', { sqlCallSites: true })).toEqual(['--root', '/m', '--sql-call-sites']);
+  });
+
+  it('runBatchAnalyze spawns with those args and reads sqlCallSites and the summary sql stats', async () => {
+    fakeProcess({
+      stdout: [
+        '{"type":"file","file":"a.go","symbols":[],"edges":[],"complexity":[],"sqlCallSites":[{"symbolId":"a.go::Foo::function","line":4,"text":"SELECT Id FROM dbo.Loans","kind":"statement"}]}',
+        '{"type":"file","file":"b.go","symbols":[],"edges":[],"complexity":[]}',
+        '{"type":"summary","totalFiles":2,"elapsed":"1ms","sql":{"constant":1,"nonConstant":2}}',
+        '',
+      ].join('\n'),
+    });
+    const result = await runBatchAnalyze('/fake/binary', '/some/module', { sqlCallSites: true, timeoutMs: 5_000 });
+
+    expect(mockedSpawn).toHaveBeenCalledWith(
+      '/fake/binary',
+      ['--root', '/some/module', '--sql-call-sites'],
+      expect.objectContaining({ timeout: 5_000 }),
+    );
+    expect(result.files[0]!.sqlCallSites).toEqual([
+      { symbolId: 'a.go::Foo::function', line: 4, text: 'SELECT Id FROM dbo.Loans', kind: 'statement' },
+    ]);
+    expect(result.files[1]!.sqlCallSites).toBeUndefined();
+    expect(result.sql).toEqual({ constant: 1, nonConstant: 2 });
+  });
+
+  it('runBatchAnalyze without the option spawns without the flag and reports no stats', async () => {
+    fakeProcess({ stdout: '{"type":"summary","totalFiles":0,"elapsed":"1ms"}\n' });
+    const result = await runBatchAnalyze('/fake/binary', '/some/module');
+    expect(mockedSpawn).toHaveBeenCalledWith('/fake/binary', ['--root', '/some/module'], expect.anything());
+    expect(result.sql).toBeUndefined();
   });
 });

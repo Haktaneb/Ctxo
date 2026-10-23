@@ -1,0 +1,30 @@
+package corpus
+
+import (
+	"database/sql"
+	"fmt"
+)
+
+const loansSQL = "SELECT l.Id FROM dbo.Loans l " + "WHERE l.ClosedAt IS NULL"
+
+var holdsSQL = "SELECT Id FROM dbo.Holds"
+
+// FromConst: a const used as the SQL argument.
+func FromConst(db *sql.DB) (*sql.Rows, error) {
+	return db.Query(loansSQL)
+}
+
+// Concatenated: a constant concatenation at the call.
+func Concatenated(db *sql.DB) (*sql.Rows, error) {
+	return db.Query("SELECT Id FROM " + "dbo.Loans")
+}
+
+// FromVar: a var is not a constant.
+func FromVar(db *sql.DB) (*sql.Rows, error) {
+	return db.Query(holdsSQL)
+}
+
+// FromSprintf: fmt.Sprintf is not a constant.
+func FromSprintf(db *sql.DB, column string) (*sql.Rows, error) {
+	return db.Query(fmt.Sprintf("SELECT %s FROM dbo.Members", column))
+}

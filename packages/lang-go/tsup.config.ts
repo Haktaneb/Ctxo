@@ -7,5 +7,5 @@ export default defineConfig({
   sourcemap: true,
   clean: true,
   target: 'node20',
-  external: ['@ctxo/plugin-api', 'tree-sitter', 'tree-sitter-go'],
+  external: ['@ctxo/plugin-api', '@ctxo/sql-extract', 'tree-sitter', 'tree-sitter-go'],
 });
