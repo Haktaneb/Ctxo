@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { LiteralKind, TrivialLiteral } from '../fact-types.js';
 import { DEFAULT_FACT_OPTIONS } from '../fact-options.js';
-import { decodeCsharpRawString } from '../csharp-raw-string.js';
+import { decodeCsharpStringLiteral } from '../csharp-string-literal.js';
 import {
   canonicalNumber,
   capFactValue,
@@ -34,11 +34,9 @@ interface Vectors {
   readonly normalizeFactText: Vector<Segments, Segments>[];
   readonly capFactValue: Vector<Segments, Segments>[];
   readonly joinRoute: Vector<string[], string>[];
-  readonly languageSpecific: {
-    readonly csharp: {
-      readonly isTrivialLiteral: Vector<{ literal: string; kind: LiteralKind; trivialLiterals: TrivialLiteral[] }, boolean>[];
-    };
-  };
+  readonly languageSpecific: Readonly<Record<string, {
+    readonly isTrivialLiteral: Vector<{ literal: string; kind: LiteralKind; trivialLiterals: TrivialLiteral[] }, boolean>[];
+  }>>;
 }
 
 const vectors = JSON.parse(readFileSync(VECTORS_PATH, 'utf8')) as Vectors;
@@ -63,6 +61,21 @@ describe('fact conformance vectors', () => {
       'matchesNormalizationPatternCustom',
       'normalizeFactText',
     ]);
+  });
+
+  it('every category is an array, except languageSpecific, which is keyed by language', () => {
+    for (const [key, value] of Object.entries(vectors)) {
+      if (key === '$comment' || key === 'defaults') continue;
+      if (key === 'languageSpecific') {
+        expect(Object.keys(value as object).sort()).toEqual(['csharp', 'typescript']);
+        for (const block of Object.values(vectors.languageSpecific)) {
+          for (const category of Object.values(block)) expect(Array.isArray(category)).toBe(true);
+        }
+      } else {
+        expect(Array.isArray(value), key).toBe(true);
+      }
+    }
+    expect(vectors.$comment).toContain('Every category is an array of { input, expected }, except languageSpecific, which is keyed by language');
   });
 
   it('the vectors defaults block equals DEFAULT_FACT_OPTIONS', () => {
@@ -107,13 +120,28 @@ describe('fact conformance vectors', () => {
     expect(capFactValue(expand(input))).toBe(expand(expected));
   });
 
-  it.each(vectors.languageSpecific.csharp.isTrivialLiteral)('C# isTrivialLiteral($input.literal) with $input.trivialLiterals is $expected', ({ input, expected }) => {
-    expect(isTrivialLiteral(input.literal, input.kind, input.trivialLiterals, decodeCsharpRawString)).toBe(expected);
+  it.each(vectors.languageSpecific['csharp']!.isTrivialLiteral)('C# isTrivialLiteral($input.literal) with $input.trivialLiterals is $expected', ({ input, expected }) => {
+    expect(isTrivialLiteral(input.literal, input.kind, input.trivialLiterals, decodeCsharpStringLiteral)).toBe(expected);
   });
 
-  it('without a raw-string decoder a """ literal is never trivial', () => {
+  it('without a string literal decoder only plain quoted literals are decoded', () => {
     expect(isTrivialLiteral('"""\nraw\n"""', 'string', ['raw'])).toBe(false);
-    expect(isTrivialLiteral('"""\nraw\n"""', 'string', ['raw'], decodeCsharpRawString)).toBe(true);
+    expect(isTrivialLiteral('"""\nraw\n"""', 'string', ['raw'], decodeCsharpStringLiteral)).toBe(true);
+    expect(isTrivialLiteral('@""', 'string', [''])).toBe(false);
+    expect(isTrivialLiteral('@""', 'string', [''], decodeCsharpStringLiteral)).toBe(true);
+  });
+
+  it('the decoder is asked only for literals that are not plain quoted ones', () => {
+    const seen: string[] = [];
+    const decoder = (literal: string): string | undefined => {
+      seen.push(literal);
+      return 'decoded';
+    };
+    expect(isTrivialLiteral(' "x" ', 'string', ['x'], decoder)).toBe(true);
+    expect(isTrivialLiteral("'x'", 'char', ['x'], decoder)).toBe(true);
+    expect(isTrivialLiteral('"\\u0041"', 'string', ['decoded'], decoder)).toBe(false);
+    expect(isTrivialLiteral(' @"x" ', 'string', ['decoded'], decoder)).toBe(true);
+    expect(seen).toEqual(['@"x"']);
   });
 
   it.each(vectors.joinRoute)('joinRoute($input) is $expected', ({ input, expected }) => {

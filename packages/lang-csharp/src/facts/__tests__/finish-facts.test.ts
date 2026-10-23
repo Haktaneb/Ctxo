@@ -3,7 +3,7 @@ import type { SymbolNode } from '@ctxo/plugin-api';
 import type { FactEvidence } from '../fact-types.js';
 import { DEFAULT_FACT_OPTIONS } from '../fact-options.js';
 import { finishFacts, moduleSymbolId } from '../finish-facts.js';
-import { decodeCsharpRawString } from '../csharp-raw-string.js';
+import { decodeCsharpStringLiteral } from '../csharp-string-literal.js';
 
 const FILE = 'src/Loans/LoanPolicy.cs';
 const M = `${FILE}::Lending.LoanPolicy.CanBorrow::method`;
@@ -46,12 +46,21 @@ describe('finishFacts', () => {
     expect(kept!.detail!['literal']).toBe(short);
   });
 
-  it('the raw-string decoder hook reaches the trivial-literal check', () => {
+  it('the string literal decoder hook reaches the trivial-literal check', () => {
+    const evidence: FactEvidence[] = [
+      { kind: 'comparison', symbolId: M, line: 1, text: 'note == """\n\n"""', operator: '==', literal: '"""\n\n"""', literalKind: 'string' },
+      { kind: 'comparison', symbolId: M, line: 2, text: 'note == @""', operator: '==', literal: '@""', literalKind: 'string' },
+    ];
+    expect(finishFacts(FILE, evidence, [], DEFAULT_FACT_OPTIONS)).toHaveLength(2);
+    expect(finishFacts(FILE, evidence, [], DEFAULT_FACT_OPTIONS, decodeCsharpStringLiteral)).toEqual([]);
+  });
+
+  it('a raw string that does not compile is not trivial, so its comparison is kept', () => {
     const evidence: FactEvidence[] = [
       { kind: 'comparison', symbolId: M, line: 1, text: 'note == """\n"""', operator: '==', literal: '"""\n"""', literalKind: 'string' },
+      { kind: 'comparison', symbolId: M, line: 2, text: 'note == $"{x}"', operator: '==', literal: '$"{x}"', literalKind: 'string' },
     ];
-    expect(finishFacts(FILE, evidence, [], DEFAULT_FACT_OPTIONS)).toHaveLength(1);
-    expect(finishFacts(FILE, evidence, [], DEFAULT_FACT_OPTIONS, decodeCsharpRawString)).toEqual([]);
+    expect(finishFacts(FILE, evidence, [], DEFAULT_FACT_OPTIONS, decodeCsharpStringLiteral).map(f => f.line)).toEqual([1, 2]);
   });
 
   it('a call is kept only when a normalization pattern matches', () => {

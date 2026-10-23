@@ -58,11 +58,13 @@ export type FactEvidence =
     };
 
 /**
- * A language's raw-string decoder (C# raw strings, Java text blocks): gets a literal starting with
- * `"""` (prefixes such as `$` or `@` removed) and returns its content, or undefined when it is not a
- * well-formed raw string. The shared rules decode no `"""` literal on their own.
+ * A language's string literal decoder: gets the trimmed source of a string or char literal that is
+ * not a plain quoted one (prefixes, suffixes, verbatim, interpolated, raw, single-quoted or template
+ * strings, text blocks) and returns its content, or undefined when the literal is not a string
+ * constant (for example an interpolation hole, or a form that does not compile). The shared rules
+ * decode only a plain `"..."` string or `'...'` char with the common escapes.
  */
-export type RawStringDecoder = (literal: string) => string | undefined;
+export type StringLiteralDecoder = (literal: string) => string | undefined;
 
 /** A literal value the detectors treat as trivial: numbers, strings, booleans and `null`. */
 export type TrivialLiteral = number | string | boolean | null;

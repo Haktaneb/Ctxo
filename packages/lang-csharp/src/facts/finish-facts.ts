@@ -2,7 +2,7 @@
 // official language plugin and @ctxo/domain; only import paths may differ.
 import type { CodeFact, FactKind, SymbolNode } from '@ctxo/plugin-api';
 import { FACT_KIND_ORDER } from './fact-types.js';
-import type { FactEvidence, FactOptions, RawStringDecoder } from './fact-types.js';
+import type { FactEvidence, FactOptions, StringLiteralDecoder } from './fact-types.js';
 import {
   MAX_FACTS_PER_FILE,
   canonicalNumber,
@@ -40,11 +40,11 @@ function durationName(name: string | undefined, constructor: string): string {
   return name ?? segments.slice(-2).join('.');
 }
 
-function draft(evidence: FactEvidence, options: FactOptions, decodeRawString: RawStringDecoder | undefined): DraftFact | undefined {
+function draft(evidence: FactEvidence, options: FactOptions, decodeStringLiteral: StringLiteralDecoder | undefined): DraftFact | undefined {
   const base = { ...(evidence.symbolId !== undefined ? { symbolId: evidence.symbolId } : {}), line: evidence.line };
   switch (evidence.kind) {
     case 'comparison':
-      if (isTrivialLiteral(evidence.literal, evidence.literalKind, options.trivialLiterals, decodeRawString)) return undefined;
+      if (isTrivialLiteral(evidence.literal, evidence.literalKind, options.trivialLiterals, decodeStringLiteral)) return undefined;
       return { ...base, kind: 'literal-comparison', text: evidence.text, detail: { operator: evidence.operator, literal: capFactValue(evidence.literal) } };
     case 'call':
       if (!matchesNormalizationPattern(evidence.method, evidence.qualifier, options.normalizationMethods)) return undefined;
@@ -92,20 +92,20 @@ function attribute(line: number, symbols: readonly SymbolNode[], fallback: strin
  * Turns collector evidence into the file's facts: the trivial-literal list, normalization patterns,
  * retry/timeout names and numbers, routes (FC-3 to FC-8), FC-2 text, FC-9 attribution, then FC-10
  * order (line, kind, text, detail, symbol), duplicates dropped and at most 500 facts.
- * `decodeRawString` is the language's raw-string decoder for the trivial-literal check (the C#
- * plugin passes `decodeCsharpRawString`); without it a `"""` literal is never trivial.
+ * `decodeStringLiteral` is the language's string literal decoder for the trivial-literal check;
+ * without it only a plain quoted literal can be trivial.
  */
 export function finishFacts(
   file: string,
   evidence: readonly FactEvidence[],
   symbols: readonly SymbolNode[],
   options: FactOptions,
-  decodeRawString?: RawStringDecoder,
+  decodeStringLiteral?: StringLiteralDecoder,
 ): CodeFact[] {
   const moduleId = moduleSymbolId(file);
   const keyed: { readonly fact: CodeFact; readonly detailKey: string }[] = [];
   for (const item of evidence) {
-    const fact = draft(item, options, decodeRawString);
+    const fact = draft(item, options, decodeStringLiteral);
     if (!fact) continue;
     const finished: CodeFact = {
       kind: fact.kind,
