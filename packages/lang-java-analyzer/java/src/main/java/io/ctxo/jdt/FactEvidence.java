@@ -32,7 +32,8 @@ import java.util.regex.Pattern;
  * amount in which some int-typed operation leaves the int range (24 * 60 * 60 * 1000 * 365) is
  * not a constant, so it gives no evidence, also beside a floating operand. A hex, octal or binary
  * int literal above INT_MAX ({@code 0xFFFFFFFF}, a valid int with the value -1, which the shared
- * rules would read as 4294967295) counts as leaving the range. Types come from the JDT bindings,
+ * rules would read as 4294967295) counts as leaving the range, so a comparison or case label with
+ * one gives no evidence either. Types come from the JDT bindings,
  * else from the literals (an integer literal without {@code L} is an int).
  *
  * <p>{@code symbolId} is the owner as {@code EmitVisitor} names it: the innermost method or
@@ -188,6 +189,8 @@ final class FactEvidence {
           String right = literalKind(infix.getRightOperand());
           if ((left == null) == (right == null)) return;
           Expression literal = left != null ? infix.getLeftOperand() : infix.getRightOperand();
+          // 0xFFFFFFFF is -1 in Java, the shared rules would read 4294967295: not a constant, no fact.
+          if (overflowsInt(literal)) return;
           Dtos.Evidence ev = evidence("comparison", infix);
           if (ev == null) return;
           ev.text = src(infix);
@@ -209,7 +212,7 @@ final class FactEvidence {
         for (Object o : label.expressions()) {
           Expression value = (Expression) o;
           String kind = literalKind(value);
-          if (kind == null) continue;
+          if (kind == null || overflowsInt(value)) continue;
           Dtos.Evidence ev = evidence("comparison", label);
           if (ev == null) return;
           ev.text = subjectText + " case " + src(value);
@@ -407,16 +410,20 @@ final class FactEvidence {
       InfixExpression.Operator op = infix.getOperator();
       if (op != InfixExpression.Operator.PLUS && op != InfixExpression.Operator.MINUS
           && op != InfixExpression.Operator.TIMES && op != InfixExpression.Operator.DIVIDE) return null;
-      // Every operand is evaluated (and checked) first: a floating operand ends the exact value, but
-      // an int step beside it still wraps in Java (1.5 * 2 * (100000 * 100000)).
+      // Every operand is evaluated (and checked) first, so an int sub-expression beside a floating
+      // operand still counts (1.5 * 2 * (100000 * 100000)). Then the chain is folded left to right
+      // as Java evaluates it: the int steps before the first floating operand wrap in Java and are
+      // checked (100000 * 100000 * 1.5); from that operand on, Java computes in double, and the
+      // result is not an exact integer (null).
       List<Exact> values = new ArrayList<>();
       values.add(exact(infix.getLeftOperand()));
       values.add(exact(infix.getRightOperand()));
       for (Object o : infix.extendedOperands()) values.add(exact((Expression) o));
-      if (values.contains(null)) return null;
       Exact acc = values.get(0);
+      if (acc == null) return null;
       for (int i = 1; i < values.size(); i++) {
         Exact next = values.get(i);
+        if (next == null) return null;
         boolean isLong = acc.isLong || next.isLong;
         BigInteger value;
         if (op == InfixExpression.Operator.PLUS) value = acc.value.add(next.value);

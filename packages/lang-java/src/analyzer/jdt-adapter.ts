@@ -150,12 +150,13 @@ export class JdtAnalyzerAdapter implements ILanguageAdapter {
 
   /**
    * Facts were requested, but the analyzer's `done` or `ready` line has no `"facts":true`: an analyzer
-   * older than the plugin ignores `--facts=`, so the full tier gives only annotation endpoints. Once per adapter.
+   * older than the plugin ignores `--facts=`, so the full tier gives only annotation endpoints. Once per
+   * adapter, written to stderr directly (the package logger is DEBUG-gated, and the user must see this).
    */
   private warnFactsUnsupported(): void {
     if (this.factsWarned) return;
     this.factsWarned = true;
-    log.warn('analyzer too old for facts; run ctxo install java --full-tier');
+    process.stderr.write('[ctxo:lang-java] analyzer too old for facts; run ctxo install java --full-tier\n');
   }
 
   private norm(filePath: string): string {

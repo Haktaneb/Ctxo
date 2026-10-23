@@ -1437,7 +1437,7 @@
       ]
     },
     "java": {
-      "$comment": "Run with decodeJavaStringLiteral: text blocks (JLS 3.10.6). The opening \"\"\" must be followed by optional spaces, tabs or form feeds and a line break; the content up to the first unescaped \"\"\" (which must end the literal) gets LF line breaks, then String.stripIndent (the last line counts toward the indentation even when blank, so a closing delimiter on its own line keeps the final newline, and one at column 0 keeps all indentation; each whitespace character, a tab included, counts as one; trailing whitespace is removed), then String.translateEscapes (\\b \\t \\n \\f \\r \\s \\\" \\' \\\\, octal \\0 to \\377, a backslash before a line break joins the lines). A Unicode escape (\\u0041) and any other escape are not constants, as in the shared rules. Plain \"...\" strings never reach the decoder (\"\\s\" is not a constant). Int overflow (24 * 60 * 60 * 1000 * 365) is decided by the JDT evidence step, not by these rules: an int-typed step outside the int range gives no evidence, also inside floating arithmetic (1.5 * 2 * (100000 * 100000)). Hex, octal and binary int literals above INT_MAX without L (0xFFFFFFFF, 037777777777, 0b followed by 32 ones) are valid Java ints with wrapped values (0xFFFFFFFF is -1), while the shared rules read them unsigned (4294967295), so they are not constants: the evidence step drops a binding or duration amount holding one, and as a comparison literal the shared value is never Java's (0xFFFFFFFF is not trivial against -1). overflowsInt vectors: a Java expression and whether the JDT evidence step treats it as not a constant (types from the literals: an integer literal without L is an int).",
+      "$comment": "Run with decodeJavaStringLiteral: text blocks (JLS 3.10.6). The opening \"\"\" must be followed by optional spaces, tabs or form feeds and a line break; the content up to the first unescaped \"\"\" (which must end the literal) gets LF line breaks, then String.stripIndent (the last line counts toward the indentation even when blank, so a closing delimiter on its own line keeps the final newline, and one at column 0 keeps all indentation; each whitespace character, a tab included, counts as one; trailing whitespace is removed), then String.translateEscapes (\\b \\t \\n \\f \\r \\s \\\" \\' \\\\, octal \\0 to \\377, a backslash before a line break joins the lines). A Unicode escape (\\u0041) and any other escape are not constants, as in the shared rules. Plain \"...\" strings never reach the decoder (\"\\s\" is not a constant). Int overflow (24 * 60 * 60 * 1000 * 365) is decided by the JDT evidence step, not by these rules: an int-typed step outside the int range gives no evidence, also inside floating arithmetic (1.5 * 2 * (100000 * 100000)). Hex, octal and binary int literals above INT_MAX without L (0xFFFFFFFF, 037777777777, 0b followed by 32 ones) are valid Java ints with wrapped values (0xFFFFFFFF is -1), while the shared rules read them unsigned (4294967295), so they are not constants: the evidence step drops a binding or duration amount holding one, and a comparison or case label whose number literal is one gives no evidence (so no fact). The syntax tier (Task 7) applies the same rules from the literals alone. In a flattened chain the int steps before the first floating operand are checked (100000 * 100000 * 1.5 overflows); from a floating first operand on, Java computes in double (1.5 * 100000 * 100000 does not). overflowsInt vectors: a Java expression and whether the JDT evidence step treats it as not a constant (types from the literals: an integer literal without L is an int). comparisonGivesEvidence vectors: a comparison of an int x inside an if condition and whether it gives comparison evidence.",
       "isTrivialLiteral": [
         {
           "input": {
@@ -1695,19 +1695,47 @@
             ]
           },
           "expected": false
+        }
+      ],
+      "comparisonGivesEvidence": [
+        {
+          "input": "x == 0xFFFFFFFF",
+          "expected": false
         },
         {
-          "input": {
-            "literal": "0xFFFFFFFF",
-            "kind": "number",
-            "trivialLiterals": [
-              -1
-            ]
-          },
+          "input": "x > 037777777777",
           "expected": false
+        },
+        {
+          "input": "0b11111111111111111111111111111111 != x",
+          "expected": false
+        },
+        {
+          "input": "x == 0x7FFFFFFF",
+          "expected": true
+        },
+        {
+          "input": "x == 0xFFFFFFFFL",
+          "expected": true
+        },
+        {
+          "input": "x == -2147483648",
+          "expected": true
+        },
+        {
+          "input": "x >= 5",
+          "expected": true
         }
       ],
       "overflowsInt": [
+        {
+          "input": "100000 * 100000 * 1.5",
+          "expected": true
+        },
+        {
+          "input": "1.5 * 100000 * 100000",
+          "expected": false
+        },
         {
           "input": "24 * 60 * 60 * 1000 * 365",
           "expected": true

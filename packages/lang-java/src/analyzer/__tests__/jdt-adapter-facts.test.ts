@@ -84,7 +84,8 @@ describe('JdtAnalyzerAdapter facts', () => {
 
     beforeEach(() => {
       stderr = [];
-      vi.stubEnv('DEBUG', 'ctxo:*');
+      // No DEBUG: the warning must reach the user whatever the debug namespaces are.
+      vi.stubEnv('DEBUG', '');
       vi.spyOn(process.stderr, 'write').mockImplementation((chunk: string | Uint8Array) => {
         stderr.push(String(chunk));
         return true;
@@ -104,7 +105,7 @@ describe('JdtAnalyzerAdapter facts', () => {
       const adapter = readyAdapter({ facts: DEFAULT_FACT_OPTIONS });
       await adapter.extractFacts(FILE, '');
       expect(warnings()).toBe(1);
-      expect(stderr.find((line) => line.includes(WARNING))).toContain(' warn ');
+      expect(stderr.find((line) => line.includes(WARNING))).toBe(`[ctxo:lang-java] ${WARNING}\n`);
       expect(await adapter.startKeepAlive()).toBe(true);
       expect(warnings()).toBe(1);
     });

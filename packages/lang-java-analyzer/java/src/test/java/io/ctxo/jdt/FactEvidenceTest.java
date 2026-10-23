@@ -313,6 +313,45 @@ class FactEvidenceTest {
     }
   }
 
+  /** {@code languageSpecific.java.comparisonGivesEvidence}: an int-overflowing number literal (0xFFFFFFFF is -1 in Java) gives no comparison. */
+  @Test
+  void comparisonsFollowTheJavaVectors(@TempDir Path tmp) throws IOException {
+    JsonArray cases = vectors.getAsJsonObject("languageSpecific").getAsJsonObject("java").getAsJsonArray("comparisonGivesEvidence");
+    assertTrue(cases.size() > 0);
+    StringBuilder source = new StringBuilder("package lending;\nclass Cmp {\n");
+    for (int i = 0; i < cases.size(); i++) {
+      String input = cases.get(i).getAsJsonObject().get("input").getAsString();
+      source.append("  boolean m").append(i).append("(int x) { if (").append(input).append(") return true; return false; }\n");
+    }
+    source.append("}\n");
+    write(tmp, "src/main/java/lending/Cmp.java", source.toString());
+    List<Dtos.Evidence> found = file(analyzeWithFacts(tmp), "src/main/java/lending/Cmp.java").factEvidence;
+    for (int i = 0; i < cases.size(); i++) {
+      JsonObject vector = cases.get(i).getAsJsonObject();
+      String owner = "src/main/java/lending/Cmp.java::m" + i + "::method";
+      boolean has = found != null && found.stream().anyMatch(e -> e.kind.equals("comparison") && owner.equals(e.symbolId));
+      assertEquals(vector.get("expected").getAsBoolean(), has, vector.get("input").getAsString());
+    }
+  }
+
+  @Test
+  void anIntOverflowingCaseLabelGivesNoEvidence(@TempDir Path tmp) throws IOException {
+    String rel = "src/main/java/lending/Labels.java";
+    write(tmp, rel, String.join("\n",
+        "package lending;",
+        "class Labels {",
+        "  int m(int x) {",
+        "    switch (x) { case 0xFFFFFFFF: return 1; case 0x7FFFFFFF: return 2; case 5: return 3; default: return 0; }",
+        "  }",
+        "  int n(long y) {",
+        "    return switch ((int) y) { case 037777777777 -> 1; case -2147483648 -> 2; default -> 0; };",
+        "  }",
+        "}", ""));
+    List<String> labels = file(analyzeWithFacts(tmp), rel).factEvidence.stream()
+        .map(e -> e.text).collect(Collectors.toList());
+    assertEquals(List.of("x case 0x7FFFFFFF", "x case 5", "(int) y case -2147483648"), labels);
+  }
+
   private static org.eclipse.jdt.core.dom.Expression expression(String source) {
     org.eclipse.jdt.core.dom.ASTParser parser = org.eclipse.jdt.core.dom.ASTParser.newParser(org.eclipse.jdt.core.dom.AST.getJLSLatest());
     parser.setKind(org.eclipse.jdt.core.dom.ASTParser.K_EXPRESSION);
