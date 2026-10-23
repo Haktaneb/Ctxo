@@ -341,6 +341,36 @@ describe('get_pr_impact domain fields', () => {
       expect(readIndex).toHaveBeenCalledTimes(1);
     });
 
+    it('a failed index read is not cached: the next call reads again and uses the real data', async () => {
+      const { fields, readIndex } = repo({ now: LATER });
+      const checks = 'src/Lending/Checks.cs';
+      const entry: FileIndex = {
+        file: checks,
+        lastModified: 1,
+        symbols: [{ symbolId: `${checks}::Checks.Limit::method`, name: 'Checks.Limit', kind: 'method', startLine: 1, endLine: 3, annotations: [{ name: 'Fact' }] }],
+        edges: [],
+        intent: [],
+        antiPatterns: [],
+      };
+      write(`.ctxo/index/${checks}.json`, JSON.stringify(entry));
+      write(checks, 'class Checks { [Fact] void Limit() {} }\n');
+      write(POLICY_FILE, 'class LoanPolicy { int h; }\n');
+      commit('change');
+      readIndex.mockImplementationOnce(() => {
+        throw new Error('disk hiccup');
+      });
+
+      const first = await fields(CORE, { since: 'main' });
+      // Without the index the annotated file is not known as a test file.
+      expect((first['contextsTouched'] as { files: string[] }[])[0]!.files).toEqual([checks, POLICY_FILE]);
+      expect(domainWarnings()).toEqual(['[ctxo:domain] WARN Cannot read the index for test file recognition: disk hiccup']);
+
+      const second = await fields(CORE, { since: 'main' });
+      expect(readIndex).toHaveBeenCalledTimes(2);
+      expect((second['contextsTouched'] as { files: string[] }[])[0]!.files).toEqual([POLICY_FILE]);
+      expect(domainWarnings()).toHaveLength(1);
+    });
+
     it('an index written within 2 s of the stamp is read on every call', async () => {
       const { fields, readIndex } = repo();
       writeIndexEntry(POLICY_FILE);

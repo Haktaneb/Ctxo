@@ -116,11 +116,13 @@ export function prImpactDomainFields(host: CtxoHost, state: DomainState, options
   function testEvidence(): readonly FileIndex[] {
     const stamp = indexStamp(indexDir, now());
     if (stamp !== undefined && stamp === cachedStamp) return cachedEvidence;
-    let indices: FileIndex[] = [];
+    let indices: FileIndex[];
     try {
       indices = host.services.readIndex(host.ctxoRoot);
     } catch (err) {
+      // Never cached: this call goes without the evidence and the next one reads again.
       log.warn(`Cannot read the index for test file recognition: ${(err as Error).message}`);
+      return [];
     }
     cachedEvidence = annotationEvidence(indices);
     cachedStamp = stamp;
