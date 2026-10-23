@@ -786,6 +786,30 @@ describe('cli-router init parts flags', () => {
     expect(initRuns[1]!['only']).toBeUndefined();
   });
 
+  it('passes --domain and --boundaries to InitCommand.run', async () => {
+    await route('--domain', '--boundaries', 'report', '-y');
+    await route('--only', 'domain', '--boundaries=by-rung');
+    await route('--tools', 'cursor');
+
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(initRuns).toHaveLength(3);
+    expect(initRuns[0]).toMatchObject({ domain: true, boundaries: 'report', yes: true });
+    expect(initRuns[1]).toMatchObject({ domain: false, boundaries: 'by-rung', only: ['domain'] });
+    expect(initRuns[2]).toMatchObject({ domain: false });
+    expect(initRuns[2]!['boundaries']).toBeUndefined();
+  });
+
+  it.each([[['--boundaries']], [['--boundaries', 'strict']], [['--boundaries=']], [['--boundaries', '-y']], [['--boundaries=Report']]])(
+    'rejects an invalid --boundaries value: %j',
+    async (args) => {
+      await route('--domain', ...args);
+
+      expect(errorSpy).toHaveBeenCalledWith('[ctxo] --boundaries requires by-rung or report');
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(initConstructed).toBe(0);
+    },
+  );
+
   it('leaves the part options unset when the flags are absent', async () => {
     await route('--tools', 'cursor', '--dry-run', '--no-install');
 
@@ -822,17 +846,17 @@ describe('cli-router init parts flags', () => {
     await route('--only', 'rules,hooks');
 
     expect(errorSpy).toHaveBeenCalledWith(
-      '[ctxo] Unknown init part: hooks. Valid parts: rules, skills, guard, mcp, git-hooks, config',
+      '[ctxo] Unknown init part: hooks. Valid parts: rules, skills, guard, mcp, git-hooks, config, domain',
     );
     expect(exitSpy).toHaveBeenCalledWith(1);
     expect(initConstructed).toBe(0);
   });
 
   it('rejects an unknown part given to --skip', async () => {
-    await route('--skip', 'domain');
+    await route('--skip', 'domains');
 
     expect(errorSpy).toHaveBeenCalledWith(
-      '[ctxo] Unknown init part: domain. Valid parts: rules, skills, guard, mcp, git-hooks, config',
+      '[ctxo] Unknown init part: domains. Valid parts: rules, skills, guard, mcp, git-hooks, config, domain',
     );
     expect(exitSpy).toHaveBeenCalledWith(1);
     expect(initConstructed).toBe(0);
@@ -859,7 +883,7 @@ describe('cli-router init parts flags', () => {
   });
 
   it.each(['--only', '--skip'])('rejects %s without a value', async (flag) => {
-    const message = `[ctxo] ${flag} requires a comma-separated list of parts: rules, skills, guard, mcp, git-hooks, config`;
+    const message = `[ctxo] ${flag} requires a comma-separated list of parts: rules, skills, guard, mcp, git-hooks, config, domain`;
 
     await route(flag);
     expect(errorSpy).toHaveBeenLastCalledWith(message);
@@ -876,7 +900,7 @@ describe('cli-router init parts flags', () => {
   });
 
   it.each(['--only', '--skip'])('%s followed by a flag token such as -y has no value', async (flag) => {
-    const message = `[ctxo] ${flag} requires a comma-separated list of parts: rules, skills, guard, mcp, git-hooks, config`;
+    const message = `[ctxo] ${flag} requires a comma-separated list of parts: rules, skills, guard, mcp, git-hooks, config, domain`;
 
     await route(flag, '-y');
     expect(errorSpy).toHaveBeenLastCalledWith(message);
@@ -891,14 +915,14 @@ describe('cli-router init parts flags', () => {
 
   it('handles the = spelling edges: an empty value, a comma-only value and an attached dash', async () => {
     const missing = (flag: string): string =>
-      `[ctxo] ${flag} requires a comma-separated list of parts: rules, skills, guard, mcp, git-hooks, config`;
+      `[ctxo] ${flag} requires a comma-separated list of parts: rules, skills, guard, mcp, git-hooks, config, domain`;
 
     await route('--only=');
     expect(errorSpy).toHaveBeenLastCalledWith(missing('--only'));
     await route('--skip=');
     expect(errorSpy).toHaveBeenLastCalledWith(missing('--skip'));
     await route('--only=-y');
-    expect(errorSpy).toHaveBeenLastCalledWith('[ctxo] Unknown init part: -y. Valid parts: rules, skills, guard, mcp, git-hooks, config');
+    expect(errorSpy).toHaveBeenLastCalledWith('[ctxo] Unknown init part: -y. Valid parts: rules, skills, guard, mcp, git-hooks, config, domain');
     expect(exitSpy).toHaveBeenCalledTimes(3);
     expect(initConstructed).toBe(0);
 
@@ -912,7 +936,9 @@ describe('cli-router init parts flags', () => {
     await route('--help');
 
     const help = printed();
-    expect(help).toContain('ctxo init --only <parts>  Install only these parts: rules,skills,guard,mcp,git-hooks,config');
+    expect(help).toContain('ctxo init --only <parts>  Install only these parts: rules,skills,guard,mcp,git-hooks,config,domain');
+    expect(help).toContain('  ctxo init --domain        Also set up the domain layer: registry, fold guard, skill (@ctxo/domain)');
+    expect(help).toContain('  ctxo init --boundaries <by-rung|report>   Boundary mode for --domain, without the prompt');
     expect(help).toContain('ctxo init --skip <parts>  Install everything except these parts');
     expect(help).toContain('ctxo init --no-guard      Does not install the Claude Code safe-edit guard');
     expect(help).not.toContain('rules use the full block');

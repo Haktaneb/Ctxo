@@ -17,6 +17,7 @@ import {
   scanRulesBlocks,
 } from '../../core/agent-rules/rules-block.js';
 import { isolateGitEnv, type IsolatedGitEnv } from './git-test-env.js';
+import { writeStubDomainPackage } from './helpers/stub-domain-package.js';
 
 const tempDirs: string[] = [];
 let gitEnv: IsolatedGitEnv;
@@ -822,7 +823,7 @@ describe('InitCommand - selected parts and tiered rules (#159)', () => {
 
   it('-y without --tools writes every platform, the same set the dry run previews', async () => {
     const dir = makeTempProject();
-    const planned = new InitCommand(dir).plan({ yes: true, only: ['rules'] }).map((result) => result.file);
+    const planned = (await new InitCommand(dir).plan({ yes: true, only: ['rules'] })).map((result) => result.file);
 
     await new InitCommand(dir).run({ yes: true, only: ['rules'] });
 
@@ -836,7 +837,7 @@ describe('InitCommand - selected parts and tiered rules (#159)', () => {
     mkdirSync(join(dir, '.claude', 'skills', 'ctxo-safe-edit', 'SKILL.md'), { recursive: true });
     const only: InitOptions['only'] = ['rules', 'skills', 'guard'];
 
-    const plannedClaude = new InitCommand(dir).plan({ tools: ['claude-code'], only }).find((row) => row.file === 'CLAUDE.md');
+    const plannedClaude = (await new InitCommand(dir).plan({ tools: ['claude-code'], only })).find((row) => row.file === 'CLAUDE.md');
     await new InitCommand(dir).run({ tools: ['claude-code'], yes: true, only });
 
     expect(stderr()).toMatch(/\.claude\/skills\/ctxo-safe-edit\/SKILL\.md: could not be read \(E\w+\); left unchanged/);
@@ -1147,7 +1148,7 @@ describe('InitCommand - the dry run lists every file init would touch (#159)', (
     writeFileSync(join(dir, '.mcp.json'), '{"mcpServers":{"other":{"command":"node"}}}', 'utf-8');
     writeFileSync(join(dir, 'CLAUDE.md'), '# Project\n', 'utf-8');
 
-    const plan = new InitCommand(dir).plan({ tools: TOOLS }).filter((result) => !result.file.endsWith('/'));
+    const plan = (await new InitCommand(dir).plan({ tools: TOOLS })).filter((result) => !result.file.endsWith('/'));
     const planned = Object.fromEntries(plan.map((result) => [result.file, result.action]));
     const before = fileHashes(dir);
     await new InitCommand(dir).run({ tools: TOOLS, yes: true, noInstall: true });
@@ -1205,5 +1206,121 @@ describe('InitCommand - the dry run lists every file init would touch (#159)', (
     expect(upgrade.results.map((result) => result.action)).toEqual(['updated', 'created']);
     expect(readFileSync(hookPath(dir), 'utf-8')).toBe(v1);
     expect(existsSync(hookPath(dir, 'post-merge'))).toBe(false);
+  });
+});
+
+describe('InitCommand - the domain part (@ctxo/domain)', () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  let previousExitCode: typeof process.exitCode;
+
+  beforeEach(() => {
+    previousExitCode = process.exitCode;
+    process.exitCode = undefined;
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    delete (globalThis as Record<string, unknown>).__ctxoInitContexts;
+  });
+
+  afterEach(() => {
+    errorSpy.mockRestore();
+    process.exitCode = previousExitCode;
+  });
+
+  function stderr(): string {
+    return errorSpy.mock.calls.map((call) => String(call[0])).join('\n');
+  }
+
+  const MISSING =
+    '[ctxo] \u26a0 @ctxo/domain is not installed; run "ctxo install domain", then "ctxo init --only domain"';
+
+  /** A stub module whose init contribution records its context and returns one row per tool. */
+  const STUB = `export async function register() {
+  return {
+    id: 'domain',
+    init: {
+      part: 'domain',
+      async apply(ctx) {
+        globalThis.__ctxoInitContexts = [...(globalThis.__ctxoInitContexts ?? []), {
+          toolIds: ctx.toolIds, dryRun: ctx.dryRun, yes: ctx.yes, boundaries: ctx.boundaries,
+          mode: await ctx.prompt.select('mode?', [{ value: 'by-rung', label: 'a' }, { value: 'report', label: 'b' }], 'by-rung'),
+        }];
+        const hook = ctx.ensureClaudeHookEntry({ event: 'Stop', command: 'ctxo domain-guard-hook' });
+        return [{ file: 'docs/domain/stub.yaml (' + ctx.toolIds.join('+') + ')', action: 'created' }, { ...hook, file: hook.file + ' (Stop)' }];
+      },
+    },
+  };
+}
+`;
+
+  function contexts(): Array<Record<string, unknown>> {
+    return ((globalThis as Record<string, unknown>).__ctxoInitContexts as Array<Record<string, unknown>> | undefined) ?? [];
+  }
+
+  it('the domain part warns and exits 1 when @ctxo/domain is missing and --no-install is set', async () => {
+    const dir = makeTempProject();
+
+    await new InitCommand(dir).run({ tools: ['claude-code'], yes: true, noInstall: true, domain: true, skip: ['git-hooks'] });
+
+    expect(stderr()).toContain(MISSING);
+    // The other parts still ran.
+    expect(stderr()).toContain('[ctxo] \u2713 CLAUDE.md (created)');
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('non-interactive without --yes warns and exits 1 instead of installing', async () => {
+    const dir = makeTempProject();
+
+    await new InitCommand(dir).run({ tools: ['claude-code'], only: ['domain'] });
+
+    expect(stderr()).toContain(MISSING);
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('a dry run without the package lists @ctxo/domain (package) as created and keeps the exit code', async () => {
+    const dir = makeTempProject();
+
+    await new InitCommand(dir).run({ dryRun: true, only: ['domain'] });
+
+    expect(stderr()).toMatch(/^ {2}@ctxo\/domain \(package\) +would create$/m);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("the domain part runs the module's init contribution with the selected tools", async () => {
+    const dir = makeTempProject();
+    writeStubDomainPackage(dir, STUB);
+
+    await new InitCommand(dir).run({ tools: ['claude-code', 'cursor'], yes: true, only: ['domain'], boundaries: 'report' });
+
+    expect(stderr()).toContain('[ctxo] \u2713 docs/domain/stub.yaml (claude-code+cursor) (created)');
+    expect(stderr()).toContain('[ctxo] \u2713 .claude/settings.json (Stop) (created)');
+    expect(JSON.parse(readFileSync(join(dir, '.claude', 'settings.json'), 'utf-8'))).toEqual({
+      hooks: { Stop: [{ hooks: [{ type: 'command', command: 'ctxo domain-guard-hook' }] }] },
+    });
+    expect(contexts()).toEqual([{ toolIds: ['claude-code', 'cursor'], dryRun: false, yes: true, boundaries: 'report', mode: 'by-rung' }]);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it('the dry run passes every platform and dryRun to the contribution and writes nothing', async () => {
+    const dir = makeTempProject();
+    writeStubDomainPackage(dir, STUB);
+
+    const rows = await new InitCommand(dir).plan({ only: ['domain'] });
+
+    expect(contexts()).toEqual([
+      { toolIds: PLATFORMS.map((p) => p.id), dryRun: true, yes: false, boundaries: undefined, mode: 'by-rung' },
+    ]);
+    expect(rows.map((row) => `${row.file} ${row.action}`)).toEqual([
+      `docs/domain/stub.yaml (${PLATFORMS.map((p) => p.id).join('+')}) created`,
+      '.claude/settings.json (Stop) created',
+    ]);
+    expect(existsSync(join(dir, '.claude'))).toBe(false);
+  });
+
+  it('without --domain the module contribution does not run', async () => {
+    const dir = makeTempProject();
+    writeStubDomainPackage(dir, STUB);
+
+    await new InitCommand(dir).run({ tools: ['claude-code'], yes: true, noInstall: true, only: ['rules'] });
+
+    expect(contexts()).toEqual([]);
   });
 });

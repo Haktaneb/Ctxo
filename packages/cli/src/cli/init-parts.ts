@@ -6,13 +6,16 @@
  * The language-plugin install is not a part: `--only` skips it, `--skip` keeps it (subject to
  * `--no-install`), and `--rules` keeps skipping it (see `pluginStepEnabled`).
  *
- * `domain` joins the list in PR 2B.
+ * `domain` (PR 2B) is opt-in: it is selected only by `--domain` or by naming it in `--only` (D14).
  */
 
 /** The order the help lists them in. The order init runs them in is InitCommand's, not this one. */
-export const INIT_PARTS = ['rules', 'skills', 'guard', 'mcp', 'git-hooks', 'config'] as const;
+export const INIT_PARTS = ['rules', 'skills', 'guard', 'mcp', 'git-hooks', 'config', 'domain'] as const;
 
 export type InitPart = (typeof INIT_PARTS)[number];
+
+/** The parts a plain `ctxo init` leaves out: `--domain` adds `domain`, `--only` and `--skip` name it as usual. */
+export const OPT_IN_PARTS: ReadonlySet<InitPart> = new Set<InitPart>(['domain']);
 
 function isInitPart(value: string): value is InitPart {
   return (INIT_PARTS as readonly string[]).includes(value);
@@ -46,6 +49,8 @@ export interface InitPartFlags {
   readonly noGuard?: boolean;
   /** `--rules`, deprecated: the same as `--skip git-hooks,guard`. */
   readonly rulesOnly?: boolean;
+  /** `--domain`: also selects the opt-in `domain` part (D14); `--skip domain` still removes it. */
+  readonly domain?: boolean;
 }
 
 /** What `--rules` leaves out. */
@@ -53,8 +58,9 @@ const RULES_ONLY_SKIPS: readonly InitPart[] = ['git-hooks', 'guard'];
 
 /**
  * The parts one init run installs, in `INIT_PARTS` order. `only` selects exactly those parts; otherwise
- * every part except `skip` and, for `rulesOnly`, `git-hooks` and `guard`. `noGuard` always removes `guard`.
- * An empty `only` selects nothing.
+ * every part except the opt-in ones (`OPT_IN_PARTS`), `skip` and, for `rulesOnly`, `git-hooks` and `guard`.
+ * `domain` adds the `domain` part to either selection unless `skip` names it. `noGuard` always removes
+ * `guard`. An empty `only` selects nothing.
  */
 export function resolveInitParts(flags: InitPartFlags): Set<InitPart> {
   const removed = new Set<InitPart>(flags.skip ?? []);
@@ -62,7 +68,9 @@ export function resolveInitParts(flags: InitPartFlags): Set<InitPart> {
   return new Set(
     INIT_PARTS.filter((part) => {
       if (flags.noGuard && part === 'guard') return false;
-      return flags.only !== undefined ? flags.only.includes(part) : !removed.has(part);
+      if (part === 'domain' && flags.domain && !removed.has(part)) return true;
+      if (flags.only !== undefined) return flags.only.includes(part);
+      return !OPT_IN_PARTS.has(part) && !removed.has(part);
     }),
   );
 }

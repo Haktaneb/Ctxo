@@ -78,6 +78,31 @@ function readInitPartsFlag(args: readonly string[], flag: '--only' | '--skip'): 
   return { present, parts };
 }
 
+const BOUNDARIES_ERROR = '[ctxo] --boundaries requires by-rung or report';
+
+/**
+ * Read `--boundaries <by-rung|report>` (or `--boundaries=<mode>`) from `ctxo init` arguments. Absent gives
+ * `{}`; a missing value, a flag token or any other value gives the error to print before exiting 1.
+ */
+function readBoundariesFlag(args: readonly string[]): { readonly mode?: 'by-rung' | 'report'; readonly error?: string } {
+  let mode: 'by-rung' | 'report' | undefined;
+  for (let i = 1; i < args.length; i++) {
+    const arg = args[i]!;
+    let value: string | undefined;
+    if (arg === '--boundaries') {
+      value = args[i + 1];
+      i += 1;
+    } else if (arg.startsWith('--boundaries=')) {
+      value = arg.slice('--boundaries='.length);
+    } else {
+      continue;
+    }
+    if (value !== 'by-rung' && value !== 'report') return { error: BOUNDARIES_ERROR };
+    mode = value;
+  }
+  return mode !== undefined ? { mode } : {};
+}
+
 export interface CliRouterOptions {
   /** A directory standing in for the CLI's location when modules are looked up (tests); defaults to the running CLI. */
   readonly cliAnchor?: string;
@@ -249,19 +274,22 @@ export class CliRouter {
         const dryRun = args.includes('--dry-run');
         const noInstall = args.includes('--no-install');
         const noGuard = args.includes('--no-guard');
+        const domain = args.includes('--domain');
         const tools = toolsArg ? toolsArg.split(',').map(t => t.trim()) : undefined;
         // Everything is checked before InitCommand exists, so a bad flag never starts an init. --only is
         // exact, so it cannot be mixed with the narrowing flags (--skip, --rules); --no-guard combines with all.
         const only = readInitPartsFlag(args, '--only');
         const skip = readInitPartsFlag(args, '--skip');
+        const boundaries = readBoundariesFlag(args);
         const partsError = only.error ?? skip.error
-          ?? (only.present && (skip.present || rulesOnly) ? '[ctxo] --only cannot be combined with --skip or --rules' : undefined);
+          ?? (only.present && (skip.present || rulesOnly) ? '[ctxo] --only cannot be combined with --skip or --rules' : undefined)
+          ?? boundaries.error;
         if (partsError) {
           console.error(partsError);
           process.exit(1);
           return;
         }
-        await new InitCommand(this.projectRoot).run({
+        await new InitCommand(this.projectRoot, { cliAnchor: this.cliAnchor }).run({
           tools,
           yes: yesArg,
           rulesOnly,
@@ -270,6 +298,8 @@ export class CliRouter {
           only: only.present ? only.parts : undefined,
           skip: skip.present ? skip.parts : undefined,
           noGuard,
+          domain,
+          ...(boundaries.mode !== undefined ? { boundaries: boundaries.mode } : {}),
         });
         break;
       }
@@ -487,11 +517,13 @@ Usage:
   ctxo status               Show index manifest
   ctxo init                 Interactive setup (rules, skills, guard, MCP, git hooks, config); the post-commit hook runs ctxo index --commit HEAD
   ctxo init --tools a,b -y  Non-interactive (claude-code,cursor,...); -y without --tools selects every tool
-  ctxo init --only <parts>  Install only these parts: rules,skills,guard,mcp,git-hooks,config
+  ctxo init --only <parts>  Install only these parts: rules,skills,guard,mcp,git-hooks,config,domain
   ctxo init --skip <parts>  Install everything except these parts
   ctxo init --no-guard      Does not install the Claude Code safe-edit guard
   ctxo init --rules         Deprecated: same as --skip git-hooks,guard
   ctxo init --dry-run       List every file init would create or change
+  ctxo init --domain        Also set up the domain layer: registry, fold guard, skill (@ctxo/domain)
+  ctxo init --boundaries <by-rung|report>   Boundary mode for --domain, without the prompt
   ctxo stats                Show usage statistics (--json, --days N, --clear)
   ctxo doctor               Health check all subsystems (--json, --quiet)
   ctxo doctor --fix         Apply fixes in dependency order: config, git hooks, skills, the safe-edit guard, rules blocks, plugins, index (--dry-run, --yes)

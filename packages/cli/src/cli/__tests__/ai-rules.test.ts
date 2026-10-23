@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync, writeFileSy
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { PLATFORMS, generateRules, installRules, detectPlatforms, ensureGitignore, ensureConfig, ensureIndexDir, getMcpConfigTargets, ensureMcpConfig, ctxoMcpEntry, installSkills, skillStates, SKILLS, SKILL_PLATFORMS, ensureClaudeHook, readClaudeGuardState, resolveRulesTier, gateEnabled, linkedRulesPlatforms, readRulesStates } from '../ai-rules.js';
+import { PLATFORMS, generateRules, installRules, detectPlatforms, ensureGitignore, ensureConfig, ensureIndexDir, getMcpConfigTargets, ensureMcpConfig, ctxoMcpEntry, installSkills, skillStates, SKILLS, SKILL_PLATFORMS, ensureClaudeHook, ensureClaudeHookEntry, installSkillContent, readClaudeGuardState, resolveRulesTier, gateEnabled, linkedRulesPlatforms, readRulesStates } from '../ai-rules.js';
 import { InitCommand } from '../init-command.js';
 import { applyFixes } from '../doctor-fix.js';
 import { AiRulesCheck, SkillsCheck } from '../../adapters/diagnostics/checks/agent-setup-check.js';
@@ -1424,6 +1424,140 @@ describe('ensureClaudeHook', () => {
   });
 });
 
+describe('ensureClaudeHookEntry', () => {
+  const STOP = { event: 'Stop', command: 'ctxo domain-guard-hook' };
+
+  it('adds a Stop entry without a matcher and keeps other hooks', () => {
+    const root = makeTempDir();
+    const file = writeClaudeSettings(
+      root,
+      'settings.json',
+      JSON.stringify({ model: 'x', hooks: { PreToolUse: [CTXO_GUARD_ENTRY], Stop: [{ hooks: [{ type: 'command', command: 'other' }] }] } }, null, 2),
+    );
+
+    const result = ensureClaudeHookEntry(root, STOP);
+
+    expect(result).toEqual({ file: '.claude/settings.json', action: 'updated' });
+    const cfg = JSON.parse(readFileSync(file, 'utf-8'));
+    expect(cfg.model).toBe('x');
+    expect(cfg.hooks.PreToolUse).toEqual([CTXO_GUARD_ENTRY]);
+    expect(cfg.hooks.Stop).toEqual([
+      { hooks: [{ type: 'command', command: 'other' }] },
+      { hooks: [{ type: 'command', command: 'ctxo domain-guard-hook' }] },
+    ]);
+    expect('matcher' in cfg.hooks.Stop[1]).toBe(false);
+    expect(ensureClaudeHookEntry(root, STOP).action).toBe('skipped');
+  });
+
+  it('creates the settings file and honours dryRun', () => {
+    const root = makeTempDir();
+    expect(ensureClaudeHookEntry(root, STOP, { dryRun: true })).toEqual({ file: '.claude/settings.json', action: 'created' });
+    expect(existsSync(join(root, '.claude'))).toBe(false);
+    expect(ensureClaudeHookEntry(root, STOP).action).toBe('created');
+    const cfg = JSON.parse(readFileSync(join(root, '.claude', 'settings.json'), 'utf-8'));
+    expect(cfg).toEqual({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'ctxo domain-guard-hook' }] }] } });
+  });
+
+  it('does not duplicate an entry present in settings.local.json', () => {
+    const root = makeTempDir();
+    writeClaudeSettings(
+      root,
+      'settings.local.json',
+      JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'ctxo domain-guard-hook' }] }] } }),
+    );
+
+    expect(ensureClaudeHookEntry(root, STOP)).toEqual({ file: '.claude/settings.json', action: 'skipped' });
+    expect(existsSync(join(root, '.claude', 'settings.json'))).toBe(false);
+    // Another event is not covered by the local entry.
+    expect(ensureClaudeHookEntry(root, { event: 'SessionStart', command: 'ctxo domain-guard-hook' }).action).toBe('created');
+  });
+
+  it('leaves an unreadable settings.json unchanged and warns', () => {
+    const root = makeTempDir();
+    for (const text of ['not json{{{', '{"hooks":{"Stop":{}}}', '{"hooks":{"Stop":[{"matcher":"x"}]}}']) {
+      const file = writeClaudeSettings(root, 'settings.json', text);
+      const before = readFileSync(file);
+
+      const result = ensureClaudeHookEntry(root, STOP, { rerun: 'domain' });
+
+      expect(result.action).toBe('skipped');
+      expect(result.warning).toBe(
+        '.claude/settings.json is not valid JSON or not a settings object; left unchanged. Fix it, then run "ctxo init --only domain".',
+      );
+      expect(readFileSync(file).equals(before)).toBe(true);
+    }
+  });
+
+  it('validates only the event it writes: a malformed Stop list does not block the PreToolUse guard', () => {
+    const root = makeTempDir();
+    writeClaudeSettings(root, 'settings.json', '{"hooks":{"Stop":{}}}');
+
+    expect(ensureClaudeHook(root).action).toBe('updated');
+    const cfg = JSON.parse(readFileSync(join(root, '.claude', 'settings.json'), 'utf-8'));
+    expect(cfg.hooks.Stop).toEqual({});
+    expect(cfg.hooks.PreToolUse).toEqual([CTXO_GUARD_ENTRY]);
+  });
+
+  it('keeps a BOM and CRLF line endings', () => {
+    const root = makeTempDir();
+    const file = writeClaudeSettings(root, 'settings.json', BOM + '{\r\n  "model": "x"\r\n}\r\n');
+
+    ensureClaudeHookEntry(root, STOP);
+
+    const text = readFileSync(file, 'utf-8');
+    expect(text.startsWith(BOM)).toBe(true);
+    expect(text.replace(/\r\n/g, '')).not.toContain('\n');
+    expect(JSON.parse(text.slice(1)).hooks.Stop).toHaveLength(1);
+  });
+});
+
+describe('installSkillContent', () => {
+  const CONTENT = '---\nname: ctxo-domain-fold\ndescription: test\n---\n\n# Fold\n\nBody.\n\n<!-- ctxo-skill v0.14 -->\n';
+
+  it('installSkillContent writes Claude Code and Cursor skill files and skips identical content', () => {
+    const root = makeTempDir();
+
+    expect(installSkillContent(root, 'claude-code', 'ctxo-domain-fold', CONTENT)).toEqual({
+      file: '.claude/skills/ctxo-domain-fold/SKILL.md',
+      action: 'created',
+    });
+    expect(installSkillContent(root, 'cursor', 'ctxo-domain-fold', CONTENT)).toEqual({
+      file: '.cursor/rules/ctxo-domain-fold.mdc',
+      action: 'created',
+    });
+    expect(readFileSync(join(root, '.claude', 'skills', 'ctxo-domain-fold', 'SKILL.md'), 'utf-8')).toBe(CONTENT);
+    expect(readFileSync(join(root, '.cursor', 'rules', 'ctxo-domain-fold.mdc'), 'utf-8')).toBe(CONTENT);
+
+    // Identical content (formatting ignored) is skipped and not rewritten.
+    const cursorFile = join(root, '.cursor', 'rules', 'ctxo-domain-fold.mdc');
+    writeFileSync(cursorFile, CONTENT.replace(/\n/g, '\r\n'), 'utf-8');
+    expect(installSkillContent(root, 'cursor', 'ctxo-domain-fold', CONTENT)?.action).toBe('skipped');
+    expect(readFileSync(cursorFile, 'utf-8')).toContain('\r\n');
+
+    // Changed content is updated; a platform without skills gives undefined.
+    expect(installSkillContent(root, 'claude-code', 'ctxo-domain-fold', CONTENT + 'More.\n')?.action).toBe('updated');
+    expect(installSkillContent(root, 'windsurf', 'ctxo-domain-fold', CONTENT)).toBeUndefined();
+  });
+
+  it('honours dryRun, keeps a skill from a newer ctxo and warns on an unreadable path', () => {
+    const root = makeTempDir();
+    expect(installSkillContent(root, 'claude-code', 'ctxo-domain-fold', CONTENT, { dryRun: true })?.action).toBe('created');
+    expect(existsSync(join(root, '.claude'))).toBe(false);
+
+    const target = join(root, '.claude', 'skills', 'ctxo-domain-fold', 'SKILL.md');
+    mkdirSync(join(root, '.claude', 'skills', 'ctxo-domain-fold'), { recursive: true });
+    writeFileSync(target, CONTENT.replace('v0.14', 'v9.0'), 'utf-8');
+    const newer = installSkillContent(root, 'claude-code', 'ctxo-domain-fold', CONTENT);
+    expect(newer).toMatchObject({ action: 'skipped' });
+    expect(newer?.warning).toBe('.claude/skills/ctxo-domain-fold/SKILL.md: skill v9.0 comes from a newer ctxo; left unchanged');
+
+    mkdirSync(join(root, '.cursor', 'rules', 'ctxo-domain-fold.mdc'), { recursive: true });
+    const blocked = installSkillContent(root, 'cursor', 'ctxo-domain-fold', CONTENT);
+    expect(blocked?.action).toBe('skipped');
+    expect(blocked?.warning).toMatch(/^\.cursor\/rules\/ctxo-domain-fold\.mdc: could not be read/);
+  });
+});
+
 describe('readClaudeGuardState', () => {
   it('reports present, absent and unreadable', () => {
     const root = makeTempDir();
@@ -1643,7 +1777,7 @@ describe('linked rules files', () => {
     }
 
     // The dry run holds both names.
-    const plan = new InitCommand(dir).plan({ tools: ['claude-code', 'antigravity'], only: ['rules'] });
+    const plan = await new InitCommand(dir).plan({ tools: ['claude-code', 'antigravity'], only: ['rules'] });
     expect(plan.filter((row) => row.held === true).map((row) => row.file)).toEqual(['CLAUDE.md', 'AGENTS.md']);
 
     // Doctor agrees: it reads the file once, under CLAUDE.md, and --fix without the guard and skills holds it.
@@ -1663,7 +1797,7 @@ describe('linked rules files', () => {
 
   it('the dry run gives a linked AGENTS.md the action the real run takes', async () => {
     const dir = linkedProject((existing, newPath) => linkSync(existing, newPath));
-    const plan = new InitCommand(dir).plan({ tools: ['claude-code', 'antigravity'], only: ['skills', 'guard', 'rules'] });
+    const plan = await new InitCommand(dir).plan({ tools: ['claude-code', 'antigravity'], only: ['skills', 'guard', 'rules'] });
     const plannedAction = (file: string): string | undefined => plan.find((row) => row.file === file)?.action;
 
     // The real run writes the shared file through CLAUDE.md, so AGENTS.md then reads as unchanged.
@@ -1672,9 +1806,7 @@ describe('linked rules files', () => {
 
     // In the other order the first name written is AGENTS.md; the dry run follows that too.
     writeFileSync(join(dir, 'CLAUDE.md'), '# Project\n', 'utf-8');
-    const reversed = new InitCommand(dir)
-      .plan({ tools: ['antigravity', 'claude-code'], only: ['rules'] })
-      .map((row) => `${row.file} ${row.action}`);
+    const reversed = (await new InitCommand(dir).plan({ tools: ['antigravity', 'claude-code'], only: ['rules'] })).map((row) => `${row.file} ${row.action}`);
     expect(reversed).toEqual(['AGENTS.md updated', 'CLAUDE.md skipped']);
   });
 

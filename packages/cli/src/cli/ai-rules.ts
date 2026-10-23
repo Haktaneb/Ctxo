@@ -26,6 +26,7 @@ import {
 } from '../core/agent-rules/rules-block.js';
 import { loadConfig } from '../core/config/load-config.js';
 import type { CliInstallKind } from '../core/install/install-kind.js';
+import type { ClaudeHookEntry } from '../ports/i-ctxo-module.js';
 
 /* ------------------------------------------------------------------ */
 /*  Claude Code safe-edit gate hook                                    */
@@ -33,8 +34,13 @@ import type { CliInstallKind } from '../core/install/install-kind.js';
 
 const CTXO_HOOK_COMMAND = 'ctxo gate-hook';
 const CLAUDE_SETTINGS_FILE = '.claude/settings.json';
-const UNREADABLE_SETTINGS_WARNING =
-  `${CLAUDE_SETTINGS_FILE} is not valid JSON or not a settings object; left unchanged. Fix it, then run "ctxo init --only rules,skills,guard".`;
+/** The init parts the unreadable-settings warning tells the user to run again by default (the guard's). */
+const GUARD_RERUN_PARTS = 'rules,skills,guard';
+
+/** The warning for an unreadable settings file; `rerun` is the `--only` value that writes the entry again. */
+function unreadableSettingsWarning(rerun: string): string {
+  return `${CLAUDE_SETTINGS_FILE} is not valid JSON or not a settings object; left unchanged. Fix it, then run "ctxo init --only ${rerun}".`;
+}
 
 /** Whether the safe-edit guard is registered: `unreadable` means `.claude/settings.json` cannot be read safely. */
 export type ClaudeGuardState = 'present' | 'absent' | 'unreadable';
@@ -48,15 +54,25 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/** The hook a settings read looks for: a command under one event. */
+interface HookProbe {
+  readonly event: string;
+  readonly command: string;
+}
+
+const GUARD_PROBE: HookProbe = { event: 'PreToolUse', command: CTXO_HOOK_COMMAND };
+
 /**
  * Reads a Claude Code settings file; a leading UTF-8 BOM and CRLF line endings are kept in `shape`, so
  * a rewrite restores them (D2). `unreadable` covers text that fails `JSON.parse` (JSONC comments
  * included) and JSON that is not a plain object, has a `hooks` that is not a plain object, a
- * `hooks.PreToolUse` that is not an array, or a `PreToolUse` entry that is not a plain object with a
- * `hooks` array. The guard counts wherever its own entry is well formed: a file that registers it is
- * `ok` with `hasHook` even next to a malformed entry, because ctxo never writes a file with the guard.
+ * `hooks[probe.event]` that is not an array, or an entry there that is not a plain object with a
+ * `hooks` array. Only the probed event is checked, so a malformed list under another event does not
+ * stop a write (it is written back as it was). The hook counts wherever its own entry is well formed:
+ * a file that registers it is `ok` with `hasHook` even next to a malformed entry, because ctxo never
+ * writes a file that already has it.
  */
-function readSettings(path: string): SettingsRead {
+function readSettings(path: string, probe: HookProbe = GUARD_PROBE): SettingsRead {
   if (!existsSync(path)) return { kind: 'missing' };
   let json: unknown;
   let shape: TextShape;
@@ -69,21 +85,27 @@ function readSettings(path: string): SettingsRead {
   if (!isPlainObject(json)) return { kind: 'unreadable' };
   if (json.hooks === undefined) return { kind: 'ok', json, hasHook: false, shape };
   if (!isPlainObject(json.hooks)) return { kind: 'unreadable' };
-  const pre = json.hooks.PreToolUse;
-  if (pre === undefined) return { kind: 'ok', json, hasHook: false, shape };
-  if (!Array.isArray(pre)) return { kind: 'unreadable' };
-  const wellFormed = (pre as unknown[]).filter(
+  const list = json.hooks[probe.event];
+  if (list === undefined) return { kind: 'ok', json, hasHook: false, shape };
+  if (!Array.isArray(list)) return { kind: 'unreadable' };
+  const wellFormed = (list as unknown[]).filter(
     (entry): entry is { hooks: unknown[] } => isPlainObject(entry) && Array.isArray(entry.hooks),
   );
-  const hasHook = wellFormed.some((entry) => entry.hooks.some((h) => isPlainObject(h) && h.command === CTXO_HOOK_COMMAND));
-  if (!hasHook && wellFormed.length !== pre.length) return { kind: 'unreadable' };
+  const hasHook = wellFormed.some((entry) => entry.hooks.some((h) => isPlainObject(h) && h.command === probe.command));
+  if (!hasHook && wellFormed.length !== list.length) return { kind: 'unreadable' };
   return { kind: 'ok', json, hasHook, shape };
 }
 
-/** The shared settings file and whether the guard is registered there or in the local one (read only, D11). */
-function guardRegistration(projectRoot: string): { readonly shared: SettingsRead; readonly state: ClaudeGuardState } {
-  const shared = readSettings(join(projectRoot, '.claude', 'settings.json'));
-  const local = readSettings(join(projectRoot, '.claude', 'settings.local.json'));
+/**
+ * The shared settings file and whether the probed hook (the guard by default) is registered there or in
+ * the local one (read only, D11).
+ */
+function guardRegistration(
+  projectRoot: string,
+  probe: HookProbe = GUARD_PROBE,
+): { readonly shared: SettingsRead; readonly state: ClaudeGuardState } {
+  const shared = readSettings(join(projectRoot, '.claude', 'settings.json'), probe);
+  const local = readSettings(join(projectRoot, '.claude', 'settings.local.json'), probe);
   if ((shared.kind === 'ok' && shared.hasHook) || (local.kind === 'ok' && local.hasHook)) {
     return { shared, state: 'present' };
   }
@@ -326,33 +348,51 @@ export function rulesFileHoldReasons(
 }
 
 /**
- * Registers the safe-edit guard under `hooks.PreToolUse` in `.claude/settings.json`. A guard already
- * registered there or in `.claude/settings.local.json` is `skipped`. An unreadable settings file is
- * never overwritten: `skipped` with a warning. Every other setting and hook is kept, the entry goes
- * last, and the file's UTF-8 BOM and line endings are written back (D2). `dryRun` computes the same
- * action and writes nothing, not even a directory.
+ * Registers the safe-edit guard under `hooks.PreToolUse` in `.claude/settings.json`: an
+ * `ensureClaudeHookEntry` for `ctxo gate-hook` with the `Edit` matcher. A guard already registered there
+ * or in `.claude/settings.local.json` is `skipped`, and an unreadable settings file is never overwritten.
  */
 export function ensureClaudeHook(projectRoot: string, options: { readonly dryRun?: boolean } = {}): InstallResult {
+  return ensureClaudeHookEntry(projectRoot, { event: 'PreToolUse', matcher: 'Edit', command: CTXO_HOOK_COMMAND }, options);
+}
+
+/**
+ * Registers one command hook under `hooks[entry.event]` in `.claude/settings.json`, as
+ * `{ matcher?, hooks: [{ type: 'command', command }] }` (no `matcher` key without one). The same command
+ * already under that event in `settings.json` or `settings.local.json` is `skipped`. An unreadable
+ * settings file (see `readSettings`; only this event's list is checked) is never overwritten: `skipped`
+ * with a warning that names `ctxo init --only <rerun>` (default `rules,skills,guard`). Every other setting
+ * and hook is kept, the entry goes last, and the file's UTF-8 BOM and line endings are written back (D2).
+ * `dryRun` computes the same action and writes nothing, not even a directory.
+ */
+export function ensureClaudeHookEntry(
+  projectRoot: string,
+  entry: ClaudeHookEntry,
+  options: { readonly dryRun?: boolean; readonly rerun?: string } = {},
+): InstallResult {
   const filePath = join(projectRoot, '.claude', 'settings.json');
-  const ctxoEntry = { matcher: 'Edit', hooks: [{ type: 'command', command: CTXO_HOOK_COMMAND }] };
-  const { shared, state } = guardRegistration(projectRoot);
+  const hookEntry = {
+    ...(entry.matcher !== undefined ? { matcher: entry.matcher } : {}),
+    hooks: [{ type: 'command', command: entry.command }],
+  };
+  const { shared, state } = guardRegistration(projectRoot, { event: entry.event, command: entry.command });
 
   if (state === 'present') return { file: CLAUDE_SETTINGS_FILE, action: 'skipped' };
   if (shared.kind === 'unreadable') {
-    return { file: CLAUDE_SETTINGS_FILE, action: 'skipped', warning: UNREADABLE_SETTINGS_WARNING };
+    return { file: CLAUDE_SETTINGS_FILE, action: 'skipped', warning: unreadableSettingsWarning(options.rerun ?? GUARD_RERUN_PARTS) };
   }
 
   if (shared.kind === 'missing') {
     if (!options.dryRun) {
       mkdirSync(dirname(filePath), { recursive: true });
-      writeFileSync(filePath, JSON.stringify({ hooks: { PreToolUse: [ctxoEntry] } }, null, 2) + '\n', 'utf-8');
+      writeFileSync(filePath, JSON.stringify({ hooks: { [entry.event]: [hookEntry] } }, null, 2) + '\n', 'utf-8');
     }
     return { file: CLAUDE_SETTINGS_FILE, action: 'created' };
   }
 
   const hooks = isPlainObject(shared.json.hooks) ? shared.json.hooks : {};
-  const pre = Array.isArray(hooks.PreToolUse) ? (hooks.PreToolUse as unknown[]) : [];
-  const updated = { ...shared.json, hooks: { ...hooks, PreToolUse: [...pre, ctxoEntry] } };
+  const list = Array.isArray(hooks[entry.event]) ? (hooks[entry.event] as unknown[]) : [];
+  const updated = { ...shared.json, hooks: { ...hooks, [entry.event]: [...list, hookEntry] } };
   const body = JSON.stringify(updated, null, 2) + '\n';
   if (!options.dryRun) writeFileSync(filePath, shared.shape.restore(body), 'utf-8');
   return { file: CLAUDE_SETTINGS_FILE, action: 'updated' };
@@ -655,29 +695,66 @@ export function skillStates(projectRoot: string, platformId: string): SkillState
 }
 
 /**
- * Copies the bundled skills into the platform's skill folder. A skill equal to the bundled one
- * (formatting ignored, see `SkillState`) is `skipped` and not rewritten; a missing one is `created`, a
- * different one `updated`. A skill from a newer ctxo, and a skill path that cannot be read (such as a
- * directory), are `skipped` with a warning and left unchanged. `dryRun` computes the same actions and
- * writes nothing, not even a directory.
+ * Copies the bundled skills into the platform's skill folder, one `installSkillContent` per skill. A skill
+ * equal to the bundled one (formatting ignored, see `SkillState`) is `skipped` and not rewritten; a
+ * missing one is `created`, a different one `updated`. A skill from a newer ctxo, and a skill path that
+ * cannot be read (such as a directory), are `skipped` with a warning and left unchanged. `dryRun` computes
+ * the same actions and writes nothing, not even a directory. Throws when the bundled skills cannot be found.
  */
 export function installSkills(
   projectRoot: string,
   platformId: string,
   options: { readonly dryRun?: boolean } = {},
 ): InstallResult[] {
-  return skillPlan(projectRoot, platformId).map(({ file, state, bundled, to, version, blocked }): InstallResult => {
-    if (blocked !== undefined) return { file, action: 'skipped', warning: blocked };
-    if (state === 'current') return { file, action: 'skipped' };
-    if (state === 'newer') {
-      return { file, action: 'skipped', warning: `${file}: skill v${version ?? ''} comes from a newer ctxo; left unchanged` };
+  if (!skillTarget(platformId)) return [];
+  const src = skillsSourceDir();
+  const bundled = SKILLS.map((skill) => ({ skill, content: readFileSync(join(src, skill, 'SKILL.md'), 'utf-8') }));
+  return bundled.map(({ skill, content }) => installSkillContent(projectRoot, platformId, skill, content, options)!);
+}
+
+/**
+ * Installs one skill with the given content into the platform's skill folder
+ * (`.claude/skills/<name>/SKILL.md`, `.cursor/rules/<name>.mdc`); undefined for a platform without skills.
+ * The file is read once, with no check first: missing is `created`, equal content (formatting ignored,
+ * `comparableMarkdown`) is `skipped` and not rewritten, different content is `updated`. A copy whose
+ * `<!-- ctxo-skill -->` marker is above the content's own marker comes from a newer ctxo, and a path that
+ * cannot be read (a directory, no permission) is not a skill: both are `skipped` with a warning and left
+ * unchanged. `dryRun` computes the same action and writes nothing, not even a directory. Opt-in modules
+ * install their skills through it.
+ */
+export function installSkillContent(
+  projectRoot: string,
+  platformId: string,
+  name: string,
+  content: string,
+  options: { readonly dryRun?: boolean } = {},
+): InstallResult | undefined {
+  const target = skillTarget(platformId);
+  if (!target) return undefined;
+  const to = target(projectRoot, name);
+  const file = relative(projectRoot, to).split(sep).join('/');
+
+  let installed: string | undefined;
+  try {
+    installed = readFileSync(to, 'utf-8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      return { file, action: 'skipped', warning: unreadableWarning(file, err) };
     }
-    if (!options.dryRun) {
-      mkdirSync(dirname(to), { recursive: true });
-      writeFileSync(to, bundled, 'utf-8');
+  }
+  if (installed !== undefined) {
+    const version = skillTemplateVersion(installed);
+    const ours = skillTemplateVersion(content);
+    if (version !== undefined && ours !== undefined && compareTemplateVersions(version, ours) > 0) {
+      return { file, action: 'skipped', warning: `${file}: skill v${version} comes from a newer ctxo; left unchanged` };
     }
-    return { file, action: state === 'missing' ? 'created' : 'updated' };
-  });
+    if (comparableMarkdown(installed) === comparableMarkdown(content)) return { file, action: 'skipped' };
+  }
+  if (!options.dryRun) {
+    mkdirSync(dirname(to), { recursive: true });
+    writeFileSync(to, content, 'utf-8');
+  }
+  return { file, action: installed === undefined ? 'created' : 'updated' };
 }
 
 /**

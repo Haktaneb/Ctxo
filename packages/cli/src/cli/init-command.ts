@@ -11,7 +11,9 @@ import {
   getMcpConfigTargets,
   ensureMcpConfig,
   installSkills,
+  installSkillContent,
   ensureClaudeHook,
+  ensureClaudeHookEntry,
   gateEnabled,
   linkedRulesPlatforms,
   planRules,
@@ -30,7 +32,9 @@ import {
 } from '../core/detection/detect-languages.js';
 import { InstallCommand } from './install-command.js';
 import { cliInstallKind } from '../core/install/install-kind.js';
-import { getCliPackageRoot } from './cli-paths.js';
+import { getCliPackageRoot, getVersion as getCliVersion } from './cli-paths.js';
+import { loadConfig } from '../core/config/load-config.js';
+import type { InitContribution, InitPartContext, InitPrompter } from '../ports/i-ctxo-module.js';
 import {
   POST_COMMIT_CONTENT,
   POST_MERGE_CONTENT,
@@ -97,6 +101,19 @@ export interface InitOptions {
   skip?: InitPart[];
   /** `--no-guard`: does not install the safe-edit guard. */
   noGuard?: boolean;
+  /** `--domain`: also set up the domain layer (the opt-in `domain` part, D14). */
+  domain?: boolean;
+  /** `--boundaries`: the boundary mode for the domain part, so it is not asked. */
+  boundaries?: BoundaryMode;
+}
+
+/** The boundary modes of `domain.boundaries.enforce`. */
+export type BoundaryMode = 'by-rung' | 'report';
+
+/** Construction options of InitCommand. */
+export interface InitCommandOptions {
+  /** A directory standing in for the CLI's location when @ctxo/domain is looked up (tests); defaults to the running CLI. */
+  readonly cliAnchor?: string;
 }
 
 /* ------------------------------------------------------------------ */
@@ -178,6 +195,95 @@ const RULES_DEPRECATION_NOTICE =
   '[ctxo] --rules is deprecated and now means --skip git-hooks,guard. Use --only or --skip instead.';
 const NOTHING_TO_INSTALL_NOTICE = '[ctxo] Nothing to install: every part is excluded.';
 const SHARED_HOOKS_SKIPPED = 'git hooks skipped - shared hooks directory (see warning above)';
+
+/** The row a dry run gives the @ctxo/domain package when it is not installed. */
+const DOMAIN_PACKAGE_ROW = '@ctxo/domain (package)';
+const DOMAIN_MISSING_WARNING = '@ctxo/domain is not installed; run "ctxo install domain", then "ctxo init --only domain"';
+
+/**
+ * The boundary-mode question. `@ctxo/domain` asks the same one when it runs without an answer; init asks
+ * it in the question phase, before the spinner (PF11), and passes the answer as `boundaries`.
+ */
+const BOUNDARY_QUESTION = 'Boundary violations between named contexts';
+const BOUNDARY_CHOICES: readonly { readonly value: BoundaryMode; readonly label: string }[] = [
+  { value: 'by-rung', label: 'by-rung: fail verify-domain for bounded and boring contexts, warn for the others' },
+  { value: 'report', label: 'report: warnings only' },
+];
+
+/** How the domain part runs in one init run. */
+interface DomainRun {
+  /** The interactive flow: the install question was asked before the spinner (`installApproved`). */
+  readonly interactive: boolean;
+  /** `--yes`: install @ctxo/domain without asking. */
+  readonly yes: boolean;
+  /** `--no-install`: never install @ctxo/domain. */
+  readonly noInstall: boolean;
+  readonly boundaries?: BoundaryMode;
+  /** Interactive only: the answer to the install question; absent when it was not asked. */
+  readonly installApproved?: boolean;
+  /** The module's questions: clack when interactive, else each question's initial answer. */
+  readonly prompter: InitPrompter;
+  /** The platforms the domain part sets up: `--tools`, the selected tools, or the detected platforms. */
+  readonly toolIds: readonly string[];
+  /** Interactive only: stop and restart the spinner around the domain step. */
+  readonly pause?: () => void;
+  readonly resume?: () => void;
+}
+
+/** A prompter that answers every question with its initial value (not interactive, or `--yes`). */
+const INITIAL_ANSWERS: InitPrompter = {
+  confirm: async (_message, initial) => initial,
+  select: async (_message, _options, initial) => initial,
+};
+
+/** The domain run of `--yes`, `--tools` and the dry run: every selected tool, no questions (PF11). */
+function nonInteractiveDomainRun(options: InitOptions, toolIds: readonly string[]): DomainRun {
+  return {
+    interactive: false,
+    yes: options.yes === true,
+    noInstall: options.noInstall === true,
+    ...(options.boundaries !== undefined ? { boundaries: options.boundaries } : {}),
+    prompter: INITIAL_ANSWERS,
+    toolIds,
+  };
+}
+
+type Clack = typeof import('@clack/prompts');
+
+/** The module's questions through clack; cancelling ends init like every other init question. */
+function clackPrompter(clack: Clack, pc: PC): InitPrompter {
+  const answered = <T>(value: T | symbol): T => {
+    if (clack.isCancel(value)) {
+      clack.cancel('Setup cancelled.');
+      process.exit(0);
+    }
+    return value as unknown as T;
+  };
+  return {
+    async confirm(message, initial) {
+      return answered(await clack.confirm({ message: pc.cyan(message), initialValue: initial })) === true;
+    },
+    async select<T extends string>(
+      message: string,
+      options: readonly { readonly value: T; readonly label: string }[],
+      initial: T,
+    ): Promise<T> {
+      const choices = options.map((option) => ({ value: option.value, label: option.label }));
+      const picked: unknown = await clack.select({ message: pc.cyan(message), options: choices as never, initialValue: initial as never });
+      return answered(picked as T | symbol);
+    },
+  };
+}
+
+/** `domain.boundaries.enforce` from `.ctxo/config.yaml` when it holds a valid mode. */
+function configuredBoundaryMode(projectRoot: string): BoundaryMode | undefined {
+  const domain = (loadConfig(join(projectRoot, '.ctxo')).config as Record<string, unknown>)['domain'];
+  if (typeof domain !== 'object' || domain === null) return undefined;
+  const boundaries = (domain as Record<string, unknown>)['boundaries'];
+  if (typeof boundaries !== 'object' || boundaries === null) return undefined;
+  const enforce = (boundaries as Record<string, unknown>)['enforce'];
+  return enforce === 'by-rung' || enforce === 'report' ? enforce : undefined;
+}
 
 /** The parts the AI Tools step serves: without any of them, no tool list is asked for. */
 const TOOL_PARTS: readonly InitPart[] = ['rules', 'skills', 'guard', 'mcp'];
@@ -276,10 +382,14 @@ function displayPath(projectRoot: string, path: string): string {
 
 export class InitCommand {
   private readonly projectRoot: string;
+  private readonly cliAnchor: string | undefined;
+  /** Set when the domain part could not run (missing package, failed init); `run` then ends with exit code 1. */
+  private domainFailed = false;
 
-  constructor(projectRoot: string) {
+  constructor(projectRoot: string, options: InitCommandOptions = {}) {
     // Router now resolves this; kept as a defensive copy for direct construction.
     this.projectRoot = projectRoot;
+    this.cliAnchor = options.cliAnchor;
   }
 
   /**
@@ -306,10 +416,12 @@ export class InitCommand {
 
   /**
    * What init would do with these options, one row per file, writing nothing: the same pipeline as a
-   * real run over the parts the flags select. Without `tools` it previews every platform (D16).
+   * real run over the parts the flags select. Without `tools` it previews every platform (D16), the
+   * domain part included (PF11). Without @ctxo/domain the domain part is the row `@ctxo/domain (package)`.
    */
-  plan(options: InitOptions = {}): InitResult[] {
-    return this.applyParts(resolveInitParts(options), selectedTools(options), true, declinedBy(options));
+  async plan(options: InitOptions = {}): Promise<InitResult[]> {
+    const toolIds = selectedTools(options);
+    return this.applyParts(resolveInitParts(options), toolIds, true, declinedBy(options), nonInteractiveDomainRun(options, toolIds));
   }
 
   async run(options: InitOptions = {}): Promise<void> {
@@ -327,9 +439,11 @@ export class InitCommand {
       return;
     }
 
-    if (options.dryRun) return this.dryRun(options);
-    if (options.yes || options.tools) return await this.runNonInteractive(options, parts);
-    return this.runInteractive(options, parts);
+    if (options.dryRun) await this.dryRun(options);
+    else if (options.yes || options.tools) await this.runNonInteractive(options, parts);
+    else await this.runInteractive(options, parts);
+    // The domain part ran after the others; a missing package (or a failed init) fails the run (D14).
+    if (this.domainFailed) process.exitCode = 1;
   }
 
   /* ---------------------------------------------------------------- */
@@ -337,20 +451,22 @@ export class InitCommand {
   /* ---------------------------------------------------------------- */
 
   /**
-   * Installs the selected parts in one fixed order: config, skills, guard, rules, MCP, git hooks.
+   * Installs the selected parts in one fixed order: config, skills, guard, rules, MCP, git hooks, domain.
    * Skills and the guard go first so each platform's rules tier is resolved from what is on disk after
    * them, and so `rulesHold` can see whether a block that expects them must wait (for a file under
    * any of its linked names, `rulesFileHoldReasons`). A part not in the
    * set adds no row. Bundled skills that cannot be read become a warning row, and the other parts
    * still run. `dryRun` gives the same rows and writes nothing; the rules tier and the hold then count
    * the skills and guard it would install as present. `declined` is what the user declined in this run.
+   * `domain` says how the domain part (step 7, `applyDomain`) installs @ctxo/domain and asks its questions.
    */
-  private applyParts(
+  private async applyParts(
     parts: ReadonlySet<InitPart>,
     toolIds: readonly string[],
     dryRun: boolean,
     declined: Pick<RulesHoldOptions, 'noGuard' | 'skipSkills'>,
-  ): InitResult[] {
+    domain: DomainRun,
+  ): Promise<InitResult[]> {
     const root = this.projectRoot;
     const write = { dryRun };
     const results: InitResult[] = [];
@@ -430,7 +546,84 @@ export class InitCommand {
       }
     }
 
+    if (parts.has('domain')) {
+      domain.pause?.();
+      try {
+        results.push(...(await this.applyDomain(dryRun, domain)));
+      } finally {
+        domain.resume?.();
+      }
+    }
+
     return results;
+  }
+
+  /**
+   * Step 7, the domain part. Without @ctxo/domain's init contribution: a dry run gives the row
+   * `@ctxo/domain (package)`; `--no-install`, a non-interactive run without `--yes` or a declined install
+   * question give the missing-package warning (all but the declined question fail the run); otherwise
+   * @ctxo/domain is installed (`ctxo install domain`) and loaded again. Then the contribution's `apply` runs
+   * with the domain tools, the run's prompter, `ensureConfig` and the two writers of `ai-rules.ts`.
+   */
+  private async applyDomain(dryRun: boolean, run: DomainRun): Promise<InitResult[]> {
+    const missing: InitResult = { file: '@ctxo/domain', action: 'skipped', warning: DOMAIN_MISSING_WARNING };
+    let init = await this.loadDomainInit(false);
+    if (init === undefined) {
+      if (dryRun) return [{ file: DOMAIN_PACKAGE_ROW, action: 'created' }];
+      const declined = run.interactive && run.installApproved === false;
+      const allowed = !run.noInstall && (run.interactive ? run.installApproved === true : run.yes);
+      if (!allowed) {
+        if (!declined) this.domainFailed = true;
+        return [missing];
+      }
+      await new InstallCommand(this.projectRoot).run({ languages: ['domain'], yes: true });
+      init = await this.loadDomainInit(true);
+      if (init === undefined) {
+        this.domainFailed = true;
+        return [missing];
+      }
+    }
+
+    const root = this.projectRoot;
+    const write = { dryRun };
+    const ctx: InitPartContext = {
+      projectRoot: root,
+      toolIds: run.toolIds,
+      dryRun,
+      yes: run.yes,
+      ...(run.boundaries !== undefined ? { boundaries: run.boundaries } : {}),
+      prompt: run.prompter,
+      ensureConfigFile: () => ensureConfig(root, write),
+      ensureClaudeHookEntry: (entry) => ensureClaudeHookEntry(root, entry, { ...write, rerun: 'domain' }),
+      installSkill: (platformId, name, content) => installSkillContent(root, platformId, name, content, write),
+    };
+    try {
+      return [...(await init.apply(ctx))];
+    } catch (err) {
+      this.domainFailed = true;
+      return [{ file: '@ctxo/domain', action: 'skipped', warning: `@ctxo/domain init failed: ${(err as Error).message}` }];
+    }
+  }
+
+  /**
+   * @ctxo/domain's init contribution, or undefined when the package is not installed, does not load
+   * (version mismatch, load failure: the loader warns) or has no `init`. `refresh` looks again after an install.
+   */
+  private async loadDomainInit(refresh: boolean): Promise<InitContribution | undefined> {
+    try {
+      const [{ DOMAIN_MODULE_PACKAGE, loadCtxoModules }, { resolvePackageCandidates }, { createModuleHost }] = await Promise.all([
+        import('../adapters/modules/module-loader.js'),
+        import('../adapters/language/plugin-discovery.js'),
+        import('./module-host.js'),
+      ]);
+      if (resolvePackageCandidates(DOMAIN_MODULE_PACKAGE, this.projectRoot, this.cliAnchor).length === 0) return undefined;
+      const host = createModuleHost({ projectRoot: this.projectRoot, mode: 'cli' });
+      const { modules } = await loadCtxoModules(host, { refresh, cliAnchor: this.cliAnchor });
+      const init = modules[0]?.registration.init;
+      return init !== undefined && typeof init.apply === 'function' ? init : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /**
@@ -480,7 +673,8 @@ export class InitCommand {
     const showTools = TOOL_PARTS.some((part) => parts.has(part));
     const showPlugins = missingPlugins.length > 0;
     const showHooks = parts.has('git-hooks');
-    const totalSteps = [showIndex, showTools, showPlugins, showHooks].filter(Boolean).length;
+    const showDomain = parts.has('domain');
+    const totalSteps = [showIndex, showTools, showPlugins, showHooks, showDomain].filter(Boolean).length;
     let stepNum = 0;
 
     // ── Banner ──
@@ -583,6 +777,33 @@ export class InitCommand {
       console.error('');
     }
 
+    // ── Domain knowledge (opt-in part); its questions come before the spinner (PF11) ──
+    const prompter = clackPrompter(clack, pc);
+    let installApproved: boolean | undefined;
+    let boundaries = options.boundaries;
+    if (showDomain) {
+      stepNum++;
+      console.error(stepHeader(
+        stepNum,
+        totalSteps,
+        'Domain Knowledge',
+        'Registry, fold guard and the ctxo-domain-fold skill (@ctxo/domain).',
+        pc,
+      ));
+      console.error('');
+      const installed = (await this.loadDomainInit(false)) !== undefined;
+      if (!installed && !options.noInstall) {
+        installApproved = await prompter.confirm(
+          `Install @ctxo/domain@${getCliVersion()}? It adds the registry, contexts-touched and the fold guard.`,
+          true,
+        );
+      }
+      if ((installed || installApproved === true) && boundaries === undefined && configuredBoundaryMode(this.projectRoot) === undefined) {
+        boundaries = await prompter.select(BOUNDARY_QUESTION, BOUNDARY_CHOICES, 'by-rung');
+      }
+      console.error('');
+    }
+
     // ── Guard question (Claude Code only); answering no declines the guard, as --no-guard does ──
     const declined = declinedBy(options);
     if (parts.has('guard') && toolIds.includes('claude-code') && !options.noGuard) {
@@ -601,7 +822,19 @@ export class InitCommand {
     const s = clack.spinner();
     s.start(pc.dim('Configuring...'));
 
-    const rows = this.applyParts(parts, toolIds, false, declined).map((result) => summaryRow(result, pc));
+    const domainRun: DomainRun = {
+      interactive: true,
+      yes: false,
+      noInstall: options.noInstall === true,
+      ...(boundaries !== undefined ? { boundaries } : {}),
+      ...(installApproved !== undefined ? { installApproved } : {}),
+      prompter,
+      toolIds: showTools ? toolIds : [...detectPlatforms(this.projectRoot)],
+      // The domain step may install a package and ask the module's own questions: never under a live spinner.
+      pause: () => s.stop(pc.dim('Setting up the domain layer...')),
+      resume: () => s.start(pc.dim('Finalizing...')),
+    };
+    const rows = (await this.applyParts(parts, toolIds, false, declined, domainRun)).map((result) => summaryRow(result, pc));
 
     if (pluginsToInstall.length > 0) {
       s.stop(pc.dim('Installing language plugins...'));
@@ -620,7 +853,7 @@ export class InitCommand {
     }
 
     // ── Next steps box ──
-    const hasWork = toolIds.length > 0 || parts.has('git-hooks');
+    const hasWork = toolIds.length > 0 || parts.has('git-hooks') || parts.has('domain');
     if (hasWork) {
       const steps = [
         `${pc.cyan('\u25b6')} ctxo index     ${pc.dim('\u2500 build codebase index')}`,
@@ -643,7 +876,8 @@ export class InitCommand {
     const toolIds = selectedTools(options);
     exitOnUnknownTools(toolIds);
 
-    for (const result of this.applyParts(parts, toolIds, false, declinedBy(options))) console.error(formatResultLine(result));
+    const rows = await this.applyParts(parts, toolIds, false, declinedBy(options), nonInteractiveDomainRun(options, toolIds));
+    for (const result of rows) console.error(formatResultLine(result));
 
     // Language detection + plugin install (not a part: skipped by --only, --rules and --no-install)
     if (pluginStepEnabled(options)) {
@@ -670,11 +904,12 @@ export class InitCommand {
    * hooks directory prints installHooks' warning and no hook rows, as a real run does. The hook rows
    * come marked from the pipeline, so the hooks directory is looked up only when git-hooks is selected.
    */
-  private dryRun(options: InitOptions): void {
+  private async dryRun(options: InitOptions): Promise<void> {
     exitOnUnknownTools(selectedTools(options));
 
     console.error(DRY_RUN_HEADER);
-    for (const result of this.plan(options)) console.error(formatPlanLine(result));
+    const rows = await this.plan(options);
+    for (const result of rows) console.error(formatPlanLine(result));
   }
 
   /* ---------------------------------------------------------------- */
