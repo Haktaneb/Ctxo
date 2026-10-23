@@ -180,6 +180,13 @@ jobs:
           CTXO_DOTNET_E2E: '1'
         run: pnpm --filter @ctxo/cli test:e2e tests/e2e/csharp-sql-call-site.test.ts
 
+      # The domain acceptance suite on the Roslyn tier: with .NET set up, a C# run that falls back to the
+      # syntax tier fails instead of skipping the cross-context edge tests.
+      - name: Run the domain acceptance tests on the Roslyn tier
+        env:
+          CTXO_REQUIRE_DOTNET: '1'
+        run: pnpm --filter @ctxo/domain test:e2e
+
   build:
     name: Build
     runs-on: ubuntu-latest

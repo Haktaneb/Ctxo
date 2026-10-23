@@ -104,6 +104,7 @@ describe.each(VARIANTS)('PR 2B acceptance, %s sample', (variant) => {
     expect(report.summary.errors).toBe(0);
     const boundaries = report.checks.find((check) => check.id === '10')!;
     expect(boundaries.findings.every((f) => f.severity === 'warning')).toBe(true);
+    ws.requireEdges();
     if (ws.resolvesEdges) {
       // The Catalog -> Lending edge is a warning: both rungs are non-blocking.
       expect(report.summary.warnings).toBeGreaterThanOrEqual(1);
@@ -177,6 +178,7 @@ describe.each(VARIANTS)('PR 2B acceptance, %s sample', (variant) => {
 
   it('boundaries: a Lending edge into a Billing internal fails by-rung and passes with --boundaries report', (context) => {
     const ws = prepared(variant);
+    ws.requireEdges();
     if (!ws.resolvesEdges) context.skip('C# needs the Roslyn tier (.NET SDK 8+) to resolve edges between files');
     addBillingInternalEdge(ws, variant);
     ws.commit('feat: lending reads the billing ledger directly');
@@ -301,7 +303,7 @@ describe.each(VARIANTS)('PR 2B acceptance, %s sample', (variant) => {
   });
 
   it.skipIf(variant !== 'typescript')(
-    'discovery proposes trackerPrefixes [LEND] from LEND-<n> commit subjects; once confirmed, a LEND-456 test comment neither links nor fails verify-domain',
+    'discovery proposes trackerPrefixes [LEND] from LEND-<n> commit subjects; once confirmed, a LEND-01 comment no longer links the rule',
     () => {
       const ws = SampleWorkspace.create(variant);
       ws.commitLoaderRules();
@@ -319,20 +321,29 @@ describe.each(VARIANTS)('PR 2B acceptance, %s sample', (variant) => {
       // Nothing is written until it is confirmed.
       expect(ws.exists('.ctxo/config.yaml') ? ws.read('.ctxo/config.yaml') : '').not.toContain('trackerPrefixes');
 
+      // LEND-01 loses its Untested line and is only mentioned in a test comment. Before the prefix is confirmed
+      // the mention links the rule, so check 6 passes; after, a tracker-prefix mention no longer links.
+      ws.replace(
+        'docs/domain/lending/domain.md',
+        '### LEND-01 A loan lasts fourteen days\nUntested: the due date is set by the loan service and has no test yet\n',
+        '### LEND-01 A loan lasts fourteen days\n',
+      );
+      ws.replace(LOAN_LIMIT_TEST[variant], "describe('loan limit'", "// LEND-01 flaky on the build server\ndescribe('loan limit'");
+      ws.commit('test: note the ticket on the loan limit test');
+      ws.index();
+
+      const before = verifyJson(ws);
+      expect(before.status, before.messages.join('\n')).toBe(0);
+      expect(before.report.checks.find((check) => check.id === '6')!.status).toBe('pass');
+
       const write = ws.cli(['domain', 'discover', '--write']);
       expect(write.status, write.stderr).toBe(0);
       const config = parse(ws.read('.ctxo/config.yaml')) as { domain: { rules: { trackerPrefixes: string[] } } };
       expect(config.domain.rules.trackerPrefixes).toEqual(['LEND']);
 
-      const file = LOAN_LIMIT_TEST[variant];
-      ws.replace(file, "describe('loan limit'", "// LEND-456 flaky on the build server\ndescribe('loan limit'");
-      ws.commit('test: note the tracker ticket');
-      ws.index();
-
-      const { status, report, messages } = verifyJson(ws);
-      expect(status, messages.join('\n')).toBe(0);
-      expect(report.checks.find((check) => check.id === '6')!.status).toBe('pass');
-      expect(messages.filter((m) => m.includes('LEND-456'))).toEqual([]);
+      const after = verifyJson(ws);
+      expect(after.status).toBe(1);
+      expect(after.messages).toContain('6 error LEND-01: no test link, no "Tests:" line and no "Untested:" line');
     },
   );
 });

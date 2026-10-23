@@ -84,6 +84,16 @@ export class SampleWorkspace {
    */
   resolvesEdges = true;
 
+  /**
+   * With `CTXO_REQUIRE_DOTNET=1` (the CI job that sets up .NET) a C# run that fell back to the syntax tier is a
+   * failure, not a skip: the Roslyn tier is what that job exists to cover.
+   */
+  requireEdges(): void {
+    if (process.env['CTXO_REQUIRE_DOTNET'] === '1' && !this.resolvesEdges) {
+      throw new Error('CTXO_REQUIRE_DOTNET=1, but C# was indexed on the syntax tier: install .NET SDK 8+ so the Roslyn tier resolves edges between files');
+    }
+  }
+
   private constructor(
     readonly dir: string,
     readonly variant: Variant,
