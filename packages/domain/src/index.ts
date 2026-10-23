@@ -7,6 +7,7 @@ import { domainDoctorChecks } from './doctor/domain-checks.js';
 import { domainIndexPass } from './index-pass/domain-index-pass.js';
 import { domainInit } from './init/domain-init.js';
 import { createDomainState } from './mcp/domain-state.js';
+import { domainTools } from './mcp/domain-tools.js';
 import { createEnrichers } from './mcp/enrichers.js';
 import { taskContextReservation } from './mcp/graph-enrichers.js';
 import { DOMAIN_PACKAGE, domainVersion, sameMinor } from './version.js';
@@ -37,6 +38,9 @@ export const register: CtxoModuleRegister = async (host) => {
       registrar.registerCommand(domainGuardHookCommand(host));
       registrar.registerCommand(domainCommand(host));
       registrar.registerCommand(verifyDomainCommand(host));
+    },
+    registerTools(registrar) {
+      for (const tool of domainTools(host, state)) registrar.registerTool(tool);
     },
     enrich: createEnrichers(host, state),
     reserveTaskContextTokens: taskContextReservation(state),

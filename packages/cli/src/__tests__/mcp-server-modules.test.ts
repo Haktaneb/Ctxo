@@ -19,6 +19,7 @@ import type {
   ResponseEnricher,
 } from '../ports/i-ctxo-module.js';
 import type { IGitPort } from '../ports/i-git-port.js';
+import type { ISessionRecorderPort, SessionEvent } from '../ports/i-session-recorder-port.js';
 import type { FileIndex } from '../core/types.js';
 
 /** a.ts::A calls b.ts::B. */
@@ -92,9 +93,9 @@ describe('registerTools with modules', () => {
     rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
-  async function connect(modules?: readonly LoadedModule[]): Promise<Client> {
+  async function connect(modules?: readonly LoadedModule[], recorder: ISessionRecorderPort | null = null): Promise<Client> {
     const server = new McpServer({ name: 'ctxo', version: '0.0.0' });
-    registerTools(server, storage, new MaskingPipeline(), git, undefined, null, tempDir, undefined, undefined, modules);
+    registerTools(server, storage, new MaskingPipeline(), git, undefined, recorder, tempDir, undefined, undefined, modules);
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await server.connect(serverTransport);
     const client = new Client({ name: 'mcp-server-modules-test', version: '0.0.0' });
@@ -160,6 +161,22 @@ describe('registerTools with modules', () => {
     const slice = await call(client, 'get_logic_slice', { symbolId: 'src/a.ts::A::function' });
     expect(slice['shadowed']).toBeUndefined();
     expect((slice['root'] as { symbolId: string }).symbolId).toBe('src/a.ts::A::function');
+  });
+
+  it('a module tool call is recorded in the session stats like a core tool call (R23)', async () => {
+    const events: SessionEvent[] = [];
+    const recorder: ISessionRecorderPort = {
+      record: (event) => events.push(event),
+      queryStats: () => ({ totalCalls: 0, totalTokensServed: 0, topTools: [], topSymbols: [], detailLevelDistribution: [] }),
+      clear: () => undefined,
+    };
+    const client = await connect([moduleWith({ registerTools: (registrar) => registrar.registerTool(stubTool([])) })], recorder);
+
+    await call(client, 'domain_stub', { id: 'lending' });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ tool: 'domain_stub', truncated: false });
+    expect(events[0]!.responseBytes).toBeGreaterThan(0);
   });
 
   it('a module tool whose input schema cannot be built is skipped and the server still starts', async () => {

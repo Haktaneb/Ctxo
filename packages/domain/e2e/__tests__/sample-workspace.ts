@@ -224,6 +224,11 @@ export class McpSession {
     return JSON.parse(response.content[0]!.text) as Record<string, unknown>;
   }
 
+  /** The names of the tools the server lists. */
+  async listTools(): Promise<string[]> {
+    return (await this.client.listTools()).tools.map((tool) => tool.name);
+  }
+
   async close(): Promise<void> {
     await this.client.close();
   }

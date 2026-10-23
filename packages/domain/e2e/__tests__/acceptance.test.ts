@@ -208,6 +208,49 @@ describe.each(VARIANTS)('PR 2B acceptance, %s sample', (variant) => {
     expect([...domainArtifacts(first).entries()]).toEqual([...a.entries()]);
   });
 
+  it('the server lists the 14 core tools plus get_domain_context and get_rule, which answer without a registry too', async () => {
+    const ws = prepared(variant);
+    let session = await ws.connect();
+    try {
+      const names = await session.listTools();
+      expect(names).toHaveLength(16);
+      expect(names).toEqual(expect.arrayContaining(['get_domain_context', 'get_rule', 'get_blast_radius']));
+
+      const rule = (await session.call('get_rule', { ruleId: 'lend_03' })) as {
+        rule: { ruleId: string; context: { id: string } };
+        tests: { file: string; sources: { source: string }[] }[];
+        _meta?: unknown;
+      };
+      expect(rule.rule).toMatchObject({ ruleId: 'LEND-03', context: { id: 'lending' } });
+      expect(rule.tests.map((t) => t.file)).toContain(LOAN_LIMIT_TEST[variant]);
+      expect(rule.tests.flatMap((t) => t.sources.map((s) => s.source))).toContain('card-tests');
+      expect(rule._meta).toBeDefined();
+
+      const card = await session.call('get_domain_context', { path: LOAN_LIMIT[variant] });
+      expect(card['context']).toMatchObject({ id: 'lending', card: 'docs/domain/lending/domain.md' });
+      expect(card['_meta']).toBeDefined();
+    } finally {
+      await session.close();
+    }
+
+    ws.remove(REGISTRY);
+    session = await ws.connect();
+    try {
+      expect(await session.listTools()).toHaveLength(16);
+      const hint = 'No domain registry at docs/domain/contexts.yaml. Create one with "ctxo init --domain".';
+      for (const [name, args] of [
+        ['get_rule', { ruleId: 'LEND-03' }],
+        ['get_domain_context', {}],
+      ] as const) {
+        const response = await session.call(name, args);
+        expect(response['error'], name).toBeUndefined();
+        expect(response, name).toMatchObject({ found: false, hint });
+      }
+    } finally {
+      await session.close();
+    }
+  });
+
   it('no registry: no new fields anywhere, and the commands print a hint and exit 0', async () => {
     const ws = SampleWorkspace.create(variant);
     ws.commitLoaderRules();
