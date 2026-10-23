@@ -208,20 +208,20 @@ describe('applyFixes', () => {
   });
 
   it('orphan prune keeps the index entry of a tracked file with a non-ASCII name', async () => {
-    // Without -z, git quotes such a name ("\305\237ube kayd\304\261.txt") and the entry would be
+    // Without -z, git quotes such a name ("\303\266d\303\274n\303\247 kayd\304\261.txt") and the entry would be
     // deleted as an orphan. .txt files: no language plugin is needed, so nothing is installed.
     execFileSync('git', ['init', '-q'], { cwd: tmp });
     execFileSync('git', ['config', 'core.quotePath', 'true'], { cwd: tmp });
-    for (const file of ['şube kaydı.txt', 'plain.txt']) writeFileSync(join(tmp, file), 'notes', 'utf-8');
+    for (const file of ['ödünç kaydı.txt', 'plain.txt']) writeFileSync(join(tmp, file), 'notes', 'utf-8');
     const ctxoRoot = join(tmp, '.ctxo');
     const writer = new JsonIndexWriter(ctxoRoot);
-    for (const file of ['şube kaydı.txt', 'plain.txt', 'gone.txt']) writer.write(buildFileIndex({ file }));
+    for (const file of ['ödünç kaydı.txt', 'plain.txt', 'gone.txt']) writer.write(buildFileIndex({ file }));
     const entry = (file: string): string => join(ctxoRoot, 'index', `${file}.json`);
 
     const r = await applyFixes(report([{ id: 'orphaned_files', status: 'fail' }]), { projectRoot: tmp, ctxoRoot });
 
     expect(r.attempts.find((a) => a.name === 'Orphaned index files')?.status).toBe('success');
-    expect(existsSync(entry('şube kaydı.txt'))).toBe(true);
+    expect(existsSync(entry('ödünç kaydı.txt'))).toBe(true);
     expect(existsSync(entry('plain.txt'))).toBe(true);
     expect(existsSync(entry('gone.txt'))).toBe(false);
   });

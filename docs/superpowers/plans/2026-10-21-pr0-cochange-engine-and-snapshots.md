@@ -32,7 +32,7 @@
 
 ## Review Focus
 
-1. **Paths with spaces and non-ASCII characters** (for example `src/şube kaydı.ts`): git quotes and octal-escapes them by default, so they would silently fall out of co-change and `--commit`. Expected: they are analysed and re-indexed like any other path. Test owned by Task 1.
+1. **Paths with spaces and non-ASCII characters** (for example `src/ödünç kaydı.ts`): git quotes and octal-escapes them by default, so they would silently fall out of co-change and `--commit`. Expected: they are analysed and re-indexed like any other path. Test owned by Task 1.
 2. **Git unavailable, no HEAD yet, or a shallow clone:** today a failing git call yields an empty map and the empty matrix is still written. Expected: indexing completes, the existing `co-changes.json` is left untouched, and a shallow clone produces a smaller but valid window. Tests owned by Tasks 1 and 4.
 3. **The hook running on a root commit or on a merge commit:** expected no crash; the root commit's files are indexed; a merge commit re-indexes nothing but still refreshes co-change and the snapshot. Test owned by Task 5.
 4. **Upgrading an existing install:** an old hook block with user lines around it, and a history folder full of same-SHA duplicates. Expected: the block is replaced in place with user lines preserved, and history reads as one entry per commit without a migration. Tests owned by Tasks 6 and 9.
@@ -76,7 +76,7 @@
 - [ ] **Step 1: Write the failing tests** in the new test file, with a temp repo builder that commits files in sequence:
   - `getChangeLog returns non-merge commits newest first with name-status changes`: three commits, then a merge commit from a side branch. Expect three entries, no merge entry, `commits[0].hash` equal to the third commit, `changes` statuses `A`/`M`.
   - `getChangeLog reports renames with oldPath`: commit `src/a.ts`, then `git mv src/a.ts src/b.ts` and commit. Expect `{ status: 'R', path: 'src/b.ts', oldPath: 'src/a.ts' }`.
-  - `getChangeLog keeps paths with spaces and non-ASCII characters intact`: commit `src/şube kaydı.ts`. Expect `changes[0].path === 'src/şube kaydı.ts'` (Review Focus 1).
+  - `getChangeLog keeps paths with spaces and non-ASCII characters intact`: commit `src/ödünç kaydı.ts`. Expect `changes[0].path === 'src/ödünç kaydı.ts'` (Review Focus 1).
   - `getChangeLog honours maxCommits and anchors head to HEAD even when HEAD is a merge`: `maxCommits = 2` gives 2 commits; `head` equals `git rev-parse --short HEAD` of the merge commit.
   - `getChangeLog returns undefined in a repo with no commits`.
   - `getChangeLog handles a case-only rename and returns forward-slash paths` (Review Focus 5): rename `src/Foo.ts` to `src/foo.ts` through a temporary name (`git mv src/Foo.ts src/tmp.ts`, commit, `git mv src/tmp.ts src/foo.ts`, commit). Expect `R` entries ending at `src/foo.ts`, and no path contains `\`.
