@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class FactEvidenceTest {
   private static final Path LENDING = Paths.get("src/test/resources/lending").toAbsolutePath();
   private static final Path GOLDEN = Paths.get("src/test/resources/lending-facts-off.golden.jsonl").toAbsolutePath();
+  private static final Path GOLDEN_SQL = Paths.get("src/test/resources/lending-facts-off-sql.golden.jsonl").toAbsolutePath();
   private static final String FACTS = "src/main/java/lending/facts/";
   private static final String RULES = FACTS + "LoanRules.java";
   private static JsonObject vectors;
@@ -285,6 +286,120 @@ class FactEvidenceTest {
   }
 
   @Test
+  void anIntStepBesideAFloatingOperandIsStillChecked(@TempDir Path tmp) throws IOException {
+    String rel = "src/main/java/lending/Mixed.java";
+    write(tmp, rel, String.join("\n",
+        "package lending;",
+        "class Mixed {",
+        "  static final double RETRY_FACTOR = 1.5 * 2 * (100000 * 100000);",
+        "  static final double RETRY_SCALE = 1.5 * 2 * (1000 * 1000);",
+        "  static final double DELAY_SCALE = (100000 * 100000) * 1.5;",
+        "}", ""));
+    List<String> found = file(analyzeWithFacts(tmp), rel).factEvidence.stream()
+        .map(e -> e.name).collect(Collectors.toList());
+    assertEquals(List.of("RETRY_SCALE"), found);
+    assertTrue(FactEvidence.overflowsInt(expression("1.5 * 2 * (100000 * 100000)")));
+  }
+
+  /** {@code languageSpecific.java.overflowsInt}: expressions the JDT evidence step treats as not constants (no bindings: types from the literals). */
+  @Test
+  void overflowsIntFollowsTheJavaVectors() {
+    JsonArray cases = vectors.getAsJsonObject("languageSpecific").getAsJsonObject("java").getAsJsonArray("overflowsInt");
+    assertTrue(cases.size() > 0);
+    for (JsonElement e : cases) {
+      JsonObject vector = e.getAsJsonObject();
+      String input = vector.get("input").getAsString();
+      assertEquals(vector.get("expected").getAsBoolean(), FactEvidence.overflowsInt(expression(input)), input);
+    }
+  }
+
+  private static org.eclipse.jdt.core.dom.Expression expression(String source) {
+    org.eclipse.jdt.core.dom.ASTParser parser = org.eclipse.jdt.core.dom.ASTParser.newParser(org.eclipse.jdt.core.dom.AST.getJLSLatest());
+    parser.setKind(org.eclipse.jdt.core.dom.ASTParser.K_EXPRESSION);
+    // As the Analyzer sets them: JDT 3.33's default source level rejects binary literals and underscores.
+    Map<String, String> options = org.eclipse.jdt.core.JavaCore.getOptions();
+    org.eclipse.jdt.core.JavaCore.setComplianceOptions(org.eclipse.jdt.core.JavaCore.VERSION_17, options);
+    parser.setCompilerOptions(options);
+    parser.setSource(source.toCharArray());
+    org.eclipse.jdt.core.dom.ASTNode node = parser.createAST(null);
+    assertTrue(node instanceof org.eclipse.jdt.core.dom.Expression, source + " parses as an expression");
+    return (org.eclipse.jdt.core.dom.Expression) node;
+  }
+
+  @Test
+  void aCollectorFailureDropsThatFilesEvidenceOnly(@TempDir Path tmp) throws IOException {
+    write(tmp, "src/main/java/lending/Broken.java",
+        "package lending;\nclass Broken {\n  static final int MAX_RETRIES = 3;\n  int m(int x) { if (x > 5) return 1; return 0; }\n}\n");
+    write(tmp, "src/main/java/lending/Fine.java",
+        "package lending;\nclass Fine {\n  static final int MAX_RETRIES = 4;\n}\n");
+    Analyzer.FactCollector original = Analyzer.factCollector;
+    java.io.PrintStream stderr = System.err;
+    ByteArrayOutputStream errors = new ByteArrayOutputStream();
+    try {
+      // A collector that records one record, then fails on a node of Broken.java mid-walk.
+      Analyzer.factCollector = (cu, source, rel, options, out) -> {
+        original.collect(cu, source, rel, options, out);
+        if (rel.endsWith("Broken.java")) throw new IllegalStateException("unexpected node");
+      };
+      System.setErr(new PrintStream(errors, true));
+      List<Dtos.FileResult> results = analyzeWithFacts(tmp);
+      Dtos.FileResult broken = file(results, "src/main/java/lending/Broken.java");
+      assertNull(broken.factEvidence);
+      assertTrue(broken.symbols.stream().anyMatch(s -> s.name.equals("m")), "symbols are kept");
+      assertFalse(broken.edges.isEmpty() && broken.symbols.isEmpty());
+      assertEquals(1, file(results, "src/main/java/lending/Fine.java").factEvidence.size());
+    } finally {
+      Analyzer.factCollector = original;
+      System.setErr(stderr);
+    }
+    String log = errors.toString();
+    assertEquals(1, log.lines().count(), log);
+    assertTrue(log.contains("src/main/java/lending/Broken.java") && log.contains("IllegalStateException"), log);
+  }
+
+  @Test
+  void doneAndReadyLinesCarryTheFactsMarkerOnlyWithTheOption() throws IOException {
+    Analyzer on = new Analyzer(LENDING.toString(), new String[0], false, new Dtos.FactOptions(defaultPatterns));
+    Analyzer off = new Analyzer(LENDING.toString(), new String[0], true);
+
+    JsonObject doneOn = lastLine(batch(on));
+    assertEquals("done", doneOn.get("type").getAsString());
+    assertTrue(doneOn.get("facts").getAsBoolean());
+    JsonObject doneOff = lastLine(batch(off));
+    assertEquals("done", doneOff.get("type").getAsString());
+    assertFalse(doneOff.has("facts"), doneOff.toString());
+    assertEquals(List.of("type", "totalFiles", "elapsed", "sql"), new ArrayList<>(doneOff.keySet()));
+
+    JsonObject readyOn = firstLine(keepAlive(on));
+    assertEquals("ready", readyOn.get("type").getAsString());
+    assertTrue(readyOn.get("facts").getAsBoolean());
+    JsonObject readyOff = firstLine(keepAlive(off));
+    assertEquals(List.of("type", "projectCount", "fileCount"), new ArrayList<>(readyOff.keySet()));
+  }
+
+  private static String batch(Analyzer analyzer) {
+    ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+    Main.runBatch(LENDING.toString(), analyzer, new PrintStream(bytes, true));
+    return bytes.toString();
+  }
+
+  private static String keepAlive(Analyzer analyzer) throws IOException {
+    ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+    Main.runKeepAlive(LENDING.toString(), analyzer, new java.io.ByteArrayInputStream(new byte[0]),
+        new PrintStream(bytes, true, "UTF-8"));
+    return bytes.toString("UTF-8");
+  }
+
+  private static JsonObject firstLine(String output) {
+    return JsonParser.parseString(output.split("\\r?\\n")[0]).getAsJsonObject();
+  }
+
+  private static JsonObject lastLine(String output) {
+    String[] lines = output.trim().split("\\r?\\n");
+    return JsonParser.parseString(lines[lines.length - 1]).getAsJsonObject();
+  }
+
+  @Test
   void textBlocksAreStringLiteralsWithTheirSourceText(@TempDir Path tmp) throws IOException {
     String rel = "src/main/java/lending/Blocks.java";
     write(tmp, rel, String.join("\r\n",
@@ -396,13 +511,54 @@ class FactEvidenceTest {
   }
 
   /**
-   * Facts off, the batch output is byte-identical to the tip of the line before facts existed: the
-   * golden was written by that analyzer over the lending fixture with LF line endings (offsets
-   * depend on them, and git may check the fixture out with CRLF). With facts on, every line without
-   * its factEvidence member is the same too.
+   * Facts off, the batch output is byte-identical to the tip of the line before facts existed, with
+   * and without {@code --sql-call-sites}. With facts on, every line without its factEvidence member
+   * is the same too.
+   *
+   * <p>The goldens ({@code lending-facts-off.golden.jsonl}, {@code lending-facts-off-sql.golden.jsonl})
+   * are the {@code "type":"file"} lines of the analyzer built at {@code a364d6e2}, the commit before
+   * fact evidence, sorted by {@code file}. To regenerate them (only for a deliberate output change):
+   * export that commit's {@code packages/lang-java-analyzer/java} ({@code git archive a364d6e2 ...}),
+   * run {@code mvn -q -Pjava17 -DskipTests package} there, copy the current {@code lending} fixture
+   * with every {@code .java} file converted to LF line endings (offsets depend on them, and git may
+   * check the fixture out with CRLF), run {@code java -jar ctxo-jdt-analyzer-17.jar <copy>} (and again
+   * with {@code --sql-call-sites}), keep the {@code "type":"file"} lines, sort them by their
+   * {@code file} member and write them with LF line endings. The -11 and -17 JARs give the same lines.
    */
   @Test
   void factsOffOutputIsByteIdenticalToTheGolden(@TempDir Path tmp) throws IOException {
+    Path copy = lfCopy(tmp);
+    assertGolden(GOLDEN, copy, false);
+  }
+
+  @Test
+  void factsOffOutputWithSqlCallSitesIsByteIdenticalToTheGolden(@TempDir Path tmp) throws IOException {
+    Path copy = lfCopy(tmp);
+    assertGolden(GOLDEN_SQL, copy, true);
+  }
+
+  private static void assertGolden(Path goldenFile, Path copy, boolean sqlCallSites) throws IOException {
+    List<String> golden = new ArrayList<>();
+    for (String line : Files.readString(goldenFile, StandardCharsets.UTF_8).split("\\r?\\n")) {
+      if (!line.isBlank()) golden.add(line);
+    }
+    assertEquals(sqlCallSites, golden.stream().anyMatch(l -> l.contains("\"sqlCallSites\"")));
+
+    assertEquals(golden, fileLines(copy.toString(), new Analyzer(copy.toString(), new String[0], sqlCallSites)));
+
+    List<String> on = fileLines(copy.toString(),
+        new Analyzer(copy.toString(), new String[0], sqlCallSites, new Dtos.FactOptions(defaultPatterns)));
+    assertTrue(on.stream().anyMatch(l -> l.contains("\"factEvidence\"")));
+    List<String> stripped = on.stream().map(l -> {
+      JsonObject o = JsonParser.parseString(l).getAsJsonObject();
+      o.remove("factEvidence");
+      return Main.json(o);
+    }).collect(Collectors.toList());
+    assertEquals(golden, stripped);
+  }
+
+  /** The lending fixture copied with LF line endings. */
+  private static Path lfCopy(Path tmp) throws IOException {
     Path copy = tmp.resolve("lending");
     try (Stream<Path> walk = Files.walk(LENDING)) {
       for (Path p : (Iterable<Path>) walk::iterator) {
@@ -412,22 +568,7 @@ class FactEvidenceTest {
         Files.write(target, text.getBytes(StandardCharsets.UTF_8));
       }
     }
-    List<String> golden = new ArrayList<>();
-    for (String line : Files.readString(GOLDEN, StandardCharsets.UTF_8).split("\\r?\\n")) {
-      if (!line.isBlank()) golden.add(line);
-    }
-
-    assertEquals(golden, fileLines(copy.toString(), new Analyzer(copy.toString(), new String[0])));
-
-    List<String> on = fileLines(copy.toString(),
-        new Analyzer(copy.toString(), new String[0], false, new Dtos.FactOptions(defaultPatterns)));
-    assertTrue(on.stream().anyMatch(l -> l.contains("\"factEvidence\"")));
-    List<String> stripped = on.stream().map(l -> {
-      JsonObject o = JsonParser.parseString(l).getAsJsonObject();
-      o.remove("factEvidence");
-      return Main.json(o);
-    }).collect(Collectors.toList());
-    assertEquals(golden, stripped);
+    return copy;
   }
 
   /** The {@code file} lines of a batch run, sorted by file (the walk order depends on the file system). */

@@ -76,8 +76,8 @@ describe('buildAnalyzerArgs', () => {
 const FACTS = { trivialLiterals: [0], normalizationMethods: ['trim', 'strings.ToLower'] };
 const FACTS_ARG = `--facts=${Buffer.from('{"normalizationMethods":["trim","strings.ToLower"]}', 'utf8').toString('base64')}`;
 
-/** A `--keep-alive` process that reports `ready` as soon as it is spawned. */
-function readyProcess(): void {
+/** A `--keep-alive` process that prints `ready` (or the given ready line) as soon as it is spawned. */
+function readyProcess(ready = '{"type":"ready"}'): void {
   const proc = Object.assign(new EventEmitter(), {
     stdout: new EventEmitter(),
     stderr: new EventEmitter(),
@@ -86,7 +86,7 @@ function readyProcess(): void {
     kill: vi.fn(),
   });
   mockedSpawn.mockImplementationOnce(() => {
-    queueMicrotask(() => proc.stdout.emit('data', Buffer.from('{"type":"ready"}\n')));
+    queueMicrotask(() => proc.stdout.emit('data', Buffer.from(`${ready}\n`)));
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return proc as any;
   });
@@ -122,6 +122,28 @@ describe('fact options on the analyzer command line', () => {
       ['-jar', '/app.jar', '/root', '--keep-alive', '--sql-call-sites', FACTS_ARG],
       ['-jar', '/app.jar', '/root', '--keep-alive'],
     ]);
+  });
+
+  it('runBatchIndex reports facts only when the done line carries the marker', async () => {
+    fakeBatch('{"type":"done","totalFiles":0,"elapsed":"1ms","facts":true}\n');
+    expect((await runBatchIndex('java', '/app.jar', '/root', { facts: FACTS })).facts).toBe(true);
+    fakeBatch('{"type":"done","totalFiles":0,"elapsed":"1ms"}\n');
+    expect(await runBatchIndex('java', '/app.jar', '/root', { facts: FACTS })).not.toHaveProperty('facts');
+  });
+
+  it('the keep-alive reports facts only when the ready line carries the marker', async () => {
+    readyProcess('{"type":"ready","projectCount":1,"fileCount":2,"facts":true}');
+    const marked = new JdtKeepAlive('java', '/app.jar', '/root', { facts: FACTS });
+    expect(marked.reportsFacts()).toBe(false);
+    expect(await marked.start()).toBe(true);
+    expect(marked.reportsFacts()).toBe(true);
+    await marked.shutdown();
+
+    readyProcess();
+    const old = new JdtKeepAlive('java', '/app.jar', '/root', { facts: FACTS });
+    expect(await old.start()).toBe(true);
+    expect(old.reportsFacts()).toBe(false);
+    await old.shutdown();
   });
 
   it('runBatchIndex keeps the factEvidence records of a file line', async () => {

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { FactOptions } from '../../facts/fact-types.js';
 import { DEFAULT_FACT_OPTIONS } from '../../facts/fact-options.js';
 import type { JdtFileResult } from '../jdt-process.js';
@@ -6,6 +6,7 @@ import type { JdtFileResult } from '../jdt-process.js';
 const keepAlive = vi.hoisted(() => ({
   options: [] as unknown[],
   results: [] as unknown[],
+  reportsFacts: true,
 }));
 
 vi.mock('../jdt-process.js', async (importOriginal) => ({
@@ -17,6 +18,7 @@ vi.mock('../jdt-process.js', async (importOriginal) => ({
     }
     start(): Promise<boolean> { return Promise.resolve(true); }
     isAlive(): boolean { return true; }
+    reportsFacts(): boolean { return keepAlive.reportsFacts; }
     analyzeFile(): Promise<unknown> { return Promise.resolve(keepAlive.results.shift() ?? null); }
     shutdown(): Promise<void> { return Promise.resolve(); }
   },
@@ -73,6 +75,60 @@ describe('JdtAnalyzerAdapter facts', () => {
     mockedRun.mockReset();
     keepAlive.options.length = 0;
     keepAlive.results.length = 0;
+    keepAlive.reportsFacts = true;
+  });
+
+  describe('the facts marker (an analyzer too old for --facts= ignores it)', () => {
+    const WARNING = 'analyzer too old for facts; run ctxo install java --full-tier';
+    let stderr: string[];
+
+    beforeEach(() => {
+      stderr = [];
+      vi.stubEnv('DEBUG', 'ctxo:*');
+      vi.spyOn(process.stderr, 'write').mockImplementation((chunk: string | Uint8Array) => {
+        stderr.push(String(chunk));
+        return true;
+      });
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+    });
+
+    const warnings = (): number => stderr.filter((line) => line.includes(WARNING)).length;
+
+    it('warns once when facts were requested and neither the done line nor the ready line carries the marker', async () => {
+      mockedRun.mockResolvedValue({ files: [rules('3', 3)], totalFiles: 1, elapsed: '1ms' });
+      keepAlive.reportsFacts = false;
+      const adapter = readyAdapter({ facts: DEFAULT_FACT_OPTIONS });
+      await adapter.extractFacts(FILE, '');
+      expect(warnings()).toBe(1);
+      expect(stderr.find((line) => line.includes(WARNING))).toContain(' warn ');
+      expect(await adapter.startKeepAlive()).toBe(true);
+      expect(warnings()).toBe(1);
+    });
+
+    it('the keep-alive ready line without the marker warns too', async () => {
+      keepAlive.reportsFacts = false;
+      const adapter = readyAdapter({ facts: DEFAULT_FACT_OPTIONS });
+      expect(await adapter.startKeepAlive()).toBe(true);
+      expect(warnings()).toBe(1);
+    });
+
+    it('stays quiet when the analyzer reports facts, or when facts were not requested', async () => {
+      mockedRun.mockResolvedValue({ files: [rules('3', 3)], totalFiles: 1, elapsed: '1ms', facts: true });
+      const adapter = readyAdapter({ facts: DEFAULT_FACT_OPTIONS });
+      await adapter.extractFacts(FILE, '');
+      await adapter.startKeepAlive();
+
+      mockedRun.mockResolvedValue({ files: [rules('3', 3)], totalFiles: 1, elapsed: '1ms' });
+      keepAlive.reportsFacts = false;
+      const plain = readyAdapter({});
+      await plain.extractSymbols(FILE, '');
+      await plain.startKeepAlive();
+      expect(warnings()).toBe(0);
+    });
   });
 
   it('extractFacts finishes the cached evidence plus annotation routes; the batch and the keep-alive get the options', async () => {

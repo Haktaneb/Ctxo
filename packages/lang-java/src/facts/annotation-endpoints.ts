@@ -33,6 +33,11 @@ function springPaths(annotation: SymbolAnnotation): string[] {
   return value.length > 0 ? value : [''];
 }
 
+/** A JAX-RS `Path` value: `args[0]`, else `named.value` (`@Path(value = "/x")` when a tier reports the member by name). */
+function jaxRsPath(annotation: SymbolAnnotation | undefined): string | undefined {
+  return annotation?.args?.[0] ?? annotation?.named?.['value'];
+}
+
 /** `RequestMethod.POST` (or `POST`) gives `POST`. */
 function verbOf(value: string): string {
   return value.slice(value.lastIndexOf('.') + 1).toUpperCase();
@@ -80,8 +85,8 @@ export function annotationRouteEvidence(
     const owner = enclosingType(method, symbols);
     const classMapping = owner?.annotations?.find((a) => a.name === REQUEST_MAPPING);
     const prefixes = classMapping ? springPaths(classMapping) : [''];
-    const classPath = owner?.annotations?.find((a) => a.name === PATH)?.args?.[0];
-    const methodPath = annotations.find((a) => a.name === PATH)?.args?.[0];
+    const classPath = jaxRsPath(owner?.annotations?.find((a) => a.name === PATH));
+    const methodPath = jaxRsPath(annotations.find((a) => a.name === PATH));
 
     const push = (verb: string, route: string): void => {
       evidence.push({ kind: 'route', symbolId: method.symbolId, line: method.startLine, verb, route });

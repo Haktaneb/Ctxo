@@ -1437,7 +1437,7 @@
       ]
     },
     "java": {
-      "$comment": "Run with decodeJavaStringLiteral: text blocks (JLS 3.10.6). The opening \"\"\" must be followed by optional spaces, tabs or form feeds and a line break; the content up to the first unescaped \"\"\" (which must end the literal) gets LF line breaks, then String.stripIndent (the last line counts toward the indentation even when blank, so a closing delimiter on its own line keeps the final newline, and one at column 0 keeps all indentation; each whitespace character, a tab included, counts as one; trailing whitespace is removed), then String.translateEscapes (\\b \\t \\n \\f \\r \\s \\\" \\' \\\\, octal \\0 to \\377, a backslash before a line break joins the lines). A Unicode escape (\\u0041) and any other escape are not constants, as in the shared rules. Plain \"...\" strings never reach the decoder (\"\\s\" is not a constant). Int overflow (24 * 60 * 60 * 1000 * 365) is decided by the JDT evidence step, not by these rules: an int-typed step outside the int range gives no evidence.",
+      "$comment": "Run with decodeJavaStringLiteral: text blocks (JLS 3.10.6). The opening \"\"\" must be followed by optional spaces, tabs or form feeds and a line break; the content up to the first unescaped \"\"\" (which must end the literal) gets LF line breaks, then String.stripIndent (the last line counts toward the indentation even when blank, so a closing delimiter on its own line keeps the final newline, and one at column 0 keeps all indentation; each whitespace character, a tab included, counts as one; trailing whitespace is removed), then String.translateEscapes (\\b \\t \\n \\f \\r \\s \\\" \\' \\\\, octal \\0 to \\377, a backslash before a line break joins the lines). A Unicode escape (\\u0041) and any other escape are not constants, as in the shared rules. Plain \"...\" strings never reach the decoder (\"\\s\" is not a constant). Int overflow (24 * 60 * 60 * 1000 * 365) is decided by the JDT evidence step, not by these rules: an int-typed step outside the int range gives no evidence, also inside floating arithmetic (1.5 * 2 * (100000 * 100000)). Hex, octal and binary int literals above INT_MAX without L (0xFFFFFFFF, 037777777777, 0b followed by 32 ones) are valid Java ints with wrapped values (0xFFFFFFFF is -1), while the shared rules read them unsigned (4294967295), so they are not constants: the evidence step drops a binding or duration amount holding one, and as a comparison literal the shared value is never Java's (0xFFFFFFFF is not trivial against -1). overflowsInt vectors: a Java expression and whether the JDT evidence step treats it as not a constant (types from the literals: an integer literal without L is an int).",
       "isTrivialLiteral": [
         {
           "input": {
@@ -1694,6 +1694,78 @@
               "A"
             ]
           },
+          "expected": false
+        },
+        {
+          "input": {
+            "literal": "0xFFFFFFFF",
+            "kind": "number",
+            "trivialLiterals": [
+              -1
+            ]
+          },
+          "expected": false
+        }
+      ],
+      "overflowsInt": [
+        {
+          "input": "24 * 60 * 60 * 1000 * 365",
+          "expected": true
+        },
+        {
+          "input": "24L * 60 * 60 * 1000 * 365",
+          "expected": false
+        },
+        {
+          "input": "100000 * 100000 / 100000",
+          "expected": true
+        },
+        {
+          "input": "1000 * 1000 * 1000 * 1000L",
+          "expected": false
+        },
+        {
+          "input": "1000 * 1000 * 1000 * 10 * 1L",
+          "expected": true
+        },
+        {
+          "input": "1.5 * 2 * (100000 * 100000)",
+          "expected": true
+        },
+        {
+          "input": "1.5 * 2 * (1000 * 1000)",
+          "expected": false
+        },
+        {
+          "input": "-2147483648",
+          "expected": false
+        },
+        {
+          "input": "2147483647",
+          "expected": false
+        },
+        {
+          "input": "0x7FFFFFFF",
+          "expected": false
+        },
+        {
+          "input": "0xFFFFFFFF",
+          "expected": true
+        },
+        {
+          "input": "0xFFFFFFFFL",
+          "expected": false
+        },
+        {
+          "input": "037777777777",
+          "expected": true
+        },
+        {
+          "input": "0b11111111111111111111111111111111",
+          "expected": true
+        },
+        {
+          "input": "x * 1000",
           "expected": false
         }
       ]

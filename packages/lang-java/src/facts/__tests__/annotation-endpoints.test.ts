@@ -93,6 +93,15 @@ describe('annotationRouteEvidence (Spring, JAX-RS)', () => {
     ]);
   });
 
+  it('a JAX-RS Path reads named.value when args is empty', () => {
+    const symbols = [
+      cls('HoldResource', 0, 30, [{ name: 'Path', named: { value: '/holds' } }]),
+      method('get', 3, [{ name: 'GET' }, { name: 'Path', named: { value: '{id}' } }]),
+      method('put', 8, [{ name: 'PUT' }, { name: 'Path', args: ['x'], named: { value: 'ignored' } }]),
+    ];
+    expect(endpoints(symbols)).toEqual(['3 get::method GET /holds/{id}', '8 put::method PUT /holds/x']);
+  });
+
   it('the innermost enclosing class gives the prefix; a method outside a class or a class without a prefix gives the method path', () => {
     const symbols = [
       cls('Outer', 0, 50, [{ name: 'RequestMapping', args: ['outer'] }]),

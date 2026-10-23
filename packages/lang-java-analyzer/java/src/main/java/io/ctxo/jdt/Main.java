@@ -59,7 +59,8 @@ public final class Main {
 
   /**
    * One JSONL line per file, then the {@code done} line; with {@code --sql-call-sites} the
-   * {@code done} line carries {@code "sql":{"constant":n,"nonConstant":m}}. Package-private for the tests.
+   * {@code done} line carries {@code "sql":{"constant":n,"nonConstant":m}}, with {@code --facts=}
+   * {@code "facts":true} (so does the keep-alive {@code ready} line). Package-private for the tests.
    */
   static void runBatch(String root, Analyzer analyzer, PrintStream out) {
     long start = System.nanoTime();
@@ -73,6 +74,8 @@ public final class Main {
     done.addProperty("elapsed", String.format("%.1fs", (System.nanoTime() - start) / 1e9));
     Dtos.SqlStats sql = analyzer.sqlStats();
     if (sql != null) done.add("sql", GSON.toJsonTree(sql));
+    // Only with --facts=: the plugin tells an analyzer that understood it from an older one that ignored it.
+    if (analyzer.factsEnabled()) done.addProperty("facts", true);
     out.println(json(done));
   }
 
@@ -102,6 +105,7 @@ public final class Main {
     ready.addProperty("type", "ready");
     ready.addProperty("projectCount", 1);
     ready.addProperty("fileCount", allFiles.size());
+    if (analyzer.factsEnabled()) ready.addProperty("facts", true);
     out.println(json(ready));
     // The plugin writes UTF-8; the platform charset (Cp1254 and the like on JRE 11-17) would garble non-ASCII paths.
     try (BufferedReader in = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8))) {

@@ -30,8 +30,10 @@ import java.util.regex.Pattern;
  *
  * <p>Java wraps int arithmetic, the shared rules evaluate it exactly: a binding value or duration
  * amount in which some int-typed operation leaves the int range (24 * 60 * 60 * 1000 * 365) is
- * not a constant, so it gives no evidence. Types come from the JDT bindings, else from the
- * literals (an integer literal without {@code L} is an int).
+ * not a constant, so it gives no evidence, also beside a floating operand. A hex, octal or binary
+ * int literal above INT_MAX ({@code 0xFFFFFFFF}, a valid int with the value -1, which the shared
+ * rules would read as 4294967295) counts as leaving the range. Types come from the JDT bindings,
+ * else from the literals (an integer literal without {@code L} is an int).
  *
  * <p>{@code symbolId} is the owner as {@code EmitVisitor} names it: the innermost method or
  * constructor ({@code <file>::<name>::method}), else the field declarator
@@ -405,14 +407,16 @@ final class FactEvidence {
       InfixExpression.Operator op = infix.getOperator();
       if (op != InfixExpression.Operator.PLUS && op != InfixExpression.Operator.MINUS
           && op != InfixExpression.Operator.TIMES && op != InfixExpression.Operator.DIVIDE) return null;
-      List<Expression> operands = new ArrayList<>();
-      operands.add(infix.getLeftOperand());
-      operands.add(infix.getRightOperand());
-      for (Object o : infix.extendedOperands()) operands.add((Expression) o);
-      Exact acc = exact(operands.get(0));
-      for (int i = 1; i < operands.size(); i++) {
-        Exact next = exact(operands.get(i));
-        if (acc == null || next == null) return null;
+      // Every operand is evaluated (and checked) first: a floating operand ends the exact value, but
+      // an int step beside it still wraps in Java (1.5 * 2 * (100000 * 100000)).
+      List<Exact> values = new ArrayList<>();
+      values.add(exact(infix.getLeftOperand()));
+      values.add(exact(infix.getRightOperand()));
+      for (Object o : infix.extendedOperands()) values.add(exact((Expression) o));
+      if (values.contains(null)) return null;
+      Exact acc = values.get(0);
+      for (int i = 1; i < values.size(); i++) {
+        Exact next = values.get(i);
         boolean isLong = acc.isLong || next.isLong;
         BigInteger value;
         if (op == InfixExpression.Operator.PLUS) value = acc.value.add(next.value);

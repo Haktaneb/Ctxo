@@ -56,6 +56,8 @@ export interface JdtBatchResult {
   elapsed: string;
   /** From the `done` line; absent without `--sql-call-sites` (the keep-alive prints no `done` line). */
   sql?: JdtSqlStats;
+  /** `true` when the `done` line carries `"facts":true`: the analyzer understood `--facts=` (an older JAR ignores it). */
+  facts?: true;
 }
 
 export interface RunOpts {
@@ -112,6 +114,7 @@ export async function runBatchIndex(
     const proc = spawn(javaBin, args, { stdio: ['ignore', 'pipe', 'pipe'], timeout: timeoutMs });
     const files: JdtFileResult[] = [];
     let sql: JdtSqlStats | undefined;
+    let facts = false;
     let totalFiles = 0,
       elapsed = '',
       stderr = '',
@@ -130,6 +133,7 @@ export async function runBatchIndex(
             totalFiles?: unknown;
             elapsed?: unknown;
             sql?: unknown;
+            facts?: unknown;
           };
           switch (obj.type) {
             case 'file':
@@ -142,6 +146,7 @@ export async function runBatchIndex(
               totalFiles = Number(obj.totalFiles ?? 0);
               elapsed = String(obj.elapsed ?? '');
               sql = parseSqlStats(obj.sql);
+              facts = obj.facts === true;
               break;
           }
         } catch {
@@ -158,7 +163,7 @@ export async function runBatchIndex(
         resolve(empty);
         return;
       }
-      resolve({ files, totalFiles, elapsed, ...(sql ? { sql } : {}) });
+      resolve({ files, totalFiles, elapsed, ...(sql ? { sql } : {}), ...(facts ? { facts: true as const } : {}) });
     });
     proc.on('error', (err) => {
       log.error(`ctxo-jdt-analyzer spawn error: ${(err as Error).message}`);
@@ -184,6 +189,7 @@ export class JdtKeepAlive {
   private readonly idleMs: number;
   private proc: ChildProcess | null = null;
   private buffer = '';
+  private factsReported = false;
   private pending = new Map<string, (r: JdtFileResult | null) => void>();
   private inactivityTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -215,7 +221,7 @@ export class JdtKeepAlive {
           if (!line) continue;
           try {
             const obj = JSON.parse(line);
-            if (obj.type === 'ready') { settle(true); }
+            if (obj.type === 'ready') { this.factsReported = obj.facts === true; settle(true); }
             else if (obj.type === 'file') {
               const norm = String(obj.file).replace(/\\/g, '/');
               const cb = this.pending.get(norm);
@@ -234,6 +240,9 @@ export class JdtKeepAlive {
   }
 
   isAlive(): boolean { return this.proc !== null && !this.proc.killed; }
+
+  /** True once the `ready` line carried `"facts":true`: the analyzer understood `--facts=`. */
+  reportsFacts(): boolean { return this.factsReported; }
 
   async analyzeFile(relativePath: string): Promise<JdtFileResult | null> {
     if (!this.proc || !this.proc.stdin!.writable) return null;

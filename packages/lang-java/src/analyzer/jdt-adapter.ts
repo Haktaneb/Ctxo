@@ -25,6 +25,7 @@ export class JdtAnalyzerAdapter implements ILanguageAdapter {
   private keepAlive: JdtKeepAlive | null = null;
   private readonly sqlCallSites: boolean;
   private sqlStats: JdtSqlStats | undefined;
+  private factsWarned = false;
 
   /** The `facts` option as constructed. */
   readonly facts: FactOptions | undefined;
@@ -124,6 +125,7 @@ export class JdtAnalyzerAdapter implements ILanguageAdapter {
     this.keepAlive = new JdtKeepAlive(this.javaBin, this.jarPath, this.root, this.analyzerOptions());
     const ok = await this.keepAlive.start();
     if (!ok) this.keepAlive = null;
+    else if (this.facts && !this.keepAlive.reportsFacts()) this.warnFactsUnsupported();
     return ok;
   }
 
@@ -144,6 +146,16 @@ export class JdtAnalyzerAdapter implements ILanguageAdapter {
     this.cache.clear();
     this.batchPromise = null;
     this.initialized = false;
+  }
+
+  /**
+   * Facts were requested, but the analyzer's `done` or `ready` line has no `"facts":true`: an analyzer
+   * older than the plugin ignores `--facts=`, so the full tier gives only annotation endpoints. Once per adapter.
+   */
+  private warnFactsUnsupported(): void {
+    if (this.factsWarned) return;
+    this.factsWarned = true;
+    log.warn('analyzer too old for facts; run ctxo install java --full-tier');
   }
 
   private norm(filePath: string): string {
@@ -168,6 +180,7 @@ export class JdtAnalyzerAdapter implements ILanguageAdapter {
     } else if (this.sqlCallSites) {
       log.warn('Java analyzer reported no SQL statistics although --sql-call-sites was requested (analyzer too old?)');
     }
+    if (this.facts && !result.facts) this.warnFactsUnsupported();
     this.cache.clear();
     for (const file of result.files) this.cache.set(this.norm(file.file), file);
     log.info(`Java analyzer batch: ${result.files.length} files in ${result.elapsed}`);

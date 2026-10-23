@@ -13,6 +13,15 @@ import java.util.*;
 /** Runs JDT batch analysis over a set of source files and emits FileResults. */
 public final class Analyzer {
   private static final String SOURCE_ENCODING = "UTF-8";
+
+  /** The fact evidence collector of one compilation unit ({@link FactEvidence#collect}). */
+  @FunctionalInterface
+  interface FactCollector {
+    void collect(CompilationUnit cu, String source, String file, Dtos.FactOptions options, List<Dtos.Evidence> out);
+  }
+
+  /** {@link FactEvidence#collect}; a test seam, so a collector failure can be simulated. */
+  static volatile FactCollector factCollector = FactEvidence::collect;
   private final String rootDir;
   private final String[] classpath;
   private final boolean sqlCallSites;
@@ -48,6 +57,11 @@ public final class Analyzer {
     return sqlStats;
   }
 
+  /** True when the analyzer collects fact evidence ({@code --facts=} was parsed). */
+  public boolean factsEnabled() {
+    return facts != null;
+  }
+
   public List<Dtos.FileResult> analyze(List<String> sourceFiles) {
     if (sqlCallSites) sqlStats = new Dtos.SqlStats();
     Map<String, Dtos.FileResult> byPath = new LinkedHashMap<>();
@@ -79,7 +93,13 @@ public final class Analyzer {
         if (facts != null) {
           String source = sourceOf(sourceFilePath, cu);
           List<Dtos.Evidence> evidence = new ArrayList<>();
-          if (source != null) FactEvidence.collect(cu, source, rel, facts, evidence);
+          try {
+            if (source != null) factCollector.collect(cu, source, rel, facts, evidence);
+          } catch (RuntimeException | StackOverflowError e) {
+            // The file keeps its symbols and edges; only its (possibly partial) evidence is dropped.
+            evidence.clear();
+            System.err.println("[ctxo-jdt-analyzer] fact evidence skipped for " + rel + ": " + e.getClass().getName());
+          }
           if (!evidence.isEmpty()) fr.factEvidence = evidence;
         }
         // imports: anchor on the first top-level type symbol (JDT visits imports before types,
