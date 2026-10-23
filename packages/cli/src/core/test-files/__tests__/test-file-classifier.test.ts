@@ -44,8 +44,8 @@ describe('createTestFileClassifier', () => {
   });
 
   it('matches backslash paths and paths with spaces or non-ASCII characters', () => {
-    expect(isTest('src\\şube kaydı\\__tests__\\a.ts')).toBe(true);
-    expect(isTest('src/şube kaydı/b.test.ts')).toBe(true);
+    expect(isTest('src\\ödünç kaydı\\__tests__\\a.ts')).toBe(true);
+    expect(isTest('src/ödünç kaydı/b.test.ts')).toBe(true);
   });
 
   it('adds index.tests globs to the defaults', () => {

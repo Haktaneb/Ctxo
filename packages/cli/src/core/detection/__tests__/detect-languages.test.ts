@@ -99,9 +99,9 @@ describe('detectLanguages', () => {
   });
 
   it('counts files whose names have non-ASCII characters by their real extension', () => {
-    // Without -z, git quotes such a name ("src/\305\237ube.ts") and the extension reads as `.ts"`.
+    // Without -z, git quotes such a name ("src/\303\266d\303\274n\303\247.ts") and the extension reads as `.ts"`.
     execFileSync('git', ['config', 'core.quotePath', 'true'], { cwd: tempDir });
-    touch(tempDir, 'src/şube kaydı.ts', '');
+    touch(tempDir, 'src/ödünç kaydı.ts', '');
     touch(tempDir, 'src/plain.ts', '');
     commitAll(tempDir);
     const result = detectLanguages(tempDir);

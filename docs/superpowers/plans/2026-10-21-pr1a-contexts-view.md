@@ -104,7 +104,7 @@
 - [ ] **Step 1: Write the failing tests.**
   - `classifies a path matched by each default glob as a test file`: `it.each` over `src/__tests__/a.ts`, `src/a.test.ts`, `web/a.spec.js`, `test/a.ts`, `tests/e2e/a.ts`, `pkg/store_test.go`, `src/test/java/AT.java`, `src/Billing.Tests/A.cs`, `src/Billing.Test/A.cs`, `src/LoanTests.cs`, `src/LoanTest.cs`, `app/test_models.py`, `app/models_test.py`; each returns `true`.
   - `leaves look-alike production paths alone`: `src/latest.ts`, `src/contest/a.ts`, `src/Testing.cs`, `src/attestation.go`, `src/testing_utils.py` return `false`.
-  - `matches backslash paths and paths with spaces or non-ASCII characters` (Review Focus 5): `src\\şube kaydı\\__tests__\\a.ts` and `src/şube kaydı/b.test.ts` return `true`.
+  - `matches backslash paths and paths with spaces or non-ASCII characters` (Review Focus 5): `src\\ödünç kaydı\\__tests__\\a.ts` and `src/ödünç kaydı/b.test.ts` return `true`.
   - `adds index.tests globs to the defaults`: `createTestFileClassifier(['**/Characterization/**'])` returns `true` for `src/Characterization/A.cs` and still `true` for `src/a.test.ts`.
   - In `load-config.test.ts`: `index.tests keeps valid globs and reports invalid ones`: config `index.tests: ['**/it/**', <'a'.repeat(65_537)>]` (picomatch rejects only patterns above 65536 characters) gives `indexTestPatterns(config)` equal to `['**/it/**']` and `invalidGlobs` containing `index.tests: <that pattern>`; `index still rejects an unknown key`.
 - [ ] **Step 2: Run them.** `pnpm --filter @ctxo/cli exec vitest run src/core/test-files src/core/config`. Expected: FAIL (module not found, `indexTestPatterns` missing).
@@ -303,7 +303,7 @@
   - `cohesion is internal weight over internal plus boundary weight`, `crossEdges count symbol edges to other candidates by kind`, `coChangePairs keep the top 10 crossing pairs`, `coverage counts candidate files plus assigned hubs over all nodes`.
   - Spec 7.5 determinism, `the same input in reversed order gives byte-identical JSON`: `JSON.stringify` of both views is equal, with indices and each file's symbols reversed.
   - Review Focus 3: `an index without edges puts every node in unclustered` (`coverage` `{ files: 3, covered: 0, ratio: 0 }`) and `no node gives an empty view with ratio 0`.
-  - Review Focus 5: `a candidate under a non-ASCII directory with spaces keeps that spelling as its label and the same fingerprint across runs` (`src/şube kaydı/*.ts`).
+  - Review Focus 5: `a candidate under a non-ASCII directory with spaces keeps that spelling as its label and the same fingerprint across runs` (`src/ödünç kaydı/*.ts`).
 - [ ] **Step 2: Run them.** `pnpm --filter @ctxo/cli exec vitest run src/core/overlay src/core/contexts-view`. Expected: the new tests FAIL; existing overlay tests pass.
 - [ ] **Step 3: Implement.** Move the Louvain call and `splitDisconnectedCommunities` out of `CommunityDetector` unchanged and call them from there; use `compareCodepoint` in the `detectGodNodes` tie-break; write the two contexts-view modules (pipeline order: file graph, hubs, damping, `clusterFiles`, `foldSmallGroups`, hub assignment, IDs and labels, per-candidate fields, collisions, coverage).
 - [ ] **Step 4: Run them.** Expected: PASS, including both golden tests. Then `pnpm --filter @ctxo/cli test:unit`. Expected: all pass.

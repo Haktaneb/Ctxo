@@ -822,12 +822,12 @@ describe('IndexCommand incremental runs', () => {
   // `git ls-files` prints a path with non-ASCII characters in quotes and octal escapes unless it is run
   // with -z. Full runs and the doctor must read the same names the incremental runs (which use -z) do.
   describe('a tracked file with a non-ASCII name', () => {
-    const NON_ASCII = 'src/şube kaydı.ts';
+    const NON_ASCII = 'src/ödünç kaydı.ts';
 
     function commitNonAsciiFile(): void {
       project.write(
         NON_ASCII,
-        "import { greet } from './greet';\n\nexport function subeKaydi(): string {\n  return greet('sube');\n}\n",
+        "import { greet } from './greet';\n\nexport function oduncKaydi(): string {\n  return greet('odunc');\n}\n",
       );
       project.commit('feat: add a file with a non-ASCII name');
     }
@@ -838,10 +838,10 @@ describe('IndexCommand incremental runs', () => {
       await new IndexCommand(project.dir).run();
 
       expect(hasIndexEntry(project.dir, NON_ASCII)).toBe(true);
-      expect(symbolNames(project.dir, NON_ASCII)).toEqual(['subeKaydi']);
+      expect(symbolNames(project.dir, NON_ASCII)).toEqual(['oduncKaydi']);
       const cache = await readSqliteContents(project.dir);
       expect(cache.files).toContain(NON_ASCII);
-      expect(cache.symbolIds).toContain(`${NON_ASCII}::subeKaydi::function`);
+      expect(cache.symbolIds).toContain(`${NON_ASCII}::oduncKaydi::function`);
       expect(cache.files).toEqual(readJsonContents(project.dir).files);
     });
 

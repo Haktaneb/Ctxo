@@ -642,12 +642,12 @@ describe('buildContextsView', () => {
   });
 
   it('a candidate under a non-ASCII directory with spaces keeps that spelling as its label and the same fingerprint across runs', () => {
-    const files = ['src/şube kaydı/a.ts', 'src/şube kaydı/b.ts', 'src/şube kaydı/c.ts'];
+    const files = ['src/ödünç kaydı/a.ts', 'src/ödünç kaydı/b.ts', 'src/ödünç kaydı/c.ts'];
     const first = buildContextsView(input(clique(files)));
     const second = buildContextsView(input(clique(files).reverse()));
 
     expect(first.candidates).toHaveLength(1);
-    expect(first.candidates[0]!.label).toBe('src/şube kaydı');
+    expect(first.candidates[0]!.label).toBe('src/ödünç kaydı');
     expect(first.candidates[0]!.files).toEqual(files);
     expect(first.candidates[0]!.fingerprint).toBe(fingerprintOf(files));
     expect(second.candidates[0]!.fingerprint).toBe(first.candidates[0]!.fingerprint);

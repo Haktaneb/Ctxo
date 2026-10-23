@@ -66,16 +66,16 @@ describe('StatusCommand', () => {
   it('does not badge the entry of a tracked file with a non-ASCII name as orphaned', () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'ctxo-status4-'));
     tempDirs.push(tempDir);
-    // Without -z, git quotes such a name ("src/\305\237ube.ts") and the entry would never match it.
+    // Without -z, git quotes such a name ("src/\303\266d\303\274n\303\247.ts") and the entry would never match it.
     execFileSync('git', ['init', '-q'], { cwd: tempDir });
     execFileSync('git', ['config', 'core.quotePath', 'true'], { cwd: tempDir });
     mkdirSync(join(tempDir, 'src'), { recursive: true });
-    writeFileSync(join(tempDir, 'src', 'şube kaydı.ts'), 'export const a = 1;\n', 'utf-8');
+    writeFileSync(join(tempDir, 'src', 'ödünç kaydı.ts'), 'export const a = 1;\n', 'utf-8');
     writeFileSync(join(tempDir, 'src', 'plain.ts'), 'export const b = 1;\n', 'utf-8');
 
     const ctxoRoot = join(tempDir, '.ctxo');
     const writer = new JsonIndexWriter(ctxoRoot);
-    writer.write(buildIndex('src/şube kaydı.ts'));
+    writer.write(buildIndex('src/ödünç kaydı.ts'));
     writer.write(buildIndex('src/plain.ts'));
     writer.write(buildIndex('src/gone.ts'));
     new SchemaManager(ctxoRoot).writeVersion();
