@@ -32,7 +32,11 @@ export interface PluginContext {
   readonly logger: PluginLogger;
   readonly projectRoot: string;
   readonly workspace: IWorkspace;
-  /** Per-plugin configuration block from `.ctxo/config.yaml#languages.config.<id>`. */
+  /**
+   * Per-plugin configuration block from `.ctxo/config.yaml#languages.config.<id>`. The host reserves
+   * the key `facts`: fact detector options (`trivialLiterals`, `normalizationMethods`), set only when
+   * facts are requested.
+   */
   readonly config: Record<string, unknown>;
   /** Protocol v2 host capabilities. Absent on v1 cores. */
   readonly capabilities?: PluginCapabilities;

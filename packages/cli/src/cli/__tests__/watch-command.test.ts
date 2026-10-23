@@ -127,6 +127,7 @@ describe('buildWatchFileIndex', () => {
     const fact = { kind: 'endpoint' as const, symbolId: 'a.fake::p::procedure', line: 1, text: 'GET /x' };
     expect('facts' in buildWatchFileIndex('a.fake', { ...base, symbols: [], edges: [] })).toBe(false);
     expect(buildWatchFileIndex('a.fake', { ...base, symbols: [], edges: [], facts: [fact] }).facts).toEqual([fact]);
+    expect(buildWatchFileIndex('a.fake', { ...base, symbols: [], edges: [], facts: [] }).facts).toEqual([]);
   });
 });
 
