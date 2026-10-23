@@ -28,7 +28,29 @@ import { isolateGitEnv, type IsolatedGitEnv } from './git-test-env.js';
  * Set by a test to make the guard write fail as it does on a read-only `.claude/`, or the skills
  * install fail for the platforms listed in `skills`, before anything is written.
  */
-const faults = vi.hoisted(() => ({ guardWrite: false, skills: [] as string[] }));
+const faults = vi.hoisted(() => ({
+  guardWrite: false,
+  skills: [] as string[],
+  /** A path fragment: `mkdirSync` fails with EACCES for any directory whose path contains it. */
+  mkdirDenied: undefined as string | undefined,
+}));
+
+// A portable stand-in for a skill folder that cannot be created. A file where a folder belongs behaves
+// differently per OS (Windows: ENOENT on read, then mkdir throws; Linux: ENOTDIR on read, which the
+// installer treats as an unreadable skill and skips), and a read-only dir does not fail as root (CI).
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  const norm = (p: unknown) => String(p).split('\\').join('/');
+  return {
+    ...actual,
+    mkdirSync: ((...args: Parameters<typeof actual.mkdirSync>) => {
+      if (faults.mkdirDenied && norm(args[0]).includes(faults.mkdirDenied)) {
+        throw Object.assign(new Error(`EACCES: permission denied, mkdir '${String(args[0])}'`), { code: 'EACCES' });
+      }
+      return actual.mkdirSync(...args);
+    }) as typeof actual.mkdirSync,
+  };
+});
 
 vi.mock('../ai-rules.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../ai-rules.js')>();
@@ -81,6 +103,7 @@ describe('applyFixes', () => {
   afterEach(() => {
     faults.guardWrite = false;
     faults.skills = [];
+    faults.mkdirDenied = undefined;
     rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     if (savedCI === undefined) delete process.env['CI'];
     else process.env['CI'] = savedCI;
@@ -471,8 +494,9 @@ describe('applyFixes', () => {
 
     it('--fix keeps the Claude Code rules block when the skills install fails', async () => {
       write('CLAUDE.md', PRE_TIER_CLAUDE_MD);
-      // A file where a skill folder belongs: installSkills writes ctxo-understand, then throws.
-      write('.claude/skills/ctxo-safe-edit', 'not a folder');
+      // installSkills writes ctxo-understand, then cannot create the ctxo-safe-edit folder and throws.
+      // installSkills writes ctxo-understand, then cannot create the ctxo-safe-edit folder and throws.
+      faults.mkdirDenied = '/.claude/skills/ctxo-safe-edit';
       const claudeMd = bytes('CLAUDE.md');
 
       const r = await fix(await runAgentChecks());

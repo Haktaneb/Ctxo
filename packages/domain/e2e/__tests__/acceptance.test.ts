@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -85,10 +85,11 @@ function domainArtifacts(ws: SampleWorkspace): Map<string, string> {
   const root = ws.path('.ctxo/index/domain');
   const files = new Map<string, string>();
   const walk = (dir: string, prefix: string): void => {
-    for (const name of readdirSync(dir).sort()) {
-      const full = join(dir, name);
-      if (statSync(full).isDirectory()) walk(full, `${prefix}${name}/`);
-      else files.set(`${prefix}${name}`, readFileSync(full, 'utf-8'));
+    // Entry kinds come from the directory listing itself: no stat before the read (CodeQL js/file-system-race).
+    for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) walk(full, `${prefix}${entry.name}/`);
+      else files.set(`${prefix}${entry.name}`, readFileSync(full, 'utf-8'));
     }
   };
   walk(root, '');
