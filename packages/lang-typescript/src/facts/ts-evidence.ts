@@ -74,21 +74,108 @@ function scopesOf(sourceFile: SourceFile, filePath: string): Scope[] {
   return scopes;
 }
 
-const within = (node: Node, outer: Node): boolean => node.getStart() >= outer.getStart() && node.getEnd() <= outer.getEnd();
+/** A scope with its offsets computed once, its excluded ranges merged, and the next larger scope holding it. */
+interface PlacedScope {
+  readonly symbolId: string;
+  readonly start: number;
+  readonly end: number;
+  /** Sorted by start, none inside another. */
+  readonly exclude: ReadonlyArray<readonly [number, number]>;
+  parent: PlacedScope | undefined;
+}
 
-/** The smallest scope holding `node` outside its excluded sub-scopes (ties: the lower symbol ID); undefined: the module. */
-function ownerOf(node: Node, scopes: readonly Scope[]): string | undefined {
-  let best: Scope | undefined;
-  let bestWidth = Number.POSITIVE_INFINITY;
-  for (const scope of scopes) {
-    if (!within(node, scope.node) || scope.exclude.some((x) => within(node, x))) continue;
-    const width = scope.node.getEnd() - scope.node.getStart();
-    if (width < bestWidth || (width === bestWidth && best !== undefined && scope.symbolId < best.symbolId)) {
-      best = scope;
-      bestWidth = width;
+/** Ranges `[start, end]` of `nodes`, sorted by start, with ranges inside another dropped. */
+function mergedRanges(nodes: readonly Node[]): Array<readonly [number, number]> {
+  const sorted = nodes.map((n) => [n.getStart(), n.getEnd()] as const).sort((a, b) => a[0] - b[0] || b[1] - a[1]);
+  const merged: Array<readonly [number, number]> = [];
+  for (const range of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && range[1] <= last[1]) continue;
+    merged.push(range);
+  }
+  return merged;
+}
+
+/** Whether `[start, end]` lies inside one of `ranges` (sorted, none inside another). */
+function insideAny(start: number, end: number, ranges: ReadonlyArray<readonly [number, number]>): boolean {
+  let lo = 0;
+  let hi = ranges.length - 1;
+  let candidate = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (ranges[mid]![0] <= start) {
+      candidate = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
     }
   }
-  return best?.symbolId;
+  return candidate >= 0 && end <= ranges[candidate]![1];
+}
+
+/**
+ * Owner lookup over scopes. Scopes are AST nodes, so two of them are nested or disjoint; sorted by start
+ * (wider first on a tie), each one's parent is the nearest earlier scope holding it. A record's candidates
+ * are then the last scope starting at or before it and that scope's parents, a chain as deep as the nesting.
+ */
+class Owners {
+  private readonly sorted: PlacedScope[];
+
+  constructor(scopes: readonly Scope[]) {
+    this.sorted = scopes
+      .map((scope): PlacedScope => ({
+        symbolId: scope.symbolId,
+        start: scope.node.getStart(),
+        end: scope.node.getEnd(),
+        exclude: mergedRanges(scope.exclude),
+        parent: undefined,
+      }))
+      .sort((a, b) => a.start - b.start || b.end - a.end);
+    const open: PlacedScope[] = [];
+    for (const scope of this.sorted) {
+      while (open.length > 0 && !(open[open.length - 1]!.start <= scope.start && scope.end <= open[open.length - 1]!.end)) open.pop();
+      scope.parent = open[open.length - 1];
+      open.push(scope);
+    }
+  }
+
+  /** The smallest scope holding `node` outside its excluded sub-scopes (ties: the lower symbol ID); undefined: the module. */
+  ownerOf(node: Node): string | undefined {
+    const start = node.getStart();
+    const end = node.getEnd();
+    let scope = this.last(start);
+    let best: PlacedScope | undefined;
+    for (; scope !== undefined; scope = scope.parent) {
+      if (best !== undefined && (scope.start !== best.start || scope.end !== best.end)) break;
+      if (scope.start > start || end > scope.end || insideAny(start, end, scope.exclude)) continue;
+      if (best === undefined || scope.symbolId < best.symbolId) best = scope;
+    }
+    return best?.symbolId;
+  }
+
+  /** The last scope (in sorted order) starting at or before `offset`. */
+  private last(offset: number): PlacedScope | undefined {
+    let lo = 0;
+    let hi = this.sorted.length - 1;
+    let found: PlacedScope | undefined;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (this.sorted[mid]!.start <= offset) {
+        found = this.sorted[mid];
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    return found;
+  }
+}
+
+/** `expr` without the parentheses around it. */
+function unparenthesized(expr: Node): Node {
+  let node = expr;
+  while (Node.isParenthesizedExpression(node)) node = node.getExpression();
+  return node;
 }
 
 function isNumeric(node: Node): boolean {
@@ -120,11 +207,17 @@ function nameOf(node: Node): string | undefined {
   return Node.isStringLiteral(node) ? node.getLiteralValue() : undefined;
 }
 
-const lineOf = (node: Node): number => node.getStartLineNumber() - 1;
+/** Offsets of every `\n` in `text`, ascending. */
+function newlineOffsets(text: string): number[] {
+  const offsets: number[] = [];
+  for (let at = text.indexOf('\n'); at !== -1; at = text.indexOf('\n', at + 1)) offsets.push(at);
+  return offsets;
+}
 
 class Collector {
   readonly evidence: FactEvidence[] = [];
-  private readonly scopes: Scope[];
+  private readonly owners: Owners;
+  private readonly newlines: number[];
 
   constructor(
     sourceFile: SourceFile,
@@ -132,11 +225,28 @@ class Collector {
     private readonly resolver: ModuleResolver,
     private readonly options: FactOptions,
   ) {
-    this.scopes = scopesOf(sourceFile, filePath);
+    this.owners = new Owners(scopesOf(sourceFile, filePath));
+    this.newlines = newlineOffsets(sourceFile.getFullText());
+  }
+
+  /**
+   * The 0-based line of `node`'s start: the `\n` count before it, as ts-morph's `getStartLineNumber() - 1`
+   * counts, found by binary search instead of a scan from the file start.
+   */
+  private lineOf(node: Node): number {
+    const start = node.getStart();
+    let lo = 0;
+    let hi = this.newlines.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (this.newlines[mid]! < start) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
   }
 
   private push(node: Node, item: FactEvidence): void {
-    const symbolId = ownerOf(node, this.scopes);
+    const symbolId = this.owners.ownerOf(node);
     this.evidence.push(symbolId !== undefined ? { ...item, symbolId } : item);
   }
 
@@ -149,7 +259,10 @@ class Collector {
     } else if (Node.isConditionalExpression(node)) {
       this.condition(node.getCondition());
     } else if (Node.isSwitchStatement(node)) {
-      this.caseLabels(node.getExpression().getText(), node.getCaseBlock().getClauses());
+      // `switch (typeof x)` labels are type guards too.
+      if (!Node.isTypeOfExpression(unparenthesized(node.getExpression()))) {
+        this.caseLabels(node.getExpression().getText(), node.getCaseBlock().getClauses());
+      }
     } else if (Node.isCallExpression(node)) {
       this.call(node);
     } else if (Node.isVariableDeclaration(node) || Node.isPropertyDeclaration(node) || Node.isPropertyAssignment(node)) {
@@ -180,9 +293,12 @@ class Collector {
         const rightKind = literalKindOf(expr.getRight());
         if ((leftKind === undefined) === (rightKind === undefined)) return;
         const literal = leftKind !== undefined ? expr.getLeft() : expr.getRight();
+        // `typeof x === 'string'` is a type guard, not a business literal.
+        const other = leftKind !== undefined ? expr.getRight() : expr.getLeft();
+        if (Node.isTypeOfExpression(unparenthesized(other))) return;
         this.push(expr, {
           kind: 'comparison',
-          line: lineOf(expr),
+          line: this.lineOf(expr),
           text: expr.getText(),
           operator: operator.getText(),
           literal: literal.getText(),
@@ -201,7 +317,7 @@ class Collector {
       if (literalKind === undefined) continue;
       this.push(clause, {
         kind: 'comparison',
-        line: lineOf(clause),
+        line: this.lineOf(clause),
         text: `${subject} case ${label.getText()}`,
         operator: 'case',
         literal: label.getText(),
@@ -213,7 +329,7 @@ class Collector {
   /** FC-5: a binding whose name has a retry or timeout fragment; the finisher checks the value. */
   private binding(node: Node, name: string, value: Node): void {
     if (!hasRetryTimeoutFragment(name)) return;
-    this.push(node, { kind: 'binding', line: lineOf(node), name, value: value.getText() });
+    this.push(node, { kind: 'binding', line: this.lineOf(node), name, value: value.getText() });
   }
 
   private call(call: CallExpression): void {
@@ -225,7 +341,7 @@ class Collector {
       ? callee.getText() === 'setTimeout'
       : Node.isPropertyAccessExpression(callee) && callee.getName() === 'setTimeout' && TIMER_GLOBALS.has(callee.getExpression().getText());
     if (timer && args.length >= 2) {
-      this.push(call, { kind: 'duration', line: lineOf(call), constructor: callee.getText(), unit: 'ms', amount: args[1]!.getText() });
+      this.push(call, { kind: 'duration', line: this.lineOf(call), constructor: callee.getText(), unit: 'ms', amount: args[1]!.getText() });
     }
 
     if (!Node.isPropertyAccessExpression(callee)) return;
@@ -234,7 +350,7 @@ class Collector {
 
     // FC-4: x.m(...) whose simple name matches a normalization pattern.
     if (matchesNormalizationPattern(method, receiver.getText(), this.options.normalizationMethods)) {
-      this.push(call, { kind: 'call', line: lineOf(call), text: call.getText(), method, qualifier: receiver.getText() });
+      this.push(call, { kind: 'call', line: this.lineOf(call), text: call.getText(), method, qualifier: receiver.getText() });
     }
 
     // G7: Express and Fastify routes: a literal path and a handler (Express `app.get('env')` reads a setting);
@@ -244,7 +360,7 @@ class Collector {
     if (verb !== undefined && path !== undefined) {
       if (args.length < 2) return;
       if (receiverModule(receiver, this.resolver, ROUTE_MODULES) !== undefined) {
-        this.push(call, { kind: 'route', line: lineOf(call), verb, route: path });
+        this.push(call, { kind: 'route', line: this.lineOf(call), verb, route: path });
       }
     } else if (method === 'route' && args[0] && Node.isObjectLiteralExpression(args[0])) {
       this.fastifyRoute(call, receiver, args[0]);
@@ -276,7 +392,7 @@ class Collector {
     }
     if (url === undefined || methods === undefined || methods.length === 0) return;
     if (receiverModule(receiver, this.resolver, ROUTE_MODULES) !== 'fastify') return;
-    for (const method of methods) this.push(call, { kind: 'route', line: lineOf(call), verb: method, route: url });
+    for (const method of methods) this.push(call, { kind: 'route', line: this.lineOf(call), verb: method, route: url });
   }
 }
 

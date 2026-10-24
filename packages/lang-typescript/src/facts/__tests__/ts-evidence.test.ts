@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Project } from 'ts-morph';
 import type { CodeFact, FactKind } from '@ctxo/plugin-api';
 import { TsMorphAdapter } from '../../ts-morph-adapter.js';
@@ -230,6 +230,78 @@ describe('TypeScript fact evidence', () => {
     const second = await adapter.extractFacts(RULES, sample.get(RULES)!);
     expect(second).toEqual(first);
     expect(first.length).toBeGreaterThan(0);
+  });
+
+  it('typeof checks are type guards, not literal comparisons', async () => {
+    const source = [
+      'export function t(x: unknown, n: number) {',
+      "  if (typeof x === 'string' || typeof x !== 'undefined') {}",
+      "  if ('number' == typeof x && (typeof (x) != 'bigint')) {}",
+      "  const kind = typeof x === 'object' ? 1 : 2;",
+      "  switch (typeof x) { case 'boolean': break; }",
+      '  if (n > 5) {}',
+      '}',
+    ].join('\n');
+    expect((await factsOf('src/t.ts', source)).map((f) => f.text)).toEqual(['n > 5']);
+  });
+
+  it('fact owners stay linear in file size (scale)', async () => {
+    const methods = 4_000;
+    let source = 'export class Big {\n';
+    for (let i = 0; i < methods; i++) {
+      source += `  m${i}(x: number, s: string) { if (x === ${i + 2} && s === 'k${i}') return 1; const retryDelay = ${i}; return 0; }\n`;
+    }
+    source += '}\n';
+    const project = new Project({ useInMemoryFileSystem: true });
+    const sourceFile = project.createSourceFile('/src/big.ts', source);
+    const started = Date.now();
+    const evidence = collectTsEvidence(sourceFile, 'src/big.ts', new ModuleResolver(project), DEFAULT_FACT_OPTIONS);
+    const elapsed = Date.now() - started;
+    // Three records per method, each owned by the method on its line.
+    expect(evidence.length).toBe(methods * 3);
+    expect(evidence.every((e) => e.symbolId === `src/big.ts::Big.m${e.line - 1}::method`)).toBe(true);
+    // The old code checked every scope for every record and counted lines from the file start: over 10 s here.
+    expect(elapsed).toBeLessThan(2_500);
+  }, 120_000);
+
+  it('owners: the smallest scope wins and nested test blocks are excluded', async () => {
+    const file = 'src/__tests__/o.test.ts';
+    const source = [
+      "describe('outer', () => {",
+      '  if (a > 2) {}',
+      "  it('inner', () => { if (b > 3) {} });",
+      '  if (c > 4) {}',
+      '});',
+      'export function after(d: number) { if (d > 6) {} }',
+      'export class K { run(e: number) { if (e > 7) {} } }',
+      'if (f > 8) {}',
+    ].join('\n');
+    expect((await factsOf(file, source)).map((f) => [f.text, f.symbolId])).toEqual([
+      ['a > 2', `${file}::outer::function`],
+      ['b > 3', `${file}::outer > inner::function`],
+      ['c > 4', `${file}::outer::function`],
+      ['d > 6', `${file}::after::function`],
+      ['e > 7', `${file}::K.run::method`],
+      ['f > 8', expect.stringMatching(/^src\/__tests__\/o\.test\.ts::/)],
+    ]);
+  });
+
+  it('a failing fact extraction warns and returns no facts (warn-and-continue)', async () => {
+    const options = { ...DEFAULT_FACT_OPTIONS };
+    Object.defineProperty(options, 'normalizationMethods', {
+      get() {
+        throw new Error('detector exploded');
+      },
+    });
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const adapter = new TsMorphAdapter({ facts: options });
+      await expect(adapter.extractFacts('src/boom.ts', 'export function f(e: string) { return e.trim(); }')).resolves.toEqual([]);
+      const lines = stderr.mock.calls.map((call) => String(call[0]));
+      expect(lines.some((line) => line.includes('[ctxo:lang-typescript]') && line.includes('src/boom.ts') && line.includes('detector exploded'))).toBe(true);
+    } finally {
+      stderr.mockRestore();
+    }
   });
 
   it('collectTsEvidence works on a bare source file', () => {

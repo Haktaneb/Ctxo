@@ -189,8 +189,8 @@ export class TsMorphAdapter implements ILanguageAdapter {
   /**
    * Code facts (protocol v2, only with the `facts` option): ts-morph evidence plus Nest decorator routes,
    * finished by the shared rules. Route receivers resolve like SQL call sites (preloaded files, else disk
-   * reads under `projectRoot`, released before returning). A failure propagates, so the host reports it and
-   * writes no `facts` for the file rather than an empty list.
+   * reads under `projectRoot`, released before returning). A failure is logged as a warning and gives `[]`
+   * (warn-and-continue, as in the other plugins).
    */
   async extractFacts(filePath: string, source: string): Promise<CodeFact[]> {
     const options = this.facts;
@@ -204,6 +204,9 @@ export class TsMorphAdapter implements ILanguageAdapter {
       const evidence = [...collectTsEvidence(sourceFile, filePath, resolver, options), ...annotationRouteEvidence(symbols)];
       // Every record carries its G8 owner or none (the module symbol), so no attribution by line is needed.
       return finishFacts(filePath, evidence, [], options, decodeTypescriptStringLiteral);
+    } catch (err) {
+      log.warn(`Fact extraction failed for ${filePath}: ${(err as Error).message}`);
+      return [];
     } finally {
       resolver.release();
       if (!this.projectPreloaded) {
