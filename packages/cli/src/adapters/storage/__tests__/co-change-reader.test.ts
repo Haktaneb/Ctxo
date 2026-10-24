@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CoChangeReader } from '../co-change-reader.js';
@@ -339,9 +339,12 @@ it('readEntries returns the validated entries as stored and re-reads after the m
   // The map lists the same frozen entry objects.
   expect(reader.readCoChangeMap()?.get('src/b.ts')?.[0]).toBe(entries?.[0]);
 
-  // Rewritten with a newer mtime: read again.
-  writeMatrixFile(root, matrix([entry('src/d.ts', 'src/e.ts', 0.5, 2)]), 2);
-  expect(reader.readEntries()).toEqual([entry('src/d.ts', 'src/e.ts', 0.5, 2)]);
+  // Rewritten with the same byte length and a newer mtime: only the mtime tells the versions apart.
+  const second = [entry('src/a.ts', 'src/b.ts', 0.7, 4), entry('src/a.ts', 'src/c.ts', 0.6, 3)];
+  const sizeBefore = statSync(matrixPath(root)).size;
+  writeMatrixFile(root, { ...matrix(second), extra: { future: true } }, 2);
+  expect(statSync(matrixPath(root)).size).toBe(sizeBefore);
+  expect(reader.readEntries()).toEqual(second);
   expect(faults.matrixReads).toBe(2);
 
   // A matrix without pairs is a matrix: no entries, not "no matrix".

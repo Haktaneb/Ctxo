@@ -216,6 +216,7 @@ describe('handleGetPrImpact', () => {
       readCoChangeMap: () => new Map([
         ['src/a.ts', [{ file1: 'src/a.ts', file2: 'src/c.ts', sharedCommits: 3, frequency: 0.6 }]],
       ]),
+      readEntries: () => undefined,
     };
     const git = createMockGit(['src/a.ts']);
     const handler = handleGetPrImpact(storage, git, new MaskingPipeline(), undefined, tempDir, undefined, port);
@@ -242,7 +243,7 @@ describe('handleGetPrImpact', () => {
     const strong = { file1: 'src/a.ts', file2: 'src/c.ts', sharedCommits: 6, frequency: 0.9 };
     const weak = { file1: 'src/a.ts', file2: 'src/b.ts', sharedCommits: 2, frequency: 0.3 };
     const shared = [weak, strong];
-    const port: ICoChangePort = { readCoChangeMap: () => new Map([['src/a.ts', shared]]) };
+    const port: ICoChangePort = { readCoChangeMap: () => new Map([['src/a.ts', shared]]), readEntries: () => undefined };
     const git = createMockGit(['src/a.ts']);
     const handler = handleGetPrImpact(storage, git, new MaskingPipeline(), undefined, tempDir, undefined, port);
     const result = await handler({ since: 'HEAD~1' });
