@@ -334,6 +334,11 @@ describe('wrapResponse: domain fields', () => {
     ['symbols', 'Use get_blast_radius on one linked symbol for its impact.'],
     ['provenance', 'Open the linked files directly; external references are never fetched.'],
     ['unresolved', 'Run "ctxo verify-domain --json" for every unresolved card reference.'],
+    ['shadowSpecs', 'Use find_shadow_specs with kinds to narrow the list, or run "ctxo domain shadow-specs <context> --json" for every candidate.'],
+    ['contextMap', 'Run "ctxo domain map --json" for the full context map.'],
+    ['staleResolutions', 'Run "ctxo verify-domain --json" for every stale resolution in shadow-specs.yaml.'],
+    ['unknownRules', 'Run "ctxo verify-domain --json" for every resolution that names an unknown rule.'],
+    ['resolutionProblems', 'Run "ctxo verify-domain --json" for every problem in shadow-specs.yaml.'],
   ])("the new tools' arrays are truncatable with their hints: %s", (field, hint) => {
     process.env['CTXO_RESPONSE_LIMIT'] = '1024';
 
