@@ -1,9 +1,15 @@
 ---
 name: ctxo-domain-fold
-description: Use BEFORE changing code under a named domain context and BEFORE finishing a branch, to read the context's card and fold behaviour changes back into it.
+description: Use BEFORE changing code under a named domain context, BEFORE finishing a branch, and when adopting or tuning the domain config, to read the context's card, fold behaviour changes back into it and discover the repository's conventions.
 ---
 
 # Fold domain knowledge with ctxo
+
+## When adopting or tuning the domain config
+
+1. Run `ctxo domain discover` first (a dry run: it writes nothing). It reads the commit subjects, branches, index and tracked files and proposes `domain.rules.trackerPrefixes`, `domain.tests.ruleTraitKeys`, `index.tests` and the characterization and contract test markers (folders, file-name globs, Trait or Category values and custom test attributes). External ID families such as CWE and ADR are proposed as tracker prefixes so they never link as rule IDs; GitHub `#N` issues and other identifiers are evidence only.
+2. Review the evidence, then either edit `.ctxo/config.yaml` by hand or run `ctxo domain discover --write`, which adds the proposed values and removes none. `--json` prints the same evidence and proposal for a script.
+3. Do not reverse-engineer the config keys from ctxo's installed files: the discovery report names each key it proposes.
 
 ## Before changing a context's code
 
@@ -23,4 +29,4 @@ description: Use BEFORE changing code under a named domain context and BEFORE fi
 2. For each unresolved context, either commit a card update or add `Domain-Unchanged: <id> (reason)` to a commit (an empty commit is fine).
 3. The Stop guard blocks once when a commit changed a context without either, so resolve every context before you finish.
 
-<!-- ctxo-skill v0.16 -->
+<!-- ctxo-skill v0.17 -->

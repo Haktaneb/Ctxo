@@ -24,7 +24,7 @@ const USAGE = [
   '',
   '  rules --write  Generate the path-scoped loader rules (.claude/rules, and .cursor/rules when .cursor/ exists)',
   '  rules --check  Exit 1 when a generated rule is missing, outdated or stale, or when a hand-written file blocks an expected path',
-  '  discover       Propose tracker prefixes, rule trait keys and test folders from the repository; --json prints them, --write merges them into .ctxo/config.yaml',
+  '  discover       Propose the domain config from the repository: tracker prefixes (external ID families such as CWE and ADR, kept from linking), rule trait keys, test folders and test-kind markers (Trait or Category values, custom attributes, *ContractTests file names); also reports GitHub #N issues and other identifiers. Run it first when adopting or tuning the domain config; --json prints the evidence and proposal, --write merges the proposal into .ctxo/config.yaml (adds values, removes none)',
   '  map            The context map from the last "ctxo index": per context its rung, the suggested rung, rules with tests, open shadow-spec candidates and the rung criteria; --json prints the get_context_map body',
   `  shadow-specs   The shadow-spec candidates of one context with fingerprints and resolutions; --kinds <k,...> keeps these kinds (${CANDIDATE_KINDS.join(', ')}), --all adds resolved ones, --json prints the find_shadow_specs body`,
   '',
@@ -34,7 +34,7 @@ const USAGE = [
 
 const HELP_LINES = [
   'ctxo domain rules --write|--check   Generate or check the path-scoped loader rules per context',
-  'ctxo domain discover [--json] [--write]   Propose domain conventions found in the repository',
+  'ctxo domain discover [--json] [--write]   Propose the domain config from the repository (run it first when adopting the domain layer)',
   'ctxo domain map   Context map: metrics, rungs and suggested rungs per context (--json)',
   'ctxo domain shadow-specs <context>   Shadow-spec candidates of a context (--kinds, --all, --json)',
 ];
@@ -136,6 +136,8 @@ async function discover(args: readonly string[], host: CtxoHost, ctx: ModuleComm
     printAdded('index.tests', proposal.indexTests, input.indexTests);
     printAdded('domain.tests.characterization.paths', proposal.characterizationPaths, config.tests.characterization.paths);
     printAdded('domain.tests.contract.paths', proposal.contractPaths, config.tests.contract.paths);
+    printAdded('domain.tests.characterization.annotations', proposal.characterizationAnnotations, config.tests.characterization.annotations);
+    printAdded('domain.tests.contract.annotations', proposal.contractAnnotations, config.tests.contract.annotations);
     return 0;
   } catch (err) {
     console.error(`[ctxo] domain discover failed: ${(err as Error).message}`);

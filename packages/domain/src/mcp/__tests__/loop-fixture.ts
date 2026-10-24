@@ -121,6 +121,9 @@ export interface LoopProject {
   dispose(): void;
 }
 
+/** The fixture's `.ctxo/config.yaml`: a tracker prefix the fixture never uses, so the conventions are not at their defaults. */
+export const FIXTURE_CONFIG = 'version: "1.0"\ndomain:\n  rules:\n    trackerPrefixes: [OPS]\n';
+
 export const ARTIFACTS = ['graph.json', 'contexts.json', 'boundaries.json', 'shadow-candidates.json', 'maturity.json'] as const;
 
 export function createLoopProject(): LoopProject {
@@ -151,6 +154,8 @@ export function createLoopProject(): LoopProject {
       write(TEST_FILE, TEST_TEXT);
       write('docs/domain/contexts.yaml', REGISTRY);
       write('docs/domain/lending/domain.md', CARD);
+      // One convention off its default, so get_context_map gives no discover hint (#191); the hint tests replace it.
+      write('.ctxo/config.yaml', FIXTURE_CONFIG);
       const host = createModuleHost({ cliVersion: '0.0.0', mode: 'cli', projectRoot: root });
       const { services } = host;
       const indices = services.readIndex(ctxoRoot);
@@ -164,7 +169,7 @@ export function createLoopProject(): LoopProject {
         isTestFile: services.createTestFileCheck(config, indices),
       };
       await domainIndexPass(host)(ctx);
-      for (const path of ['docs/domain/contexts.yaml', 'docs/domain/lending/domain.md']) age(path);
+      for (const path of ['docs/domain/contexts.yaml', 'docs/domain/lending/domain.md', '.ctxo/config.yaml']) age(path);
       for (const name of ARTIFACTS) age(`.ctxo/index/domain/${name}`);
     },
     dispose: () => rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }),

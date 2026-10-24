@@ -239,6 +239,84 @@ describe('ctxo domain discover', () => {
     expect(existsSync(join(dir, '.ctxo', 'config.yaml'))).toBe(false);
   });
 
+  it('--json adds external IDs, GitHub issues, other identifiers and test-kind markers from a real repository (#191)', async () => {
+    const dir = gitRepo([
+      'fix: path traversal (CWE-22)',
+      'fix: injection (CWE-89) (#12)',
+      'feat: holds (#164)',
+      'LEND-1 a',
+      'LEND-2 b',
+      'LEND-3 c',
+      'LEND-4 d',
+      'LEND-5 e',
+    ]);
+    const git = (...args: string[]): void => {
+      execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=Test', '-c', 'user.email=test@test.com', ...args], {
+        cwd: dir,
+        stdio: 'ignore',
+      });
+    };
+    const testFile = 'tests/Storage.Tests/BlobStoreContractTests.cs';
+    put(dir, testFile, 'public class BlobStoreContractTests {}\n');
+    git('add', testFile);
+    git('commit', '-q', '-m', 'test: storage contract (#170)');
+    for (const branch of ['feat/164-holds', 'fix/acme-12', 'fix/acme-13', 'fix/acme-14']) git('branch', branch);
+    put(
+      dir,
+      `.ctxo/index/${testFile}.json`,
+      JSON.stringify({
+        file: testFile,
+        lastModified: 1,
+        symbols: [
+          {
+            symbolId: `${testFile}::BlobStoreContractTests::class`,
+            name: 'BlobStoreContractTests',
+            kind: 'class',
+            startLine: 0,
+            endLine: 9,
+            annotations: [{ name: 'Trait', args: ['Category', 'StorageContract'] }],
+          },
+          {
+            symbolId: `${testFile}::BlobStoreContractTests.Puts::method`,
+            name: 'Puts',
+            kind: 'method',
+            startLine: 2,
+            endLine: 4,
+            annotations: [{ name: 'StorageContractFact' }],
+          },
+        ],
+        edges: [],
+        intent: [],
+        antiPatterns: [],
+      }),
+    );
+
+    expect(await run(dir, 'discover', '--json')).toBe(0);
+    const out = JSON.parse(stdout.join('')) as {
+      evidence: Record<string, unknown> & { trackerKeys: unknown[] };
+      proposal: Record<string, unknown>;
+    };
+    expect(out.evidence.trackerKeys).toEqual([{ prefix: 'LEND', occurrences: 5, overlapsRulePrefix: false }]);
+    expect(out.evidence['externalIds']).toEqual([{ prefix: 'CWE', occurrences: 2, note: 'external IDs, kept from linking' }]);
+    expect(out.evidence['githubIssues']).toEqual({ subjects: 3, squashSuffixes: 3, branches: 1 });
+    expect(out.evidence['otherIdentifiers']).toEqual([{ prefix: 'acme', branches: 3 }]);
+    expect(out.proposal['trackerPrefixes']).toEqual(['CWE', 'LEND']);
+    expect(out.proposal['externalIdPrefixes']).toEqual(['CWE']);
+    expect(out.proposal['contractAnnotations']).toEqual(['StorageContractFact', 'Trait:Category=StorageContract']);
+    expect(out.proposal['contractPaths']).toEqual(['**/*ContractTests.cs']);
+    // The existing fields stay.
+    for (const key of ['cardPrefixes', 'traitKeys', 'uncoveredTestFolders', 'characterizationFolders', 'contractFolders', 'provenanceFolders']) {
+      expect(out.evidence, key).toHaveProperty(key);
+    }
+
+    stdout.length = 0;
+    expect(await run(dir, 'discover', '--write')).toBe(0);
+    const written = readFileSync(join(dir, '.ctxo', 'config.yaml'), 'utf-8');
+    expect(written).toContain('Trait:Category=StorageContract');
+    expect(written).toContain('Trait:Kind=Contract');
+    expect(stderr.join('\n')).toContain('domain.tests.contract.annotations');
+  });
+
   it('--write merges the proposal into .ctxo/config.yaml and lists the added values', async () => {
     const dir = gitRepo(five);
     put(dir, '.ctxo/config.yaml', 'version: "1.0"\n# keep me\n');
@@ -498,7 +576,7 @@ describe('ctxo domain map and ctxo domain shadow-specs', () => {
     const host = createModuleHost({ projectRoot: loop.root, mode: 'cli' });
     expect(domainCommand(host).help).toEqual([
       'ctxo domain rules --write|--check   Generate or check the path-scoped loader rules per context',
-      'ctxo domain discover [--json] [--write]   Propose domain conventions found in the repository',
+      'ctxo domain discover [--json] [--write]   Propose the domain config from the repository (run it first when adopting the domain layer)',
       'ctxo domain map   Context map: metrics, rungs and suggested rungs per context (--json)',
       'ctxo domain shadow-specs <context>   Shadow-spec candidates of a context (--kinds, --all, --json)',
     ]);

@@ -2,6 +2,7 @@ import { statSync } from 'node:fs';
 import type { CtxoHost, ModuleToolDefinition } from '@ctxo/cli/internal';
 import { locateRepoPath } from '../adapters/repo-files.js';
 import { buildContextMap } from '../core/context-map.js';
+import { conventionsAtDefaults } from '../core/domain-config.js';
 import { canonicalRuleId } from '../core/domain-graph-query.js';
 import { CANDIDATE_KINDS, candidatesOf, type CandidateKind, type ShadowCandidate } from '../core/shadow-candidates.js';
 import { applyResolutions, shadowSpecsPath, type AppliedResolutions } from '../core/shadow-specs-file.js';
@@ -20,11 +21,15 @@ export const GET_CONTEXT_MAP = 'get_context_map';
 
 type Payload = Record<string, unknown>;
 
+/** The `get_context_map` hint while the discoverable conventions are all at their defaults (#191). */
+export const DEFAULT_CONVENTIONS_HINT =
+  'The domain conventions are still at their defaults; run "ctxo domain discover" to propose them from this repository.';
+
 const FIND_SHADOW_SPECS_DESCRIPTION =
   'Find shadow-spec candidates in a named context: business-looking logic that no card rule pins yet. Candidates are literal comparisons in conditions, string normalization, retry and timeout values and public endpoints in the context\'s code, the SQL tables, views and procedures it owns, and its rules without tests. Each has its file, line, symbol, a line-independent fingerprint, its source (native analysis, text scan, the index or the card) and its resolution: linked to a rule, marked Untested in the card, or resolved in the context\'s shadow-specs.yaml (the response names the file) with { rule: <ID> } or { notARule: "<reason>" }. Use this for the Deletion Test: for each open candidate, find or write the rule that pins it, or record why it is not a rule. Resolved candidates are hidden unless includeResolved is true. Copy each fingerprint verbatim into shadow-specs.yaml as a YAML single-quoted scalar (fingerprint: \'...\', with a \' inside written as \'\'); %7C and %25 in the symbol part are an encoded | and %. Under ctxo watch, candidates refresh only on the next "ctxo index". Large results are truncated with _meta.hint.';
 
 const GET_CONTEXT_MAP_DESCRIPTION =
-  "Get the map of named contexts: for each context its card, rule count and share of rules with tests, characterization and contract test counts, cross-context edges in and out, co-change with other contexts, drift, boundary violations and open shadow-spec candidates, plus the owner's rung from the registry, a suggested rung and the status of each criterion (pinned, named, bounded, boring). Use this to see how mature each context is and what blocks its next rung. The suggestion never changes the registry. Under ctxo watch, the map refreshes only on the next \"ctxo index\". Large results are truncated with _meta.hint; run \"ctxo domain map\" for the full map. Needs a domain registry (docs/domain/contexts.yaml).";
+  "Get the map of named contexts: for each context its card, rule count and share of rules with tests, characterization and contract test counts, cross-context edges in and out, co-change with other contexts, drift, boundary violations and open shadow-spec candidates, plus the owner's rung from the registry, a suggested rung and the status of each criterion (pinned, named, bounded, boring). Use this to see how mature each context is and what blocks its next rung. The suggestion never changes the registry. Under ctxo watch, the map refreshes only on the next \"ctxo index\". Large results are truncated with _meta.hint; run \"ctxo domain map\" for the full map. Needs a domain registry (docs/domain/contexts.yaml). While the domain conventions are at their defaults, the hint says to run \"ctxo domain discover\", which proposes tracker prefixes, rule trait keys and test-kind markers from the repository.";
 
 const KINDS_DESCRIPTION = `Candidate kinds to return (default: all): ${CANDIDATE_KINDS.join(', ')}. An empty list also returns all kinds.`;
 
@@ -88,8 +93,8 @@ function repoFileExists(projectRoot: string, repoPath: string): boolean {
 
 /**
  * The `get_context_map` answer (also the body of `ctxo domain map`): `buildContextMap` over every context's
- * candidates after its file resolutions. A missing boundaries artifact adds `NO_BOUNDARIES_HINT`; stale data adds
- * `stale` and the stale hint.
+ * candidates after its file resolutions. A missing boundaries artifact adds `NO_BOUNDARIES_HINT`, conventions still
+ * at their defaults add `DEFAULT_CONVENTIONS_HINT` (#191), in that order; stale data adds `stale` and the stale hint.
  */
 export function contextMapAnswer(projectRoot: string, snapshot: LoopSnapshot): Payload {
   const candidates: ShadowCandidate[] = [];
@@ -104,7 +109,10 @@ export function contextMapAnswer(projectRoot: string, snapshot: LoopSnapshot): P
     cardExists: (path) => repoFileExists(projectRoot, path),
   });
   const body: Payload = { ...view };
-  if (snapshot.boundaries === undefined) body['hint'] = NO_BOUNDARIES_HINT;
+  const hints: string[] = [];
+  if (snapshot.boundaries === undefined) hints.push(NO_BOUNDARIES_HINT);
+  if (conventionsAtDefaults(snapshot.domain.config)) hints.push(DEFAULT_CONVENTIONS_HINT);
+  if (hints.length > 0) body['hint'] = hints.join(' ');
   return withStale(snapshot, body);
 }
 

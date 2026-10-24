@@ -123,6 +123,10 @@ export interface DiscoveryValues {
   readonly characterizationPaths: readonly string[];
   /** Globs for `domain.tests.contract.paths`. */
   readonly contractPaths: readonly string[];
+  /** Matchers for `domain.tests.characterization.annotations` (#191); absent adds none. */
+  readonly characterizationAnnotations?: readonly string[];
+  /** Matchers for `domain.tests.contract.annotations` (#191); absent adds none. */
+  readonly contractAnnotations?: readonly string[];
 }
 
 /** Makes sure every ancestor of `path` is a mapping (a null scalar is replaced), so `setIn` can reach the leaf. */
@@ -160,7 +164,7 @@ function unionInto(doc: Document, path: readonly string[], values: readonly stri
 /**
  * Unions a discovery proposal into the text of `.ctxo/config.yaml`: `domain.rules.trackerPrefixes`,
  * `domain.tests.ruleTraitKeys`, `index.tests` and the `paths` of `domain.tests.characterization` and
- * `domain.tests.contract` (an absent list starts from its default globs). Existing values stay in place and in order, new ones are
+ * `domain.tests.contract`, and their `annotations` (an absent list starts from its defaults). Existing values stay in place and in order, new ones are
  * appended; comments, a UTF-8 BOM and CRLF line endings are kept. Nothing new returns the text unchanged.
  * Throws when the text is not valid YAML or a target is not a sequence.
  */
@@ -185,6 +189,15 @@ export function mergeDiscoveryProposal(text: string, proposal: DiscoveryValues):
     unionInto(doc, ['domain', 'tests', 'characterization', 'paths'], proposal.characterizationPaths, tests.characterization.paths) ||
     changed;
   changed = unionInto(doc, ['domain', 'tests', 'contract', 'paths'], proposal.contractPaths, tests.contract.paths) || changed;
+  changed =
+    unionInto(
+      doc,
+      ['domain', 'tests', 'characterization', 'annotations'],
+      proposal.characterizationAnnotations ?? [],
+      tests.characterization.annotations,
+    ) || changed;
+  changed =
+    unionInto(doc, ['domain', 'tests', 'contract', 'annotations'], proposal.contractAnnotations ?? [], tests.contract.annotations) || changed;
   if (!changed) return { text, changed: false };
   const out = doc.toString({ lineWidth: 0 });
   return { text: (bom ? BOM : '') + (crlf ? out.replace(/\n/g, '\r\n') : out), changed: true };

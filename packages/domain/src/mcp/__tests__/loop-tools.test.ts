@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModuleToolDefinition } from '@ctxo/cli/internal';
 import { createDomainState, STALE_CARDS_HINT } from '../domain-state.js';
 import { NO_BOUNDARIES_HINT, STALE_LOOP_HINT } from '../loop-state.js';
-import { FIND_SHADOW_SPECS, GET_CONTEXT_MAP, loopTools } from '../loop-tools.js';
+import { DEFAULT_CONVENTIONS_HINT, FIND_SHADOW_SPECS, GET_CONTEXT_MAP, loopTools } from '../loop-tools.js';
 import { CARD, createLoopProject, POLICY_FILE, type LoopProject } from './loop-fixture.js';
 
 let project: LoopProject;
@@ -64,7 +64,7 @@ const FIND_DESCRIPTION =
   'Find shadow-spec candidates in a named context: business-looking logic that no card rule pins yet. Candidates are literal comparisons in conditions, string normalization, retry and timeout values and public endpoints in the context\'s code, the SQL tables, views and procedures it owns, and its rules without tests. Each has its file, line, symbol, a line-independent fingerprint, its source (native analysis, text scan, the index or the card) and its resolution: linked to a rule, marked Untested in the card, or resolved in the context\'s shadow-specs.yaml (the response names the file) with { rule: <ID> } or { notARule: "<reason>" }. Use this for the Deletion Test: for each open candidate, find or write the rule that pins it, or record why it is not a rule. Resolved candidates are hidden unless includeResolved is true. Copy each fingerprint verbatim into shadow-specs.yaml as a YAML single-quoted scalar (fingerprint: \'...\', with a \' inside written as \'\'); %7C and %25 in the symbol part are an encoded | and %. Under ctxo watch, candidates refresh only on the next "ctxo index". Large results are truncated with _meta.hint.';
 
 const MAP_DESCRIPTION =
-  "Get the map of named contexts: for each context its card, rule count and share of rules with tests, characterization and contract test counts, cross-context edges in and out, co-change with other contexts, drift, boundary violations and open shadow-spec candidates, plus the owner's rung from the registry, a suggested rung and the status of each criterion (pinned, named, bounded, boring). Use this to see how mature each context is and what blocks its next rung. The suggestion never changes the registry. Under ctxo watch, the map refreshes only on the next \"ctxo index\". Large results are truncated with _meta.hint; run \"ctxo domain map\" for the full map. Needs a domain registry (docs/domain/contexts.yaml).";
+  "Get the map of named contexts: for each context its card, rule count and share of rules with tests, characterization and contract test counts, cross-context edges in and out, co-change with other contexts, drift, boundary violations and open shadow-spec candidates, plus the owner's rung from the registry, a suggested rung and the status of each criterion (pinned, named, bounded, boring). Use this to see how mature each context is and what blocks its next rung. The suggestion never changes the registry. Under ctxo watch, the map refreshes only on the next \"ctxo index\". Large results are truncated with _meta.hint; run \"ctxo domain map\" for the full map. Needs a domain registry (docs/domain/contexts.yaml). While the domain conventions are at their defaults, the hint says to run \"ctxo domain discover\", which proposes tracker prefixes, rule trait keys and test-kind markers from the repository.";
 
 describe('loop tools', () => {
   it('names the two tools with their descriptions', () => {
@@ -267,6 +267,43 @@ describe('loop tools', () => {
     expect(NO_BOUNDARIES_HINT).toBe(
       'No boundary data yet, so cross-context edges and violations are unknown and bounded is not met; run "ctxo index".',
     );
+  });
+
+  it('conventions still at their defaults add the discover hint and change nothing else (#191)', async () => {
+    await project.index();
+    const tuned = await call(tools().get(GET_CONTEXT_MAP));
+    expect(tuned['hint']).toBeUndefined();
+
+    project.write('.ctxo/config.yaml', 'version: "1.0"\n');
+    project.age('.ctxo/config.yaml');
+    const defaults = await call(tools().get(GET_CONTEXT_MAP));
+    expect(defaults['hint']).toBe(DEFAULT_CONVENTIONS_HINT);
+    expect(DEFAULT_CONVENTIONS_HINT).toBe(
+      'The domain conventions are still at their defaults; run "ctxo domain discover" to propose them from this repository.',
+    );
+    const { hint: _hint, ...rest } = defaults;
+    expect(rest).toEqual(tuned);
+
+    // After the view's own hint.
+    rmSync(join(project.ctxoRoot, 'index', 'domain', 'boundaries.json'));
+    expect((await call(tools().get(GET_CONTEXT_MAP)))['hint']).toBe(`${NO_BOUNDARIES_HINT} ${DEFAULT_CONVENTIONS_HINT}`);
+  });
+
+  it('any one convention off its default drops the hint', async () => {
+    await project.index();
+    for (const yaml of [
+      'domain:\n  tests:\n    ruleTraitKeys: [Rule, Req]\n',
+      'domain:\n  tests:\n    characterization:\n      paths: ["golden/**"]\n',
+      'domain:\n  tests:\n    contract:\n      annotations: [StorageContractFact]\n',
+    ]) {
+      project.write('.ctxo/config.yaml', yaml);
+      project.age('.ctxo/config.yaml');
+      expect((await call(tools().get(GET_CONTEXT_MAP)))['hint'], yaml).toBeUndefined();
+    }
+  });
+
+  it('the tool description names ctxo domain discover', () => {
+    expect(tools().get(GET_CONTEXT_MAP)!.description).toContain('"ctxo domain discover"');
   });
 
   it('stale maturity gives the map with stale and the stale hint', async () => {

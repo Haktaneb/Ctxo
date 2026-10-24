@@ -203,6 +203,22 @@ describe('mergeDiscoveryProposal', () => {
     expect(parse(again.text).domain.tests.contract.paths).toEqual(['api/**', 'tests/Contracts/**']);
   });
 
+  it('unions characterization and contract annotations, starting an absent list from its defaults (#191)', () => {
+    const text = 'domain:\n  tests:\n    contract:\n      annotations: [ContractFact]   # ours\n';
+    const out = mergeDiscoveryProposal(text, {
+      ...proposal,
+      characterizationAnnotations: ['Category:FeeCharacterization'],
+      contractAnnotations: ['ContractFact', 'Trait:Category=StorageContract'],
+    });
+    expect(out.changed).toBe(true);
+    expect(out.text).toContain('# ours');
+    const doc = parse(out.text);
+    expect(doc.domain.tests.contract.annotations).toEqual(['ContractFact', 'Trait:Category=StorageContract']);
+    expect(doc.domain.tests.characterization.annotations).toEqual([...CHARACTERIZATION.annotations, 'Category:FeeCharacterization']);
+    const again = mergeDiscoveryProposal(out.text, { ...proposal, contractAnnotations: ['Trait:Category=StorageContract'] });
+    expect(parse(again.text).domain.tests.contract.annotations).toEqual(['ContractFact', 'Trait:Category=StorageContract']);
+  });
+
   it('mergeDiscoveryProposal adds values without dropping existing ones', () => {
     const text = [
       'version: "1.0"',
