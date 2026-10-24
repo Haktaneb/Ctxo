@@ -172,7 +172,11 @@ describe('domainIndexPass', () => {
     ]);
 
     expect(
-      logs.some((l) => /Domain: 2 contexts, 0 rules \(0 without tests\), 0 links, 3 cross-context edges, 2 boundary violations \(\d+ ms\)/.test(l)),
+      logs.some((l) =>
+        /Domain: 2 contexts, 0 rules \(0 without tests\), 0 links, 0 shadow-spec candidates \(0 resolved by links or Untested\), 3 cross-context edges, 2 boundary violations \(\d+ ms\)/.test(
+          l,
+        ),
+      ),
     ).toBe(true);
 
     await runPass(HISTORY);
@@ -514,7 +518,264 @@ contexts:
     expect(line).toBeDefined();
     expect(line).toContain('rules (');
     expect(line).toMatch(
-      new RegExp(`Domain: 2 contexts, 2 rules \\(1 without tests\\), ${graph.links.length} links, 0 cross-context edges, 0 boundary violations \\(\\d+ ms\\)`),
+      new RegExp(`Domain: 2 contexts, 2 rules \\(1 without tests\\), ${graph.links.length} links, 1 shadow-spec candidates \\(1 resolved by links or Untested\\), 0 cross-context edges, 0 boundary violations \\(\\d+ ms\\)`),
     );
+  });
+
+  describe('shadow-candidates.json and maturity.json', () => {
+    const RENEWAL = 'src/Lending/RenewalPolicy.cs';
+    const CAN_RENEW = `${RENEWAL}::RenewalPolicy.CanRenew::method`;
+    const DUE = 'src/Lending/DueDates.cs';
+    const IS_OVERDUE = `${DUE}::DueDates.IsOverdue::method`;
+    const FEES = 'src/Billing/Fees.cs';
+    const FLOW = 'tests/Lending.Tests/Characterization/RenewalFlowTests.cs';
+    const FLOW_METHOD = `${FLOW}::RenewalFlowTests.RenewsTwiceAtMost::method`;
+    const CAN_BORROW = `${POLICY}::LoanPolicy.CanBorrow::method`;
+
+    /** A class and one method; lines are 0-based like every index line. */
+    const method = (file: string, cls: string, name: string, start: number, end: number): FileIndex['symbols'] => [
+      { symbolId: `${file}::${cls}::class`, name: cls, kind: 'class', startLine: start - 2, endLine: end + 1 },
+      { symbolId: `${file}::${cls}.${name}::method`, name: `${cls}.${name}`, kind: 'method', startLine: start, endLine: end },
+    ];
+
+    const LOOP_INDICES: FileIndex[] = [
+      // Native facts: the plugin ran its detectors (0-based lines).
+      {
+        ...GRAPH_INDICES[0]!,
+        facts: [{ kind: 'literal-comparison', symbolId: CAN_BORROW, line: 5, text: 'loans < 5', detail: { operator: '<', literal: '5' } }],
+      },
+      {
+        file: RENEWAL,
+        lastModified: 1_700_000_000,
+        symbols: method(RENEWAL, 'RenewalPolicy', 'CanRenew', 4, 8),
+        edges: [],
+        intent: [],
+        antiPatterns: [],
+        facts: [
+          { kind: 'endpoint', symbolId: CAN_RENEW, line: 4, text: '[HttpPost("renew")]', detail: { method: 'POST', route: 'renew' } },
+          { kind: 'literal-comparison', symbolId: CAN_RENEW, line: 7, text: 'renewals > 2', detail: { operator: '>', literal: '2' } },
+        ],
+      },
+      // No facts key: a plugin without fact detectors, so the text scan reads this file.
+      { file: DUE, lastModified: 1_700_000_000, symbols: method(DUE, 'DueDates', 'IsOverdue', 4, 8), edges: [], intent: [], antiPatterns: [] },
+      // facts: [] means the detectors ran and found nothing: no text scan.
+      { file: FEES, lastModified: 1_700_000_000, symbols: method(FEES, 'Fees', 'Late', 4, 8), edges: [], intent: [], antiPatterns: [], facts: [] },
+      GRAPH_INDICES[1]!,
+      {
+        file: FLOW,
+        lastModified: 1_700_000_000,
+        symbols: [
+          { symbolId: `${FLOW}::RenewalFlowTests::class`, name: 'RenewalFlowTests', kind: 'class', startLine: 2, endLine: 6 },
+          {
+            symbolId: FLOW_METHOD,
+            name: 'RenewalFlowTests.RenewsTwiceAtMost',
+            kind: 'method',
+            startLine: 4,
+            endLine: 5,
+            annotations: [{ name: 'Fact' }],
+          },
+        ],
+        edges: [{ from: FLOW_METHOD, to: CAN_RENEW, kind: 'calls' }],
+        intent: [],
+        antiPatterns: [],
+      },
+    ];
+
+    const CO_CHANGES = {
+      version: 1,
+      timestamp: 1_700_000_000,
+      entries: [
+        { file1: FEES, file2: RENEWAL, sharedCommits: 3, frequency: 0.6 },
+        // Same context, below the floor, or with a test file: never a cross-context pair.
+        { file1: DUE, file2: RENEWAL, sharedCommits: 5, frequency: 0.9 },
+        { file1: DUE, file2: FEES, sharedCommits: 1, frequency: 0.4 },
+        { file1: FEES, file2: FLOW, sharedCommits: 4, frequency: 0.8 },
+      ],
+    };
+
+    function writeIndex(index: FileIndex): void {
+      const target = join(ctxoRoot, 'index', `${index.file}.json`);
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, JSON.stringify(index, null, 2), 'utf-8');
+    }
+
+    beforeEach(() => {
+      rmSync(ctxoRoot, { recursive: true, force: true });
+      for (const index of LOOP_INDICES) writeIndex(index);
+      writeFileSync(join(ctxoRoot, 'index', 'co-changes.json'), JSON.stringify(CO_CHANGES, null, 2), 'utf-8');
+      writeRepo(
+        RENEWAL,
+        'namespace Lending;\n\npublic class RenewalPolicy\n{\n    [HttpPost("renew")]\n    public bool CanRenew(int renewals)\n    {\n        return renewals > 2 ? false : true;\n    }\n}\n',
+      );
+      writeRepo(
+        DUE,
+        'namespace Lending;\n\npublic class DueDates\n{\n    public bool IsOverdue(int days)\n    {\n        if (days > 14) return true;\n        return false;\n    }\n}\n',
+      );
+      writeRepo(
+        FEES,
+        'namespace Billing;\n\npublic class Fees\n{\n    public decimal Late(int days)\n    {\n        if (days > 30) return 5m;\n        return 0m;\n    }\n}\n',
+      );
+      writeRepo(FLOW, 'namespace Lending.Tests.Characterization;\n\npublic class RenewalFlowTests\n{\n    [Fact]\n    public void RenewsTwiceAtMost() { }\n}\n');
+    });
+
+    const candidatesFile = (): string => join(domainDir(), 'shadow-candidates.json');
+    const maturityFile = (): string => join(domainDir(), 'maturity.json');
+
+    interface Candidate {
+      readonly kind: string;
+      readonly context: string;
+      readonly file: string;
+      readonly line: number;
+      readonly symbolId?: string;
+      readonly text: string;
+      readonly source: string;
+      readonly resolution?: { readonly by: string };
+    }
+
+    it('writes shadow-candidates.json and maturity.json, byte-identical on a second run', async () => {
+      await runPass();
+      const candidatesText = read('shadow-candidates.json');
+      const maturityText = read('maturity.json');
+      const graph = JSON.parse(read('graph.json')) as DomainGraph;
+
+      const candidates = JSON.parse(candidatesText);
+      expect(candidates).toMatchObject({ ctxoArtifact: 'domain-shadow-candidates', version: 1 });
+      expect(candidates.registryHash).toBe(graph.registryHash);
+      expect(candidates.cardsHash).toBe(graph.cardsHash);
+      expect((candidates.candidates as Candidate[]).map((c) => [c.context, c.kind, c.file, c.line, c.source, c.resolution?.by ?? null])).toEqual([
+        ['lending', 'rule-without-tests', 'docs/domain/lending/domain.md', 14, 'card', 'untested'],
+        ['lending', 'literal-comparison', DUE, 7, 'text', null],
+        ['lending', 'literal-comparison', POLICY, 6, 'native', 'rule-link'],
+        ['lending', 'endpoint', RENEWAL, 5, 'native', null],
+        ['lending', 'literal-comparison', RENEWAL, 8, 'native', null],
+      ]);
+
+      const maturity = JSON.parse(maturityText);
+      expect(maturity).toMatchObject({ ctxoArtifact: 'domain-maturity', version: 1, registryHash: graph.registryHash, cardsHash: graph.cardsHash });
+      expect(maturity.contexts.map((c: { context: string }) => c.context)).toEqual(['lending', 'billing']);
+
+      expect(
+        logs.some((l) =>
+          new RegExp(
+            `Domain: 2 contexts, 2 rules \\(1 without tests\\), ${graph.links.length} links, ` +
+              '5 shadow-spec candidates \\(2 resolved by links or Untested\\), 0 cross-context edges, 0 boundary violations \\(\\d+ ms\\)',
+          ).test(l),
+        ),
+      ).toBe(true);
+
+      const before = [statSync(candidatesFile()).mtimeMs, statSync(maturityFile()).mtimeMs];
+      await runPass();
+      expect(read('shadow-candidates.json')).toBe(candidatesText);
+      expect(read('maturity.json')).toBe(maturityText);
+      expect([statSync(candidatesFile()).mtimeMs, statSync(maturityFile()).mtimeMs]).toEqual(before);
+    });
+
+    it('the text fallback runs only for files without native facts', async () => {
+      await runPass();
+      const candidates = JSON.parse(read('shadow-candidates.json')).candidates as Candidate[];
+      const text = candidates.filter((c) => c.source === 'text');
+      expect(text).toHaveLength(1);
+      expect(text[0]).toMatchObject({ file: DUE, line: 7, symbolId: IS_OVERDUE, kind: 'literal-comparison' });
+      expect(text[0]!.text).toContain('days > 14');
+      // Fees.cs has facts: [] and a comparison in its source: no candidate. RenewalPolicy.cs keeps its native facts only.
+      expect(candidates.filter((c) => c.file === FEES)).toEqual([]);
+      expect(candidates.filter((c) => c.file === RENEWAL).every((c) => c.source === 'native')).toBe(true);
+    });
+
+    it('maturity counts the characterization test and the cross-context pair', async () => {
+      await runPass();
+      expect(JSON.parse(read('maturity.json')).contexts).toEqual([
+        {
+          context: 'lending',
+          tests: { characterization: 1, contract: 0 },
+          mainPaths: { total: 1, reached: 1, unreached: [] },
+          contractSymbols: { total: 0, reached: 0, unreached: [] },
+          coChange: { pairs: 1, top: [{ file: RENEWAL, otherFile: FEES, otherContext: 'billing', frequency: 0.6, sharedCommits: 3 }] },
+        },
+        {
+          context: 'billing',
+          tests: { characterization: 0, contract: 0 },
+          mainPaths: { total: 0, reached: 0, unreached: [] },
+          contractSymbols: { total: 0, reached: 0, unreached: [] },
+          coChange: { pairs: 1, top: [{ file: FEES, otherFile: RENEWAL, otherContext: 'lending', frequency: 0.6, sharedCommits: 3 }] },
+        },
+      ]);
+    });
+
+    it('maturity counts a cross-context pair once', async () => {
+      await runPass();
+      const contexts = JSON.parse(read('maturity.json')).contexts as { context: string; coChange: { pairs: number; top: unknown[] } }[];
+      expect(contexts.map((c) => [c.context, c.coChange.pairs, c.coChange.top.length])).toEqual([
+        ['lending', 1, 1],
+        ['billing', 1, 1],
+      ]);
+    });
+
+    it('maturity has no co-change without co-changes.json', async () => {
+      rmSync(join(ctxoRoot, 'index', 'co-changes.json'));
+      await runPass();
+      expect(JSON.parse(read('maturity.json')).contexts.map((c: { coChange: unknown }) => c.coChange)).toEqual([
+        { pairs: 0, top: [] },
+        { pairs: 0, top: [] },
+      ]);
+    });
+
+    it('removes both artifacts when the registry is gone', async () => {
+      await runPass();
+      expect(existsSync(candidatesFile())).toBe(true);
+      expect(existsSync(maturityFile())).toBe(true);
+      rmSync(join(root, 'docs', 'domain', 'contexts.yaml'));
+      await runPass();
+      expect(existsSync(candidatesFile())).toBe(false);
+      expect(existsSync(maturityFile())).toBe(false);
+    });
+
+    it('writes nothing when the registry has problems', async () => {
+      writeRegistry(GRAPH_REGISTRY.replace('rung: named', 'rung: unknown'));
+      await runPass();
+      expect(existsSync(candidatesFile())).toBe(false);
+      expect(existsSync(maturityFile())).toBe(false);
+
+      writeRegistry(GRAPH_REGISTRY);
+      await runPass();
+      const candidates = read('shadow-candidates.json');
+      const maturity = read('maturity.json');
+      writeRegistry('version: 1\ncontexts: [');
+      writeRepo(DUE, 'public class DueDates\n{\n    public bool IsOverdue(int days) => days > 21;\n}\n');
+      rmSync(join(ctxoRoot, 'index', 'co-changes.json'));
+      await runPass();
+      expect(read('shadow-candidates.json')).toBe(candidates);
+      expect(read('maturity.json')).toBe(maturity);
+    });
+
+    it('a graph build failure leaves both artifacts as they were (W10)', async () => {
+      await runPass();
+      const candidates = read('shadow-candidates.json');
+      const maturity = read('maturity.json');
+      writeRepo(DUE, 'public class DueDates\n{\n    public bool IsOverdue(int days) => days > 21;\n}\n');
+      rmSync(join(ctxoRoot, 'index', 'co-changes.json'));
+      const failing = (host: CtxoHost): CtxoHost => {
+        const services = { ...host.services };
+        Object.defineProperty(services, 'dataResourceKinds', {
+          get() {
+            throw new Error('boom');
+          },
+        });
+        return { ...host, services };
+      };
+      await runPass(undefined, failing);
+      expect(logs.some((l) => l.includes('The domain graph could not be built: boom'))).toBe(true);
+      expect(read('shadow-candidates.json')).toBe(candidates);
+      expect(read('maturity.json')).toBe(maturity);
+    });
+
+    it('the JSON index reader skips both artifacts', async () => {
+      const services = createModuleHost({ cliVersion: '0.0.0', mode: 'cli', projectRoot: root }).services;
+      const before = services.readIndex(ctxoRoot).length;
+      await runPass();
+      expect(existsSync(candidatesFile())).toBe(true);
+      expect(existsSync(maturityFile())).toBe(true);
+      expect(services.readIndex(ctxoRoot)).toHaveLength(before);
+    });
   });
 });
