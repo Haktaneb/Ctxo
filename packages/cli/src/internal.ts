@@ -53,6 +53,7 @@ export type {
   GitRefs,
   CoChangeEntry,
   CodeFact,
+  FactKind,
   SearchDocument,
   SearchResponse,
   SearchResult,
