@@ -233,7 +233,11 @@ export function discoverConventions(input: DiscoveryInput): { readonly evidence:
 const LABEL_WIDTH = 22;
 const row = (label: string, value: string): string => `${label.padEnd(LABEL_WIDTH)}${value}`;
 const folderList = (folders: readonly FolderCount[]): string => folders.map((f) => `${f.folder} (${f.files})`).join(', ');
-const flow = (values: readonly string[]): string => `[${values.join(', ')}]`;
+/**
+ * A YAML flow list with each value as a JSON string, which is a valid YAML double-quoted scalar (D-I2): an unquoted
+ * glob would start an alias at `*` and make the pasted block unparsable.
+ */
+const flow = (values: readonly string[]): string => `[${values.map((value) => JSON.stringify(value)).join(', ')}]`;
 
 /** The human report in the spec 10.9 layout, followed by the proposed config; `config` is the resolved domain config. */
 export function formatDiscovery(evidence: DiscoveryEvidence, proposal: DiscoveryProposal, config: DomainConfig): string {

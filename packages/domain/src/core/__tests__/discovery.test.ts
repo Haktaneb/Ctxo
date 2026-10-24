@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 import { createModuleHost, type FileIndex } from '@ctxo/cli/internal';
 import { parseCard } from '../card-parser.js';
 import { discoverConventions, formatDiscovery, proposalAddsSomething, type DiscoveryInput } from '../discovery.js';
@@ -279,7 +280,7 @@ describe('formatDiscovery', () => {
     expect(lines.some((line) => line.includes('<- not covered by domain.tests.characterization.paths'))).toBe(false);
     expect(lines).toContain('      contract:');
     // The configured globs plus the new ones: the list --write writes, so a hand-pasted block keeps the defaults.
-    expect(lines).toContain('        paths: [**/Contract/**, **/Contracts.Tests/**, tests/Contracts/**]');
+    expect(lines).toContain('        paths: ["**/Contract/**", "**/Contracts.Tests/**", "tests/Contracts/**"]');
     expect(lines.some((line) => line.trim() === 'characterization:')).toBe(false);
   });
 
@@ -293,7 +294,38 @@ describe('formatDiscovery', () => {
     };
     const { evidence, proposal } = discoverConventions(input({ config, trackedFiles: ['src/Characterization/B.cs'] }));
     const lines = formatDiscovery(evidence, proposal, config).split('\n');
-    expect(lines).toContain('        paths: [zz/**, golden/**, src/Characterization/**]');
+    expect(lines).toContain('        paths: ["zz/**", "golden/**", "src/Characterization/**"]');
+  });
+
+  it('prints a proposed config block that parses as YAML to the proposal (D-I2)', () => {
+    const config = {
+      ...DEFAULT_DOMAIN_CONFIG,
+      tests: {
+        ...DEFAULT_DOMAIN_CONFIG.tests,
+        characterization: { ...DEFAULT_DOMAIN_CONFIG.tests.characterization, paths: ['**/Golden/**'] },
+      },
+    };
+    const { evidence, proposal } = discoverConventions(
+      input({
+        config,
+        commitSubjects: [...subjects('LEND', 6)],
+        indices: [index('qa/Lending.Specs/A.cs', [{ name: 'Fact' }, { name: 'Trait', args: ['Req', 'LEND-03'] }])],
+        trackedFiles: ['src/Characterization/A.cs', 'tests/Contracts/B.cs'],
+      }),
+    );
+    expect(proposal.characterizationPaths.length).toBeGreaterThan(0);
+    expect(proposal.contractPaths.length).toBeGreaterThan(0);
+    const text = formatDiscovery(evidence, proposal, config);
+    const block = text.slice(text.indexOf('Proposed config (.ctxo/config.yaml)\n') + 'Proposed config (.ctxo/config.yaml)\n'.length);
+    const parsed = parseYaml(block) as {
+      domain: { rules: { trackerPrefixes: string[] }; tests: { ruleTraitKeys: string[]; characterization: { paths: string[] }; contract: { paths: string[] } } };
+      index: { tests: string[] };
+    };
+    expect(parsed.domain.rules.trackerPrefixes).toEqual(proposal.trackerPrefixes);
+    expect(parsed.domain.tests.ruleTraitKeys).toEqual(proposal.ruleTraitKeys);
+    expect(parsed.domain.tests.characterization.paths).toEqual([...config.tests.characterization.paths, ...proposal.characterizationPaths]);
+    expect(parsed.domain.tests.contract.paths).toEqual([...DEFAULT_DOMAIN_CONFIG.tests.contract.paths, ...proposal.contractPaths]);
+    expect(parsed.index.tests).toEqual(proposal.indexTests);
   });
 });
 
