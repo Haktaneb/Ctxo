@@ -256,6 +256,8 @@ describe('finishFacts attribution at scale', () => {
     const ms = performance.now() - started;
     expect(facts).toHaveLength(500);
     for (const fact of facts.slice(0, 50)) expect(fact.symbolId).toBe(reference(fact.line, symbols));
-    expect(ms).toBeLessThan(500);
+    // About 150 ms locally; the bound leaves room for a slow CI runner (521 ms seen on ubuntu-latest). The old
+    // per-record scan of every symbol took several seconds there.
+    expect(ms).toBeLessThan(2_000);
   });
 });

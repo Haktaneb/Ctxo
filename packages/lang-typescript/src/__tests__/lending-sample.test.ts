@@ -244,5 +244,5 @@ describe('lending sample facts', () => {
         expect(JSON.stringify(earlierOnly, null, 2)).toBe(JSON.stringify(golden[sqlCallSites ? 'sqlCallSites' : 'default'], null, 2));
       }
     }
-  });
+  }, 60_000);
 });
