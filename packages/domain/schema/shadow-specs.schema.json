@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ctxo.dev/schema/domain-shadow-specs.schema.json",
+  "title": "Ctxo shadow-spec resolutions",
+  "description": "<registry folder>/<context>/shadow-specs.yaml: resolutions of shadow-spec candidates by fingerprint (find_shadow_specs). One entry resolves every candidate with its fingerprint; an entry matching no candidate is stale.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["fingerprint", "resolution"],
+    "properties": {
+      "fingerprint": {
+        "description": "<kind> | <symbol> | <normalized text>, as find_shadow_specs reports it; spacing around the separators does not matter.",
+        "type": "string",
+        "pattern": "^[^|]*\\S[^|]*\\|[^|]*\\S[^|]*\\|[\\s\\S]*\\S"
+      },
+      "resolution": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["rule"],
+            "properties": {
+              "rule": { "description": "The rule that states this candidate (LEND-03; lend03 also works).", "type": "string", "pattern": "\\S" }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["notARule"],
+            "properties": {
+              "notARule": { "description": "Why this candidate is not a business rule.", "type": "string", "pattern": "\\S" }
+            }
+          }
+        ]
+      }
+    }
+  }
+}
