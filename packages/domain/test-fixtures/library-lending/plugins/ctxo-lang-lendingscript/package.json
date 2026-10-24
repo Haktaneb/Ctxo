@@ -1,0 +1,8 @@
+{
+  "name": "ctxo-lang-lendingscript",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Test fixture: a protocol v1 language plugin without extractFacts, for the domain text fallback",
+  "type": "module",
+  "main": "index.js"
+}
