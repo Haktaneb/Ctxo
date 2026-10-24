@@ -227,6 +227,7 @@ export default defineConfig({
             { text: 'Blast Radius — ctxo vs Manual', link: '/comparisons/blast-radius' },
             { text: 'Dead Code — ctxo vs knip/tsr/deadcode', link: '/comparisons/dead-code' },
             { text: 'Core Refactor - ctxo vs Coding Blind', link: '/comparisons/safe-refactor' },
+            { text: 'Table Split - ctxo vs Coding Blind', link: '/comparisons/table-impact' },
           ],
         },
         {
