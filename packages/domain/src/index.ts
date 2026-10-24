@@ -11,6 +11,7 @@ import { domainRankedScope } from './mcp/domain-scope.js';
 import { createDomainState } from './mcp/domain-state.js';
 import { domainTools } from './mcp/domain-tools.js';
 import { createEnrichers } from './mcp/enrichers.js';
+import { loopTools } from './mcp/loop-tools.js';
 import { taskContextReservation } from './mcp/graph-enrichers.js';
 import { DOMAIN_PACKAGE, domainVersion, sameMinor } from './version.js';
 
@@ -62,7 +63,8 @@ export const register: CtxoModuleRegister = async (host) => {
       registrar.registerCommand(verifyDomainCommand(host));
     },
     registerTools(registrar) {
-      for (const tool of domainTools(host, state)) registrar.registerTool(tool);
+      // The PR 3 tools, then the loop tools (W12: composed here, so domainTools keeps its two).
+      for (const tool of [...domainTools(host, state), ...loopTools(host, state)]) registrar.registerTool(tool);
     },
     enrich: createEnrichers(host, state),
     reserveTaskContextTokens: taskContextReservation(state),
