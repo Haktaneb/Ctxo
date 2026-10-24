@@ -6,8 +6,8 @@ export class LoansController {
   constructor(private readonly loans: LoanService) {}
 
   @Get(':id')
-  find(@Param('id') id: string): string {
-    return `loan ${id}`;
+  find(@Param('id') id: string): { id: string } {
+    return { id };
   }
 
   // rule: LEND-03

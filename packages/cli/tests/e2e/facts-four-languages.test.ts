@@ -199,7 +199,7 @@ function factsByFile(indices: readonly FileIndex[]): Record<string, unknown> {
 
 /** The tier the index summary reports for a language (`C#`, `Go`, `Java`), or undefined. */
 function tierOf(output: string, language: string): string | undefined {
-  const escaped = language.replace(/[#]/g, '\\$&');
+  const escaped = language.replace(/[.*+?^${}()|[\]\\#]/g, '\\$&');
   return new RegExp(`\\[ctxo\\]\\s+${escaped}: \\d+ files? \\((full|syntax) tier`).exec(output)?.[1];
 }
 
