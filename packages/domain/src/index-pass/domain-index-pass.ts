@@ -188,8 +188,8 @@ export function domainIndexPass(host: CtxoHost): (ctx: IndexPassContext) => Prom
 
 /**
  * Whether `ctxo domain discover` would add a value to the config (#191), recorded in `maturity.json` for the
- * `get_context_map` hint. It reads the pass's index and change log (no second index read or `git log`), plus the
- * branch names and tracked files. Without a change log (`--skip-history`, a file re-index) the subjects are
+ * `get_context_map` hint. It reads committed inputs only: the pass's index and change log (no second index read
+ * or `git log`) and the tracked files, never the local branch refs, because `maturity.json` is committed. Without a change log (`--skip-history`, a file re-index) the subjects are
  * unknown, so the last recorded result is kept; a failure keeps it too, with a warning.
  */
 async function discoveryResult(
@@ -211,6 +211,8 @@ async function discoveryResult(
     const input = await gatherDiscoveryInput(host, ctx.projectRoot, ctx.ctxoRoot, { config: ctx.config }, config, {
       indices: ctx.indices,
       commitSubjects: ctx.history.commits.map((commit) => commit.message),
+      // maturity.json is committed: no local branch refs, so every machine at the same commit records the same result.
+      branches: { local: [], remote: [] },
     });
     const { proposal } = discoverConventions(input);
     return { addsSomething: proposalAddsSomething(proposal, config, input.indexTests) };

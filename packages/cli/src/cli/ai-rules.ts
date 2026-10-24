@@ -25,6 +25,7 @@ import {
   type RulesVariant,
   type TextShape,
 } from '../core/agent-rules/rules-block.js';
+import { parse as parseYaml } from 'yaml';
 import { loadConfig } from '../core/config/load-config.js';
 import type { CliInstallKind } from '../core/install/install-kind.js';
 import type { ClaudeHookEntry } from '../ports/i-ctxo-module.js';
@@ -402,6 +403,39 @@ export function ensureClaudeHookEntry(
 /** `gate.enabled` from `.ctxo/config.yaml`; a missing or invalid config counts as enabled. */
 export function gateEnabled(projectRoot: string): boolean {
   return loadConfig(join(projectRoot, '.ctxo')).config.gate?.enabled !== false;
+}
+
+/** The registry path `@ctxo/domain` reads when `domain.registry` is not set. */
+const DEFAULT_DOMAIN_REGISTRY = 'docs/domain/contexts.yaml';
+
+/**
+ * Whether the repository's committed state sets up the domain layer (#191): `.ctxo/config.yaml` has a
+ * `domain` key (even an empty one), or the default registry file exists. A configured `domain.registry` is
+ * inside the `domain` key, so it counts too. Never throws.
+ */
+export function domainLayerCommitted(projectRoot: string): boolean {
+  // The raw YAML, read quietly: `loadConfig` would warn a second time about an invalid config, and a schema
+  // problem elsewhere in the file does not change whether the domain layer is set up.
+  try {
+    const parsed: unknown = parseYaml(readFileSync(join(projectRoot, '.ctxo', 'config.yaml'), 'utf-8'));
+    if (typeof parsed === 'object' && parsed !== null && Object.prototype.hasOwnProperty.call(parsed, 'domain')) return true;
+  } catch {
+    // No config, or not valid YAML: only the registry file can say domain.
+  }
+  try {
+    return existsSync(join(projectRoot, DEFAULT_DOMAIN_REGISTRY));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether a rules block carries the domain line: the committed state says the domain layer is set up, or the
+ * `@ctxo/domain` module loads on this machine. Committed state first, so teammates with and without the package
+ * render the same block (#191); the module only adds the line where nothing is committed yet.
+ */
+export function rulesDomainLine(projectRoot: string, moduleLoaded: boolean): boolean {
+  return domainLayerCommitted(projectRoot) || moduleLoaded;
 }
 
 /**

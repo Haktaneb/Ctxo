@@ -8,6 +8,7 @@ import {
   readClaudeGuardState,
   readRulesStates,
   resolveRulesTier,
+  rulesDomainLine,
   skillStates,
   skillsExpected,
   type PlatformRulesState,
@@ -68,11 +69,14 @@ function platformName(platformId: string): string {
 export class AiRulesCheck implements IHealthCheck {
   readonly id = 'ai_rules';
   readonly title = 'AI rules';
-  private readonly variant: RulesVariant;
+  private readonly moduleLoaded: boolean;
 
-  /** `domain`: the `@ctxo/domain` module is installed, so a current block carries the domain line (#191). */
+  /**
+   * `domain`: the `@ctxo/domain` module loaded. A current block carries the domain line when it loaded or the
+   * committed state sets up the domain layer (`rulesDomainLine`, #191).
+   */
   constructor(options: { readonly domain?: boolean } = {}) {
-    this.variant = { domain: options.domain === true };
+    this.moduleLoaded = options.domain === true;
   }
 
   async run(ctx: CheckContext): Promise<CheckResult> {
@@ -86,10 +90,11 @@ export class AiRulesCheck implements IHealthCheck {
   private check(projectRoot: string): CheckResult {
     const problems: RulesProblem[] = [];
     const summary: string[] = [];
+    const variant: RulesVariant = { domain: rulesDomainLine(projectRoot, this.moduleLoaded) };
     for (const state of readRulesStates(projectRoot)) {
       const first = state.scan.blocks[0];
-      const status = first ? classifyRulesBlock(first, this.variant) : undefined;
-      problems.push(...fileProblems(projectRoot, state, status, this.variant).map((p) => ({ ...p, text: `${state.file}: ${p.text}` })));
+      const status = first ? classifyRulesBlock(first, variant) : undefined;
+      problems.push(...fileProblems(projectRoot, state, status, variant).map((p) => ({ ...p, text: `${state.file}: ${p.text}` })));
       if (status?.state === 'current') summary.push(`${state.file} v${RULES_TEMPLATE_VERSION} ${status.tier}`);
       if (status?.state === 'newer') summary.push(`${state.file} v${status.version} from a newer ctxo`);
     }
@@ -131,8 +136,8 @@ function fileProblems(
     problems.push({
       text:
         variant.domain === true
-          ? 'rules block lacks the "ctxo domain discover" line (@ctxo/domain is installed)'
-          : 'rules block has the "ctxo domain discover" line (@ctxo/domain is not installed)',
+          ? 'rules block lacks the "ctxo domain discover" line (the domain layer is set up)'
+          : 'rules block has the "ctxo domain discover" line, but the domain layer is not set up (no domain config, no registry, @ctxo/domain not loaded)',
       fix: RULES_FIX,
     });
   } else if (status?.state === 'outdated') {

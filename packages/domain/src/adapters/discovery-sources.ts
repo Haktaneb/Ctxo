@@ -12,6 +12,8 @@ import { readCardText } from './repo-files.js';
 export interface PreloadedDiscoverySources {
   readonly indices?: readonly FileIndex[];
   readonly commitSubjects?: readonly string[];
+  /** Replaces the branch refs read; the index pass passes none, so a committed artifact never depends on local refs. */
+  readonly branches?: { readonly local: readonly string[]; readonly remote: readonly string[] };
 }
 
 /**
@@ -70,15 +72,17 @@ export async function gatherDiscoveryInput(
     }
   }
 
-  let localBranches: readonly string[] = [];
-  let remoteBranches: readonly string[] = [];
-  try {
-    const refs = await git?.getRefs?.();
-    localBranches = refs?.localBranches ?? refs?.branches ?? [];
-    remoteBranches = refs?.remoteBranches ?? [];
-  } catch {
-    localBranches = [];
-    remoteBranches = [];
+  let localBranches: readonly string[] = preloaded.branches?.local ?? [];
+  let remoteBranches: readonly string[] = preloaded.branches?.remote ?? [];
+  if (preloaded.branches === undefined) {
+    try {
+      const refs = await git?.getRefs?.();
+      localBranches = refs?.localBranches ?? refs?.branches ?? [];
+      remoteBranches = refs?.remoteBranches ?? [];
+    } catch {
+      localBranches = [];
+      remoteBranches = [];
+    }
   }
 
   let trackedFiles: readonly string[] | undefined;

@@ -21,6 +21,7 @@ import {
   readClaudeGuardState,
   readRulesStates,
   resolveRulesTier,
+  rulesDomainLine,
   rulesFileHoldReasons,
   skillInstallWarnings,
   skillsExpected,
@@ -36,7 +37,10 @@ export interface FixOptions {
   readonly ctxoRoot: string;
   readonly yes?: boolean;
   readonly dryRun?: boolean;
-  /** The `@ctxo/domain` module is installed: re-rendered rules blocks carry the domain line (#191). */
+  /**
+   * The `@ctxo/domain` module loaded. Re-rendered rules blocks carry the domain line when it loaded or the
+   * committed state sets up the domain layer (`rulesDomainLine`, #191).
+   */
   readonly domain?: boolean;
 }
 
@@ -154,7 +158,7 @@ export async function applyFixes(report: DoctorReport, options: FixOptions): Pro
       await run(
         'AI rules',
         're-render ctxo rules blocks',
-        () => fixAiRules(options.projectRoot, options.domain === true),
+        () => fixAiRules(options.projectRoot, rulesDomainLine(options.projectRoot, options.domain === true)),
         options,
       ),
     );

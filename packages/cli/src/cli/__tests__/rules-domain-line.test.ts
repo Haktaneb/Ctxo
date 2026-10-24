@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
   COMPACT_DOMAIN_LINE,
   FULL_DOMAIN_LINE,
@@ -15,7 +15,7 @@ import {
 } from '../../core/agent-rules/rules-block.js';
 import { AiRulesCheck } from '../../adapters/diagnostics/checks/agent-setup-check.js';
 import type { CheckContext, DoctorReport } from '../../core/diagnostics/types.js';
-import { installRules } from '../ai-rules.js';
+import { domainLayerCommitted, installRules } from '../ai-rules.js';
 import { applyFixes } from '../doctor-fix.js';
 import { InitCommand } from '../init-command.js';
 import { isolateGitEnv, type IsolatedGitEnv } from './git-test-env.js';
@@ -24,16 +24,33 @@ import { isolateGitEnv, type IsolatedGitEnv } from './git-test-env.js';
  * #191: the rules block names `ctxo domain discover` only when `@ctxo/domain` is installed. The module loader
  * is stubbed so `ctxo init` sees the module (or not) without a real package.
  */
-const domain = vi.hoisted(() => ({ installed: false }));
+const domain = vi.hoisted(() => ({
+  installed: false,
+  /** Loads that still report no module, as before an install later in the run. */
+  loadsBeforeInstalled: 0,
+  /** Calls of the stub module's init `apply`. */
+  applied: 0,
+}));
 
 vi.mock('../../adapters/modules/module-loader.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../adapters/modules/module-loader.js')>();
   return {
     ...actual,
-    loadCtxoModules: async () =>
-      domain.installed
-        ? { modules: [{ name: '@ctxo/domain', version: '0.0.0', registration: { id: 'domain' } }], reports: [] }
-        : { modules: [], reports: [] },
+    loadCtxoModules: async () => {
+      if (domain.loadsBeforeInstalled > 0) {
+        domain.loadsBeforeInstalled -= 1;
+        return { modules: [], reports: [] };
+      }
+      if (!domain.installed) return { modules: [], reports: [] };
+      const init = {
+        part: 'domain',
+        apply: async () => {
+          domain.applied += 1;
+          return [];
+        },
+      };
+      return { modules: [{ name: '@ctxo/domain', version: '0.0.0', registration: { id: 'domain', init } }], reports: [] };
+    },
   };
 });
 
@@ -114,6 +131,7 @@ describe('drift and repair of the domain line (#191)', () => {
 
   afterEach(() => {
     domain.installed = false;
+    domain.loadsBeforeInstalled = 0;
     gitEnv.restore();
     rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
@@ -125,7 +143,7 @@ describe('drift and repair of the domain line (#191)', () => {
     expect((await new AiRulesCheck().run(ctx())).status).toBe('pass');
     const missing = await new AiRulesCheck({ domain: true }).run(ctx());
     expect(missing.status).toBe('warn');
-    expect(missing.message).toBe('CLAUDE.md: rules block lacks the "ctxo domain discover" line (@ctxo/domain is installed)');
+    expect(missing.message).toBe('CLAUDE.md: rules block lacks the "ctxo domain discover" line (the domain layer is set up)');
 
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
@@ -135,7 +153,9 @@ describe('drift and repair of the domain line (#191)', () => {
 
       const stray = await new AiRulesCheck().run(ctx());
       expect(stray.status).toBe('warn');
-      expect(stray.message).toBe('CLAUDE.md: rules block has the "ctxo domain discover" line (@ctxo/domain is not installed)');
+      expect(stray.message).toBe(
+        'CLAUDE.md: rules block has the "ctxo domain discover" line, but the domain layer is not set up (no domain config, no registry, @ctxo/domain not loaded)',
+      );
       await applyFixes(report(), { projectRoot: tmp, ctxoRoot: join(tmp, '.ctxo'), yes: true });
     } finally {
       errorSpy.mockRestore();
@@ -176,5 +196,82 @@ describe('drift and repair of the domain line (#191)', () => {
     // The compact tier needs the guard, the skills and an enabled gate on disk; render it directly.
     const block = renderRulesBlock('compact', { domain: true });
     expect(block.split('\n').at(-3)).toBe(COMPACT_DOMAIN_LINE);
+  });
+
+  describe('committed state decides, the module only adds (I-R1)', () => {
+    const writeRepo = (path: string, text: string): void => {
+      mkdirSync(dirname(join(tmp, path)), { recursive: true });
+      writeFileSync(join(tmp, path), text, 'utf-8');
+    };
+
+    it('two machines with the same committed domain config render the same block, module or not', async () => {
+      writeRepo('.ctxo/config.yaml', 'version: "1.0"\ndomain:\n  registry: docs/domain/contexts.yaml\n');
+      expect(domainLayerCommitted(tmp)).toBe(true);
+
+      domain.installed = false;
+      await init();
+      const withoutModule = claudeMd();
+      expect(withoutModule).toContain(FULL_DOMAIN_LINE);
+
+      domain.installed = true;
+      await init();
+      expect(claudeMd()).toBe(withoutModule);
+
+      // Neither machine reports drift.
+      expect((await new AiRulesCheck().run(ctx())).status).toBe('pass');
+      expect((await new AiRulesCheck({ domain: true }).run(ctx())).status).toBe('pass');
+    });
+
+    it('the default registry file alone counts as committed domain state', () => {
+      expect(domainLayerCommitted(tmp)).toBe(false);
+      writeRepo('docs/domain/contexts.yaml', 'version: 1\ncontexts: []\n');
+      expect(domainLayerCommitted(tmp)).toBe(true);
+    });
+
+    it('module absent and no domain state give exactly the block without the line', async () => {
+      domain.installed = false;
+      await init();
+      expect(claudeMd()).toBe(`${renderRulesBlock('full')}\n`);
+    });
+
+    it('a module that fails to load keeps the line while the committed state says domain', async () => {
+      writeRepo('docs/domain/contexts.yaml', 'version: 1\ncontexts: []\n');
+      const withLine = `${renderRulesBlock('full', { domain: true })}\n`;
+      writeRepo('CLAUDE.md', withLine);
+      // The loader reports no module (as on a load failure or a version mismatch).
+      domain.installed = false;
+      expect((await new AiRulesCheck({ domain: false }).run(ctx())).status).toBe('pass');
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        await applyFixes(report(), { projectRoot: tmp, ctxoRoot: join(tmp, '.ctxo'), yes: true });
+      } finally {
+        errorSpy.mockRestore();
+      }
+      expect(claudeMd()).toBe(withLine);
+      await init();
+      expect(claudeMd()).toBe(withLine);
+    });
+  });
+
+  it('init renders the rules again when the domain step makes the package available, with one created row (m5)', async () => {
+    domain.installed = true;
+    // The rules step's load sees no module; the domain step's load finds it.
+    domain.loadsBeforeInstalled = 1;
+    domain.applied = 0;
+    execFileSync('git', ['init', '-q'], { cwd: tmp });
+    const lines: string[] = [];
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(' '));
+    });
+    try {
+      await new InitCommand(tmp).run({ tools: ['claude-code'], yes: true, noInstall: true, only: ['rules', 'domain'] });
+    } finally {
+      errorSpy.mockRestore();
+    }
+    expect(domain.applied).toBe(1);
+    expect(claudeMd()).toContain(FULL_DOMAIN_LINE);
+    const rows = lines.filter((line) => line.includes('CLAUDE.md'));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatch(/created/i);
   });
 });

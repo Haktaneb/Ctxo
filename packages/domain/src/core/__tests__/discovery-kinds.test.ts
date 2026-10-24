@@ -154,6 +154,15 @@ describe('GitHub issues (#N)', () => {
     expect(formatDiscovery(none.evidence, none.proposal, DEFAULT_DOMAIN_CONFIG)).not.toContain('GitHub issues');
   });
 
+  it('needs at least five references for the tracker verdict, and skips year-like branches (m3)', () => {
+    const one = discoverConventions(input({ commitSubjects: ['fix (#1)', ...times(999, (i) => `chore ${i}`)] }));
+    expect(one.evidence.githubIssues).toMatchObject({ subjects: 1, largestFamily: false });
+    expect(formatDiscovery(one.evidence, one.proposal, DEFAULT_DOMAIN_CONFIG)).not.toContain('the issue tracker (GitHub)');
+    const five = discoverConventions(input({ commitSubjects: times(4, (i) => `fix (#${i + 1})`), localBranches: ['feat/9-holds'] }));
+    expect(five.evidence.githubIssues.largestFamily).toBe(true);
+    expect(discoverConventions(input({ localBranches: ['release/2024-q1', '2025-hotfix'] })).evidence.githubIssues.branches).toBe(0);
+  });
+
   it('does not name GitHub as the tracker when a tracker key family is larger', () => {
     const { evidence, proposal } = discoverConventions(
       input({ commitSubjects: [...times(9, (i) => `LEND-${i + 1} loans`), 'fix (#3)'] }),
@@ -353,6 +362,16 @@ describe('test-kind markers: what is not a marker', () => {
       { matcher: 'Trait:Kind=ContractTests', count: 1 },
     ]);
     expect(proposal.contractAnnotations).toEqual(['Trait:Category=Contracts', 'Trait:Kind=ContractTests']);
+  });
+
+  it('a value named after a non-test class (Category LoanContract next to LoanContract) is no marker (m4)', () => {
+    const tests = index('tests/Lending.Tests/LoanTests.cs', [
+      [{ name: 'Fact' }, { name: 'Category', args: ['LoanContract'] }],
+      [{ name: 'Fact' }, { name: 'Category', args: ['StorageContract'] }],
+    ]);
+    const { evidence, proposal } = discoverConventions(input({ indices: [tests, entity('src/Lending/LoanContract.cs', 'LoanContract')] }));
+    expect(evidence.testKindMarkers.contract.annotationValues).toEqual([{ matcher: 'Category:StorageContract', count: 1 }]);
+    expect(proposal.contractAnnotations).toEqual(['Category:StorageContract']);
   });
 
   it('DataContract and ContractTestBase attributes are no test attributes', () => {

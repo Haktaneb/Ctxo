@@ -18,6 +18,7 @@ import {
   linkedRulesPlatforms,
   planRules,
   resolveRulesTier,
+  rulesDomainLine,
   rulesFileHoldReasons,
   skillInstallWarnings,
   type InstallResult,
@@ -551,8 +552,9 @@ export class InitCommand {
     };
 
     if (parts.has('rules')) {
-      // The domain line when @ctxo/domain is installed, or (a dry run) when the domain part would install it.
-      const domainLine = (await this.domainModuleLoaded()) || (dryRun && parts.has('domain'));
+      // The domain line when the committed state sets up the domain layer or @ctxo/domain loads (#191), or (a
+      // dry run) when the domain part would set it up.
+      const domainLine = rulesDomainLine(root, await this.domainModuleLoaded()) || (dryRun && parts.has('domain'));
       const rows = applyRules(domainLine);
       rulesRows = { at: results.length, count: rows.length, domain: domainLine };
       results.push(...rows);
@@ -582,10 +584,15 @@ export class InitCommand {
       } finally {
         domain.resume?.();
       }
-      // The domain part installed @ctxo/domain after the rules step: render the rules again, with the domain line.
-      if (!dryRun && rulesRows !== undefined && !rulesRows.domain && (await this.domainModuleLoaded())) {
-        const again = applyRules(true);
-        results.splice(rulesRows.at, rulesRows.count, ...again);
+      // The domain part set up the domain layer (its config, registry or package) after the rules step: render
+      // the rules again, with the domain line. A file the first pass created keeps its `created` row.
+      const before = rulesRows;
+      if (!dryRun && before !== undefined && !before.domain && rulesDomainLine(root, await this.domainModuleLoaded())) {
+        const first = results.slice(before.at, before.at + before.count);
+        const again = applyRules(true).map((row) =>
+          row.action === 'updated' && first.some((old) => old.file === row.file && old.action === 'created') ? { ...row, action: 'created' as const } : row,
+        );
+        results.splice(before.at, before.count, ...again);
       }
     }
 

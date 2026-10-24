@@ -73,7 +73,7 @@ export interface DiscoveryEvidence {
   /**
    * GitHub-style issue references: subjects with one (at the start, as `(#N)`, or after fixes, closes, resolves,
    * refs, see, issue or pull request), the subjects ending in `(#N)`, all subjects, the `N-slug` branches, and
-   * whether they are the largest identifier family. Evidence only.
+   * whether they are the largest identifier family with at least `GITHUB_TRACKER_MIN` references. Evidence only.
    */
   readonly githubIssues: {
     readonly subjects: number;
@@ -223,8 +223,13 @@ const ISSUE_REFS: readonly RegExp[] = [
   /\b(?:fix(?:e[sd])?|close[sd]?|resolve[sd]?|refs?|see|issue|pull request)\s*:?\s+#\d+\b/i,
 ];
 const SQUASH_SUFFIX = /\(#\d+\)\s*$/;
-/** `N-slug`, alone or after `type/`: a last segment of digits, a dash and a slug starting with a letter. */
-const ISSUE_BRANCH = /(?:^|\/)\d+-[A-Za-z][^/]*$/;
+/**
+ * `N-slug`, alone or after `type/`: a last segment of digits, a dash and a slug starting with a letter. A
+ * year-like number (`release/2024-q1`) is not an issue.
+ */
+const ISSUE_BRANCH = /(?:^|\/)(?!(?:19|20)\d{2}-)\d+-[A-Za-z][^/]*$/;
+/** Issue references (subjects plus branches) the GitHub tracker verdict needs, like a tracker prefix. */
+export const GITHUB_TRACKER_MIN = TRACKER_PREFIX_MIN;
 
 function githubIssues(subjects: readonly string[], branches: readonly string[], tracker: DiscoveryEvidence['trackerKeys']): DiscoveryEvidence['githubIssues'] {
   const withRef = subjects.filter((s) => ISSUE_REFS.some((re) => re.test(s))).length;
@@ -236,7 +241,7 @@ function githubIssues(subjects: readonly string[], branches: readonly string[], 
     squashSuffixes: subjects.filter((s) => SQUASH_SUFFIX.test(s)).length,
     totalSubjects: subjects.length,
     branches: issueBranches,
-    largestFamily: total > 0 && total > largestTracker,
+    largestFamily: total >= GITHUB_TRACKER_MIN && total > largestTracker,
   };
 }
 
@@ -327,6 +332,13 @@ function valueMatcher(annotation: Annotation): { readonly kind: TestKind; readon
   return { kind, matcher: spec };
 }
 
+/** The tag value of a value annotation without a trailing `Test` or `Tests`, for the entity check. */
+function valueStem(annotation: Annotation): string {
+  const args = annotation.args ?? [];
+  const value = (lastSegment(annotation.name) === 'Trait' ? args[1] : args[0]) ?? '';
+  return value.trim().replace(/Tests?$/, '');
+}
+
 /** The glob, kind and (CamelCase form only) entity stem a test file name gives; undefined for any other file. */
 function fileFamily(base: string): { readonly kind: TestKind; readonly glob: string; readonly stem?: string } | undefined {
   const camel = KIND_FILE_CAMEL.exec(base);
@@ -370,19 +382,24 @@ function testKindMarkers(
   };
   const testIndexed = new Set<string>();
   const entities = new Set<string>();
+  const annotationsOf = (index: FileIndex): Annotation[] => index.symbols.flatMap((symbol) => symbol.annotations ?? []);
+  // Values count in test files only; a custom test attribute makes a file a test file too.
+  const isTest = (index: FileIndex): boolean =>
+    input.isPathTestFile(index.file) || hasTestAnnotation(index, annotated) || annotationsOf(index).some((a) => isKindAttribute(a.name));
   for (const index of input.indices) {
-    const all = index.symbols.flatMap((symbol) => symbol.annotations ?? []);
-    const custom = all.filter((a) => isKindAttribute(a.name));
-    for (const annotation of custom) bump(counts[kindOf(lastSegment(annotation.name))!].attributes, annotation.name);
-    // Values count in test files only; a custom test attribute makes a file a test file too.
-    if (!input.isPathTestFile(index.file) && !hasTestAnnotation(index, annotated) && custom.length === 0) {
-      for (const symbol of index.symbols) if (ENTITY_KINDS.has(symbol.kind)) entities.add(lastSegment(symbol.name));
-      continue;
+    if (isTest(index)) testIndexed.add(norm(index.file));
+    else for (const symbol of index.symbols) if (ENTITY_KINDS.has(symbol.kind)) entities.add(lastSegment(symbol.name));
+  }
+  for (const index of input.indices) {
+    const all = annotationsOf(index);
+    for (const annotation of all) {
+      if (isKindAttribute(annotation.name)) bump(counts[kindOf(lastSegment(annotation.name))!].attributes, annotation.name);
     }
-    testIndexed.add(norm(index.file));
+    if (!testIndexed.has(norm(index.file))) continue;
     for (const annotation of all) {
       const found = valueMatcher(annotation);
-      if (found !== undefined) bump(counts[found.kind].values, found.matcher);
+      // A value named after a non-test class (`Category("LoanContract")` next to `LoanContract`) tags an entity's tests.
+      if (found !== undefined && !entities.has(valueStem(annotation))) bump(counts[found.kind].values, found.matcher);
     }
   }
   for (const raw of tracked) {
