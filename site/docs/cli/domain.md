@@ -64,6 +64,9 @@ artifacts) and reads each context's `<registry folder>/<context>/shadow-specs.ya
   longer matches. Update the fingerprint from `ctxo domain shadow-specs <id>` or remove the entry.
 - `resolution names unknown rule <ID>` (warning): no card defines the rule, so the entry resolves nothing.
 - `<path> belongs to no context` (warning): a `shadow-specs.yaml` in a folder that is no context ID.
+- `stale resolutions were not checked: <reason>` (warning): the candidates could not be built, so no entry can be
+  called stale; given only when some `shadow-specs.yaml` has entries. The exit code stays 0 unless another finding
+  is an error.
 
 A registry that does not parse or validate skips checks 2 to 12. Day one is green: with the init skeleton (no contexts) or a partial registry,
 unowned files and a missing context map are warnings until you set `domain.coverage.unowned: error`.
@@ -157,9 +160,10 @@ ctxo domain map [--json]
 ```
 
 ```text
-[ctxo] Context map: 2 contexts (1 agree with the suggested rung)
-  lending  rung pinned  suggested fear  rules 2 (1 tested)  open candidates 4  pinned ✗ named ✗ bounded ✓ boring ✗
-  billing  rung fear  suggested fear  rules 0 (0 tested)  open candidates 1  pinned ✗ named ✗ bounded ✓ boring ✗
+[ctxo] Context map: 3 contexts (3 agree with the suggested rung)
+  lending  rung pinned  suggested pinned  rules 5 (1 tested)  open candidates 4  pinned ✓ named ✗ bounded ✗ boring ✗
+  billing  rung bounded  suggested bounded  rules 3 (0 tested)  open candidates 4  pinned ✓ named ✓ bounded ✓ boring ✗
+  catalog  rung fear  suggested fear  rules 0 (0 tested)  open candidates 1  pinned ✗ named ✗ bounded ✗ boring ✗
 ```
 
 `--json` prints the whole `get_context_map` body (no `_meta`, no truncation). The suggestion never changes the
@@ -176,28 +180,39 @@ ctxo domain shadow-specs <context> [--kinds <k,...>] [--all] [--json]
 
 | Flag | Description |
 | --- | --- |
-| `--kinds <k,...>` | Keep these kinds: `literal-comparison`, `normalization`, `retry-timeout`, `endpoint`, `data-resource`, `procedure`, `rule-without-tests` (an empty list means all) |
+| `--kinds <k,...>` | Keep these kinds: `literal-comparison`, `normalization`, `retry-timeout`, `endpoint`, `data-resource`, `procedure`, `rule-without-tests`. Repeated options add up; an empty list means all |
 | `--all` | Also list resolved candidates |
 | `--json` | Print the `find_shadow_specs` body |
 
 ```text
-[ctxo] lending: 4 open, 2 resolved shadow-spec candidates (docs/domain/lending/shadow-specs.yaml)
-  open  retry-timeout  src/lending/loan-policy.ts:1  HOLD_TIMEOUT_MS = 604800000
-      retry-timeout | loan-policy.HOLD_TIMEOUT_MS | HOLD_TIMEOUT_MS = 604800000
-  resolved  literal-comparison  src/lending/loan-policy.ts:4  loans.length >= 5  [rule LEND-03]
-      literal-comparison | loan-policy.canBorrow | loans.length >= 5
-  stale  literal-comparison | loan-policy.canBorrow | loans.length >= 3 (line 6)
-  unknown rule  LEND-99  endpoint | routes.routes | GET /loans/:id (line 8)
+[ctxo] lending: 2 open, 2 resolved shadow-spec candidates (docs/domain/lending/shadow-specs.yaml)
+  open  endpoint  src/lending/api/loans.controller.ts:8  GET /loans/:id
+      endpoint | LoansController.find | GET /loans/:id
+  resolved  endpoint  src/lending/api/loans.controller.ts:14  POST /loans  [linked: LEND-03]
+      endpoint | LoansController.borrow | POST /loans
+  resolved  normalization  src/lending/member-directory.ts:2  email.trim()  [not a rule: input cleanup, not a business rule]
+      normalization | member-directory.memberKey | email.trim()
+  open  normalization  src/lending/member-directory.ts:2  email.trim().toLowerCase()
+      normalization | member-directory.memberKey | email.trim().toLowerCase()
 ```
+
+Both examples are `ctxo domain map` and `ctxo domain shadow-specs lending --kinds endpoint,normalization --all` on
+the in-repo library-lending sample, TypeScript variant (`packages/domain/test-fixtures/library-lending/typescript`),
+copied to a temp folder and indexed. A stale entry prints `  stale  <fingerprint> (line <n>)` and an entry naming
+an unknown rule `  unknown rule  <ID>  <fingerprint> (line <n>)`.
 
 Each candidate's fingerprint is on the line below it: copy it verbatim into the context's `shadow-specs.yaml`
 with `resolution: { rule: <ID> }` or `resolution: { notARule: "<reason>" }`. The file is read on every run, so an
 edit shows at once; the candidates themselves refresh on `ctxo index` (not under `ctxo watch`). Output is not
 masked, as for `ctxo contexts --json`.
 
-**Exit codes (map and shadow-specs):** 0 done or no registry, 1 bad arguments, an unknown kind or an unknown
-context, 2 registry problems or no index data (`[ctxo] No context map yet; run "ctxo index".`,
-`[ctxo] No shadow-spec data yet; run "ctxo index".`).
+**Exit codes (map and shadow-specs):**
+
+| Exit | When |
+| --- | --- |
+| 0 | Done, or no registry (a hint is printed) |
+| 1 | Bad arguments, an unknown kind or an unknown context |
+| 2 | Registry problems; no index data (`[ctxo] No context map yet; run "ctxo index".`, `[ctxo] No shadow-spec data yet; run "ctxo index".`); index data built from another registry (`[ctxo] The domain registry changed since the last "ctxo index"; run it to rebuild the domain graph.`); an internal error (`[ctxo] domain <name> failed: <message>`) |
 
 ## See also
 

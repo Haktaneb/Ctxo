@@ -35,80 +35,72 @@ every call.
 
 ## Response
 
-From a synthetic library-lending project (TypeScript), with no `shadow-specs.yaml` yet:
+From the in-repo library-lending sample, TypeScript variant
+(`packages/domain/test-fixtures/library-lending/typescript`), copied to a temp folder, made a git repository and
+indexed with `ctxo index` (`_meta.workspace` trimmed). The sample's `docs/domain/lending/shadow-specs.yaml` already
+resolves two candidates:
+
+```yaml
+- fingerprint: "literal-comparison | renewal-policy.canRenew | loanPeriods >= 2"
+  resolution: { rule: LEND-05 }
+- fingerprint: "normalization | member-directory.memberKey | email.trim()"
+  resolution: { notARule: "input cleanup, not a business rule" }
+```
+
+`{ "context": "lending" }` returns the four open candidates:
 
 ```json
 {
   "context": { "id": "lending", "name": "Lending", "rung": "pinned" },
   "counts": {
-    "open": 6,
-    "resolved": 0,
+    "open": 4,
+    "resolved": 7,
     "byKind": {
-      "literal-comparison": { "open": 1, "resolved": 0 },
-      "normalization": { "open": 2, "resolved": 0 },
-      "retry-timeout": { "open": 1, "resolved": 0 },
-      "endpoint": { "open": 1, "resolved": 0 },
-      "rule-without-tests": { "open": 1, "resolved": 0 }
+      "literal-comparison": { "open": 0, "resolved": 1 },
+      "normalization": { "open": 1, "resolved": 1 },
+      "endpoint": { "open": 1, "resolved": 1 },
+      "data-resource": { "open": 1, "resolved": 0 },
+      "procedure": { "open": 1, "resolved": 0 },
+      "rule-without-tests": { "open": 0, "resolved": 4 }
     }
   },
   "shadowSpecs": [
     {
-      "fingerprint": "rule-without-tests | LEND-04 | A hold expires after seven days",
-      "kind": "rule-without-tests",
-      "file": "docs/domain/lending/domain.md",
-      "line": 12,
-      "ruleId": "LEND-04",
-      "text": "LEND-04 A hold expires after seven days",
-      "source": "card"
-    },
-    {
-      "fingerprint": "retry-timeout | loan-policy.HOLD_TIMEOUT_MS | HOLD_TIMEOUT_MS = 604800000",
-      "kind": "retry-timeout",
-      "file": "src/lending/loan-policy.ts",
+      "fingerprint": "data-resource | dbo.loans | table dbo.loans",
+      "kind": "data-resource",
+      "file": "db/migrations/lending/001_create_loans.sql",
       "line": 1,
-      "symbolId": "src/lending/loan-policy.ts::HOLD_TIMEOUT_MS::variable",
-      "text": "HOLD_TIMEOUT_MS = 604800000",
-      "detail": { "name": "HOLD_TIMEOUT_MS", "value": "604800000" },
-      "source": "native"
+      "symbolId": "db/migrations/lending/001_create_loans.sql::dbo.loans::table",
+      "text": "table dbo.loans",
+      "source": "index"
     },
     {
-      "fingerprint": "literal-comparison | loan-policy.canBorrow | loans.length >= 5",
-      "kind": "literal-comparison",
-      "file": "src/lending/loan-policy.ts",
-      "line": 4,
-      "symbolId": "src/lending/loan-policy.ts::canBorrow::function",
-      "text": "loans.length >= 5",
-      "detail": { "operator": ">=", "literal": "5" },
-      "source": "native"
+      "fingerprint": "procedure | dbo.usp_closeloan | procedure dbo.usp_closeloan",
+      "kind": "procedure",
+      "file": "db/migrations/lending/001_create_loans.sql",
+      "line": 10,
+      "symbolId": "db/migrations/lending/001_create_loans.sql::dbo.usp_closeloan::procedure",
+      "text": "procedure dbo.usp_closeloan",
+      "source": "index"
     },
     {
-      "fingerprint": "normalization | loan-policy.memberKey | email.trim()",
-      "kind": "normalization",
-      "file": "src/lending/loan-policy.ts",
-      "line": 9,
-      "symbolId": "src/lending/loan-policy.ts::memberKey::function",
-      "text": "email.trim()",
-      "detail": { "method": "trim" },
-      "source": "native"
-    },
-    {
-      "fingerprint": "normalization | loan-policy.memberKey | email.trim().toLowerCase()",
-      "kind": "normalization",
-      "file": "src/lending/loan-policy.ts",
-      "line": 9,
-      "symbolId": "src/lending/loan-policy.ts::memberKey::function",
-      "text": "email.trim().toLowerCase()",
-      "detail": { "method": "toLowerCase" },
-      "source": "native"
-    },
-    {
-      "fingerprint": "endpoint | routes.routes | GET /loans/:id",
+      "fingerprint": "endpoint | LoansController.find | GET /loans/:id",
       "kind": "endpoint",
-      "file": "src/lending/routes.ts",
-      "line": 5,
-      "symbolId": "src/lending/routes.ts::routes::variable",
+      "file": "src/lending/api/loans.controller.ts",
+      "line": 8,
+      "symbolId": "src/lending/api/loans.controller.ts::LoansController.find::method",
       "text": "GET /loans/:id",
       "detail": { "verb": "GET", "route": "/loans/:id" },
+      "source": "native"
+    },
+    {
+      "fingerprint": "normalization | member-directory.memberKey | email.trim().toLowerCase()",
+      "kind": "normalization",
+      "file": "src/lending/member-directory.ts",
+      "line": 2,
+      "symbolId": "src/lending/member-directory.ts::memberKey::function",
+      "text": "email.trim().toLowerCase()",
+      "detail": { "method": "toLowerCase" },
       "source": "native"
     }
   ],
@@ -116,24 +108,13 @@ From a synthetic library-lending project (TypeScript), with no `shadow-specs.yam
   "staleResolutions": [],
   "unknownRules": [],
   "resolutionProblems": [],
-  "_meta": { "totalItems": 6, "returnedItems": 6, "truncated": false }
+  "_meta": { "totalItems": 4, "returnedItems": 4, "truncated": false, "totalBytes": 1666 }
 }
 ```
 
-After the team writes `docs/domain/lending/shadow-specs.yaml`:
-
-```yaml
-- fingerprint: "literal-comparison | loan-policy.canBorrow | loans.length >= 5"
-  resolution: { rule: lend03 }
-- fingerprint: "normalization | loan-policy.memberKey | email.trim()"
-  resolution: { notARule: "input hygiene, not a business rule" }
-- fingerprint: "literal-comparison | loan-policy.canBorrow | loans.length >= 3"
-  resolution: { rule: LEND-03 }
-- fingerprint: "endpoint | routes.routes | GET /loans/:id"
-  resolution: { rule: LEND-99 }
-```
-
-`{ "context": "lending", "kinds": ["literal-comparison"], "includeResolved": true }` gives:
+The seven resolved ones are hidden: four rules without tests carry an `Untested:` line, the `POST /loans` endpoint
+is linked to LEND-03 by a card `Code:` line, and the two entries above resolve the rest.
+`{ "context": "lending", "kinds": ["literal-comparison"], "includeResolved": true }` shows one of them:
 
 ```json
 {
@@ -141,28 +122,40 @@ After the team writes `docs/domain/lending/shadow-specs.yaml`:
   "counts": { "open": 0, "resolved": 1, "byKind": { "literal-comparison": { "open": 0, "resolved": 1 } } },
   "shadowSpecs": [
     {
-      "fingerprint": "literal-comparison | loan-policy.canBorrow | loans.length >= 5",
+      "fingerprint": "literal-comparison | renewal-policy.canRenew | loanPeriods >= 2",
       "kind": "literal-comparison",
-      "file": "src/lending/loan-policy.ts",
-      "line": 4,
-      "symbolId": "src/lending/loan-policy.ts::canBorrow::function",
-      "text": "loans.length >= 5",
-      "detail": { "operator": ">=", "literal": "5" },
+      "file": "src/lending/renewal-policy.ts",
+      "line": 6,
+      "symbolId": "src/lending/renewal-policy.ts::canRenew::function",
+      "text": "loanPeriods >= 2",
+      "detail": { "operator": ">=", "literal": "2" },
       "source": "native",
-      "resolution": { "by": "shadow-specs", "rule": "LEND-03" }
+      "resolution": { "by": "shadow-specs", "rule": "LEND-05" }
     }
   ],
   "resolutionFile": "docs/domain/lending/shadow-specs.yaml",
-  "staleResolutions": [{ "fingerprint": "literal-comparison | loan-policy.canBorrow | loans.length >= 3", "line": 6 }],
-  "unknownRules": [{ "fingerprint": "endpoint | routes.routes | GET /loans/:id", "rule": "LEND-99", "line": 8 }],
+  "staleResolutions": [],
+  "unknownRules": [],
   "resolutionProblems": [],
-  "_meta": { "totalItems": 1, "returnedItems": 1, "truncated": false }
+  "_meta": { "totalItems": 1, "returnedItems": 1, "truncated": false, "totalBytes": 645 }
 }
 ```
 
-The rule `lend03` is canonicalized to `LEND-03`. The `loans.length >= 3` entry is stale: the literal changed, so its
-fingerprint matches nothing (and `ctxo verify-domain` check 12 warns). `LEND-99` is defined by no card, so that
-entry resolves nothing and the endpoint stays open.
+Change the limit in `renewal-policy.ts` to `loanPeriods >= 3` and run `ctxo index` again: the fingerprint changes,
+so the candidate reopens and the old entry is stale (`ctxo verify-domain` check 12 warns about it):
+
+```json
+{
+  "counts": { "open": 1, "resolved": 0, "byKind": { "literal-comparison": { "open": 1, "resolved": 0 } } },
+  "shadowSpecs": [
+    { "fingerprint": "literal-comparison | renewal-policy.canRenew | loanPeriods >= 3", "line": 6, "source": "native" }
+  ],
+  "staleResolutions": [{ "fingerprint": "literal-comparison | renewal-policy.canRenew | loanPeriods >= 2", "line": 3 }]
+}
+```
+
+(trimmed to the changed fields). In the C# variant the same candidate is
+`literal-comparison | RenewalPolicy.CanRenew | loanPeriods >= 2`.
 
 | Field | Meaning |
 | --- | --- |
@@ -200,11 +193,14 @@ for the fingerprint rules and the file format.
 
 | Situation | Response |
 | --- | --- |
-| No registry | `{ "found": false, "hint": "..." }` |
-| A registry with problems | `{ "found": false, "hint": "..." }` (run `ctxo verify-domain`) |
-| A context the registry does not name, or a blank one | `{ "found": false, "hint": "No context <id> in the registry; get_context_map lists the contexts." }` |
+| No registry | `{ "found": false, "hint": "No domain registry at docs/domain/contexts.yaml. Create one with \"ctxo init --domain\"." }` |
+| A registry with problems | `{ "found": false, "hint": "The domain registry at <path> has problems; run \"ctxo verify-domain\"." }` |
+| No domain graph | `{ "found": false, "hint": "No domain graph yet; run \"ctxo index\"." }` |
+| The registry changed since the last index (the graph was built from another registry) | `{ "found": false, "hint": "The domain registry changed since the last \"ctxo index\"; run it to rebuild the domain graph." }` |
 | No loop artifacts (not indexed with this release) | `{ "found": false, "hint": "No shadow-spec data yet; run \"ctxo index\"." }` |
-| Artifacts built for another registry, or cards changed since the last index | The answer, plus `stale: true` and a hint to run `ctxo index` |
+| A context the registry does not name | `{ "found": false, "hint": "No context <id> in the registry; get_context_map lists the contexts." }` |
+| A blank `context` (empty or whitespace) | Rejected by the input schema (an MCP input validation error) |
+| A loop artifact built for another registry than the current graph, or cards changed since the last index | The answer, plus `stale: true` and a hint to run `ctxo index` |
 | An unexpected failure | `{ "error": true, "message": "The shadow-spec data could not be read: ..." }` |
 
 ## Truncation

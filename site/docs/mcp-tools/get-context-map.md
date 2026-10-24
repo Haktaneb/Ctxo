@@ -24,7 +24,10 @@ None.
 
 ## Response
 
-From a synthetic library-lending project (TypeScript) with two contexts:
+From the in-repo library-lending sample, TypeScript variant
+(`packages/domain/test-fixtures/library-lending/typescript`), copied to a temp folder, made a git repository and
+indexed with `ctxo index`. Lending is shown in full; Billing and Catalog are trimmed to their rungs and criteria
+(`_meta.workspace` trimmed):
 
 ```json
 {
@@ -33,63 +36,55 @@ From a synthetic library-lending project (TypeScript) with two contexts:
       "id": "lending",
       "name": "Lending",
       "rung": "pinned",
-      "suggestedRung": "fear",
+      "suggestedRung": "pinned",
       "card": { "path": "docs/domain/lending/domain.md", "present": true },
-      "rules": { "count": 2, "withTests": 1, "share": 0.5 },
+      "rules": { "count": 5, "withTests": 1, "share": 0.2 },
       "tests": { "characterization": 1, "contract": 0 },
-      "crossContextEdges": { "in": 0, "out": 0 },
+      "crossContextEdges": { "in": 2, "out": 2 },
       "coChange": { "pairs": 0, "top": [] },
-      "drift": null,
-      "boundaryViolations": { "total": 0, "errors": 0, "warnings": 0 },
-      "shadowSpecs": { "open": 4, "resolved": 2 },
+      "drift": { "crossShare": { "current": 0.118 }, "movedFiles": 0, "distinctCommits": 1, "confidence": "low" },
+      "boundaryViolations": { "total": 2, "errors": 0, "warnings": 2 },
+      "shadowSpecs": { "open": 4, "resolved": 7 },
       "criteria": {
-        "pinned": {
-          "met": false,
-          "mainPaths": 1,
-          "reached": 0,
-          "coverage": 0,
-          "threshold": 0.8,
-          "characterizationTests": 1,
-          "unreached": ["src/lending/routes.ts::routes::variable"]
-        },
-        "named": { "met": false, "card": true, "terms": 1, "inGlossary": 0, "missing": ["Loan"] },
-        "bounded": { "met": true, "contractSymbols": 0, "reached": 0, "unreached": [], "boundaryViolations": 0 },
-        "boring": { "met": false, "rules": 2, "rulesWithoutTests": 1, "openCandidates": 4 }
+        "pinned": { "met": true, "mainPaths": 2, "reached": 2, "coverage": 1, "threshold": 0.8, "characterizationTests": 1, "unreached": [] },
+        "named": { "met": false, "card": true, "terms": 4, "inGlossary": 1, "missing": ["Member account", "Account", "Fine"] },
+        "bounded": { "met": false, "contractSymbols": 0, "reached": 0, "unreached": [], "boundaryViolations": 2 },
+        "boring": { "met": false, "rules": 5, "rulesWithoutTests": 4, "openCandidates": 4 }
       },
       "boundariesKnown": true
     },
     {
       "id": "billing",
       "name": "Billing",
+      "rung": "bounded",
+      "suggestedRung": "bounded",
+      "criteria": {
+        "pinned": { "met": true, "mainPaths": 1, "reached": 1, "coverage": 1, "threshold": 0.8, "characterizationTests": 1, "unreached": [] },
+        "named": { "met": true, "card": true, "terms": 1, "inGlossary": 1, "missing": [] },
+        "bounded": { "met": true, "contractSymbols": 1, "reached": 1, "unreached": [], "boundaryViolations": 0 },
+        "boring": { "met": false, "rules": 3, "rulesWithoutTests": 3, "openCandidates": 4 }
+      }
+    },
+    {
+      "id": "catalog",
+      "name": "Catalog",
       "rung": "fear",
       "suggestedRung": "fear",
       "card": { "present": false },
       "rules": { "count": 0, "withTests": 0, "share": null },
-      "tests": { "characterization": 0, "contract": 0 },
-      "crossContextEdges": { "in": 0, "out": 0 },
-      "coChange": { "pairs": 0, "top": [] },
-      "drift": null,
-      "boundaryViolations": { "total": 0, "errors": 0, "warnings": 0 },
-      "shadowSpecs": { "open": 1, "resolved": 0 },
-      "criteria": {
-        "pinned": { "met": false, "mainPaths": 0, "reached": 0, "coverage": null, "threshold": 0.8, "characterizationTests": 0, "unreached": [] },
-        "named": { "met": false, "card": false, "terms": 0, "inGlossary": 0, "missing": [] },
-        "bounded": { "met": true, "contractSymbols": 0, "reached": 0, "unreached": [], "boundaryViolations": 0 },
-        "boring": { "met": false, "rules": 0, "rulesWithoutTests": 0, "openCandidates": 1 }
-      },
-      "boundariesKnown": true
+      "boundaryViolations": { "total": 2, "errors": 0, "warnings": 2 }
     }
   ],
-  "summary": { "contexts": 2, "agree": 1, "suggestedAbove": 0, "suggestedBelow": 1 },
+  "summary": { "contexts": 3, "agree": 3, "suggestedAbove": 0, "suggestedBelow": 0 },
   "settings": { "pinnedCoverage": 0.8 },
-  "_meta": { "totalItems": 2, "returnedItems": 2, "truncated": false }
+  "_meta": { "totalItems": 3, "returnedItems": 3, "truncated": false, "totalBytes": 2753 }
 }
 ```
 
-Lending's characterization test calls `canBorrow`, but its one main path is the Express route registered in
-top-level code (the module symbol of `routes.ts`), which the test does not reach in the graph, so `pinned` is not
-met and the suggestion stays at `fear`. Each criterion is still reported: `bounded` holds, `named` misses a glossary
-entry for `Loan`, and `boring` waits for one untested rule and four open candidates.
+Lending's characterization test reaches both main paths, so `pinned` is met and agrees with the owner's rung.
+Every higher criterion is still reported: `named` misses glossary entries for three card terms, `bounded` fails on
+two boundary violations (a Catalog edge into Lending outside its contracts), and `boring` waits for four untested
+rules and four open candidates. Billing's contract test reaches its one contract symbol, so `bounded` holds.
 
 | Field | Meaning |
 | --- | --- |
@@ -123,10 +118,11 @@ create no graph edges, so a context tested only that way can stay below `pinned`
 
 | Situation | Response |
 | --- | --- |
-| No registry, or a registry with problems | `{ "found": false, "hint": "..." }` |
+| No registry, a registry with problems, or no domain graph | `{ "found": false, "hint": "..." }` (the same hints as [`find_shadow_specs`](/mcp-tools/find-shadow-specs#graceful-misses)) |
+| The registry changed since the last index (the graph was built from another registry) | `{ "found": false, "hint": "The domain registry changed since the last \"ctxo index\"; run it to rebuild the domain graph." }` |
 | No loop artifacts (not indexed with this release) | `{ "found": false, "hint": "No shadow-spec data yet; run \"ctxo index\"." }` |
 | No `boundaries.json` | The map, with `boundariesKnown: false` and a hint |
-| Artifacts built for another registry, or cards changed since the last index | The map, plus `stale: true` and a hint to run `ctxo index` |
+| A loop artifact built for another registry than the current graph, or cards changed since the last index | The map, plus `stale: true` and a hint to run `ctxo index` |
 | An unexpected failure | `{ "error": true, "message": "..." }` |
 
 ## Truncation

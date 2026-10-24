@@ -10,8 +10,9 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (ten packages today). Per-pack
 
 ### Added (agentic loop)
 
-- Fact detectors in the four official plugins, in both tiers: `literal-comparison`, `normalization`,
-  `retry-timeout` and `endpoint` facts from ts-morph (TypeScript), Roslyn IOperation and tree-sitter (C#), JDT and
+- Fact detectors in the four official plugins, in every tier they have (both tiers of C#, Java and Go; ts-morph,
+  the only TypeScript tier): `literal-comparison`, `normalization`, `retry-timeout` and `endpoint` facts from
+  ts-morph (TypeScript), Roslyn IOperation and tree-sitter (C#), JDT and
   tree-sitter (Java) and ctxo-go-analyzer and tree-sitter (Go). One shared rule set (identical `src/facts/` copies,
   checked by a drift test) and the conformance vectors in `packages/plugin-api/conformance/fact-vectors.json` define
   conditions, literal forms, the typed trivial-literal list, normalization patterns, retry and timeout names on
@@ -33,12 +34,15 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (ten packages today). Per-pack
   14 core tools, 18 with `@ctxo/domain`.
 - `ctxo domain map [--json]` and `ctxo domain shadow-specs <context> [--kinds <k,...>] [--all] [--json]`: the CLI
   faces of the two tools (the same bodies without `_meta`); exit 0 done or no registry, 1 bad arguments or an
-  unknown context, 2 registry problems or no index data.
+  unknown context, 2 registry problems, no index data, index data built from another registry (the stale-registry
+  hint) or an internal error (`[ctxo] domain <name> failed: <message>`). Repeated `--kinds` options add up.
 - `<registry folder>/<context>/shadow-specs.yaml`: hand-written resolutions by fingerprint (`{ rule: <ID> }` or
   `{ notARule: "<reason>" }`), with the JSON Schema `packages/domain/schema/shadow-specs.schema.json` in the npm
   package. It is read on every call, so an edit needs no re-index.
 - `ctxo verify-domain` check 12, "Shadow-spec resolutions" (twelve checks now): a `shadow-specs.yaml` that does
   not parse is an error; stale entries, unknown rules and a `shadow-specs.yaml` outside every context are warnings.
+  When the candidates cannot be built and some file has entries, one warning `stale resolutions were not checked:
+  <reason>` replaces the stale findings (exit stays 0).
 - `ctxo index` writes `.ctxo/index/domain/shadow-candidates.json` and `.ctxo/index/domain/maturity.json`
   (`ctxoArtifact` markers, rewritten only when their content changed).
 - Config: `domain.facts` (`trivialLiterals`, `normalizationMethods`, `textScanExtensions`), the K13a conventions
