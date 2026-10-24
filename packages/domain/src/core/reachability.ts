@@ -16,6 +16,8 @@ export interface ReachGraph {
   readonly containerOf: ReadonlyMap<string, string>;
   /** The indexed symbols per file (forward slashes), in codepoint order. */
   readonly symbolsByFile: ReadonlyMap<string, readonly string[]>;
+  /** Every indexed symbol ID, the union of `symbolsByFile` (a module symbol is not in it). */
+  readonly indexed: ReadonlySet<string>;
 }
 
 export type ReachedVia = 'symbol' | 'type' | 'file';
@@ -29,11 +31,7 @@ function fileOf(symbolId: string): string {
   return norm(sep < 0 ? symbolId : symbolId.slice(0, sep));
 }
 
-type Offsets = { readonly start: number; readonly end: number };
-
-function offsetsOf(symbol: SymbolNode): Offsets | undefined {
-  return symbol.startOffset !== undefined && symbol.endOffset !== undefined ? { start: symbol.startOffset, end: symbol.endOffset } : undefined;
-}
+const hasOffsets = (s: SymbolNode): boolean => s.startOffset !== undefined && s.endOffset !== undefined;
 
 /**
  * True when `outer` contains `inner`. Lines decide first; on the same lines character offsets decide when both
@@ -43,11 +41,9 @@ function offsetsOf(symbol: SymbolNode): Offsets | undefined {
 function contains(outer: SymbolNode, inner: SymbolNode): boolean {
   if (outer.symbolId === inner.symbolId) return false;
   if (outer.startLine > inner.startLine || outer.endLine < inner.endLine) return false;
-  const o = offsetsOf(outer);
-  const i = offsetsOf(inner);
-  if (o !== undefined && i !== undefined) {
-    if (o.start > i.start || o.end < i.end) return false;
-    if (o.start !== i.start || o.end !== i.end) return true;
+  if (hasOffsets(outer) && hasOffsets(inner)) {
+    if (outer.startOffset! > inner.startOffset! || outer.endOffset! < inner.endOffset!) return false;
+    if (outer.startOffset !== inner.startOffset || outer.endOffset !== inner.endOffset) return true;
   } else if (spanLength(outer) !== spanLength(inner)) {
     return true;
   }
@@ -58,22 +54,59 @@ function contains(outer: SymbolNode, inner: SymbolNode): boolean {
 function innerFirst(a: SymbolNode, b: SymbolNode): number {
   const lines = spanLength(a) - spanLength(b);
   if (lines !== 0) return lines;
-  const oa = offsetsOf(a);
-  const ob = offsetsOf(b);
-  if (oa !== undefined && ob !== undefined && oa.end - oa.start !== ob.end - ob.start) return oa.end - oa.start - (ob.end - ob.start);
+  if (hasOffsets(a) && hasOffsets(b)) {
+    const chars = a.endOffset! - a.startOffset! - (b.endOffset! - b.startOffset!);
+    if (chars !== 0) return chars;
+  }
   return compare(a.symbolId, b.symbolId);
 }
 
-/** The innermost container of each symbol (`contains`, then `innerFirst`). */
-function containers(index: FileIndex, out: Map<string, string>): void {
-  for (const symbol of index.symbols) {
+/** The definition: every pair, O(F^2). Used for files the sweep cannot take. */
+function pairwiseContainers(symbols: readonly SymbolNode[], out: Map<string, string>): void {
+  for (const symbol of symbols) {
     let best: SymbolNode | undefined;
-    for (const other of index.symbols) {
+    for (const other of symbols) {
       if (!contains(other, symbol)) continue;
       if (best === undefined || innerFirst(other, best) < 0) best = other;
     }
     if (best !== undefined) out.set(symbol.symbolId, best.symbolId);
   }
+}
+
+/**
+ * The innermost container of each symbol (`contains`, then `innerFirst`) in O(F log F): sort by start, wider span
+ * first, then ID, and sweep with a stack of open spans. The coordinate is the character offset when every symbol
+ * of the file carries offsets, else the line. On nested spans the stack top is the innermost container, and among
+ * equal spans the smallest ID is the container of the others (only it stays on the stack). A file with spans that
+ * overlap without nesting, or with offsets on some symbols only, takes the pairwise definition, so the result is
+ * always the pairwise one.
+ */
+function containers(index: FileIndex, out: Map<string, string>): void {
+  const symbols = index.symbols;
+  const withOffsets = symbols.filter(hasOffsets).length;
+  if (withOffsets !== 0 && withOffsets !== symbols.length) return pairwiseContainers(symbols, out);
+  const byChars = withOffsets !== 0;
+  const start = (s: SymbolNode): number => (byChars ? s.startOffset! : s.startLine);
+  const end = (s: SymbolNode): number => (byChars ? s.endOffset! : s.endLine);
+  const sorted = [...symbols].sort((a, b) => start(a) - start(b) || end(b) - end(a) || compare(a.symbolId, b.symbolId));
+
+  const found = new Map<string, string>();
+  const stack: SymbolNode[] = [];
+  for (const symbol of sorted) {
+    while (stack.length > 0 && !contains(stack[stack.length - 1]!, symbol)) {
+      const closed = stack.pop()!;
+      // Overlap without nesting: the stack no longer describes containment.
+      if (end(closed) >= start(symbol)) return pairwiseContainers(symbols, out);
+    }
+    const top = stack[stack.length - 1];
+    if (top !== undefined) {
+      found.set(symbol.symbolId, top.symbolId);
+      // An equal span: the top stays the container of everything inside both.
+      if (start(top) === start(symbol) && end(top) === end(symbol)) continue;
+    }
+    stack.push(symbol);
+  }
+  for (const [id, container] of found) out.set(id, container);
 }
 
 /** H8: the forward code edges of the graph (targets resolved to node IDs) and the containment of the indices. */
@@ -100,8 +133,13 @@ export function buildReachGraph(graph: SymbolGraph, indices: readonly FileIndex[
     byFile.set(file, set);
   }
   const symbolsByFile = new Map<string, readonly string[]>();
-  for (const file of [...byFile.keys()].sort(compare)) symbolsByFile.set(file, [...byFile.get(file)!].sort(compare));
-  return { successors, containerOf, symbolsByFile };
+  const indexed = new Set<string>();
+  for (const file of [...byFile.keys()].sort(compare)) {
+    const ids = [...byFile.get(file)!].sort(compare);
+    symbolsByFile.set(file, ids);
+    for (const id of ids) indexed.add(id);
+  }
+  return { successors, containerOf, symbolsByFile, indexed };
 }
 
 /** Every symbol a walk from the tests visits; a test with no successors starts from its container as well. */
@@ -132,7 +170,6 @@ export function reachedVia(reach: ReachGraph, visited: ReadonlySet<string>, symb
   if (visited.has(symbolId)) return 'symbol';
   const container = reach.containerOf.get(symbolId);
   if (container !== undefined && visited.has(container)) return 'type';
-  const inFile = reach.symbolsByFile.get(fileOf(symbolId)) ?? [];
-  if (!inFile.includes(symbolId) && inFile.some((id) => visited.has(id))) return 'file';
+  if (!reach.indexed.has(symbolId) && (reach.symbolsByFile.get(fileOf(symbolId)) ?? []).some((id) => visited.has(id))) return 'file';
   return undefined;
 }

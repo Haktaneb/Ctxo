@@ -87,12 +87,7 @@ function reversed(reach: ReachGraph): Map<string, string[]> {
  * Every symbol whose forward walk visits an ID that makes `reachedVia` succeed for one of the main paths: the
  * path itself, its container (`type`), and for a module symbol every symbol of its file (`file`).
  */
-function reachers(
-  reach: ReachGraph,
-  predecessors: ReadonlyMap<string, readonly string[]>,
-  indexed: ReadonlySet<string>,
-  mainPaths: readonly string[],
-): Set<string> {
+function reachers(reach: ReachGraph, predecessors: ReadonlyMap<string, readonly string[]>, mainPaths: readonly string[]): Set<string> {
   const seen = new Set<string>();
   const queue: string[] = [];
   const add = (id: string): void => {
@@ -104,7 +99,7 @@ function reachers(
     add(id);
     const container = reach.containerOf.get(id);
     if (container !== undefined) add(container);
-    if (!indexed.has(id)) for (const other of reach.symbolsByFile.get(fileOf(id)) ?? []) add(other);
+    if (!reach.indexed.has(id)) for (const other of reach.symbolsByFile.get(fileOf(id)) ?? []) add(other);
   }
   for (let i = 0; i < queue.length; i++) for (const from of predecessors.get(queue[i]!) ?? []) add(from);
   return seen;
@@ -183,11 +178,9 @@ export function buildMaturityFacts(input: MaturityInput): ContextMaturityFacts[]
     if (owner === undefined) unownedCases.add(test);
   }
   const predecessors = unownedCases.size === 0 ? new Map<string, string[]>() : reversed(reach);
-  const indexed = new Set<string>();
-  if (unownedCases.size > 0) for (const ids of reach.symbolsByFile.values()) for (const id of ids) indexed.add(id);
   const countsOf = new Map<string, { characterization: number; contract: number }>();
   for (const context of contextIds) {
-    const reaching = unownedCases.size === 0 ? new Set<string>() : reachers(reach, predecessors, indexed, mainPathsOf.get(context)!);
+    const reaching = unownedCases.size === 0 ? new Set<string>() : reachers(reach, predecessors, mainPathsOf.get(context)!);
     const counts = (kind: ReadonlySet<string>): number => {
       let count = 0;
       for (const test of kind) {

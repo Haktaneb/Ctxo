@@ -279,12 +279,15 @@ describe('buildMaturityFacts', () => {
   });
 
   it('test counts equal one walk per test (W17) on the fixtures', () => {
-    for (const fixture of [sampleFixture(), multiOwnedFixture()]) {
+    for (const fixture of [sampleFixture(), multiOwnedFixture(), edgeShapesFixture()]) {
       const input = prepare(fixture);
       const facts = buildMaturityFacts(input);
       expect(countsOf(facts)).toEqual(referenceCounts(input, facts));
     }
     expect(countsOf(run(sampleFixture()))).toEqual({ lending: { characterization: 1, contract: 0 }, billing: { characterization: 1, contract: 1 } });
+    // lending: LoanFlow, JdtTests.Case (through its class) and cycleCase (a -> b -> a -> Loans.Get);
+    // billing: ChargeFlow and reachesModule (a symbol of the file whose endpoint is the module symbol).
+    expect(countsOf(run(edgeShapesFixture()))).toEqual({ lending: { characterization: 3, contract: 0 }, billing: { characterization: 2, contract: 1 } });
   });
 
   it('a test file owned by two contexts counts for each owner it reaches, not for its first owner', () => {
@@ -351,6 +354,39 @@ describe('buildMaturityFacts', () => {
     expect(elapsed).toBeLessThan(1000);
   });
 });
+
+/** Unowned tests that start from their class, reach a module-symbol endpoint via file, and pass through a cycle. */
+function edgeShapesFixture(): Fixture {
+  const base = sampleFixture();
+  const jdt = 'tests/Characterization/JdtTests.cs';
+  const moduleFile = 'src/Billing/Web/Module.ts';
+  const moduleTest = 'tests/Characterization/ModuleFlow.test.ts';
+  const cycleFile = 'src/Lending/Cycle.ts';
+  const cycleTest = 'tests/Characterization/CycleTests.ts';
+  const a = `${cycleFile}::a::function`;
+  const b = `${cycleFile}::b::function`;
+  return {
+    ...base,
+    indices: [
+      ...base.indices,
+      // JDT shape: the test method has no edges, its class uses the main path.
+      fileIndex(jdt, [sym(jdt, 'JdtTests', 'class', 0, 20), sym(jdt, 'JdtTests.Case', 'method', 2, 6)], [
+        { from: `${jdt}::JdtTests::class`, to: LOANS_GET, kind: 'uses' },
+      ]),
+      fileIndex(moduleFile, [sym(moduleFile, 'handler', 'function', 2, 8)]),
+      fileIndex(moduleTest, [sym(moduleTest, 'reachesModule', 'function', 0, 4)], [
+        { from: `${moduleTest}::reachesModule::function`, to: `${moduleFile}::handler::function`, kind: 'calls' },
+      ]),
+      fileIndex(cycleFile, [sym(cycleFile, 'a', 'function', 0, 3), sym(cycleFile, 'b', 'function', 4, 7)], [
+        { from: a, to: b, kind: 'calls' },
+        { from: b, to: a, kind: 'calls' },
+        { from: b, to: LOANS_GET, kind: 'calls' },
+      ]),
+      fileIndex(cycleTest, [sym(cycleTest, 'cycleCase', 'function', 0, 4)], [{ from: `${cycleTest}::cycleCase::function`, to: a, kind: 'calls' }]),
+    ],
+    facts: [...base.facts, [moduleFile, [endpoint(moduleFile, `${moduleFile}::<module>::variable`)]]],
+  };
+}
 
 function multiOwnedFixture(): Fixture {
   const shared = 'src/Shared/tests/Characterization/SharedFlow.cs';
