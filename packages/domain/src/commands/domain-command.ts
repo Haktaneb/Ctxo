@@ -9,6 +9,7 @@ import { resolveDomainConfig } from '../core/domain-config.js';
 import { diffLoaderRules, renderLoaderRules } from '../core/loader-rules.js';
 import type { ContextMapView } from '../core/context-map.js';
 import { CANDIDATE_KINDS, type CandidateKind, type CandidateResolution } from '../core/shadow-candidates.js';
+import { quoteFingerprint } from '../core/shadow-specs-file.js';
 import { createDomainState, type DomainState } from '../mcp/domain-state.js';
 import { createLoopState, type LoopSnapshot, type LoopStateFailure } from '../mcp/loop-state.js';
 import { contextMapAnswer, shadowSpecsAnswer } from '../mcp/loop-tools.js';
@@ -27,7 +28,8 @@ const USAGE = [
   '  map            The context map from the last "ctxo index": per context its rung, the suggested rung, rules with tests, open shadow-spec candidates and the rung criteria; --json prints the get_context_map body',
   `  shadow-specs   The shadow-spec candidates of one context with fingerprints and resolutions; --kinds <k,...> keeps these kinds (${CANDIDATE_KINDS.join(', ')}), --all adds resolved ones, --json prints the find_shadow_specs body`,
   '',
-  'Exit codes (map, shadow-specs): 0 done or no registry, 1 bad arguments or an unknown context, 2 registry problems, no or stale index data (run "ctxo index") or an internal error.',
+  'Exit codes (map, shadow-specs): 0 done (stale data, such as cards edited since the last index, prints a hint and still exits 0) or no registry, ' +
+    '1 bad arguments or an unknown context, 2 registry problems, no index data or a graph built from another registry (run "ctxo index"), or an internal error.',
 ];
 
 const HELP_LINES = [
@@ -317,12 +319,12 @@ async function shadowSpecsBody(args: readonly string[], host: CtxoHost): Promise
   for (const candidate of view.shadowSpecs) {
     const state = candidate.resolution === undefined ? 'open' : 'resolved';
     console.error(`  ${state}  ${candidate.kind}  ${candidate.file}:${candidate.line}  ${candidate.text}${resolutionText(candidate.resolution)}`);
-    console.error(`      ${candidate.fingerprint}`);
+    console.error(`      ${quoteFingerprint(candidate.fingerprint)}`);
   }
   // Stale entries and unknown rules are separate reports, never summed (an entry can be in both).
-  for (const entry of view.staleResolutions) console.error(`  stale  ${entry.fingerprint} (line ${entry.line})`);
+  for (const entry of view.staleResolutions) console.error(`  stale  ${quoteFingerprint(entry.fingerprint)} (line ${entry.line})`);
   printMore(body, 'staleResolutions', view.staleResolutions.length, 'stale entries');
-  for (const entry of view.unknownRules) console.error(`  unknown rule  ${entry.rule}  ${entry.fingerprint} (line ${entry.line})`);
+  for (const entry of view.unknownRules) console.error(`  unknown rule  ${entry.rule}  ${quoteFingerprint(entry.fingerprint)} (line ${entry.line})`);
   printMore(body, 'unknownRules', view.unknownRules.length, 'unknown rules');
   for (const problem of view.resolutionProblems) {
     console.error(`  ${problem.severity}  ${view.resolutionFile}:${problem.line} ${problem.message}`);

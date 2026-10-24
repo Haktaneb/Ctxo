@@ -9,6 +9,7 @@ import type { ShadowCandidate } from '../shadow-candidates.js';
 import {
   applyResolutions,
   parseShadowSpecs,
+  quoteFingerprint,
   SHADOW_SPECS_FILE,
   shadowSpecsPath,
   type ResolutionEntry,
@@ -356,5 +357,31 @@ describe('shadow-specs.schema.json', () => {
       const parserOk = !parseShadowSpecs(text).problems.some((p) => p.message === 'the file must be a YAML list of { fingerprint, resolution } entries');
       expect([text, schemaOk]).toEqual([text, parserOk]);
     }
+  });
+});
+
+describe('quoteFingerprint (D-I1)', () => {
+  const tricky = [
+    fingerprint('literal-comparison', 'Loan.IsLate', 'status == "Overdue"'),
+    fingerprint('literal-comparison', 'Paths.Temp', 'dir == "C:\\temp"'),
+    fingerprint('literal-comparison', 'Names.Is', "name == 'it''s'"),
+    fingerprint('literal-comparison', 'Map.Get', 'a: b'),
+    fingerprint('literal-comparison', 'Size.Big', 'x > 5 # y'),
+    fingerprint('normalization', 'Key.Of', '`${a}`.trim()'),
+    fingerprint('literal-comparison', 'A.b', '- [x] {y} & *z ! %w @v'),
+  ];
+
+  it.each(tricky)('the single-quoted scalar pastes into shadow-specs.yaml and resolves the same fingerprint: %s', (fp) => {
+    const quoted = quoteFingerprint(fp);
+    expect(quoted.startsWith("'") && quoted.endsWith("'")).toBe(true);
+    expect(parseYaml(`fingerprint: ${quoted}\n`)).toEqual({ fingerprint: fp });
+    const parsed = parseShadowSpecs(`- fingerprint: ${quoted}\n  resolution: { notARule: x }\n`);
+    expect(parsed.problems).toEqual([]);
+    expect(parsed.entries.map((e) => e.fingerprint)).toEqual([fp]);
+  });
+
+  it('doubles a single quote and leaves everything else as it is', () => {
+    expect(quoteFingerprint("a | b | it's")).toBe("'a | b | it''s'");
+    expect(quoteFingerprint('a | b | "x\\y"')).toBe('\'a | b | "x\\y"\'');
   });
 });

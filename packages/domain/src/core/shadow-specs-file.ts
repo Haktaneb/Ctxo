@@ -163,6 +163,15 @@ function parseUnsafe(input: string): ParsedShadowSpecs {
   return { entries, problems: byLine(problems) };
 }
 
+/**
+ * A fingerprint as a YAML single-quoted scalar (`'...'`, a `'` written `''`), ready to paste after `fingerprint: `
+ * in `shadow-specs.yaml` (D-I1). Unlike a plain or a double-quoted scalar it holds `"`, `\`, `: `, ` #` and the flow
+ * indicators as they are; a fingerprint never holds a line break (its parts are whitespace-collapsed).
+ */
+export function quoteFingerprint(fingerprint: string): string {
+  return `'${fingerprint.replace(/'/g, "''")}'`;
+}
+
 /** `<dirname(registryPath)>/<context>/shadow-specs.yaml`, posix (`config/domain/contexts.yaml` gives `config/domain/<context>/...`). */
 export function shadowSpecsPath(registryPath: string, context: string): string {
   const slashed = registryPath.replace(/\\/g, '/');

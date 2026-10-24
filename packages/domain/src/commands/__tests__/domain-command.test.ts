@@ -418,11 +418,26 @@ describe('ctxo domain map and ctxo domain shadow-specs', () => {
     expect(stderr).toEqual([
       '[ctxo] lending: 1 open, 1 resolved shadow-spec candidates (docs/domain/lending/shadow-specs.yaml)',
       '  open  rule-without-tests  docs/domain/lending/domain.md:13  LEND-04 A loan lasts three weeks',
-      `      ${UNTESTED}`,
+      `      '${UNTESTED}'`,
       `  resolved  literal-comparison  ${POLICY_FILE}:3  loans.length >= 5  [rule LEND-03]`,
-      `      ${LITERAL}`,
-      '  stale  endpoint | Gone.handler | GET /gone (line 3)',
+      `      '${LITERAL}'`,
+      "  stale  'endpoint | Gone.handler | GET /gone' (line 3)",
     ]);
+  });
+
+  it('domain shadow-specs prints each fingerprint as a YAML single-quoted scalar that pastes back as is (D-I1)', async () => {
+    await loop.index();
+    stderr.length = 0;
+    expect(await runLoop('shadow-specs', 'lending')).toBe(0);
+    const quoted = stderr.filter((l) => l.startsWith("      '")).map((l) => l.trim());
+    expect(quoted).toHaveLength(2);
+    loop.write('docs/domain/lending/shadow-specs.yaml', quoted.map((q) => `- fingerprint: ${q}\n  resolution: { notARule: "pasted" }\n`).join(''));
+    stdout.length = 0;
+    expect(await runLoop('shadow-specs', 'lending', '--json')).toBe(0);
+    const body = printed();
+    expect(body['shadowSpecs']).toEqual([]);
+    expect(body['resolutionProblems']).toEqual([]);
+    expect(body['staleResolutions']).toEqual([]);
   });
 
   it('--kinds filters and an unknown kind exits 1', async () => {
@@ -495,6 +510,12 @@ describe('ctxo domain map and ctxo domain shadow-specs', () => {
       expect(text).toContain('       ctxo domain map [--json]');
       expect(text).toContain('       ctxo domain shadow-specs <context> [--kinds <k,...>] [--all] [--json]');
       expect(text).toContain('Exit codes (map, shadow-specs)');
+      // The help says what the code does (C-M): stale data answers with a hint and exit 0; a graph from another
+      // registry exits 2.
+      expect(text).toContain(
+        'Exit codes (map, shadow-specs): 0 done (stale data, such as cards edited since the last index, prints a hint and still exits 0) or no registry, ' +
+          '1 bad arguments or an unknown context, 2 registry problems, no index data or a graph built from another registry (run "ctxo index"), or an internal error.',
+      );
     }
     expect(stdout.join('')).toBe('');
   });
