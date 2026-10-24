@@ -170,7 +170,7 @@ The rest is evidence only, with no config key:
   card rule prefix. They no longer appear among the tracker-like keys.
 - **GitHub issues.** Subjects with an issue reference (`#N` at the start, `(#N)`, or after fixes, closes, refs and
   similar words; not `step #1`), with their share and the `(#N)` squash suffixes, and `N-slug` or `type/N-slug`
-  branches. When they outnumber every tracker-key family, the line names GitHub as the issue tracker.
+  branches. With at least 5 references that outnumber every tracker-key family, the line names GitHub as the issue tracker.
 - **Lowercase identifiers.** `name-NN` branch families seen in at least 3 branches, runtime names such as `node`
   left out; a family whose upper case is a known prefix is marked as a possible tracker key.
 
