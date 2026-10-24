@@ -11,9 +11,15 @@ import { runBatchAnalyze, type AnalyzerFactEvidence, type AnalyzerFileResult, ty
 import type { DurationUnit, FactEvidence, FactOptions, LiteralKind } from '../facts/fact-types.js';
 import { finishFacts } from '../facts/finish-facts.js';
 import { decodeGoStringLiteral } from '../facts/go-string-literal.js';
+import { GoAdapter } from '../go-adapter.js';
 
 const log = createLogger('ctxo:lang-go');
 const VALID_SYMBOL_ID = /^.+::.+::.+$/;
+
+/** The syntax-tier fact source for files whose bytes differ from the batch's (see `extractFacts`). */
+export interface GoSyntaxFacts {
+  extractFacts(filePath: string, source: string): Promise<CodeFact[]>;
+}
 
 /**
  * Full-tier Go adapter. Owns the analyzer binary lifecycle and an
@@ -37,9 +43,6 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
   private timedOut = false;
   private batchFailed = false;
   private batchPromise: Promise<void> | null = null;
-  /** The stale-evidence re-run in flight, and the one follow-up queued behind it (`requestRefresh`). */
-  private refreshRunning: Promise<boolean> | null = null;
-  private refreshQueued: Promise<boolean> | null = null;
   /** Set by `dispose`; a batch that finishes later is dropped. */
   private disposed = false;
   private initialized = false;
@@ -47,10 +50,13 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
   private sqlStats: { constant: number; nonConstant: number } | undefined;
   /** Fact detector options: set when the host requests facts; without them `extractFacts` returns `[]`. */
   readonly facts: FactOptions | undefined;
+  /** Facts of stale files: the composite's tree-sitter adapter, or one made on first use. */
+  private syntaxFacts: GoSyntaxFacts | undefined;
 
-  constructor(options: { readonly sqlCallSites?: boolean; readonly facts?: FactOptions } = {}) {
+  constructor(options: { readonly sqlCallSites?: boolean; readonly facts?: FactOptions; readonly syntaxFacts?: GoSyntaxFacts } = {}) {
     this.sqlCallSites = options.sqlCallSites === true;
     this.facts = options.facts;
+    this.syntaxFacts = options.syntaxFacts;
   }
 
   /**
@@ -182,25 +188,19 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
   /**
    * Code facts (protocol v2, only with the `facts` option): the batch's evidence for the file, finished by
    * the shared rules with the Go string literal decoder. When the source differs from the bytes the batch
-   * read (the analyzer's `factSourceHash`, for example after a `ctxo watch` save), the batch runs again
-   * (see `requestRefresh`), so stale evidence is never served. When that re-run fails, or the source still
-   * differs afterwards, this throws and the host writes no facts for the file; a failed re-run keeps the
-   * last good results and the full tier. Go has no annotation routes.
+   * read (the analyzer's `factSourceHash`, for example after a `ctxo watch` save), the facts of that one file
+   * come from the tree-sitter collector instead (the tiers are built to agree), so stale evidence is never
+   * served and a save never reruns the analyzer on the whole module (B-I1). Go has no annotation routes.
    */
   async extractFacts(filePath: string, source: string): Promise<CodeFact[]> {
     const options = this.facts;
     if (!options || !this.isReady()) return [];
     await this.ensureBatch();
     const path = this.normalizePath(filePath);
-    let file = this.cache.get(path);
+    const file = this.cache.get(path);
     if (file && isStale(file, source)) {
-      if (!(await this.requestRefresh())) {
-        throw new Error(`Go analyzer re-run failed; no fact evidence for ${path}`);
-      }
-      file = this.cache.get(path);
-      if (file && isStale(file, source)) {
-        throw new Error(`Go analyzer fact evidence for ${path} does not match the current source after a re-run`);
-      }
+      this.syntaxFacts ??= new GoAdapter({ facts: options });
+      return this.syntaxFacts.extractFacts(path, source);
     }
     const evidence = (file?.factEvidence ?? []).map(toFactEvidence).filter((e): e is FactEvidence => e !== undefined);
     if (evidence.length === 0) return [];
@@ -221,70 +221,29 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
     this.cache.clear();
     this.deadSymbolIds.clear();
     this.batchPromise = null;
-    this.refreshRunning = null;
-    this.refreshQueued = null;
     this.initialized = false;
   }
 
   private async ensureBatch(): Promise<void> {
     if (this.batchPromise) return this.batchPromise;
-    this.batchPromise = this.runBatch(true).then(() => undefined);
+    this.batchPromise = this.runBatch();
     return this.batchPromise;
   }
 
-  /**
-   * Re-runs the batch for stale fact evidence; resolves true when the run succeeded. At most one re-run is in
-   * flight plus one queued follow-up: a file that goes stale while a re-run is in flight joins the follow-up
-   * (the running one may have read its bytes before the change), so a burst of saves costs two runs at most.
-   * A queued follow-up is joined first, also in the moment between the end of the running re-run and the
-   * start of the follow-up, so only one analyzer run is ever in flight.
-   */
-  private requestRefresh(): Promise<boolean> {
-    if (this.refreshQueued) return this.refreshQueued;
-    if (!this.refreshRunning) return this.startRefresh();
-    const startFollowUp = (): Promise<boolean> => {
-      this.refreshQueued = null;
-      return this.startRefresh();
-    };
-    this.refreshQueued = this.refreshRunning.then(startFollowUp, startFollowUp);
-    return this.refreshQueued;
-  }
-
-  /** Starts a re-run; it never rejects (a run that throws, for example on spawn, resolves false). */
-  private startRefresh(): Promise<boolean> {
-    const run: Promise<boolean> = this.runBatch(false)
-      .catch((err: unknown) => {
-        log.warn(`Go analyzer re-run failed: ${(err as Error).message}; keeping the last results`);
-        return false;
-      })
-      .finally(() => {
-        if (this.refreshRunning === run) this.refreshRunning = null;
-      });
-    this.refreshRunning = run;
-    return run;
-  }
-
-  /**
-   * One analyzer batch; true when it succeeded and its result is cached. A failed first batch marks the
-   * analyzer as failed (the composite then uses tree-sitter); a failed re-run keeps the last good cache.
-   */
-  private async runBatch(initial: boolean): Promise<boolean> {
-    if (!this.binaryPath || !this.moduleRoot) return false;
+  /** The one analyzer batch of this adapter; a failure marks the analyzer as failed (the composite then uses tree-sitter). */
+  private async runBatch(): Promise<void> {
+    if (!this.binaryPath || !this.moduleRoot) return;
     const result = await runBatchAnalyze(this.binaryPath, this.moduleRoot, {
       sqlCallSites: this.sqlCallSites,
       ...(this.facts ? { facts: this.facts } : {}),
     });
-    if (this.disposed) return false;
+    if (this.disposed) return;
     if (result.failed) {
-      if (initial) {
-        this.batchFailed = true;
-        log.warn('Go analyzer run failed or timed out; these files fall back to the tree-sitter syntax tier');
-      } else {
-        log.warn('Go analyzer re-run failed or timed out; keeping the last results');
-      }
-      return false;
+      this.batchFailed = true;
+      log.warn('Go analyzer run failed or timed out; these files fall back to the tree-sitter syntax tier');
+      return;
     }
-    this.absorbBatch(result, initial);
+    this.absorbBatch(result);
     if (this.sqlCallSites) {
       if (result.sql) {
         log.debug(`Go analyzer SQL arguments: ${result.sql.constant} constant, ${result.sql.nonConstant} non-constant`);
@@ -293,11 +252,10 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
       }
     }
     log.info(`Go analyzer batch: ${result.totalFiles} files in ${result.elapsed}, ${result.dead.length} dead`);
-    return true;
   }
 
-  /** Caches a batch result; SQL statistics count only the first batch, so a re-run does not count twice. */
-  private absorbBatch(result: AnalyzerBatchResult, countSql: boolean): void {
+  /** Caches the batch result. */
+  private absorbBatch(result: AnalyzerBatchResult): void {
     this.cache.clear();
     this.deadSymbolIds.clear();
     this.hasMain = result.hasMain;
@@ -328,7 +286,7 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
           : {}),
       });
     }
-    if (result.sql && countSql) {
+    if (result.sql) {
       this.sqlStats = {
         constant: (this.sqlStats?.constant ?? 0) + result.sql.constant,
         nonConstant: (this.sqlStats?.nonConstant ?? 0) + result.sql.nonConstant,

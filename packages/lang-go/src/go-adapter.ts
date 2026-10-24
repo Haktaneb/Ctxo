@@ -100,8 +100,8 @@ export class GoAdapter extends TreeSitterAdapter {
 
   /**
    * Code facts (protocol v2) from the CST, by names and import paths (see `collectTreeSitterEvidence`), finished by
-   * the shared rules with the Go string decoder. `[]` without the `facts` option. A failure propagates, so the host
-   * reports it and writes no `facts` for the file rather than an empty list.
+   * the shared rules with the Go string decoder. `[]` without the `facts` option. A failure propagates to the caller;
+   * `GoCompositeAdapter`, the plugin's adapter boundary, logs it and returns `[]` (B-M1).
    */
   async extractFacts(filePath: string, source: string): Promise<CodeFact[]> {
     const options = this.facts;
