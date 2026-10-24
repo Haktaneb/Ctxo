@@ -187,7 +187,8 @@ Fingerprints are `kind | symbol | normalized text` and do not depend on line num
 can hold double quotes, backslashes, `: ` or ` #`, which break a double-quoted or plain scalar.
 `ctxo domain shadow-specs` prints them in that form. `%7C` and `%25` in the kind and symbol parts are an encoded `|`
 and `%`. A multi-dot file name stays one segment of the symbol part (`loan.service.ts::withRetry` gives
-`loan.service.withRetry`). Several candidates may
+`loan.service.withRetry`), and code outside every declaration has the basename alone (`app.ts` gives `app`,
+`api.loan.service.ts` gives `api.loan.service`). Several candidates may
 share one fingerprint (overloads, the same text twice), and one entry resolves them all. An entry with an unknown rule
 that matches no candidate is listed in both `staleResolutions` and `unknownRules`. See
 [the Deletion Test loop](https://github.com/alperhankendi/Ctxo/blob/master/docs/features/domain-knowledge.md#the-deletion-test-loop)

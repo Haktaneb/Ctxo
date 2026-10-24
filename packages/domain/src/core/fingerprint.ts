@@ -91,9 +91,10 @@ export function nameSegments(name: string): string[] {
  * H4: the last two `.` segments of `<file basename>.<symbol name without a trailing (...)>`, where the basename has
  * no directory and no last extension (W26). `src/Lending/LoanPolicy.cs::LibraryLending.Lending.LoanPolicy.CanBorrow::method`
  * gives `LoanPolicy.CanBorrow`, `src/lending/loan-policy.ts::canBorrow::function` gives `loan-policy.canBorrow`,
- * `src/app.ts::app::variable` gives `app.app`. The basename is one segment even when it holds dots (D-M1):
- * `src/lending/loan.service.ts::withRetry::function` gives `loan.service.withRetry`. An ID without a file part
- * (`dbo.loans::table`) uses its name alone.
+ * The basename is one segment even when it holds dots (D-M1): `src/lending/loan.service.ts::withRetry::function`
+ * gives `loan.service.withRetry`. The module symbol of a file (FC-9, `<file>::<basename>::variable`) gives the
+ * basename alone, also one segment: `src/app.ts::app::variable` gives `app`, `src/api.loan.service.ts::api.loan.service::variable`
+ * gives `api.loan.service`. An ID without a file part (`dbo.loans::table`) uses its name alone.
  * A `.` inside `<...>`, `[...]`, `(...)` or quotes does not split a segment (`segmentDots`).
  *
  * Amended H4 (fix rounds 1 and 2): a member whose name holds a `.` keeps its containing type. Without a container
@@ -106,6 +107,12 @@ export function nameSegments(name: string): string[] {
 export function fingerprintSymbolPart(symbolId: string, container?: string): string {
   const first = symbolId.indexOf('::');
   const last = symbolId.lastIndexOf('::');
+  if (first >= 0 && first !== last) {
+    // The module symbol of a file (FC-9, `<file>::<basename>::variable`) is the whole basename, one segment:
+    // `api.loan.service.ts` and `web.loan.service.ts` never share a part, and `app.ts` gives `app`.
+    const base = baseName(symbolId.slice(0, first));
+    if (base !== '' && symbolId.slice(last + 2) === 'variable' && symbolId.slice(first + 2, last) === base) return collapse(base);
+  }
   if (first >= 0 && first !== last && container !== undefined) {
     const name = withoutParameterSuffix(symbolId.slice(first + 2, last));
     if (container !== '' && name.startsWith(`${container}.`)) {

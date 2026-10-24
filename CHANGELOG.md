@@ -26,7 +26,8 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (ten packages today). Per-pack
 - `find_shadow_specs({ context, kinds?, includeResolved? })`: shadow-spec candidates of a context (facts, owned
   tables, views and procedures, and rules without tests), each with file, line, symbol, a line-independent
   fingerprint (`kind | symbol | normalized text`; a multi-dot file name stays one segment, so `loan.service.ts::withRetry`
-  gives `loan.service.withRetry`), its source and its resolution (a rule link, an `Untested:` line,
+  gives `loan.service.withRetry`, and code outside every declaration has the basename alone, `app.ts` gives `app`),
+  its source and its resolution (a rule link, an `Untested:` line,
   or `shadow-specs.yaml`), plus `counts`, `staleResolutions`, `unknownRules` and `resolutionProblems` (each capped at
   50 with `<name>Total`).
 - `get_context_map()`: per context its card, rules and the share with tests, characterization and contract test

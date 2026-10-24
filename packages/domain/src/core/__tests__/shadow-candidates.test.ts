@@ -222,7 +222,7 @@ describe('buildShadowCandidates', () => {
         source: 'native',
       },
       {
-        fingerprint: 'literal-comparison | rate.rate | rate > 3',
+        fingerprint: 'literal-comparison | rate | rate > 3',
         kind: 'literal-comparison',
         context: 'lending',
         file: RATE,

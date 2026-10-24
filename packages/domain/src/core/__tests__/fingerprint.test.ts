@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { moduleSymbolId } from '../facts/finish-facts.js';
 import { decodeFingerprintPart, fingerprint, fingerprintSymbolPart, nameSegments, normalizeFingerprint, segmentDots } from '../fingerprint.js';
 
 const SPEC = 'literal-comparison | LoanPolicy.CanBorrow | loans.Count >= 5';
@@ -12,7 +13,7 @@ describe('fingerprintSymbolPart', () => {
     ['src/main/java/lending/LoanPolicy.java::canBorrow::method', 'LoanPolicy.canBorrow'],
     ['loans/policy.go::CanBorrow::function', 'policy.CanBorrow'],
     ['db/migrations/lending/001_create_loans.sql::dbo.loans::table', 'dbo.loans'],
-    ['src/app.ts::app::variable', 'app.app'],
+    ['src/app.ts::app::variable', 'app'],
   ])('the symbol part drops namespaces and the C# parameter suffix: %s', (symbolId, expected) => {
     expect(fingerprintSymbolPart(symbolId)).toBe(expected);
   });
@@ -33,6 +34,34 @@ describe('fingerprintSymbolPart', () => {
     expect(fingerprintSymbolPart('src/lending/loans.controller.ts::borrow::function')).toBe('loans.controller.borrow');
     // A member keeps the last two segments of its own name: the file part is not involved.
     expect(fingerprintSymbolPart('src/lending/loan.service.ts::LoanService.renew::method')).toBe('LoanService.renew');
+  });
+
+  it('the module symbol of a file is its whole basename, so multi-dot siblings never collide (Minor 2)', () => {
+    const parts = [
+      ['src/api/api.loan.service.ts', 'api.loan.service'],
+      ['src/web/web.loan.service.ts', 'web.loan.service'],
+      ['src/lending/loan.service.ts', 'loan.service'],
+      ['src/app.ts', 'app'],
+      ['src/Fees/fees.cs', 'fees'],
+      ['src/Program.cs', 'Program'],
+      ['src/.env', '.env'],
+      ['bin/run', 'run'],
+    ] as const;
+    for (const [file, expected] of parts) {
+      expect(fingerprintSymbolPart(moduleSymbolId(file))).toBe(expected);
+      // The part round-trips through a fingerprint and its normalization.
+      const written = fingerprint('literal-comparison', fingerprintSymbolPart(moduleSymbolId(file)), 'days  >  14');
+      expect(written).toBe(`literal-comparison | ${expected} | days > 14`);
+      expect(normalizeFingerprint(written)).toBe(written);
+      expect(normalizeFingerprint(`  literal-comparison|${expected}  |days > 14 `)).toBe(written);
+    }
+    // A type of the file that prefixes the basename is no container of the module symbol.
+    expect(fingerprintSymbolPart('src/Loan.Policy.Rules.cs::Loan.Policy.Rules::variable', 'Loan')).toBe('Loan.Policy.Rules');
+    // A symbol whose name is not the basename keeps `<basename>.<name>`; so does a class named like its file, which
+    // therefore never shares a part with the module symbol of its file.
+    expect(fingerprintSymbolPart('src/api/api.loan.service.ts::withRetry::function')).toBe('api.loan.service.withRetry');
+    expect(fingerprintSymbolPart('src/Program.cs::Program::class')).toBe('Program.Program');
+    expect(fingerprintSymbolPart('src/x.d.ts::x::variable')).toBe('x.d.x');
   });
 
   it('a C# explicit interface implementation keeps its containing type (M3)', () => {
