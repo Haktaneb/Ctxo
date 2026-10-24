@@ -22,7 +22,9 @@ export interface DomainState {
 
 export const STALE_CARDS_HINT = 'Cards or the glossary changed since the last "ctxo index"; run it to refresh rule links.';
 
-const NO_GRAPH_HINT = 'No domain graph yet; run "ctxo index".';
+/** Added to the hints where adoption starts (no registry, no graph), so an agent finds the discovery command (#191). */
+export const DISCOVER_POINTER = 'To propose the domain config from this repository, run "ctxo domain discover".';
+const NO_GRAPH_HINT = `No domain graph yet; run "ctxo index". ${DISCOVER_POINTER}`;
 const STALE_REGISTRY_HINT = 'The domain registry changed since the last "ctxo index"; run it to rebuild the domain graph.';
 
 /** A stamp whose mtime is this close to the moment it was taken is not trusted (the racy-git rule). */
@@ -120,7 +122,7 @@ export function createDomainState(host: CtxoHost, options: DomainStateOptions = 
 
     const loaded = readRegistry(host.projectRoot, cfg.registry);
     if (loaded === undefined) {
-      return fail('no-registry', `No domain registry at ${cfg.registry}. Create one with "ctxo init --domain".`);
+      return fail('no-registry', `No domain registry at ${cfg.registry}. Create one with "ctxo init --domain". ${DISCOVER_POINTER}`);
     }
     if (loaded.registry === undefined || loaded.problems.length > 0) {
       return fail('invalid-registry', `The domain registry at ${loaded.path} has problems; run "ctxo verify-domain".`);

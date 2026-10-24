@@ -336,7 +336,17 @@ describe('proposalAddsSomething', () => {
   });
 
   it('is true for a new prefix, trait key or test glob', () => {
-    const base = { trackerPrefixes: [], ruleTraitKeys: ['Rule'], indexTests: [], characterizationPaths: [], contractPaths: [] };
+    const base = {
+      trackerPrefixes: [],
+      ruleTraitKeys: ['Rule'],
+      indexTests: [],
+      characterizationPaths: [],
+      contractPaths: [],
+      characterizationAnnotations: [],
+      contractAnnotations: [],
+    };
+    expect(proposalAddsSomething({ ...base, contractAnnotations: ['StorageContractFact'] }, DEFAULT_DOMAIN_CONFIG, [])).toBe(true);
+    expect(proposalAddsSomething({ ...base, characterizationAnnotations: ['Tag:characterization'] }, DEFAULT_DOMAIN_CONFIG, [])).toBe(false);
     expect(proposalAddsSomething({ ...base, trackerPrefixes: ['LEND'] }, DEFAULT_DOMAIN_CONFIG, [])).toBe(true);
     expect(proposalAddsSomething({ ...base, ruleTraitKeys: ['Rule', 'Req'] }, DEFAULT_DOMAIN_CONFIG, [])).toBe(true);
     expect(proposalAddsSomething({ ...base, indexTests: ['qa/**'] }, DEFAULT_DOMAIN_CONFIG, [])).toBe(true);

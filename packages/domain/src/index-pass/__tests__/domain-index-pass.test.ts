@@ -3,6 +3,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createModuleHost, type CoChangeWindowCommits, type CtxoHost, type FileIndex, type IndexPassContext } from '@ctxo/cli/internal';
+import { mergeDiscoveryProposal } from '../../adapters/config-writer.js';
+import { gatherDiscoveryInput } from '../../adapters/discovery-sources.js';
+import { discoverConventions } from '../../core/discovery.js';
+import { resolveDomainConfig } from '../../core/domain-config.js';
 import type { DomainGraph } from '../../core/domain-graph.js';
 import { createDomainState } from '../../mcp/domain-state.js';
 import { createLoopState, NO_LOOP_DATA_HINT } from '../../mcp/loop-state.js';
@@ -637,6 +641,48 @@ contexts:
       readonly source: string;
       readonly resolution?: { readonly by: string };
     }
+
+    /** A change log whose subjects are `subjects`, one commit each. */
+    const subjectHistory = (subjects: readonly string[]): CoChangeWindowCommits => ({
+      head: 'abc1234def',
+      headCommittedAt: 1_700_000_500,
+      commits: subjects.map((message, i) => ({
+        hash: `${String(i).padStart(4, '0')}${'0'.repeat(36)}`,
+        message,
+        date: '2026-03-03T10:00:00Z',
+        author: 'a',
+        committedAt: 1_700_000_500 - i,
+        changes: [],
+      })),
+    });
+    const discoveryOf = (): unknown => JSON.parse(read('maturity.json')).discovery;
+
+    it('records in maturity.json whether discovery would add something, and keeps it without a change log (#191)', async () => {
+      // No change log on the first run: nothing recorded.
+      await runPass();
+      expect(discoveryOf()).toBeUndefined();
+
+      // Five OPS keys: discovery proposes OPS as a tracker prefix.
+      await runPass(subjectHistory(['OPS-1 a', 'OPS-2 b', 'OPS-3 c', 'OPS-4 d', 'OPS-5 e']));
+      expect(discoveryOf()).toEqual({ addsSomething: true });
+
+      // Without a change log the subjects are unknown, so the last result stays.
+      await runPass();
+      expect(discoveryOf()).toEqual({ addsSomething: true });
+
+      // Once the config holds everything discovery proposes, it adds nothing.
+      const host = createModuleHost({ cliVersion: '0.0.0', mode: 'cli', projectRoot: root });
+      const loaded = host.services.loadConfig(ctxoRoot);
+      const { config } = resolveDomainConfig((loaded.config as Record<string, unknown>)['domain']);
+      const history = subjectHistory(['OPS-1 a', 'OPS-2 b', 'OPS-3 c', 'OPS-4 d', 'OPS-5 e']);
+      const input = await gatherDiscoveryInput(host, root, ctxoRoot, loaded, config, {
+        commitSubjects: history.commits.map((c) => c.message),
+      });
+      const { proposal } = discoverConventions(input);
+      writeFileSync(join(ctxoRoot, 'config.yaml'), mergeDiscoveryProposal('version: "1.0"\n', proposal).text, 'utf-8');
+      await runPass(history);
+      expect(discoveryOf()).toEqual({ addsSomething: false });
+    });
 
     it('writes shadow-candidates.json and maturity.json, byte-identical on a second run', async () => {
       await runPass();

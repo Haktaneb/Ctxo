@@ -157,7 +157,7 @@ domain:                   # read only when @ctxo/domain is installed
 
 ### domain
 
-The `domain` section is read by [`@ctxo/domain`](/concepts/domain-knowledge); without the package it is ignored. Each invalid key falls back to its default and is reported by [`ctxo verify-domain`](/cli/domain) (check 1) and by `ctxo doctor` (`domain_registry`), not by the core config check. `ctxo init --domain` writes the defaults and never changes an existing value. `ctxo domain discover --write` adds `domain.rules.trackerPrefixes`, `domain.tests.ruleTraitKeys`, `domain.tests.characterization.paths`, `domain.tests.contract.paths` and `index.tests` values and removes none.
+The `domain` section is read by [`@ctxo/domain`](/concepts/domain-knowledge); without the package it is ignored. Each invalid key falls back to its default and is reported by [`ctxo verify-domain`](/cli/domain) (check 1) and by `ctxo doctor` (`domain_registry`), not by the core config check. `ctxo init --domain` writes the defaults and never changes an existing value. `ctxo domain discover --write` adds `domain.rules.trackerPrefixes`, `domain.tests.ruleTraitKeys`, `domain.tests.characterization.paths`, `domain.tests.characterization.annotations`, `domain.tests.contract.paths`, `domain.tests.contract.annotations` and `index.tests` values and removes none (remove a wrong value by hand; discovery proposes it again until the evidence changes).
 
 ### cochange
 

@@ -198,9 +198,9 @@ for the fingerprint rules and the file format.
 
 | Situation | Response |
 | --- | --- |
-| No registry | `{ "found": false, "hint": "No domain registry at docs/domain/contexts.yaml. Create one with \"ctxo init --domain\"." }` |
+| No registry | `{ "found": false, "hint": "No domain registry at docs/domain/contexts.yaml. Create one with \"ctxo init --domain\". To propose the domain config from this repository, run \"ctxo domain discover\"." }` |
 | A registry with problems | `{ "found": false, "hint": "The domain registry at <path> has problems; run \"ctxo verify-domain\"." }` |
-| No domain graph | `{ "found": false, "hint": "No domain graph yet; run \"ctxo index\"." }` |
+| No domain graph | `{ "found": false, "hint": "No domain graph yet; run \"ctxo index\". To propose the domain config from this repository, run \"ctxo domain discover\"." }` |
 | The registry changed since the last index (the graph was built from another registry) | `{ "found": false, "hint": "The domain registry changed since the last \"ctxo index\"; run it to rebuild the domain graph." }` |
 | No loop artifacts (not indexed with this release, or removed because the last `ctxo index` built the graph but not the candidates or the maturity facts) | `{ "found": false, "hint": "No shadow-spec data yet; run \"ctxo index\"." }` |
 | A context the registry does not name | `{ "found": false, "hint": "No context <id> in the registry; get_context_map lists the contexts." }` |

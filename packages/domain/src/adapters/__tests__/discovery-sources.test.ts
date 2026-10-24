@@ -49,6 +49,24 @@ describe('gatherDiscoveryInput', () => {
     expect(discoverConventions(other).evidence.uncoveredTestFolders).toEqual([]);
   });
 
+  it('preloaded branches replace the refs read, so the index pass never reads local refs (#191 m2)', async () => {
+    let refsRead = 0;
+    const git = {
+      getRefs: async () => {
+        refsRead += 1;
+        return { branches: ['OPS-1'], localBranches: ['OPS-1'], remoteBranches: [] };
+      },
+    } as unknown as IGitPort;
+    const host = hostWith({ createGit: () => git, readIndex: () => [] });
+    const loaded = host.services.loadConfig(host.ctxoRoot);
+    const input = await gatherDiscoveryInput(host, dir, host.ctxoRoot, loaded, DEFAULT_DOMAIN_CONFIG, {
+      branches: { local: [], remote: [] },
+    });
+    expect(input.localBranches).toEqual([]);
+    expect(input.remoteBranches).toEqual([]);
+    expect(refsRead).toBe(0);
+  });
+
   it('passes the local and remote-tracking branch lists apart', async () => {
     const git = {
       getRefs: async () => ({ branches: ['OPS-1', 'origin/OPS-1'], localBranches: ['OPS-1'], remoteBranches: ['origin/OPS-1'] }),

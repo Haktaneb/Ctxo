@@ -151,7 +151,7 @@ ctxo init --domain                        # registry skeleton, fold guard, skill
 ctxo contexts-touched --since origin/main # which named contexts a branch changed, and which are resolved
 ctxo verify-domain --since origin/main    # CI gate: registry, cards, rule IDs, loader rules, boundaries, shadow specs
 ctxo domain rules --write                 # path-scoped rules that point the agent at the card
-ctxo domain discover                      # propose tracker prefixes and test conventions from the repo
+ctxo domain discover                      # run first: propose tracker prefixes and test conventions from the repo
 ctxo domain shadow-specs lending          # business logic in the lending code that no rule pins yet
 ctxo domain map                           # every context with its rung, a suggested rung and what blocks the next one
 ```

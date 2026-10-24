@@ -44,11 +44,11 @@ describe('createLoopState', () => {
     expect(state.load()).toEqual({
       ok: false,
       reason: 'no-registry',
-      hint: 'No domain registry at docs/domain/contexts.yaml. Create one with "ctxo init --domain".',
+      hint: 'No domain registry at docs/domain/contexts.yaml. Create one with "ctxo init --domain". To propose the domain config from this repository, run "ctxo domain discover".',
     });
 
     project.write('docs/domain/contexts.yaml', REGISTRY);
-    expect(state.load()).toEqual({ ok: false, reason: 'no-artifacts', hint: 'No domain graph yet; run "ctxo index".' });
+    expect(state.load()).toEqual({ ok: false, reason: 'no-artifacts', hint: 'No domain graph yet; run "ctxo index". To propose the domain config from this repository, run "ctxo domain discover".' });
 
     await project.index();
     const snapshot = snapshotOf(state);

@@ -99,6 +99,24 @@ export const DEFAULT_DOMAIN_CONFIG: DomainConfig = {
   guard: { enabled: true, subagents: false },
 };
 
+const sameList = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((v, i) => v === b[i]);
+const sameConvention = (a: TestConvention, b: TestConvention): boolean =>
+  sameList(a.annotations, b.annotations) && sameList(a.paths, b.paths) && sameList(a.names, b.names);
+
+/**
+ * True when the conventions `ctxo domain discover` proposes are all still at their defaults (#191):
+ * `rules.trackerPrefixes`, `tests.ruleTraitKeys`, `tests.characterization` and `tests.contract`.
+ */
+export function conventionsAtDefaults(config: DomainConfig): boolean {
+  const d = DEFAULT_DOMAIN_CONFIG;
+  return (
+    sameList(config.rules.trackerPrefixes, d.rules.trackerPrefixes) &&
+    sameList(config.tests.ruleTraitKeys, d.tests.ruleTraitKeys) &&
+    sameConvention(config.tests.characterization, d.tests.characterization) &&
+    sameConvention(config.tests.contract, d.tests.contract)
+  );
+}
+
 /** The fact request's options (`indexCapabilities.factOptions`): the two lists the plugins' detectors read. */
 export function toFactDetectorOptions(config: DomainConfig): FactDetectorOptions {
   return {

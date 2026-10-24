@@ -48,6 +48,11 @@ export interface MaturityArtifact {
   readonly registryHash: string;
   readonly cardsHash: string;
   readonly contexts: readonly ContextMaturityFacts[];
+  /**
+   * Whether `ctxo domain discover` would propose a value the config does not hold, as the index pass found it
+   * (#191). Absent when discovery could not run; `get_context_map` then gives no discover hint.
+   */
+  readonly discovery?: { readonly addsSomething: boolean };
 }
 
 export interface MaturityInput {

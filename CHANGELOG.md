@@ -6,6 +6,49 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (ten packages today). Per-pack
 
 ## [Unreleased]
 
+**`ctxo domain discover` that agents find, with tracker kinds and test-kind markers beyond folders (#191).**
+
+### Added (discovery)
+
+- The rules block `ctxo init` writes (`@ctxo/cli`) adds one line when the domain layer is set up (a `domain` key in `.ctxo/config.yaml` or the default registry `docs/domain/contexts.yaml`, both committed; otherwise a loaded `@ctxo/domain`), in both tiers:
+  "Adopting or tuning the domain layer? Run `ctxo domain discover` first (`--json` for the evidence, `--write` to
+  merge the proposal)." Committed state decides first, so teammates with and without the package render the same
+  block. Without domain state and module the block is byte-identical to before, so `RULES_TEMPLATE_VERSION` stays
+  `0.13` and no block drifts (a pre-#191 ctxo treats the line as an edit and removes it). `ctxo init --domain`
+  renders the rules again when the domain step set the layer up; `ctxo doctor` (`ai_rules`) reports a block whose
+  line does not match that state, and `ctxo doctor --fix` re-renders it.
+- Agents adopting the domain layer did not find `ctxo domain discover` and reverse-engineered the config instead.
+  The `ctxo-domain-fold` skill (now v0.17) tells them to run it first, dry run then hand edits or `--write`, when
+  adopting or tuning the domain config. The `get_context_map` description and the "no registry" and "no domain
+  graph" hints name the command, and `get_context_map` and `ctxo domain map` add a hint while
+  `domain.rules.trackerPrefixes`, `domain.tests.ruleTraitKeys`, `domain.tests.characterization` and
+  `domain.tests.contract` are all at their defaults and the last `ctxo index` found that discovery would add
+  something (`maturity.json` gains `discovery: { addsSomething }`; a run without a change log keeps the last result).
+  Core tools are unchanged.
+- External IDs: keys of a well-known external family (`EXTERNAL_ID_FAMILIES`: ADR, BIP, CAPEC, CVE, CWE, EIP, GHSA,
+  IEC, ISO, JSR, KEP, OWASP, PEP, RFC) are reported as "references, not rule IDs; no config needed"
+  (`evidence.externalIds`, flagged with `overlapsRulePrefix` when a family equals a card rule prefix) and never
+  proposed. A plain mention never linked as a rule ID: only IDs that exist in a card link.
+- GitHub issues: issue references in commit subjects (`#N` at the start, `(#N)`, or after fixes, closes, refs and
+  similar words; not a bare `step #1`) and `N-slug` or `type/N-slug` branches, printed with the share of all
+  subjects and the `(#N)` squash count, and named as the issue tracker when there are at least 5 and they outnumber every tracker-key family
+  (`evidence.githubIssues`); evidence only.
+- Other identifiers: lowercase `name-NN` branch families in at least 3 branches, runtime names left out, marked as a
+  possible tracker key when their upper case is a card rule prefix, a tracker key or a configured prefix
+  (`evidence.otherIdentifiers`); evidence only, never proposed.
+- Test-kind markers beyond folders (`evidence.testKindMarkers`): `Trait`, `Category`, `TestCategory` and `Tag` values
+  (qualified names too) that equal the kind or end with it (`StorageContract`, not `ContractRenewal`), proposed as
+  `Trait:<Key>=<Value>` or `<Name>:<Value>` for `domain.tests.<kind>.annotations`; custom test attributes such as
+  `StorageContractFact`, proposed as annotation names; test source files named `*ContractTests`,
+  `*CharacterizationTests`, `*.contract.test.ts` or `*_contract_test.go`, proposed as `paths` globs such as
+  `**/*ContractTests.cs` (a `names` marker matches test case names only), unless a file is named after a non-test
+  class of the index. `--write` merges the annotations too and still adds values and removes none.
+
+### Changed (discovery)
+
+- `ctxo domain discover --json`: external ID families no longer appear in `evidence.trackerKeys`, and no longer reach
+  the proposed `trackerPrefixes`.
+
 **Fact detectors, the Deletion Test loop and the context map: `find_shadow_specs`, `get_context_map` (#156 Phase 4, PR 4).**
 
 ### Added (agentic loop)

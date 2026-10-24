@@ -47,7 +47,7 @@ ctxo index --cochange-commits 500   # co-change window in commits (default 2000,
 ctxo index --cochange-since 12m     # co-change window by age from HEAD (d, w, m, y)
 ctxo watch                          # file watcher for incremental re-index
 ctxo sync                           # rebuild SQLite from committed JSON
-ctxo init                           # rules, skills, guard, MCP config, git hooks (post-commit v2), config + plugin install prompt
+ctxo init                           # rules (+ a "ctxo domain discover" line once the domain layer is set up), skills, guard, MCP config, git hooks (post-commit v2), config + plugin install prompt
 ctxo init --only <parts>            # install only these parts: rules,skills,guard,mcp,git-hooks,config,domain
 ctxo init --skip <parts>            # install every part except these
 ctxo init --no-guard                # does not install the safe-edit guard (full rules block unless a guard is already registered)
@@ -75,7 +75,7 @@ ctxo init --domain --boundaries by-rung|report   # boundary mode without the pro
 ctxo contexts-touched --since origin/main [--committed | --staged] [--json] [--check]   # named contexts a change touched
 ctxo verify-domain --since origin/main [--boundaries by-rung|report] [--json]            # CI gate, 12 checks, exit 0/1/2
 ctxo domain rules --write|--check   # generated path-scoped loader rules (.claude/rules, .cursor/rules)
-ctxo domain discover [--json] [--write]   # propose tracker prefixes, rule trait keys and test folders (also Characterization and Contract paths)
+ctxo domain discover [--json] [--write]   # run first when adopting: tracker prefixes, rule trait keys, test folders and test-kind markers (external IDs, GitHub #N, lowercase ids: evidence only)
 ctxo domain map [--json]            # context map: metrics, rung, suggested rung and criteria per context
 ctxo domain shadow-specs <context> [--kinds <k,...>] [--all] [--json]   # shadow-spec candidates with fingerprints and resolutions
 
@@ -225,7 +225,7 @@ domain:                        # read only when @ctxo/domain is installed (ADR-0
 
 A PreToolUse hook (Claude Code only) that blocks an Edit to a high-impact symbol until the agent has checked blast radius via the MCP tool. Registered in `.claude/settings.json` by `ctxo init`. Fires once per symbol per session, fail-open on any uncertainty.
 
-Rules are tiered (#159, [ADR-015 amendment](docs/architecture/ADR/adr-015-safe-edit-guard.md#amendment-tiered-rules-159)): `ctxo init` writes a compact block into `CLAUDE.md` when the guard, all three skills and an enabled gate are in place, and the full block everywhere else (also into a `CLAUDE.md` linked to another client's file), inside versioned `<!-- ctxo-rules-start v<version> -->` markers that are replaced in place; the `ai_rules`, `skills` and `claude_guard_hook` doctor checks report drift, and `ctxo doctor --fix` repairs it. A pre-tier or compact block is left unchanged while the guard or skills it expects are missing and not declined, so no write records an opt-out the user never made.
+Rules are tiered (#159, [ADR-015 amendment](docs/architecture/ADR/adr-015-safe-edit-guard.md#amendment-tiered-rules-159)): `ctxo init` writes a compact block into `CLAUDE.md` when the guard, all three skills and an enabled gate are in place, and the full block everywhere else (also into a `CLAUDE.md` linked to another client's file), inside versioned `<!-- ctxo-rules-start v<version> -->` markers that are replaced in place (when the domain layer is set up, by a committed `domain` key or registry file or else a loaded `@ctxo/domain`, both tiers add one line naming `ctxo domain discover`; otherwise the block is unchanged); the `ai_rules`, `skills` and `claude_guard_hook` doctor checks report drift, and `ctxo doctor --fix` repairs it. A pre-tier or compact block is left unchanged while the guard or skills it expects are missing and not declined, so no write records an opt-out the user never made.
 
 Gate decision: primary = blast-radius confirmed+likely dependents vs `minDependents` floor; secondary = PageRank percentile. Config in `.ctxo/config.yaml`:
 

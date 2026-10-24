@@ -230,7 +230,7 @@ describe('domain tools', () => {
 
   it('no registry gives found false with the hint, never an error', async () => {
     const all = tools();
-    const hint = 'No domain registry at docs/domain/contexts.yaml. Create one with "ctxo init --domain".';
+    const hint = 'No domain registry at docs/domain/contexts.yaml. Create one with "ctxo init --domain". To propose the domain config from this repository, run "ctxo domain discover".';
 
     expect(await call(all.get(GET_DOMAIN_CONTEXT), {})).toEqual({ found: false, hint });
     expect(await call(all.get(GET_DOMAIN_CONTEXT), { path: 'src/Lending/Loan.ts' })).toEqual({ found: false, hint });
@@ -238,7 +238,7 @@ describe('domain tools', () => {
 
     // A registry without a graph: the graph hint.
     write('docs/domain/contexts.yaml', REGISTRY);
-    expect(await call(all.get(GET_RULE), { ruleId: 'LEND-03' })).toEqual({ found: false, hint: 'No domain graph yet; run "ctxo index".' });
+    expect(await call(all.get(GET_RULE), { ruleId: 'LEND-03' })).toEqual({ found: false, hint: 'No domain graph yet; run "ctxo index". To propose the domain config from this repository, run "ctxo domain discover".' });
   });
 
   it('an unexpected failure is an error, not a miss', async () => {

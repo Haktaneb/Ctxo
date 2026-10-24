@@ -1,5 +1,7 @@
 import type { CtxoHost, IndexPassContext } from '@ctxo/cli/internal';
 import { DomainArtifactStore, type BoundariesArtifact, type ContextsArtifact } from '../adapters/artifact-store.js';
+import { gatherDiscoveryInput } from '../adapters/discovery-sources.js';
+import { discoverConventions, proposalAddsSomething } from '../core/discovery.js';
 import { composeLoopInputs, type LoopInputs } from '../adapters/loop-inputs.js';
 import { readRegistry } from '../adapters/registry-reader.js';
 import { computeBoundaries } from '../core/boundaries.js';
@@ -152,8 +154,9 @@ export function domainIndexPass(host: CtxoHost): (ctx: IndexPassContext) => Prom
     store.writeIfChanged('boundaries.json', boundariesArtifact);
     if (graph !== undefined) store.writeIfChanged('graph.json', graph);
     if (loop !== undefined) {
+      const discovery = await discoveryResult(host, ctx, config, store, (m) => log.warn(m));
       store.writeIfChanged('shadow-candidates.json', loop.candidates);
-      store.writeIfChanged('maturity.json', loop.maturity);
+      store.writeIfChanged('maturity.json', discovery === undefined ? loop.maturity : { ...loop.maturity, discovery });
     } else if (inputs !== undefined) {
       store.removeLoopArtifacts();
     }
@@ -181,6 +184,42 @@ export function domainIndexPass(host: CtxoHost): (ctx: IndexPassContext) => Prom
         `${crossCount} cross-context edges, ${boundaries.violations.length} boundary violations (${ms} ms)`,
     );
   };
+}
+
+/**
+ * Whether `ctxo domain discover` would add a value to the config (#191), recorded in `maturity.json` for the
+ * `get_context_map` hint. It reads committed inputs only: the pass's index and change log (no second index read
+ * or `git log`) and the tracked files, never the local branch refs, because `maturity.json` is committed. Without a change log (`--skip-history`, a file re-index) the subjects are
+ * unknown, so the last recorded result is kept; a failure keeps it too, with a warning.
+ */
+async function discoveryResult(
+  host: CtxoHost,
+  ctx: IndexPassContext,
+  config: DomainConfig,
+  store: DomainArtifactStore,
+  warn: (message: string) => void,
+): Promise<MaturityArtifact['discovery']> {
+  const previous = (): MaturityArtifact['discovery'] => {
+    try {
+      return store.readMaturity()?.discovery;
+    } catch {
+      return undefined;
+    }
+  };
+  if (ctx.history === undefined) return previous();
+  try {
+    const input = await gatherDiscoveryInput(host, ctx.projectRoot, ctx.ctxoRoot, { config: ctx.config }, config, {
+      indices: ctx.indices,
+      commitSubjects: ctx.history.commits.map((commit) => commit.message),
+      // maturity.json is committed: no local branch refs, so every machine at the same commit records the same result.
+      branches: { local: [], remote: [] },
+    });
+    const { proposal } = discoverConventions(input);
+    return { addsSomething: proposalAddsSomething(proposal, config, input.indexTests) };
+  } catch (err) {
+    warn(`Convention discovery failed: ${(err as Error).message}; the last result in maturity.json is kept.`);
+    return previous();
+  }
 }
 
 /**
