@@ -59,7 +59,7 @@ The `fetch-depth: 0` line matters: without full history, `ctxo index` cannot pop
 
 ## Domain gate
 
-With the opt-in [`@ctxo/domain`](/concepts/domain-knowledge) package and a registry, `ctxo verify-domain` is the gate for contexts, cards, rule IDs, loader rules and boundaries. `--since` also checks that every context a branch changed has a card change or a `Domain-Unchanged` trailer, which needs the base branch's history: check out with `fetch-depth: 0`.
+With the opt-in [`@ctxo/domain`](/concepts/domain-knowledge) package and a registry, `ctxo verify-domain` is the gate for contexts, cards, rule IDs, loader rules, boundaries and shadow-spec resolutions. `--since` also checks that every context a branch changed has a card change or a `Domain-Unchanged` trailer, which needs the base branch's history: check out with `fetch-depth: 0`.
 
 ```yaml
 jobs:

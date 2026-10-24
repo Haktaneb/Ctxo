@@ -1,6 +1,6 @@
 ---
 title: "ctxo domain commands"
-description: "verify-domain, contexts-touched, domain rules and domain discover: the CLI of the opt-in @ctxo/domain package."
+description: "verify-domain, contexts-touched, domain rules, domain discover, domain map and domain shadow-specs: the CLI of the opt-in @ctxo/domain package."
 ---
 
 # Domain commands
@@ -43,6 +43,7 @@ ctxo verify-domain [--since <ref>] [--boundaries by-rung|report] [--json]
 | 9 | `context-map.md` has a `Context` / `Rung` table that agrees with the registry (a missing file is a warning) | error |
 | 10 | Boundaries: edges outside `contracts` | error for `blockingRungs` in `by-rung` mode, else warning |
 | 11 | With `--since`: no unresolved touched contexts | error |
+| 12 | Shadow-spec resolutions: a `shadow-specs.yaml` that does not parse; stale entries, unknown rules, files in folders of no context | error for a broken file, else warning |
 
 Check 6 also covers the links of the domain graph:
 
@@ -54,7 +55,17 @@ Check 6 also covers the links of the domain graph:
 - A `rule:` comment in production code that names an unknown rule warns (`rule: comment names unknown rule
   LEND-09`), but only when its prefix is a rule prefix, so `# rule: E501` in a linter comment stays silent.
 
-A registry that does not parse or validate skips checks 2 to 11. Day one is green: with the init skeleton (no contexts) or a partial registry,
+Check 12 computes the shadow-spec candidates from the current index and repository (never from the stored
+artifacts) and reads each context's `<registry folder>/<context>/shadow-specs.yaml`:
+
+- A file that does not parse, is not a list, or cannot be read (outside the repository, over 1 MiB, binary, not
+  valid UTF-8) is an error, and a broken item is an error (the valid items still apply).
+- `stale resolution "<fingerprint>" matches no candidate of <id>` (warning): the code changed, so the entry no
+  longer matches. Update the fingerprint from `ctxo domain shadow-specs <id>` or remove the entry.
+- `resolution names unknown rule <ID>` (warning): no card defines the rule, so the entry resolves nothing.
+- `<path> belongs to no context` (warning): a `shadow-specs.yaml` in a folder that is no context ID.
+
+A registry that does not parse or validate skips checks 2 to 12. Day one is green: with the init skeleton (no contexts) or a partial registry,
 unowned files and a missing context map are warnings until you set `domain.coverage.unowned: error`.
 
 ### Exit codes and `--json`
@@ -129,8 +140,64 @@ subjects or branch names), `Trait` keys that carry rule-like IDs, and test folde
 ctxo domain discover [--json] [--write]
 ```
 
+It also proposes Characterization and Contract paths: folders named `Characterization`, `Contract`, `Contracts` or
+`Contracts.Tests` that `domain.tests.characterization.paths` and `domain.tests.contract.paths` do not cover, as
+`<folder>/**`, listed after the configured globs.
+
 It prints the evidence and a proposed config, and writes only with `--write`, which merges the proposal into
 `.ctxo/config.yaml` (it adds values and removes none).
+
+## ctxo domain map
+
+The context map from the last `ctxo index`: per context its rung, the suggested rung, rules with tests, open
+shadow-spec candidates and the rung criteria. The CLI face of [`get_context_map`](/mcp-tools/get-context-map).
+
+```shell
+ctxo domain map [--json]
+```
+
+```text
+[ctxo] Context map: 2 contexts (1 agree with the suggested rung)
+  lending  rung pinned  suggested fear  rules 2 (1 tested)  open candidates 4  pinned ✗ named ✗ bounded ✓ boring ✗
+  billing  rung fear  suggested fear  rules 0 (0 tested)  open candidates 1  pinned ✗ named ✗ bounded ✓ boring ✗
+```
+
+`--json` prints the whole `get_context_map` body (no `_meta`, no truncation). The suggestion never changes the
+registry.
+
+## ctxo domain shadow-specs
+
+The shadow-spec candidates of one context with their fingerprints and resolutions. The CLI face of
+[`find_shadow_specs`](/mcp-tools/find-shadow-specs).
+
+```shell
+ctxo domain shadow-specs <context> [--kinds <k,...>] [--all] [--json]
+```
+
+| Flag | Description |
+| --- | --- |
+| `--kinds <k,...>` | Keep these kinds: `literal-comparison`, `normalization`, `retry-timeout`, `endpoint`, `data-resource`, `procedure`, `rule-without-tests` (an empty list means all) |
+| `--all` | Also list resolved candidates |
+| `--json` | Print the `find_shadow_specs` body |
+
+```text
+[ctxo] lending: 4 open, 2 resolved shadow-spec candidates (docs/domain/lending/shadow-specs.yaml)
+  open  retry-timeout  src/lending/loan-policy.ts:1  HOLD_TIMEOUT_MS = 604800000
+      retry-timeout | loan-policy.HOLD_TIMEOUT_MS | HOLD_TIMEOUT_MS = 604800000
+  resolved  literal-comparison  src/lending/loan-policy.ts:4  loans.length >= 5  [rule LEND-03]
+      literal-comparison | loan-policy.canBorrow | loans.length >= 5
+  stale  literal-comparison | loan-policy.canBorrow | loans.length >= 3 (line 6)
+  unknown rule  LEND-99  endpoint | routes.routes | GET /loans/:id (line 8)
+```
+
+Each candidate's fingerprint is on the line below it: copy it verbatim into the context's `shadow-specs.yaml`
+with `resolution: { rule: <ID> }` or `resolution: { notARule: "<reason>" }`. The file is read on every run, so an
+edit shows at once; the candidates themselves refresh on `ctxo index` (not under `ctxo watch`). Output is not
+masked, as for `ctxo contexts --json`.
+
+**Exit codes (map and shadow-specs):** 0 done or no registry, 1 bad arguments, an unknown kind or an unknown
+context, 2 registry problems or no index data (`[ctxo] No context map yet; run "ctxo index".`,
+`[ctxo] No shadow-spec data yet; run "ctxo index".`).
 
 ## See also
 

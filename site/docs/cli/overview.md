@@ -39,10 +39,12 @@ Examples below assume `ctxo` is on your PATH from a global install (or a local `
 | [`ctxo blast-radius`](./blast-radius.md) | Blast radius for one symbol, JSON to stdout |
 | [`ctxo gate --preview`](./gate.md) | Preview which symbols the safe-edit guard would block |
 | [`ctxo contexts`](./contexts.md) | Candidate bounded contexts as a table; `--json` prints the full `contexts-view.json` |
-| [`ctxo verify-domain`](./domain.md) | Domain CI gate: registry, cards, rule IDs, loader rules, boundaries (`--since`, `--boundaries`, `--json`). Needs `@ctxo/domain` |
+| [`ctxo verify-domain`](./domain.md) | Domain CI gate: registry, cards, rule IDs, loader rules, boundaries, shadow-spec resolutions (`--since`, `--boundaries`, `--json`). Needs `@ctxo/domain` |
 | [`ctxo contexts-touched`](./domain.md#ctxo-contexts-touched) | Named contexts a change touched and whether each is resolved (`--since`, `--committed`, `--staged`, `--check`). Needs `@ctxo/domain` |
 | [`ctxo domain rules`](./domain.md#ctxo-domain-rules) | Generate (`--write`) or check (`--check`) the path-scoped loader rules per context. Needs `@ctxo/domain` |
 | [`ctxo domain discover`](./domain.md#ctxo-domain-discover) | Propose tracker prefixes and test conventions found in the repo (`--json`, `--write`). Needs `@ctxo/domain` |
+| [`ctxo domain map`](./domain.md#ctxo-domain-map) | The context map: rung, suggested rung, rules with tests, open candidates and criteria per context (`--json`). Needs `@ctxo/domain` |
+| [`ctxo domain shadow-specs`](./domain.md#ctxo-domain-shadow-specs) | Shadow-spec candidates of a context with fingerprints and resolutions (`--kinds`, `--all`, `--json`). Needs `@ctxo/domain` |
 | `ctxo verify-index` | CI gate: fail if index drifts from source |
 | `ctxo stats` | Show MCP usage statistics (`--json`, `--days N`, `--clear`) |
 | `ctxo version` | Verbose version report (`--json`, `--short`) |

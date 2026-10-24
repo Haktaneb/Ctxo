@@ -6,7 +6,7 @@ Ctxo is a **Model Context Protocol (MCP) server** that gives AI coding assistant
 
 * **Type:** npm package / CLI tool / MCP server (stdio transport)
 * **Author:** Alper Hankendi
-* **Status:** 14 core MCP tools (plus `get_domain_context` and `get_rule` with `@ctxo/domain`), pnpm monorepo with 10 packages, 987+ tests
+* **Status:** 14 core MCP tools (18 with `@ctxo/domain`: `get_domain_context`, `get_rule`, `find_shadow_specs`, `get_context_map`), pnpm monorepo with 10 packages, 987+ tests
 * **Language:** TypeScript (ESM-first, `"type": "module"`)
 * **Runtime:** Node.js >= 20
 
@@ -73,9 +73,11 @@ ctxo install domain                 # install @ctxo/domain at this CLI's version
 ctxo init --domain                  # also set up the domain part: config defaults, registry skeleton, fold guard hooks, skill
 ctxo init --domain --boundaries by-rung|report   # boundary mode without the prompt
 ctxo contexts-touched --since origin/main [--committed | --staged] [--json] [--check]   # named contexts a change touched
-ctxo verify-domain --since origin/main [--boundaries by-rung|report] [--json]            # CI gate, 11 checks, exit 0/1/2
+ctxo verify-domain --since origin/main [--boundaries by-rung|report] [--json]            # CI gate, 12 checks, exit 0/1/2
 ctxo domain rules --write|--check   # generated path-scoped loader rules (.claude/rules, .cursor/rules)
-ctxo domain discover [--json] [--write]   # propose tracker prefixes, rule trait keys and test folders
+ctxo domain discover [--json] [--write]   # propose tracker prefixes, rule trait keys and test folders (also Characterization and Contract paths)
+ctxo domain map [--json]            # context map: metrics, rung, suggested rung and criteria per context
+ctxo domain shadow-specs <context> [--kinds <k,...>] [--all] [--json]   # shadow-spec candidates with fingerprints and resolutions
 
 # Environment
 DEBUG=ctxo:*                  # enable all debug output
@@ -204,7 +206,9 @@ domain:                        # read only when @ctxo/domain is installed (ADR-0
   coverage: { unowned: warn }  # warn | error
   boundaries: { enforce: by-rung, blockingRungs: [bounded, boring] }   # by-rung | report
   rules: { idPattern: "^[A-Z][A-Z0-9]*-\\d+$", trackerPrefixes: [] }
-  tests: { ruleTraitKeys: [Rule] }
+  tests: { ruleTraitKeys: [Rule] }   # also characterization / contract: { annotations, paths, names } (K13a)
+  rungs: { pinnedCoverage: 0.8 }
+  facts: { trivialLiterals: [0, 1, -1, null, true, false, ""], normalizationMethods: [...], textScanExtensions: [...] }
   guard: { enabled: true, subagents: false }   # base: <ref> is optional
 ```
 
@@ -213,7 +217,7 @@ domain:                        # read only when @ctxo/domain is installed (ADR-0
 * `index.ignoreProjects`: matched against workspace paths; skipped workspaces are never enumerated and their plugin deps are never imported.
 * `cochange`: see [ADR-016](docs/architecture/ADR/adr-016-co-change-engine-and-snapshot-policy.md). One `git log` pass builds `co-changes.json` (window recorded under `window`) and every blast-radius path reads it. Overrides: `--cochange-commits`, `--cochange-since`.
 * `communities` and `contextsView`: see the ADR-016 addendum. `ctxo index` writes `.ctxo/index/contexts-view.json` (skipped by `--skip-community`, not refreshed by `ctxo watch`), including `dataResources` and per-candidate `sharedTables` (ADR-017).
-* `index.facts`: sets `capabilities.facts`, so plugins that implement `extractFacts` write `facts` into the index JSON. No official plugin implements it yet.
+* `index.facts`: sets `capabilities.facts`, so plugins that implement `extractFacts` write `facts` into the index JSON (`[]` when they find nothing). The TypeScript, C#, Java and Go plugins implement it (PR 4); an installed `@ctxo/domain` always requests facts. See [facts](docs/features/domain-knowledge.md#facts).
 * `index.tests`: test files are also recognised by test-framework annotations (`Fact`, `Test`, `TestMethod` and 8 more); see [domain knowledge](docs/features/domain-knowledge.md).
 * Invalid globs (`index.*`, `cochange.include`, `cochange.exclude`, `contextsView.exclude`, `contextsView.hubs.paths`) surface as warnings via `ctxo doctor`; schema violations surface as fails. The loader falls back to defaults on any error (warn-and-continue).
 
@@ -281,7 +285,7 @@ Language support ships as separate plugin packages discovered at runtime by scan
 }
 ```
 
-## MCP Tools (14 core + 2 with @ctxo/domain)
+## MCP Tools (14 core + 4 with @ctxo/domain)
 
 | Tool                        | Purpose                                                                                                    |
 | --------------------------- | ---------------------------------------------------------------------------------------------------------- |
@@ -301,6 +305,8 @@ Language support ships as separate plugin packages discovered at runtime by scan
 | `get_pr_impact`             | Full PR risk assessment (changes + blast radius + co-changes)                                              |
 | `get_domain_context`        | With `@ctxo/domain`: the card of the context that owns a symbol or file (terms, rules with tests and code, contracts, decisions) |
 | `get_rule`                  | With `@ctxo/domain`: one rule by ID with its tests (and link sources), implementing symbols, decisions and provenance |
+| `find_shadow_specs`         | With `@ctxo/domain`: shadow-spec candidates of a context (facts, owned data objects, rules without tests) with fingerprints and resolutions, for the Deletion Test |
+| `get_context_map`           | With `@ctxo/domain`: per-context metrics, the owner's rung, a suggested rung and the status of each criterion (pinned, named, bounded, boring) |
 
 With `@ctxo/domain` and a domain graph, `get_blast_radius` adds `rulesAffected` and `cardsToUpdate`, `get_why_context` `decisions`, `get_context_for_task` `cardExcerpt`, `get_pr_impact` `contextsTouched`, `cardsChanged` and `rulesWithoutTests`, and `get_ranked_context` takes `scope: "domain"` (see [the domain graph](docs/features/domain-knowledge.md#the-domain-graph)).
 
@@ -352,6 +358,12 @@ Working with class hierarchies?
 Need the business rules or decisions behind code? (with @ctxo/domain)
   → get_domain_context (the card of the context that owns the symbol or file)
   → then get_rule (one rule: its tests, code and decisions)
+
+Running the Deletion Test? (with @ctxo/domain)
+  → find_shadow_specs (business logic no rule pins yet), then get_rule
+
+How mature is each context? (with @ctxo/domain)
+  → get_context_map (metrics, suggested rung and what blocks the next one)
 ```
 
 ### MCP Tool Response Format (all tools)
@@ -375,7 +387,7 @@ Need the business rules or decisions behind code? (with @ctxo/domain)
 
 * **Response envelope (`_meta`):** All tool responses include `_meta: { totalItems, returnedItems, truncated, totalBytes }`. Large responses auto-truncated at 8KB (configurable via `CTXO_RESPONSE_LIMIT` env).
 * **Intent filtering:** `get_blast_radius`, `get_logic_slice`, `find_importers`, `find_dead_code` accept optional `intent` parameter for keyword-based result filtering.
-* **Tool annotations:** All 14 core tools (and the 2 domain tools) declare `readOnlyHint`, `idempotentHint`, `openWorldHint` annotations for MCP clients.
+* **Tool annotations:** All 14 core tools (and the 4 domain tools) declare `readOnlyHint`, `idempotentHint`, `openWorldHint` annotations for MCP clients.
 
 ## AI Assistant Rules (MCP Tool Usage — MANDATORY)
 
@@ -481,7 +493,7 @@ try {
 * Valid symbol kinds: `function | class | interface | method | variable | type | table | view | procedure`
 * Valid edge kinds: `imports | calls | extends | implements | uses | reads | writes | executes`
 * Edge targets may be 2-part name references (`<name>::<kind>`); data edges point at canonical names such as `dbo.loans::table` (lowercase, delimiters stripped, default schema `dbo`)
-* Optional (protocol v2): `symbols[].annotations` (`[{ "name": "Trait", "args": ["Category", "Loans"] }]`; `args` and `named` are omitted when empty) and a file-level `facts` array (`{ kind, symbolId, line, text, detail? }`, only with `index.facts: true`)
+* Optional (protocol v2): `symbols[].annotations` (`[{ "name": "Trait", "args": ["Category", "Loans"] }]`; `args` and `named` are omitted when empty) and a file-level `facts` array (`{ kind, symbolId, line, text, detail? }`, only with a fact request: `index.facts: true` or `@ctxo/domain`; `[]` from a fact-capable plugin that found nothing)
 
 ## Release & npm Publishing
 

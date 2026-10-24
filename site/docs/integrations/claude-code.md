@@ -45,7 +45,7 @@ Inside a Claude Code session:
 /mcp
 ```
 
-You should see `ctxo` listed as **connected** with 14 tools (16 with `@ctxo/domain`) and 1 resource
+You should see `ctxo` listed as **connected** with 14 tools (18 with `@ctxo/domain`) and 1 resource
 (`ctxo://status`). If it is missing, run `claude --mcp-debug` to see the spawn
 error.
 

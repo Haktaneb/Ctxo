@@ -75,7 +75,7 @@ extractFacts?(filePath: string, source: string): Promise<CodeFact[]>;
 
 - Produced **only on request**: the host sets `capabilities.facts` when `index.facts: true` is configured and, from PR 2B, when `@ctxo/domain` is installed. A plugin never extracts facts on its own initiative.
 - Facts live in the file's index JSON only (`FileIndexSchema` gains `facts`). SQLite is unchanged.
-- This PR lands the types, the schema and the plumbing. The detectors land in PR 4.
+- This PR lands the types, the schema and the plumbing. The detectors land in PR 4 (see the [addendum](#addendum-fact-detectors-pr-4)).
 
 ### 4. Capabilities
 
@@ -263,3 +263,27 @@ Each language matches a call site with the type information it has:
 - **New symbols for TypeScript properties and Go fields.** They would grow dead-code reports and communities with members that have no behaviour of their own; `named.member` on the class keeps the metadata.
 - **Moving JDT `calls` and `uses` edges from types to methods in this PR.** It would change every Java file's edges and blast radius for a reason unrelated to parity. It stays deferred until the owner asks for it.
 - **An edge helper inside `@ctxo/sql-extract`.** It would turn the two-function library of spec 8.5 into one that knows the plugin protocol's edge shape. Each plugin keeps a short `sqlEdgesFromCallSites` module instead; plugins share no code beyond `@ctxo/plugin-api` and `@ctxo/sql-extract`.
+
+---
+
+## Addendum: fact detectors (PR 4)
+
+PR 4 lands the detectors that section 3 left for later (#156 Phase 4, spec 12.1, K12). The protocol is unchanged: `FACT_KINDS`, `CodeFact` and the optional `extractFacts` are as above, and the four official plugins stay on `apiVersion: '1'`.
+
+### The evidence protocol
+
+- **Evidence, then one finisher.** Analyzers and tree-sitter walkers report syntactic evidence records (`comparison`, `call`, `binding`, `duration`, `route`); `finishFacts` on each plugin's TypeScript side applies the trivial-literal list, evaluates numbers, builds `text` and `detail`, attributes evidence without a symbol to the innermost enclosing symbol (or the module symbol `<file>::<basename>::variable`), sorts, drops duplicates and keeps at most 500 facts per file. Both tiers of a language therefore agree by construction on everything both parsers see.
+- **`--facts=<base64>`.** The Roslyn helper, the JDT analyzer and ctxo-go-analyzer collect evidence only with `--facts=<base64 of UTF-8 JSON { "normalizationMethods": [...] }>`, one argument, and report it as `factEvidence` in their per-file records (omitted when empty or without the flag). Analyzers apply only the normalization patterns and the retry and timeout name rule, to keep their output small. The JDT analyzer adds `"facts":true` to its `done` and `ready` lines; an older JAR ignores the flag, and `@ctxo/lang-java` then prints `analyzer too old for facts; run ctxo install java --full-tier` once.
+- **`PluginContext.config.facts`.** The options reach plugins through the existing `config` record, under a host-reserved key: the CLI sets `config` to `{ facts: <FactDetectorOptions> }` only when facts are requested and a module declares options (the first module in load order wins), else `{}`. A plugin reads `trivialLiterals` and `normalizationMethods` with a per-field fallback to the spec lists.
+- **`facts: []`.** An adapter with `extractFacts` that finds nothing now writes `facts: []`; an adapter without the method writes no key. The absent key is what tells `@ctxo/domain` to run its text scan for that file.
+- **Rules on the TypeScript side.** `fact-types.ts`, `fact-options.ts`, `fact-rules.ts` and `finish-facts.ts` are identical copies in `@ctxo/lang-csharp` (the master), `@ctxo/lang-typescript`, `@ctxo/lang-java` and `@ctxo/lang-go`, and `@ctxo/domain` carries the same rules for its text scan; a drift test fails when a copy differs. Each plugin adds its own `StringLiteralDecoder` for string forms other than a plain double-quoted literal (C# verbatim, interpolated, raw and `u8`; TypeScript single-quoted and substitution-free templates; Java text blocks; Go raw strings). Plugins share no code beyond `@ctxo/plugin-api` and `@ctxo/sql-extract`, so copying is the cost of that rule.
+- **The conformance vectors.** `packages/plugin-api/conformance/fact-vectors.json` (outside the published `files`) holds a `defaults` block, one array of `{ input, expected }` per rule (`canonicalNumber`, `isTrivialLiteral`, `isTrivialLiteralCustom`, `hasRetryTimeoutFragment`, `matchesNormalizationPattern`, `matchesNormalizationPatternCustom`, `normalizeFactText`, `capFactValue`, `detailLiteral`, `joinRoute`) and `languageSpecific.<language>` blocks run with that language's decoder. Every copy and the text scan are tested against them; the vectors, not prose, define the rules.
+
+### Decisions
+
+- **Retry and timeout names on token boundaries (G6, Q10).** A name matches a fragment when its ASCII tokens, read from the start of some token, begin with it. This is a deliberate narrowing of spec 12.1's "a name containing": `settlementDays` contains `ttl` and does not match. The vectors are the definition.
+- **Typed trivial literals (G3).** Numbers, strings, booleans and `null`: the string `"0"` is not the number `0`. Number literals are compared as evaluated doubles, so `0.9999999` is not `1`.
+- **Numbers.** Integer results print as digits; others round the exact double to 6 decimals, ties half away from zero (`BigDecimal(double)` with `HALF_UP` in Java, `big.Rat` in Go, never `FormatFloat`). Integer divisions with a remainder, leading-zero integers, `|v| >= 2^53` and results that round to 0 are not constants, because each language would read them differently.
+- **Tier agreement.** Syntax tiers attribute facts with the IDs their full tier would give (fields, properties, private members). For this, the C# syntax tier now applies file-scoped namespaces, the Java syntax tier indexes the members the JDT tier indexes (and the JDT tier the members of enum constant bodies), and the Go syntax tier drops type parameters from receivers; each is a one-time ID change noted in its changeset. C#'s `(n)` parameter suffix stays on syntax-tier methods; fingerprints ignore it.
+- **No `retry-timeout` facts in test files.** On the owner's precision measurement, the CLI drops that kind for files the shared test-file classifier marks as tests (in index and watch, one place), since plugins do not know the test-file rules. The check is per file and annotation-aware.
+- **Watch parity.** `ctxo watch` loads the modules and requests facts and options as `ctxo index` does, so incremental runs never drop native facts.

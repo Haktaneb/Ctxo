@@ -31,7 +31,7 @@ const USAGE = [
   'Exit codes: 0 no errors, 1 errors, 2 missing index, git failure or an internal error.',
 ];
 
-const HELP_LINE = 'ctxo verify-domain        CI gate for the registry, cards, rule IDs and boundaries (--since, --boundaries, --json)';
+const HELP_LINE = 'ctxo verify-domain        CI gate for the registry, cards, rule IDs, boundaries and shadow-spec resolutions (--since, --boundaries, --json)';
 
 const GLYPH: Record<CheckOutcome['status'], string> = { pass: '✓', warn: '⚠', fail: '✗', skipped: '-' };
 

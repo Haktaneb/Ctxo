@@ -6,6 +6,80 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (ten packages today). Per-pack
 
 ## [Unreleased]
 
+**Fact detectors, the Deletion Test loop and the context map: `find_shadow_specs`, `get_context_map` (#156 Phase 4, PR 4).**
+
+### Added (agentic loop)
+
+- Fact detectors in the four official plugins, in both tiers: `literal-comparison`, `normalization`,
+  `retry-timeout` and `endpoint` facts from ts-morph (TypeScript), Roslyn IOperation and tree-sitter (C#), JDT and
+  tree-sitter (Java) and ctxo-go-analyzer and tree-sitter (Go). One shared rule set (identical `src/facts/` copies,
+  checked by a drift test) and the conformance vectors in `packages/plugin-api/conformance/fact-vectors.json` define
+  conditions, literal forms, the typed trivial-literal list, normalization patterns, retry and timeout names on
+  token boundaries, durations with units, endpoint routes per framework (ASP.NET attributes and minimal APIs,
+  Express, Fastify, Nest, Spring, JAX-RS, `net/http`, gin), attribution to the innermost declaration, 200-code-point
+  text and at most 500 facts per file. Both tiers give the same facts; analyzers collect evidence behind
+  `--facts=<base64>`.
+- The text fallback in `@ctxo/domain`: files whose plugin has no fact detector (no `facts` key) and tracked files
+  with an extension in `domain.facts.textScanExtensions` get facts from a light lexer and single-line heuristics,
+  finished by the same rules; their candidates carry `source: "text"`.
+- `find_shadow_specs({ context, kinds?, includeResolved? })`: shadow-spec candidates of a context (facts, owned
+  tables, views and procedures, and rules without tests), each with file, line, symbol, a line-independent
+  fingerprint (`kind | symbol | normalized text`), its source and its resolution (a rule link, an `Untested:` line,
+  or `shadow-specs.yaml`), plus `counts`, `staleResolutions`, `unknownRules` and `resolutionProblems` (each capped at
+  50 with `<name>Total`).
+- `get_context_map()`: per context its card, rules and the share with tests, characterization and contract test
+  counts, cross-context edges, co-change with other contexts, drift, boundary violations and open candidates, the
+  owner's rung, a suggested rung and the status of every criterion (pinned, named, bounded, boring). Ctxo now has
+  14 core tools, 18 with `@ctxo/domain`.
+- `ctxo domain map [--json]` and `ctxo domain shadow-specs <context> [--kinds <k,...>] [--all] [--json]`: the CLI
+  faces of the two tools (the same bodies without `_meta`); exit 0 done or no registry, 1 bad arguments or an
+  unknown context, 2 registry problems or no index data.
+- `<registry folder>/<context>/shadow-specs.yaml`: hand-written resolutions by fingerprint (`{ rule: <ID> }` or
+  `{ notARule: "<reason>" }`), with the JSON Schema `packages/domain/schema/shadow-specs.schema.json` in the npm
+  package. It is read on every call, so an edit needs no re-index.
+- `ctxo verify-domain` check 12, "Shadow-spec resolutions" (twelve checks now): a `shadow-specs.yaml` that does
+  not parse is an error; stale entries, unknown rules and a `shadow-specs.yaml` outside every context are warnings.
+- `ctxo index` writes `.ctxo/index/domain/shadow-candidates.json` and `.ctxo/index/domain/maturity.json`
+  (`ctxoArtifact` markers, rewritten only when their content changed).
+- Config: `domain.facts` (`trivialLiterals`, `normalizationMethods`, `textScanExtensions`), the K13a conventions
+  `domain.tests.characterization` and `domain.tests.contract` (`annotations`, `paths`, `names`) and
+  `domain.rungs.pinnedCoverage` (default 0.8).
+- Fact detector options: `CtxoModuleRegistration.indexCapabilities.factOptions` (`FactDetectorOptions`:
+  `trivialLiterals`, `normalizationMethods`), the types `TrivialLiteral`, `FactDetectorOptions` and `CodeFact` in
+  `@ctxo/cli/internal`, and `LoadPluginsOptions.factOptions`. The first module that declares options hands them to
+  every plugin as `PluginContext.config.facts`, only when facts are requested.
+- Host API: `CtxoHostServices.readCoChangeEntries(ctxoRoot)` (the validated `co-changes.json` entries, cached by
+  modification time, `ICoChangePort.readEntries`); `shadowSpecs` and `contextMap` join the truncatable fields.
+- The [ADR-017 addendum](docs/architecture/ADR/adr-017-plugin-protocol-v2-and-data-coupling.md#addendum-fact-detectors-pr-4)
+  (the evidence protocol, `--facts=`, `config.facts`, `facts: []`, the vectors) and the
+  [ADR-018 addendum](docs/architecture/ADR/adr-018-domain-knowledge-layer.md#addendum-pr-4-additions-156).
+
+### Changed (agentic loop)
+
+- With a fact request (an installed `@ctxo/domain` or `index.facts: true`), files of fact-capable plugins carry
+  `facts` (possibly empty) in their index JSON: C#, TypeScript, Java and Go repositories with `@ctxo/domain` or
+  `index.facts: true` get a `facts` array in every indexed file's JSON on the next re-index. An adapter without
+  `extractFacts` still writes no `facts` key. Run a full `ctxo index` once after upgrading: entries written by an
+  older CLI, or untouched by an incremental `--commit` run, carry no `facts` key and get `text` candidates until
+  then. This supersedes the PR 2B note that no plugin implements `extractFacts` yet.
+- `ctxo watch` gets the loaded modules from the router and requests facts and options exactly as `ctxo index`
+  does.
+- Test files get no `retry-timeout` facts: `ctxo index` and `ctxo watch` drop that kind for files the shared
+  test-file classifier marks as tests (the default test globs, `index.tests` and a test-framework annotation on one
+  of the file's symbols, as verify-domain and dead-code decide). The other fact kinds stay in test files, and
+  candidates never come from test files.
+- `ctxo domain discover` proposes Characterization and Contract folders that `domain.tests.characterization.paths`
+  and `domain.tests.contract.paths` do not cover; `--write` merges them, keeping the configured globs.
+- `ctxo verify-domain` reads cards, test files and production files once, through the same composition as the
+  index pass; its help line names shadow-spec resolutions.
+- The `ctxo-domain-fold` skill tells the agent to call `find_shadow_specs` for business logic no rule pins yet; its
+  marker is `v0.16`, so `ctxo doctor` reports copies installed by 0.15 as outdated until `ctxo init --only domain`
+  or `ctxo doctor --fix` reinstalls them.
+- One-time ID changes in the syntax tiers, so facts attribute to the IDs the full tiers give: C# file-scoped
+  namespaces, Java enum body members, interface constants, compact constructors and anonymous class members (and the
+  JDT tier the members of enum constant bodies), Go generic receivers without type parameters (see the plugin
+  changelogs).
+
 **Domain graph: rules linked to tests, code and decisions; `get_domain_context`, `get_rule` and the domain search scope (#156 Phase 3, PR 3).**
 
 ### Added (domain graph)
@@ -161,17 +235,6 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (ten packages today). Per-pack
   represent (a `Date`, a `Map`, a `Promise`) and drops the enrichment with one warning, and
   `JsonIndexWriter.deleteEntryFile`, which refuses to delete a `ctxoArtifact` JSON file, and the
   optional `ModuleCommand.usage` (the full text `ctxo <command> --help` prints for a module command).
-- Fact detector options (#156, PR 4): `CtxoModuleRegistration.indexCapabilities.factOptions`
-  (`FactDetectorOptions`: `trivialLiterals`, `normalizationMethods`), the types `TrivialLiteral`,
-  `FactDetectorOptions` and `CodeFact` in `@ctxo/cli/internal`, and `LoadPluginsOptions.factOptions`.
-  The first module that declares options hands them to every plugin as `PluginContext.config.facts`,
-  only when facts are requested. An adapter with `extractFacts` that finds nothing now writes
-  `facts: []`; an adapter without it writes no `facts` key. `ctxo watch` gets the loaded modules from
-  the router and requests facts and options exactly as `ctxo index` does.
-- Test files get no `retry-timeout` facts (#156, PR 4): `ctxo index` and `ctxo watch` drop that kind for
-  files the shared test-file classifier marks as tests (the default test globs, `index.tests` and a
-  test-framework annotation on one of the file's symbols, as verify-domain and dead-code decide). The
-  other fact kinds stay in test files.
 - CI: the domain acceptance tests (`pnpm --filter @ctxo/domain test:e2e`) run in `e2e-tests` and, with
   `CTXO_REQUIRE_DOTNET=1`, in `dotnet-tests` (a C# run that falls back to the syntax tier fails there
   instead of skipping). The e2e job timeout is 15 minutes.

@@ -35,7 +35,7 @@ Copy the canonical Windsurf block from
 ## Verify
 
 1. Open Windsurf's **Cascade** panel.
-2. Click the hammer / tools icon. `ctxo` should appear with 14 tools (16 with `@ctxo/domain`) listed
+2. Click the hammer / tools icon. `ctxo` should appear with 14 tools (18 with `@ctxo/domain`) listed
    underneath.
 3. Prompt Cascade:
 

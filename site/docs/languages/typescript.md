@@ -156,6 +156,25 @@ plugins use. Without `@ctxo/lang-sql` it emits none.
 - ORM and query-builder calls (knex chains, Prisma model calls, TypeORM
   repositories) are not covered.
 
+## Facts
+
+When the host requests facts (`@ctxo/domain` installed, or `index.facts: true`), the plugin reports
+`literal-comparison`, `normalization`, `retry-timeout` and `endpoint` facts into each file's index JSON
+(`facts: []` when it finds none), with the rules every official plugin shares (see [facts](https://github.com/alperhankendi/Ctxo/blob/master/docs/features/domain-knowledge.md#facts)). They
+feed [`find_shadow_specs`](/mcp-tools/find-shadow-specs). At most 500 facts per file, text at most 200 code
+points, and no `retry-timeout` facts in test files.
+
+| Kind | TypeScript and JavaScript |
+| --- | --- |
+| `literal-comparison` | `if`, `while`, `do`, `for` conditions, ternaries and `switch` case clauses with a non-trivial literal (`loans.length >= 5`, `tier === 'gold'`) |
+| `normalization` | `trim`, `toLowerCase`, `toUpperCase` and the other `domain.facts.normalizationMethods` |
+| `retry-timeout` | A numeric constant bound to a retry or timeout name (`const HOLD_TIMEOUT_MS = 7 * 24 * 60 * 60 * 1000` gives `HOLD_TIMEOUT_MS = 604800000`), and `setTimeout(fn, n)` |
+| `endpoint` | Nest `@Get`, `@Post`, ..., `@All` in an exported class decorated `@Controller` (prefix from its path); Express and Fastify `get`, `post`, ..., `all` with a string path and a handler, on a receiver traced to `express` or `fastify`; Fastify `route({ method, url })` |
+
+Single-quoted strings and templates without substitutions are decoded for the trivial-literal check. ts-morph is
+the only tier, in process. Limits: a Nest controller must be exported; `app.use('/api', router)` prefixes are not
+joined; a route registered in top-level code belongs to the module symbol.
+
 ## Monorepo handling
 
 `ctxo index` scans every workspace package independently and the TypeScript

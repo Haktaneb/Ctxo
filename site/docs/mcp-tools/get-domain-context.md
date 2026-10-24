@@ -11,8 +11,8 @@ for the context that owns a symbol or a file, from the domain graph `ctxo index`
 
 ::: info Needs @ctxo/domain
 This tool is registered only when the opt-in [`@ctxo/domain`](/concepts/domain-knowledge) package is installed
-(`ctxo install domain`). Ctxo has 14 core tools, plus `get_domain_context` and [`get_rule`](/mcp-tools/get-rule)
-with the package. It reads the registry (`docs/domain/contexts.yaml`) and the domain graph
+(`ctxo install domain`). Ctxo has 14 core tools; 18 with the package (`get_domain_context`, [`get_rule`](/mcp-tools/get-rule),
+[`find_shadow_specs`](/mcp-tools/find-shadow-specs) and [`get_context_map`](/mcp-tools/get-context-map)). It reads the registry (`docs/domain/contexts.yaml`) and the domain graph
 (`.ctxo/index/domain/graph.json`); it never writes domain text and never fetches external links.
 :::
 
@@ -94,7 +94,7 @@ The response below comes from the synthetic library-lending sample (TypeScript v
       "ruleId": "LEND-05",
       "title": "A loan can be renewed once",
       "line": 27,
-      "untested": "renewals are not built yet",
+      "untested": "no test covers it yet",
       "tests": [],
       "testCount": 0,
       "code": [],

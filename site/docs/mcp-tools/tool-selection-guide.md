@@ -60,6 +60,13 @@ Working with inheritance?
 Need the business rules or decisions behind code? (with @ctxo/domain)
   -> get_domain_context (the card of the context that owns the symbol or file)
   -> then get_rule      (one rule: its tests, code and decisions)
+
+Running the Deletion Test? (with @ctxo/domain)
+  -> find_shadow_specs (business logic no rule pins yet)
+  -> then get_rule     (the rule that pins a candidate)
+
+How mature is each context? (with @ctxo/domain)
+  -> get_context_map (metrics, suggested rung, what blocks the next one)
 ```
 
 ## By task type
@@ -105,6 +112,14 @@ Combine [`find_importers`](/mcp-tools/find-importers) (direct reverse deps) with
 
 Need the business rules or decisions behind code? With `@ctxo/domain` installed, use [`get_domain_context`](/mcp-tools/get-domain-context) with the symbol or file, then [`get_rule`](/mcp-tools/get-rule) for each rule it lists that your change may affect. To find a rule by words, use [`get_ranked_context`](/mcp-tools/get-ranked-context#the-domain-scope) with `scope: "domain"`.
 
+### Running the Deletion Test
+
+Running the Deletion Test? Use [`find_shadow_specs`](/mcp-tools/find-shadow-specs) for the context, then [`get_rule`](/mcp-tools/get-rule) for the rule that should pin each open candidate. Record a candidate that is not a rule in the context's `shadow-specs.yaml` with its fingerprint, copied verbatim.
+
+### How mature is each context?
+
+How mature is each context? Use [`get_context_map`](/mcp-tools/get-context-map): per context the owner's rung, a suggested rung and the status of each criterion (pinned, named, bounded, boring).
+
 ### Class hierarchies
 
 [`get_class_hierarchy`](/mcp-tools/get-class-hierarchy) resolves both ancestors and descendants in one call — much faster than walking `extends` / `implements` edges by hand.
@@ -121,5 +136,5 @@ Need the business rules or decisions behind code? With `@ctxo/domain` installed,
 
 ## See also
 
-- [MCP Tools Overview](/mcp-tools/overview) - 14 core tools, plus 2 with `@ctxo/domain`, grouped by category
+- [MCP Tools Overview](/mcp-tools/overview) - 14 core tools, plus 4 with `@ctxo/domain`, grouped by category
 - [Response Format](/mcp-tools/response-format) — `_meta`, truncation, intent filtering

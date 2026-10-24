@@ -82,6 +82,28 @@ constant value. User-defined interfaces (sqlc's `DBTX`), method values and metho
 no call sites, and the sqlx `...Context` forms are not listed. The tree-sitter tier gives no SQL
 edges, and without `@ctxo/lang-sql` there are none.
 
+## Facts
+
+When the host requests facts (`@ctxo/domain` installed, or `index.facts: true`), both tiers report
+`literal-comparison`, `normalization`, `retry-timeout` and `endpoint` facts with the shared rules
+(see [facts](https://github.com/alperhankendi/Ctxo/blob/master/docs/features/domain-knowledge.md#facts)):
+
+- The analyzer collects evidence behind `--facts=`; the tree-sitter tier finds the same evidence and
+  gives the same facts and symbol ids for the same code.
+- Comparisons in `if`, `for` conditions, expression `switch` cases and tagless `switch` cases;
+  `strings.ToLower`, `strings.TrimSpace` and the other configured normalization methods; numeric
+  constants bound to retry and timeout names, and durations (`n * time.Second`,
+  `time.Duration(n) * time.Minute`, a bare `time.Hour`), whatever their name.
+- Endpoints from `net/http` `HandleFunc` and `Handle` (package functions and `*ServeMux`; a pattern
+  `"GET /loans"` gives the verb) and gin `GET`, `POST`, ..., `Any` and `Handle` on `*gin.Engine`,
+  `*gin.RouterGroup`, `gin.IRouter` and `gin.IRoutes`. `Group()` prefixes are not joined.
+- Raw (backtick) strings are decoded as Go does. The syntax tier matches routes by name, so a
+  `HandleFunc` on another type, and router or path constants declared in another file, can read
+  differently than in the full tier. A file created during `ctxo watch` gets `facts: []` until the
+  next batch.
+- Since this release the syntax tier drops type parameters from method receivers
+  (`List.Get::method`, as the full tier), a one-time id change for generic methods.
+
 ## How the binary is built
 
 On first use, `GoAnalyzerAdapter.initialize()` hashes the analyzer source +

@@ -78,6 +78,20 @@ domain:                   # read only when @ctxo/domain is installed
     trackerPrefixes: []
   tests:
     ruleTraitKeys: [Rule]
+    characterization:
+      annotations: ["Trait:Kind=Characterization", "Tag:characterization"]
+      paths: ["**/Characterization/**"]
+      names: ["[characterization]"]
+    contract:
+      annotations: ["Trait:Kind=Contract", "Tag:contract"]
+      paths: ["**/Contract/**", "**/Contracts.Tests/**"]
+      names: ["[contract]"]
+  rungs:
+    pinnedCoverage: 0.8
+  facts:
+    trivialLiterals: [0, 1, -1, null, true, false, ""]
+    normalizationMethods: [ToLower*, ToUpper*, Trim*, Normalize, toLowerCase, toUpperCase, trim, strings.ToLower, strings.TrimSpace, equalsIgnoreCase]
+    textScanExtensions: [.dart, .ex, .exs, .groovy, .kt, .kts, .php, .py, .rb, .rs, .scala, .swift]
   guard:
     enabled: true
     # base: origin/main   # optional
@@ -93,7 +107,7 @@ domain:                   # read only when @ctxo/domain is installed
 | `index.ignore` | string[] | `[]` | Picomatch globs applied to file paths **after** `git ls-files`. |
 | `index.ignoreProjects` | string[] | `[]` | Picomatch globs applied to workspace roots. Skipped workspaces are never enumerated. |
 | `index.tests` | string[] | `[]` | Extra test-file globs added to the shared default list. Test files are never nodes of the contexts view. Test-framework annotations also mark test files; see [Test files](#test-files). |
-| `index.facts` | boolean | `false` | Ask plugins for code facts (protocol v2). Sets `capabilities.facts`, so `ctxo index` and `ctxo watch` call `extractFacts` on plugins that implement it and write the results into the file's index JSON under `facts`. JSON only; SQLite is unchanged. No official plugin implements `extractFacts` yet. |
+| `index.facts` | boolean | `false` | Ask plugins for code facts (protocol v2). Sets `capabilities.facts`, so `ctxo index` and `ctxo watch` call `extractFacts` on plugins that implement it and write the results into the file's index JSON under `facts`. JSON only; SQLite is unchanged. A fact-capable plugin that finds nothing writes `facts: []`. The TypeScript, C#, Java and Go plugins implement `extractFacts`; an installed `@ctxo/domain` requests facts whatever this says. |
 | `masking.clusterLabels` | string[] | `[]` | Picomatch globs matched against community and candidate-context labels. A matching label is replaced with `[masked-cluster-N]` in the responses of `get_architectural_overlay`, `get_blast_radius`, `get_pr_impact` and `get_why_context`, so sensitive folder names never reach the agent. |
 | `watch.snapshotMinFileChanges` | integer >= 1 | `5` | `ctxo watch` recomputes the community snapshot only after this many distinct files were re-indexed since the last one. Raise it on large repositories, where a recompute blocks for about a second. |
 | `gate.enabled` | boolean | `true` | Enable or disable the safe-edit guard PreToolUse hook. `false` also makes `ctxo init` write the full rules block for Claude Code, and `ctxo doctor` stops expecting the guard. |
@@ -127,13 +141,23 @@ domain:                   # read only when @ctxo/domain is installed
 | `domain.rules.idPattern` | regular expression | `^[A-Z][A-Z0-9]*-\d+$` | Shape of a rule ID in a card. |
 | `domain.rules.trackerPrefixes` | string[] (`^[A-Z][A-Z0-9]*$`) | `[]` | Issue-tracker prefixes. A plain mention of an ID with such a prefix never links to a rule or raises an unknown-ID error; only structured references count. |
 | `domain.tests.ruleTraitKeys` | string[] | `[Rule]` | `Trait` annotation keys whose value is a rule ID, for example `[Trait("Rule", "LEND-03")]`. |
+| `domain.tests.characterization.annotations` | string[] | `[Trait:Kind=Characterization, Tag:characterization]` | Annotations that mark a characterization test: `Name`, `Name:value` (any argument) or `Name:key=value` (the first two arguments or a named one); ASCII case ignored in keys and values. |
+| `domain.tests.characterization.paths` | string[] (globs) | `[**/Characterization/**]` | Test files under these globs hold characterization tests. |
+| `domain.tests.characterization.names` | string[] | `[[characterization]]` | A marker in a test's name or declared title. |
+| `domain.tests.contract.annotations` | string[] | `[Trait:Kind=Contract, Tag:contract]` | The same for contract tests. |
+| `domain.tests.contract.paths` | string[] (globs) | `[**/Contract/**, **/Contracts.Tests/**]` | The same for contract tests. |
+| `domain.tests.contract.names` | string[] | `[[contract]]` | The same for contract tests. |
+| `domain.rungs.pinnedCoverage` | number from 0 to 1 | `0.8` | Share of a context's main paths (endpoint fact symbols and contract symbols) that characterization tests must reach for the suggested rung `pinned`. |
+| `domain.facts.trivialLiterals` | array of numbers, strings, booleans, `null` | `[0, 1, -1, null, true, false, ""]` | Literals that never make a `literal-comparison` fact. Typed: the string `"0"` is not the number `0`. Handed to every plugin as `config.facts`. |
+| `domain.facts.normalizationMethods` | string[] | the spec list above | Methods that make a `normalization` fact: `Name` exact, `Name*` prefix, `q.Name` only for calls written `q.Name(...)`. |
+| `domain.facts.textScanExtensions` | string[] (`.ext`) | the list above | Extensions of tracked files no plugin indexes that the `@ctxo/domain` text scan reads for facts (lower-cased, deduplicated). |
 | `domain.guard.enabled` | boolean | `true` | `false` turns the domain fold guard off. |
 | `domain.guard.base` | string (a ref) | unset | Base ref of the branch range for the guard and for `contexts-touched` without `--since`. Else the merge base with `origin/HEAD`, else `main` or `master`. |
 | `domain.guard.subagents` | boolean | `false` | Also run the guard on `SubagentStop`. |
 
 ### domain
 
-The `domain` section is read by [`@ctxo/domain`](/concepts/domain-knowledge); without the package it is ignored. Each invalid key falls back to its default and is reported by [`ctxo verify-domain`](/cli/domain) (check 1) and by `ctxo doctor` (`domain_registry`), not by the core config check. `ctxo init --domain` writes the defaults and never changes an existing value. `ctxo domain discover --write` adds `domain.rules.trackerPrefixes`, `domain.tests.ruleTraitKeys` and `index.tests` values and removes none.
+The `domain` section is read by [`@ctxo/domain`](/concepts/domain-knowledge); without the package it is ignored. Each invalid key falls back to its default and is reported by [`ctxo verify-domain`](/cli/domain) (check 1) and by `ctxo doctor` (`domain_registry`), not by the core config check. `ctxo init --domain` writes the defaults and never changes an existing value. `ctxo domain discover --write` adds `domain.rules.trackerPrefixes`, `domain.tests.ruleTraitKeys`, `domain.tests.characterization.paths`, `domain.tests.contract.paths` and `index.tests` values and removes none.
 
 ### cochange
 

@@ -1,6 +1,6 @@
 # Domain Knowledge Layer
 
-> [#156](https://github.com/alperhankendi/Ctxo/issues/156). Phase 1: data coupling, plugin protocol v2, `@ctxo/lang-sql` and language parity. Phase 2: the opt-in `@ctxo/domain` package (named contexts, `contexts-touched`, the fold guard, `verify-domain`, loader rules, boundaries and drift, discovery) and "Ctxo domain conventions v1", further down. Later phases (the domain graph, fact detectors) extend this document.
+> [#156](https://github.com/alperhankendi/Ctxo/issues/156). Phase 1: data coupling, plugin protocol v2, `@ctxo/lang-sql` and language parity. Phase 2: the opt-in `@ctxo/domain` package (named contexts, `contexts-touched`, the fold guard, `verify-domain`, loader rules, boundaries and drift, discovery) and "Ctxo domain conventions v1", further down. Phase 3: [the domain graph](#the-domain-graph). Phase 4: [facts](#facts) in every official language, [the Deletion Test loop](#the-deletion-test-loop) and [the context map and rungs](#the-context-map-and-rungs).
 
 ## The problem this solves
 
@@ -97,7 +97,7 @@ export interface CodeFact {
 // ILanguageAdapter gains: extractFacts?(filePath: string, source: string): Promise<CodeFact[]>
 ```
 
-Facts are produced only when the host asks for them: `index.facts: true` in `.ctxo/config.yaml` (no CLI flag). `ctxo index` and `ctxo watch` then call `extractFacts` on plugins that implement it and write the non-empty results into the file's index JSON under `facts`. This phase ships the types, the schema and the plumbing; no official plugin implements `extractFacts` yet, so the setting has no visible effect today. The detectors arrive in a later phase.
+Facts are produced only when the host asks for them: `index.facts: true` in `.ctxo/config.yaml` (no CLI flag), or an installed `@ctxo/domain`, which always asks. `ctxo index` and `ctxo watch` then call `extractFacts` on plugins that implement it and write the result into the file's index JSON under `facts`: a fact-capable plugin that finds nothing writes `facts: []`, and a plugin without `extractFacts` writes no `facts` key. Since PR 4 the TypeScript, C#, Java and Go plugins implement it; see [Facts](#facts) for what they detect.
 
 ### Capabilities
 
@@ -375,7 +375,7 @@ Without the `executes` rule, the candidate that holds a procedure script becomes
 
 ```yaml
 index:
-  facts: false             # true asks plugins for code facts (index JSON only)
+  facts: false             # true asks plugins for code facts (index JSON only); @ctxo/domain always asks
   tests: []                # extra test-file globs
 contextsView:
   weights: { dependency: 1.0, coChange: 1.0, data: 0 }
@@ -384,13 +384,27 @@ domain:                    # only read when @ctxo/domain is installed
   coverage: { unowned: warn }
   boundaries: { enforce: by-rung, blockingRungs: [bounded, boring] }
   rules: { idPattern: "^[A-Z][A-Z0-9]*-\\d+$", trackerPrefixes: [] }
-  tests: { ruleTraitKeys: [Rule] }
+  tests:
+    ruleTraitKeys: [Rule]
+    characterization:
+      annotations: ["Trait:Kind=Characterization", "Tag:characterization"]
+      paths: ["**/Characterization/**"]
+      names: ["[characterization]"]
+    contract:
+      annotations: ["Trait:Kind=Contract", "Tag:contract"]
+      paths: ["**/Contract/**", "**/Contracts.Tests/**"]
+      names: ["[contract]"]
+  rungs: { pinnedCoverage: 0.8 }
+  facts:
+    trivialLiterals: [0, 1, -1, null, true, false, ""]
+    normalizationMethods: [ToLower*, ToUpper*, Trim*, Normalize, toLowerCase, toUpperCase, trim, strings.ToLower, strings.TrimSpace, equalsIgnoreCase]
+    textScanExtensions: [.dart, .ex, .exs, .groovy, .kt, .kts, .php, .py, .rb, .rs, .scala, .swift]
   guard: { enabled: true, subagents: false }   # base: <ref> is optional
 ```
 
 | Key | Default | Effect |
 |---|---|---|
-| `index.facts` | `false` | Sets `capabilities.facts`; plugins that implement `extractFacts` write `facts` into the index JSON |
+| `index.facts` | `false` | Sets `capabilities.facts`; plugins that implement `extractFacts` write `facts` into the index JSON. An installed `@ctxo/domain` requests facts whatever this says |
 | `contextsView.weights.data` | `0` | Weight of data edges in the contexts-view file graph |
 | `index.tests` | `[]` | Extra test-file globs; the fix for the annotation limitations above |
 | `domain.registry` | `docs/domain/contexts.yaml` | Path of the context registry, relative to the repository root |
@@ -400,6 +414,12 @@ domain:                    # only read when @ctxo/domain is installed
 | `domain.rules.idPattern` | `^[A-Z][A-Z0-9]*-\d+$` | Shape of a rule ID |
 | `domain.rules.trackerPrefixes` | `[]` | Issue-tracker prefixes; for these, plain text never links to a rule |
 | `domain.tests.ruleTraitKeys` | `[Rule]` | `Trait` keys whose value is a rule ID |
+| `domain.tests.characterization` | see above | `annotations`, `paths` and `names` that mark a characterization test (K13a, [conventions](#test-conventions-k13a)) |
+| `domain.tests.contract` | see above | The same three lists for contract tests |
+| `domain.rungs.pinnedCoverage` | `0.8` | Share (0 to 1) of a context's main paths that characterization tests must reach for `pinned` |
+| `domain.facts.trivialLiterals` | `[0, 1, -1, null, true, false, ""]` | Literals that never make a `literal-comparison` fact; typed, so `"0"` is not `0` |
+| `domain.facts.normalizationMethods` | the spec list | Method names for `normalization` facts: `Name`, `Name*` (prefix) or `q.Name` (only calls written `q.Name(...)`) |
+| `domain.facts.textScanExtensions` | the list above | Extensions of tracked files no plugin indexes that the text scan reads (lower-cased, deduplicated) |
 | `domain.guard.enabled` | `true` | `false` turns the fold guard off |
 | `domain.guard.base` | unset | Base ref of the branch range, before the detected one |
 | `domain.guard.subagents` | `false` | Also run the guard on `SubagentStop` |
@@ -420,6 +440,11 @@ Each invalid `domain:` key falls back to its default and is reported by `verify-
 | An older CLI | Skips `@ctxo/lang-sql` with a warning and drops the new kinds from a newer index with a warning |
 | `@ctxo/domain` | No domain tools, fields, commands or hooks; a known domain command name prints an install hint and exits 1, `ctxo domain-guard-hook` exits 0 without output |
 | A domain registry | The domain commands print a hint and exit 0; no `context` fields appear |
+| A plugin without facts (a v1 community plugin) | The text-scan fallback in `@ctxo/domain`, marked `source: "text"` |
+| A language without an official plugin (Python and others) | A file-level text scan for facts (extensions in `domain.facts.textScanExtensions`) and rule IDs; no SQL edges, annotations or test symbols |
+| .NET SDK, a JRE or Go (the syntax tiers) | Facts from the tree-sitter tier; they agree with the full tier's (C#'s `(n)` suffix is ignored by fingerprints) |
+| `shadow-candidates.json` or `maturity.json` (never indexed with PR 4) | `find_shadow_specs`, `get_context_map` and `ctxo domain map / shadow-specs` answer with the hint to run `ctxo index` (the CLI faces exit 2) |
+| `boundaries.json` | `get_context_map` answers with `boundariesKnown: false`, `bounded` not met, and a hint |
 
 ## Upgrade notes
 
@@ -429,6 +454,7 @@ Each invalid `domain:` key falls back to its default and is reported by `verify-
 - **ScriptDom restore.** The Roslyn helper now restores `Microsoft.SqlServer.TransactSql.ScriptDom` from NuGet for every C# user, with or without `@ctxo/lang-sql`. If your feed cannot serve it, the plugin falls back to tree-sitter (see above); make the package reachable from your NuGet sources to keep the Roslyn tier.
 - **.NET roll forward.** The helper targets `net8.0` with `RollForward` `Major`: the .NET host keeps using an installed 8.x runtime and rolls forward to a newer major runtime when no 8.x is installed. The built helper has been run with `dotnet exec --fx-version` on .NET 8, 9 and 10, and an integration test checks the `rollForward` setting and runs the helper on the newest installed runtime.
 - **Lone `.csproj`.** A C# repository with one `.csproj` and no solution file now indexes in the Roslyn tier.
+- **Facts in the index (PR 4).** C#, TypeScript, Java and Go repositories with `@ctxo/domain` or `index.facts: true` get a `facts` array (possibly empty) in every indexed file's JSON on the next re-index. Run a full `ctxo index` once after upgrading: index entries written by an older CLI, or left untouched by an incremental `--commit` run, carry no `facts` key, so their files get `text` candidates (the noisier text scan) until a full run rewrites them.
 - **One-time TypeScript, Java and Go index change.** The first re-index after upgrading `@ctxo/lang-typescript`, `@ctxo/lang-java` or `@ctxo/lang-go` rewrites the committed JSON of their files: annotations and test symbols are always on, and SQL edges appear when `@ctxo/lang-sql` is installed. Make it a full `ctxo index`, so every file and every test symbol changes in one commit. Expect the safe-edit gate to fire somewhat more often on well-tested symbols, and symbol-level communities to shift once.
 
 ## The conformance corpus
@@ -577,6 +603,7 @@ The CI gate. It checks structure, never meaning.
 | 9 | `context-map.md` has a table with `Context` and `Rung` columns that agrees with the registry (a missing file while contexts exist is a warning) | error |
 | 10 | Boundaries: edges outside `contracts` | error for `blockingRungs` in `by-rung` mode, else warning |
 | 11 | With `--since`: no unresolved touched contexts | error |
+| 12 | Shadow-spec resolutions: a `shadow-specs.yaml` that does not parse is an error; an entry whose fingerprint matches no current candidate (stale), an entry naming an unknown rule, and a `shadow-specs.yaml` in a folder that belongs to no context are warnings (see [check 12](#verify-domain-check-12)) | error or warning |
 
 - **Exit codes.** 0 when there are no errors (warnings allowed), 1 on errors, 2 on a missing index, a git failure (a base that cannot be found, with the `fetch-depth: 0` hint) or an internal error. With no registry it prints a hint and exits 0. CI never passes silently on an internal failure.
 - **`--json` and stdout.** The JSON report (`registry`, `checks`, `summary`, `exitCode`) is printed on stdout only when the checks run. On exit 2 and on the no-registry path stdout is empty and the message goes to stderr, so a pipeline must read the exit code, not only stdout. The human report always goes to stderr.
@@ -617,6 +644,7 @@ When a registry exists, `ctxo index` runs a domain pass (Phase 2e, on every run 
 | `contexts.json` | The file-to-context map, unowned and multiply owned files, files that moved between contexts through renames in the co-change window |
 | `boundaries.json` | Cross-context edges by kind (allowed through a contract, or violations) and the violations under the configured mode |
 | `history/` | One entry per commit with per-context metrics, a rotating history of 10 |
+| `graph.json`, `shadow-candidates.json`, `maturity.json` | Written by later phases: [the domain graph](#the-domain-graph) and [the loop artifacts](#artifacts-of-the-loop) |
 
 Each artifact carries a `ctxoArtifact` marker (`domain-contexts`, `domain-boundaries`, `domain-history`). The core index reader skips any JSON that carries one, and the writer refuses to delete one as a stale index entry. Artifacts are written only when their content changed.
 
@@ -718,7 +746,7 @@ With `@ctxo/domain` installed, `ctxo doctor` adds three checks, all `pass` or `w
 
 A repository with neither a `.claude/` nor a `.cursor/` folder is checked as a Claude Code setup, so it gets a standing `domain_agent_setup` warning until `ctxo init --only domain` registers the hooks and installs the skill. `ctxo doctor --fix` repairs the agent setup.
 
-The bundled `ctxo-domain-fold` skill carries a version marker (`<!-- ctxo-skill v0.15 -->` in this release, which adds the `get_domain_context` and `get_rule` step). A copy installed by an earlier release is reported as outdated until `ctxo init --only domain` or `ctxo doctor --fix` installs the new one.
+The bundled `ctxo-domain-fold` skill carries a version marker (`<!-- ctxo-skill v0.16 -->` in this release, which adds the `find_shadow_specs` step; v0.15 added the `get_domain_context` and `get_rule` step). A copy installed by an earlier release is reported as outdated until `ctxo init --only domain` or `ctxo doctor --fix` installs the new one.
 
 ## The domain graph
 
@@ -848,7 +876,7 @@ With a valid graph, seven additive fields appear on four core tools, possibly em
 
 ### The two tools
 
-Ctxo has 14 core tools; with `@ctxo/domain` it has 16 (PR 4 adds 2 more). The two tools are registered whenever the package is loaded and answer `{ found: false, hint }` without a registry or a graph.
+Ctxo has 14 core tools; 18 with `@ctxo/domain` (these two plus [`find_shadow_specs` and `get_context_map`](#the-deletion-test-loop)). The two tools are registered whenever the package is loaded and answer `{ found: false, hint }` without a registry or a graph.
 
 - **`get_domain_context({ symbolId?, path? })`**: the card of the named context that owns a symbol or file: the context (id, name, rung, card, paths), its terms with definitions and up to 15 identifiers each, its rules with up to 10 tests and 10 code links each (and the counts), contracts (outbound, inbound, the contracts text and its references), decisions with provenance and open questions. `symbolId` wins over `path`, its file part selects the context and the symbol need not exist; a card path selects that card's context. With neither parameter it lists every context with its counts.
 - **`get_rule({ ruleId })`**: one rule (`LEND-03`; `LEND03`, `Lend03`, `lend_03` and the `rule:LEND-03` id of a domain-scope hit also match): its text and context, every test linked to it with the source of each link, the symbols that implement it, the decisions that mention it and their provenance, and the card values that did not resolve.
@@ -872,6 +900,265 @@ Check 6 reads card values and production comments the same way the graph does:
 - A `Tests:` or `Code:` value whose file part does not exist, or is a directory, is an error: `LEND-03: Tests file "<file>" does not exist`, `LEND-03: Code file "<file>" does not exist`.
 - A value with `::` that the index does not hold is a warning: `LEND-03: Code: "<value>" is not an indexed symbol; it links to its file`.
 - An unknown rule ID in a production `rule:` comment is a warning, `rule: comment names unknown rule LEND-09`, only when its prefix is a rule prefix. In a test file an unknown ID in a `rule:` comment stays an error, as in PR 2B.
+
+## Facts
+
+A rule that lives only in code is invisible to a card: `if (loans.length >= 5)` is the loan limit, whether or not any card says so. Facts are the small pieces of code that look like business logic. Since PR 4 the four official plugins detect them in both tiers, `@ctxo/domain` scans the text of every other language, and [the Deletion Test loop](#the-deletion-test-loop) turns them into candidates a team resolves one by one.
+
+| Fact kind | Detects | `detail` |
+|---|---|---|
+| `literal-comparison` | A comparison in a condition (`if`, `while`, ternary, `switch case`, `when`) with a literal operand other than 0, 1, -1, null, true, false, empty string (configurable) | `operator`, `literal` |
+| `normalization` | String normalization on a value: `ToLower*`, `ToUpper*`, `Trim*`, `Normalize`, `toLowerCase`, `toUpperCase`, `trim`, `strings.ToLower`, `strings.TrimSpace`, `equalsIgnoreCase` (configurable list) | `method` |
+| `retry-timeout` | A numeric constant bound to a name containing retry, retries, attempt, timeout, delay, backoff, ttl, expir; or a duration constructor (`TimeSpan.From*`, `Duration.of*`, `time.Second * n`, `setTimeout(..., n)`) | `name`, `value` |
+| `endpoint` | A public route: C# `[HttpGet]`/`[Route]`/`MapGet`, TS Express/Fastify/Nest, Go `http.HandleFunc`/gin, Java `@GetMapping` and friends | `verb`, `route` |
+
+**When facts are produced.** With `@ctxo/domain` installed, or `index.facts: true`, `ctxo index`, the post-commit hook (`ctxo index --commit HEAD`) and `ctxo watch` ask every plugin for facts and hand them the `domain.facts` lists (`PluginContext.config.facts`). A fact-capable plugin writes `facts` into each file's index JSON, `[]` when it finds nothing; a plugin without `extractFacts` writes no key, and its files go to the text scan. Facts live in the JSON index only. Without `@ctxo/domain` and with `index.facts: false`, the index is byte-identical to earlier releases.
+
+### The fact contract
+
+The rules are shared byte for byte by the four plugins and the text scan (`fact-rules.ts`, `finish-facts.ts`, `fact-types.ts` in each plugin's `src/facts/`, a drift test keeps them identical). The conformance vectors in `packages/plugin-api/conformance/fact-vectors.json` define every rule below; where this text and the vectors disagree, the vectors win.
+
+- **Conditions.** The tests of `if`, `while`, `do ... while`, the `for` condition, the ternary condition, C# `when` guards (case labels, switch arms, catch filters), Go tagless `switch` cases, and switch case labels and arms. Comparisons (`==`, `!=`, `===`, `!==`, `<`, `<=`, `>`, `>=`, C# relational, constant and `not` patterns) are found through `&&`, `||`, `!`, parentheses and C# `and` / `or` patterns, never inside calls or lambdas. Exactly one operand must be a literal. A case label gives the text `<subject> case <label>` with operator `case`.
+- **Literal forms.** Numbers (optionally signed, with `_`, type suffixes, hex, binary, octal and exponent forms), strings, chars, `true`, `false`, `null`, `nil` and `None`. The shared rules decode only a plain double-quoted string (and a plain single-quoted char) with the common escapes; every other string form (verbatim, interpolated, raw, single-quoted and template strings, Java text blocks, Go raw strings) goes through the language's own decoder. A literal no decoder can read is not a constant, so it is never trivial.
+- **Trivial literals** (`domain.facts.trivialLiterals`, default `[0, 1, -1, null, true, false, ""]`) are typed: a number literal is evaluated and compared exactly with the list's numbers (`0.0` and `0x0` are `0`, `0.9999999` is not `1`), strings compare by decoded content (`"0"` is not `0`), `null`, `nil` and `None` match `null`, booleans match case-insensitively.
+- **Numeric constants** are a number literal or `+ - * /` arithmetic of number literals with parentheses; named constants are not followed, so the tiers agree. An integer result prints as plain digits (`30 * 1000` gives `30000`); any other result is rounded to 6 decimals (half away from zero). Not a constant: a division of two integers with a remainder (`7 / 2`), a leading-zero integer other than `0` (`017`), division by zero, `|v| >= 2^53`, and a non-zero result that rounds to 0.
+- **Normalization patterns** (`domain.facts.normalizationMethods`): `Name` matches the callee's simple name exactly, `Name*` by prefix (case-sensitive), `q.Name` only a call written `q.Name(...)` (Go's `strings.ToLower`). No receiver type check. `detail.method` is the simple name.
+- **Name fragments.** A retry or timeout name is split into ASCII tokens (camelCase, PascalCase, digit runs; every other character separates). A fragment of `retry`, `retries`, `attempt`, `timeout`, `delay`, `backoff`, `ttl`, `expir` matches when the tokens, read from the start of some token, begin with it: `TimeOut`, `tokenTTL`, `MAX_RETRIES`, `HTTPTimeout` match, `settlementDays` and `relay` do not. This token-boundary rule is a deliberate narrowing of spec 12.1's "a name containing" (`settlementDays` contains `ttl`); the vectors are the definition.
+- **Bindings.** Declarations with an initializer (variables, constants, fields, properties), assignments, object-literal and initializer members, named arguments, annotation members and Go composite-literal keys. Text `<name> = <value>`, for example `MaxRetries = 3`.
+- **Durations and units.** C# `TimeSpan.From{Milliseconds,Seconds,Minutes,Hours,Days,Microseconds}(n)`, Java `Duration.of{Millis,Seconds,Minutes,Hours,Days,Nanos}(n)` and `Duration.of(n, ChronoUnit.X)`, Go `n * time.X`, `time.X * n`, `time.Duration(n) * time.X` and a bare `time.X`, TypeScript and JavaScript `setTimeout(fn, n)`, with the units `ns`, `us`, `ms`, `s`, `min`, `h`, `d`. A duration bound to a name is one fact under that name, whatever the name (`HoldTimeout = 90min`); an unbound one is named by the constructor's last two segments (`TimeSpan.FromSeconds = 30s`); `setTimeout` is always `setTimeout`.
+- **Endpoints.** Text `<VERB> <route>`; verbs upper case, `ANY` when none is declared; routes joined with one `/` between parts, a leading `/`, the empty route `/`.
+  - C#: `HttpGet`, `HttpPost`, `HttpPut`, `HttpDelete`, `HttpPatch`, `HttpHead`, `HttpOptions` (template `args[0]`, else `named.template` or `named.Template`), the class `[Route]` as prefix, `[Route]` alone on a method gives `ANY`; a method template starting with `/` or `~/` ignores the class route; `[controller]` is the class name without `Controller`, `[action]` the method name. Minimal APIs: `MapGet`, `MapPost`, `MapPut`, `MapDelete`, `MapPatch` with a string literal first argument.
+  - TypeScript: Nest `Get`, `Post`, `Put`, `Delete`, `Patch`, `Head`, `Options`, `All` (`ANY`) in an exported class decorated `Controller` (prefix `args[0]` or `named.path`); Express and Fastify `get`, `post`, `put`, `delete`, `patch`, `head`, `options`, `all` with a string first argument and a handler, on a receiver traced to `express` or `fastify`; Fastify `route({ method, url })` (a method array gives one fact per method).
+  - Java: Spring `GetMapping`, `PostMapping`, `PutMapping`, `DeleteMapping`, `PatchMapping`, `RequestMapping` (verbs from `named.method`, `RequestMethod.GET` gives `GET`, none gives `ANY`; paths from `args`, else `named.path`, else `named.value`; the class `RequestMapping` is the prefix); JAX-RS `GET`, `POST`, `PUT`, `DELETE`, `PATCH`, `HEAD`, `OPTIONS` with `Path` on the method and the class.
+  - Go: `net/http` `HandleFunc` and `Handle` (package functions and `*ServeMux` methods; a pattern `"GET /x"` gives `GET /x`, else `ANY`); gin `GET`, `POST`, `PUT`, `DELETE`, `PATCH`, `HEAD`, `OPTIONS`, `Any`, `Handle(method, path)` on `*gin.Engine`, `*gin.RouterGroup`, `gin.IRouter` and `gin.IRoutes`.
+  - Mount prefixes (Express `app.use('/api', router)`), gin groups and `MapGroup` are not followed.
+- **Attribution.** A fact belongs to its innermost enclosing declaration: the full tier's own symbol ID, and in a syntax tier the ID its full tier would give for members it does not index on its own (fields, properties, private members). Code outside every declaration belongs to the module symbol `<file>::<basename without its last extension>::variable`; annotation endpoints use the annotated method.
+- **Text and the cap.** `text` is single-line: whitespace runs collapse to one space, trimmed, at most 200 code points (never inside a surrogate pair). `detail.literal` is capped the same way, with CRLF and CR turned into LF first. Facts are sorted by line, kind, text and `detail`, duplicates dropped, and at most 500 are kept per file (the first 500 in that order), so a generated file cannot balloon the committed index.
+- **Test files.** `retry-timeout` facts are dropped for files the shared test-file classifier marks as tests (the default test globs, `index.tests`, and a test-framework annotation on one of the file's symbols). The check is per file and annotation-aware: it reads the annotations of the file's own symbols in the index, so a C# test class without a matching glob counts as a test file once it is indexed with annotations. The other kinds stay in test files, but [candidates](#candidates-and-their-sources) never come from test files.
+
+### Tiers per language
+
+| Language | Primary tier | Syntax tier |
+|---|---|---|
+| C# | Roslyn IOperation (`ctxo-roslyn --facts=`), .NET SDK 8+ | tree-sitter |
+| TypeScript / JavaScript | ts-morph, in process | none (ts-morph is the only tier) |
+| Java | Eclipse JDT (`@ctxo/lang-java-analyzer`, `--facts=`), JRE 11+ | tree-sitter |
+| Go | ctxo-go-analyzer (`--facts=`), Go 1.22+ | tree-sitter |
+
+Both tiers give the same `kind`, `line`, `text` and `detail` for the same code, and the same `symbolId` once C#'s `(n)` parameter suffix on syntax-tier methods is removed; fingerprints ignore that suffix, so a repository indexed on machines with different tiers resolves the same candidates. Analyzers report syntactic evidence only; each plugin's TypeScript side turns it into facts with the shared finisher, so tiers agree by construction on everything both parsers see.
+
+### The text fallback
+
+For an indexed file whose plugin has no fact detector (a `facts` key is absent), and for tracked files no plugin indexes whose extension is in `domain.facts.textScanExtensions`, `@ctxo/domain` runs a text scan during the domain index pass: a light lexer strips comments and strings (per comment style), then single-line heuristics find comparisons in conditions, case labels, normalization calls, retry and timeout bindings, durations and routes (`[HttpGet("x")]`, `@GetMapping("x")`, `MapGet("x")`, `HandleFunc("x")`, `@app.get("x")` and `@app.route("x", methods=[...])` decorators, and `<word>.get("/x")` router calls). The evidence goes through the same finisher, so the facts follow the contract above; candidates from it carry `source: "text"`. Only files with exactly one owning context are scanned, test files never, files over 1 MiB and binary files are skipped.
+
+The heuristics are line-based, so the text scan is less precise than the plugins: a comparison split over lines is missed, and a few shapes are read differently (see [known limits](#known-limits-of-facts-and-the-loop)).
+
+## The Deletion Test loop
+
+The Deletion Test asks of each piece of business-looking code: if this line were deleted, would a rule in a card say it was wrong? `find_shadow_specs` lists the code that fails the test, the shadow specs, so an agent or an owner can pin each one with a rule or record why it is not one. The loop is: run `ctxo index`, call `find_shadow_specs` for a context, for each open candidate find or write the rule (`get_rule` shows the rule's tests), then record the outcome in `shadow-specs.yaml` or link the rule to the code. Every outcome is text a person wrote; Ctxo never decides that something is a rule.
+
+### Candidates and their sources
+
+| Kind | Candidate | `source` |
+|---|---|---|
+| `literal-comparison`, `normalization`, `retry-timeout`, `endpoint` | A fact in a non-test file owned by exactly one context | `native` (the plugin's facts) or `text` (the text scan) |
+| `data-resource`, `procedure` | A `table` or `view` (`DATA_RESOURCE_KINDS`) or a `procedure` symbol in a file the context owns | `index` |
+| `rule-without-tests` | A rule of the context's card without a test link | `card` |
+
+Each candidate has `fingerprint`, `kind`, `file`, `line` (1-based), `symbolId` or `ruleId`, `text`, `detail` when the fact has one, `source` and, when resolved, `resolution`. Exact duplicates are dropped; several candidates may share one fingerprint (overloads, the same text twice in a method, a procedure defined in two migrations), and one resolution entry resolves them all. Counts are always per candidate, never per fingerprint.
+
+### Fingerprints
+
+A fingerprint is `<kind> | <symbol> | <normalized text>`, independent of line numbers: a moved line keeps its fingerprint, a changed literal changes it, so the candidate reopens. Spec 12.2's example:
+
+```text
+literal-comparison | LoanPolicy.CanBorrow | loans.Count >= 5
+```
+
+- **The symbol part** is the last two `.` segments of `<file basename without its last extension>.<symbol name without a trailing (...)>`: `src/Lending/LoanPolicy.cs::Lending.LoanPolicy.CanBorrow::method` gives `LoanPolicy.CanBorrow`, `src/lending/loan-policy.ts::canBorrow::function` gives `loan-policy.canBorrow`, and a C# syntax-tier `CanBorrow(2)` gives the same part as the full tier's `CanBorrow`. A `.` inside `<...>`, `[...]`, `(...)` or a quoted segment does not split.
+- **Members whose name holds a dot keep their containing type.** This is the general rule: any member whose name contains a dot, such as a C# explicit interface implementation (`Loan.IComparable<Lending.Loan>.CompareTo`) or a TypeScript computed or string-literal member (`LoanList.[Symbol.iterator]`), keeps the containing type in the symbol part, so two classes' iterators or `CompareTo` methods never collide.
+- **The text part** is the fact text, normalized (whitespace collapsed, at most 200 code points); for a rule without tests, the rule title (or the ID when the heading has none); for a data object, its kind and name.
+- **Encoding.** `%` and `|` in the kind and symbol parts are written `%25` and `%7C`, so the parts never hold a separator. Copy fingerprints verbatim into `shadow-specs.yaml`. A lower-case `%7c` matches too; a decoded `|` in the symbol part splits the fingerprint differently and is reported stale. Spacing around the separators does not matter.
+
+### Resolution order
+
+1. **A rule link.** A candidate whose symbol is reached by a rule's code links (card `Code:` lines and `rule:` comments, file links included) is resolved `{ by: "rule-link", rules: [...] }`.
+2. **`Untested:`.** A rule without tests whose card has an `Untested:` line is resolved `{ by: "untested", reason }`.
+3. **`shadow-specs.yaml`.** Otherwise an entry with the candidate's fingerprint resolves it: `{ by: "shadow-specs", rule }` (the rule ID canonicalized, `lend03` gives `LEND-03`) or `{ by: "shadow-specs", notARule }`. A candidate already resolved by 1 or 2 keeps that resolution. An entry naming a rule no card defines resolves nothing and is reported in `unknownRules`.
+
+### `shadow-specs.yaml`
+
+One file per context, next to the registry: `<registry folder>/<context>/shadow-specs.yaml` (`docs/domain/lending/shadow-specs.yaml` with the default registry). The team writes it; Ctxo only reads it, on every call, so an edit takes effect without a re-index.
+
+```yaml
+- fingerprint: "literal-comparison | LoanPolicy.CanBorrow | loans.Count >= 5"
+  resolution: { rule: LEND-03 }
+- fingerprint: "retry-timeout | SmtpSender.Send | Timeout = 30s"
+  resolution: { notARule: "transport timeout, not a business rule" }
+```
+
+- An empty file, comments only, `[]` or a null document (`---`, `~`, `null`) hold no entries.
+- A root that is not a list or a YAML syntax error is one error, and no entry of the file applies. So is a file that is not read: its real path lies outside the repository (a symlink pointing out), it is over 1 MiB, binary or not valid UTF-8.
+- A broken item (a missing or empty fingerprint, a resolution that is not exactly one of `rule` or `notARule`, a repeated key) is an error and is skipped; the valid items still apply. A repeated fingerprint is a warning, and the first entry wins.
+
+The schema (`packages/domain/schema/shadow-specs.schema.json`, shipped in the npm package):
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ctxo.dev/schema/domain-shadow-specs.schema.json",
+  "title": "Ctxo shadow-spec resolutions",
+  "description": "<registry folder>/<context>/shadow-specs.yaml: resolutions of shadow-spec candidates by fingerprint (find_shadow_specs). One entry resolves every candidate with its fingerprint; an entry matching no candidate is stale. An empty file or a null document (---, ~, null) holds no entries.",
+  "type": ["array", "null"],
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["fingerprint", "resolution"],
+    "properties": {
+      "fingerprint": {
+        "description": "<kind> | <symbol> | <normalized text>, as find_shadow_specs reports it; spacing around the separators does not matter.",
+        "type": "string",
+        "pattern": "^[^|]*\\S[^|]*\\|[^|]*\\S[^|]*\\|[\\s\\S]*\\S"
+      },
+      "resolution": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["rule"],
+            "properties": {
+              "rule": { "description": "The rule that states this candidate (LEND-03; lend03 also works).", "type": "string", "pattern": "\\S" }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["notARule"],
+            "properties": {
+              "notARule": { "description": "Why this candidate is not a business rule.", "type": "string", "pattern": "\\S" }
+            }
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
+### `find_shadow_specs`
+
+```json
+{ "context": "lending", "kinds": ["literal-comparison"], "includeResolved": true }
+```
+
+- `context` (required): a context ID from the registry. `kinds` (optional): any of `literal-comparison`, `normalization`, `retry-timeout`, `endpoint`, `data-resource`, `procedure`, `rule-without-tests`; omitted or an empty list means all kinds. `includeResolved` (optional, default false): also return resolved candidates with their resolution.
+- The response: `context` (`id`, `name`, `rung`), `counts` (`open`, `resolved` and `byKind`, `{ <kind>: { open, resolved } }` for each kind that has candidates, after the `kinds` filter), `shadowSpecs` (the candidates without their `context`), `resolutionFile` (the path of the context's `shadow-specs.yaml`, whether or not it exists), `staleResolutions` (`{ fingerprint, line }`), `unknownRules` (`{ fingerprint, rule, line }`) and `resolutionProblems` (`{ line, severity, message }`).
+- An entry with an unknown rule that matches no candidate appears in both `staleResolutions` and `unknownRules`; the two lists are independent and never summed.
+- `staleResolutions`, `unknownRules` and `resolutionProblems` are capped at 50 at the source, with `staleResolutionsTotal`, `unknownRulesTotal` and `resolutionProblemsTotal` when cut. Only `shadowSpecs` (and `contextMap` of `get_context_map`) is truncated by the envelope, with `_meta.hint`.
+- Graceful misses: no registry, a registry with problems, a context the registry does not name, or no loop artifacts give `{ found: false, hint }`; an artifact built for another registry, or cards changed since the last index, answer with `stale: true` and a hint to run `ctxo index`.
+- Under `ctxo watch`, candidates refresh only on the next `ctxo index`, as `graph.json` does.
+
+### `ctxo domain shadow-specs`
+
+```bash
+ctxo domain shadow-specs lending [--kinds literal-comparison,endpoint] [--all] [--json]
+```
+
+The CLI face of `find_shadow_specs`: `--json` prints exactly the tool's body without `_meta`; the human output lists each candidate (`open` or `resolved`, kind, `file:line`, text and resolution) with its fingerprint on the next line, then the stale entries, the unknown rules and the file problems. `--all` adds resolved candidates. Exit 0 when done or with no registry, 1 for bad arguments, an unknown kind or an unknown context, 2 for registry problems or no index data. The CLI output is not masked, as for `ctxo contexts --json`; `shadow-candidates.json` holds the same text the index JSON `facts` already hold.
+
+### `verify-domain` check 12
+
+Check 12, "Shadow-spec resolutions", computes the candidates from the current index and repository (never from the stored artifacts) and reports, per context: each parse problem of its `shadow-specs.yaml` at its own severity (a file that does not parse is an error, so the run exits 1), each stale entry (`stale resolution "<fingerprint>" matches no candidate of <id>`, warning), each unknown rule (`resolution names unknown rule <ID>`, warning), and each `shadow-specs.yaml` in a folder that belongs to no context (`<path> belongs to no context`, warning). With registry problems check 12 is skipped, like checks 2 to 11. When the candidates cannot be built, stale entries are not reported (staleness is unknown); the other findings still are.
+
+## The context map and rungs
+
+`get_context_map` puts every named context on one page: what it owns, how well its rules are tested and how mature it is, with a suggested rung next to the owner's. The suggestion never changes the registry.
+
+### Metrics per context
+
+| Field | Meaning |
+|---|---|
+| `card` | `path` and `present` (the file exists inside the repository) |
+| `rules` | `count`, `withTests` and `share` (3 decimals; `null` without rules) |
+| `tests` | Characterization and contract test counts (the K13a conventions below) |
+| `crossContextEdges` | Edges `in` and `out` across the context's boundary, from `boundaries.json` |
+| `coChange` | Co-change `pairs` with files of other contexts at frequency 0.5 or more (non-test files), and the `top` 10 |
+| `drift` | `crossShare`, `movedFiles`, `distinctCommits` and `confidence` from the domain history; `null` without history |
+| `boundaryViolations` | `total`, `errors`, `warnings` (in or out) |
+| `shadowSpecs` | `open` and `resolved` candidates, after the `shadow-specs.yaml` entries |
+| `rung`, `suggestedRung` | The owner's rung from the registry and the suggested one |
+| `criteria` | The status of each rung criterion, computed on its own, so the owner sees what blocks the next rung even when a lower one already fails |
+| `boundariesKnown` | False when there is no `boundaries.json`: the edge and violation counts are 0 and unknown, and `bounded` is not met |
+
+`summary` counts `contexts`, `agree`, `suggestedAbove` and `suggestedBelow`; `settings.pinnedCoverage` echoes the threshold.
+
+### The ladder
+
+The ladder is cumulative: the suggested rung is the highest one whose criterion and every lower one are met, `fear` otherwise.
+
+| Rung | Criterion (each reported in `criteria`) |
+|---|---|
+| `fear` | None of the criteria below hold |
+| `pinned` | At least `domain.rungs.pinnedCoverage` (default 0.8) of the context's main paths are reached from a characterization test, compared on the exact ratio (`coverage` is rounded for display). Main paths are the symbols of its `endpoint` facts plus its contract symbols. A context without main paths is pinned when it has at least one characterization test. Reported: `mainPaths`, `reached`, `coverage`, `threshold`, `characterizationTests`, `unreached` (at most 20) |
+| `named` | A card exists, its Language section has at least one term, and every such term has a glossary entry (the context's own or a repo-wide one). Reported: `card`, `terms`, `inGlossary`, `missing` (at most 10, in card order) |
+| `bounded` | Every contract symbol is reached from a contract test, and no boundary violation leads in or out. Met vacuously for a context with no contract symbols and no violations: every cross-context edge outside a contract is already a violation. Not met without `boundaries.json` (`boundariesKnown: false`). Reported: `contractSymbols`, `reached`, `unreached`, `boundaryViolations` |
+| `boring` | Every rule has a test link (`Untested:` rules count as without tests) and no shadow-spec candidate is open. Reported: `rules`, `rulesWithoutTests`, `openCandidates` |
+
+**Contract symbols** of a context are the symbols, other than containers, in its files that another context's `contracts` lists as allowed targets.
+
+### Test conventions (K13a)
+
+A test case is a `function` or `method` symbol of a test file that contains no other `function` or `method` of the file (TypeScript test blocks, xUnit, NUnit, MSTest and JUnit methods, Go test functions). It is a characterization or a contract test when any one of these matches:
+
+- **`annotations`**: `Name` (the annotation name), `Name:value` (any argument equals `value`) or `Name:key=value` (the first two arguments, or a named argument), ASCII case ignored in keys and values. The annotation may sit on the test or on a symbol of its file that spans it (a test class). Defaults: `Trait:Kind=Characterization`, `Tag:characterization`; `Trait:Kind=Contract`, `Tag:contract`.
+- **`paths`**: globs on the test file's path. Defaults `**/Characterization/**`; `**/Contract/**`, `**/Contracts.Tests/**`.
+- **`names`**: a marker in the test's name or in a declared test title on a line it spans (ASCII case ignored). Defaults `[characterization]`, `[contract]`.
+
+A test counts for the context that owns its file alone; a test in an unowned or multiply owned file counts for every context whose main paths its reach touches. `ctxo domain discover` proposes paths for folders named `Characterization`, `Contract`, `Contracts` or `Contracts.Tests` that the configured globs do not cover, as `<folder>/**`, keeping the configured globs in the proposed list; `--write` merges them into `domain.tests.characterization.paths` and `domain.tests.contract.paths`.
+
+### Reachability
+
+A test reaches what its forward code edges reach: `calls`, `uses`, `imports`, `extends`, `implements`. Data edges (`reads`, `writes`, `executes`) are never followed. A test without edges of its own starts from its container (JDT edges are type-level), and a reached type or file stands for what it contains. Limits: only graph edges count, so a test that calls an endpoint over HTTP (an in-process test server, a REST client) reaches nothing in the graph, and an endpoint registered in top-level code belongs to the module symbol, which a test reaches only through an import of that file. Such contexts can stay below `pinned` while being well tested; the owner's `rung` is not affected.
+
+### `get_context_map`
+
+No parameters. The response is `contextMap` (one entry per registry context, in registry order), `summary` and `settings`. Each entry can reach 4 to 5 KB, so a large registry is truncated by the envelope (`contextMap` is truncatable) with `_meta.hint` pointing to `ctxo domain map --json`. Graceful misses as for `find_shadow_specs`; a missing `boundaries.json` answers the map with a hint, and stale artifacts add `stale: true` and the hint.
+
+### `ctxo domain map`
+
+```bash
+ctxo domain map [--json]
+```
+
+Prints the whole map with no truncation: one summary line, then per context its rung, suggested rung, rules with tests, open candidates and a check or cross per criterion. `--json` prints the `get_context_map` body without `_meta`. Exit codes as for `ctxo domain shadow-specs`.
+
+### Artifacts of the loop
+
+`ctxo index` (the domain pass, also on the post-commit hook) writes two more artifacts next to `graph.json`, each with a `ctxoArtifact` marker, `registryHash` and `cardsHash`, rewritten only when their content changed and byte-identical for the same input:
+
+| File | Holds |
+|---|---|
+| `.ctxo/index/domain/shadow-candidates.json` | `"ctxoArtifact": "domain-shadow-candidates"`: every context's candidates with fingerprints and their automatic resolutions (rule links, `Untested:`); `shadow-specs.yaml` entries are applied at query time |
+| `.ctxo/index/domain/maturity.json` | `"ctxoArtifact": "domain-maturity"`: per context the characterization and contract test counts, main paths and contract symbols with their reach, and cross-context co-change |
+
+- When the graph cannot be built, both stay as they are. When the maturity facts fail, neither is updated, so the previous `maturity.json` stays and can be read together with the current `boundaries.json`.
+- `ctxo watch` does not run the domain pass: candidates and the map refresh only on the next `ctxo index`.
+- The tools check each artifact's `registryHash` against the current registry and answer from stale data with `stale: true` and a hint.
+
+## Known limits of facts and the loop
+
+- **C#:** only the first class `[Route]` is used; a `Route` inherited from a base class is missed.
+- **TypeScript:** a Nest controller must be exported to give endpoints; Express `app.use('/api', router)` prefixes are not joined.
+- **Java:** an older `@ctxo/lang-java-analyzer` JAR ignores `--facts=`; the plugin prints `analyzer too old for facts; run ctxo install java --full-tier` once and the full tier gives no facts. A comparison whose number literal overflows `int`, and hex, octal or binary literals above `INT_MAX`, give no fact.
+- **Go:** gin `Group()` prefixes are not joined; the syntax tier matches routes by name (a `HandleFunc` on a non-`ServeMux` type, router or path constants declared in another file, and a named map type with identifier keys read differently than in the full tier); a file created during `ctxo watch` gets `facts: []` until the next batch.
+- **Evidence cap:** a tree-sitter tier collects at most 2,000 pieces of evidence per file before the finisher keeps 500 facts.
+- **Text scan:** lines over 20,000 UTF-16 code units are skipped (minified or generated lines carry no useful facts); Kotlin `val x: Int = 3`, `when` arms not at line start and `for` conditions are missed; `"""` strings are lexed with backslash escapes in every style (a Kotlin raw `"""C:\"""` swallows the following lines); `methods=[...]` counts only inside the route call's own parentheses, deduplicated, at most 16 verbs (`methods=['GET', ('POST')]` drops POST); a file whose facts collapse to few under the 200-code-point text cap is scanned in full (linear). Comparisons in returned expressions (`=> loans < 5`) are not conditions under spec 12.1, so they give no fact: this is the specified behaviour, not a miss.
+- **Fingerprints:** a quote right after `[` is not a quote, so a contrived `["a].b"]` member splits at its dot.
+- **`shadow-specs.yaml`:** on a case-insensitive file system a folder `Lending/` for context `lending` is read and also listed as an orphan; the line of the first bad UTF-8 byte counts only LF (a lone-CR file reports line 1); an outside-pointing `shadow-specs.yaml` symlink in an unknown-context folder, and an in-repo link with a non-context name pointing at a context folder, are listed as orphans; a permission error on one child folder empties the orphan list.
+- **Config:** on `ctxo index` and `ctxo watch` a `[ctxo:config]` warning can print a second time.
+- **Discovery:** the `<folder>/x` probe misses globs limited to one extension; proposed convention paths are not validated as globs.
+- **Co-change cache:** keyed on modification time and size, with no racy-stamp rule.
+- **MCP server state:** the domain history is cached by its folder's stamp, so a history entry rewritten in place is seen only after a server restart.
 
 ## Ctxo domain conventions v1
 
@@ -998,7 +1285,7 @@ A team climbs one rung at a time; a context's `rung` in the registry says where 
 
 > level 0: install and index; 1: registry with paths; 2: cards; 3: rule IDs and test links, through card `Tests:` lines, test names or framework tags; 4: contracts and shadow-spec resolutions
 
-No level requires code changes. Level 4 names contracts (check 10 then guards the boundary) and shadow-spec resolutions, which belong to a later phase; until they ship, a team stops at contracts.
+No level requires code changes. Level 4 names contracts (check 10 then guards the boundary) and shadow-spec resolutions: a `<registry folder>/<context>/shadow-specs.yaml` that follows the [resolution schema](#shadow-specsyaml) (`packages/domain/schema/shadow-specs.schema.json`), checked by `verify-domain` check 12.
 
 ## See also
 

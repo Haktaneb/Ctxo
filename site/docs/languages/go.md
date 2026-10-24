@@ -145,6 +145,27 @@ none.
   listed. Non-constant SQL is counted in the analyzer's summary
   (`sql: { constant, nonConstant }`, debug log only), never guessed.
 
+## Facts
+
+When the host requests facts (`@ctxo/domain` installed, or `index.facts: true`), the plugin reports
+`literal-comparison`, `normalization`, `retry-timeout` and `endpoint` facts into each file's index JSON
+(`facts: []` when it finds none), with the rules every official plugin shares (see [facts](https://github.com/alperhankendi/Ctxo/blob/master/docs/features/domain-knowledge.md#facts)). They
+feed [`find_shadow_specs`](/mcp-tools/find-shadow-specs). At most 500 facts per file, text at most 200 code
+points, and no `retry-timeout` facts in test files.
+
+| Kind | Go |
+| --- | --- |
+| `literal-comparison` | `if` and `for` conditions, expression `switch` case values and tagless `switch` cases |
+| `normalization` | `strings.ToLower`, `strings.TrimSpace` and the other configured methods (`q.Name` patterns match `q.Name(...)` calls only) |
+| `retry-timeout` | Numeric constants bound to retry or timeout names (`const`/`var`, `=`, `:=`, composite-literal keys) and durations (`n * time.Second`, `time.Duration(n) * time.Minute`, a bare `time.Hour`), whatever their name |
+| `endpoint` | `net/http` `HandleFunc` and `Handle` (a pattern `"GET /loans"` gives the verb, else `ANY`); gin `GET`, `POST`, ..., `Any` and `Handle` on `*gin.Engine`, `*gin.RouterGroup`, `gin.IRouter`, `gin.IRoutes` |
+
+The analyzer collects evidence behind `--facts=`; the tree-sitter tier gives the same facts and ids (it now drops
+type parameters from receivers, `List.Get::method`, as the full tier, a one-time ID change for generic methods).
+Raw strings are decoded as Go does. Limits: gin `Group()` prefixes are not joined; the syntax tier matches routes by
+name, so a `HandleFunc` on another type and router or path constants from another file can read differently; a file
+created during `ctxo watch` gets `facts: []` until the next batch.
+
 ## Go modules and workspaces
 
 The analyzer discovers the module root by walking up from the project root

@@ -895,6 +895,8 @@ domain:
 | `.ctxo/index/communities.json`, `communities.history/` (one per commit) | yes | PR 0 |
 | `.ctxo/index/contexts-view.json` | yes | PR 1A |
 | `.ctxo/index/domain/{contexts,boundaries,graph}.json`, `domain/history/` | yes | PR 2B, 3 |
+| `.ctxo/index/domain/shadow-candidates.json`, `domain/maturity.json` | yes | PR 4 |
+| `<registry folder>/<context>/shadow-specs.yaml` | yes (hand-written) | the team (PR 4 reads it) |
 | `.ctxo/.cache/domain-guard/<session>.json` | no | PR 2B |
 | `.ctxo/.cache/cochange-log.json` (only if needed) | no | PR 0 |
 

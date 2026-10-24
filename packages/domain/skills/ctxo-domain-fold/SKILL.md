@@ -10,6 +10,7 @@ description: Use BEFORE changing code under a named domain context and BEFORE fi
 1. Find the context that owns the files: the generated path rule for the folder, or `docs/domain/contexts.yaml` (each context lists its `paths` and its `card`).
 2. Read the context's card before you edit: its rules, contracts and decisions are the behaviour the code must keep.
 3. With the ctxo MCP tools, call `get_domain_context` with the symbol you will change (`symbolId`, or a `path`): it returns the context's card, its rules with their linked tests and code, terms, contracts and decisions. Then call `get_rule` for each rule it lists that your change may affect, to see the tests that pin the rule and the decisions behind it.
+4. To find business logic no rule pins yet, call `find_shadow_specs` for the context.
 
 ## When behaviour changes
 
@@ -22,4 +23,4 @@ description: Use BEFORE changing code under a named domain context and BEFORE fi
 2. For each unresolved context, either commit a card update or add `Domain-Unchanged: <id> (reason)` to a commit (an empty commit is fine).
 3. The Stop guard blocks once when a commit changed a context without either, so resolve every context before you finish.
 
-<!-- ctxo-skill v0.15 -->
+<!-- ctxo-skill v0.16 -->

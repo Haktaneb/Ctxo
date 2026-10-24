@@ -190,3 +190,32 @@ PR 3 builds the domain graph (`.ctxo/index/domain/graph.json`), the fields it ad
 - **Card sections and H1 headings.** The `Rules and invariants` section ends at the next H1 or H2, so a `### X-NN` heading after a stray H1 there is not a rule (a change from PR 2B, which read rules up to the next H2). The intro and the other sections do not stop at an H1; only the rules section does.
 - **`rule:` comment attribution (F4).** A `rule:` comment links to the symbol that starts within three lines below it when that symbol sits inside the innermost symbol spanning the comment (or nothing spans it), else to the innermost symbol spanning it. The containment check keeps a comment at the end of a short method body on that method instead of the next declaration. Spec 11.2 states "innermost" for the text scan of rule IDs, not for `rule:` comments, so this fills a gap rather than departing from the spec: the usual style is a comment above a declaration, often with attributes or decorators in between, and the innermost rule would give the enclosing class. The text scan keeps the innermost rule.
 - **JUnit `Tag`.** Spec 11.2 lists xUnit `Trait`, NUnit `Category` and MSTest `TestCategory` as annotation sources. JUnit `Tag` stays a category source, as PR 2B scans it.
+
+---
+
+## Addendum: PR 4 additions (#156)
+
+PR 4 adds the agentic loop: shadow-spec candidates, the Deletion Test tools and the context map. As before, everything reaches `@ctxo/domain` through `host.services` and the module registration; the package still imports `@ctxo/cli` as types only.
+
+### Internal API
+
+- **`indexCapabilities.factOptions`** (`FactDetectorOptions`: `trivialLiterals`, `normalizationMethods`; the types `TrivialLiteral`, `FactDetectorOptions` and `CodeFact` in `@ctxo/cli/internal`). The module declares the `domain.facts` lists; the CLI hands the first module's options to every plugin as `PluginContext.config.facts`, only when facts are requested. `@ctxo/domain` computes them lazily, on first read.
+- **`host.services.readCoChangeEntries(ctxoRoot)`.** The validated entries of `co-changes.json` as stored, one per file pair, frozen and shared; `undefined` when the file is missing or invalid. It uses the same reader and modification-time cache as every other co-change read (`ICoChangePort.readEntries`), one reader per `.ctxo` root for the life of the process. The maturity facts read cross-context co-change through it.
+- **Truncatable fields.** `shadowSpecs` and `contextMap` join the truncatable fields. The secondary lists of `find_shadow_specs` (`staleResolutions`, `unknownRules`, `resolutionProblems`) are capped at 50 at the source with `<name>Total`, so the envelope always truncates the tool's primary array.
+
+### The two artifacts
+
+- `.ctxo/index/domain/shadow-candidates.json` (`domain-shadow-candidates`) and `.ctxo/index/domain/maturity.json` (`domain-maturity`) join the marker gate of the other domain artifacts, each with `registryHash` and `cardsHash`, written only when their content changed. Both are written together or not at all: when the maturity facts fail, the previous files stay. `shadow-specs.yaml` entries are applied at query time, never stored, so editing the file needs no re-index.
+- The domain pass composes its inputs once (`composeLoopInputs`): the graph, the test and code references, the cards, and the text-scan facts for files without a `facts` key, each file read once. `ctxo verify-domain` uses the same composition and computes check 12 from current inputs, never from the artifacts.
+
+### The two tools
+
+- `find_shadow_specs({ context, kinds?, includeResolved? })` and `get_context_map()` are registered whenever the package loads (14 core tools, 18 with the package) and answer `{ found: false, hint }` without a registry, with registry problems or without the loop artifacts. Each artifact's `registryHash` is checked against the current registry, and stale data answers with `stale: true` and a hint. `ctxo domain shadow-specs <context>` and `ctxo domain map` print the same bodies without `_meta`; their exit codes come from the loop state's `reason` (`no-registry` 0, `registry-problems` 2, `no-artifacts` 2), never from hint text.
+
+### Decisions
+
+- **Fingerprints (H4, amended).** `kind | symbol | normalized text`, the symbol part the last two `.` segments of the file basename (without its last extension) and the symbol name (without a trailing `(...)`). Amended, owner approved on 2026-10-24: any member whose name contains a dot (C# explicit interface implementations, TypeScript computed or string-literal members) keeps its containing type in the symbol part, as a general rule, so two types' `CompareTo` or `[Symbol.iterator]` members never share a fingerprint. `%` and `|` in the kind and symbol parts are percent-encoded (`%25`, `%7C`), so a SQL delimited name or a string-literal member never breaks the separator.
+- **Candidates come from non-test files with one owner.** Facts of test files and of unowned or multiply owned files are never candidates. One resolution entry resolves every candidate with its fingerprint; counts are per candidate.
+- **`bounded` without boundaries is not met.** A context with no `boundaries.json` reports `boundariesKnown: false`; with the artifact, `bounded` is met vacuously when the context has no contract symbols and no violations, because every crossing outside a contract is already a violation.
+- **Reachability over graph edges only.** Tests reach main paths through `calls`, `uses`, `imports`, `extends` and `implements`; data edges are not followed, and HTTP-level tests create no edges, so the suggestion can stay below the owner's rung. The suggestion never changes the registry.
+- **Skill marker.** The `ctxo-domain-fold` skill gains the `find_shadow_specs` step and the marker `v0.16`, so `ctxo doctor` reports copies installed by 0.15 as outdated.
