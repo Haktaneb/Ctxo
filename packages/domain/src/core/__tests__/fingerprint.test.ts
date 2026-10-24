@@ -23,7 +23,16 @@ describe('fingerprintSymbolPart', () => {
     // The file name splits on its own: a quote opening it never swallows the symbol name.
     expect(fingerprintSymbolPart("src/'odd.ts::Foo.bar::method")).toBe('Foo.bar');
     expect(fingerprintSymbolPart("src/don't.ts::Foo.bar::method")).toBe('Foo.bar');
-    expect(fingerprintSymbolPart('src/a.test.ts::fn::function')).toBe('test.fn');
+    expect(fingerprintSymbolPart('src/a.test.ts::fn::function')).toBe('a.test.fn');
+  });
+
+  it('a multi-dot file name stays one segment, so dotted siblings never collide (D-M1)', () => {
+    expect(fingerprintSymbolPart('src/lending/loan.service.ts::withRetry::function')).toBe('loan.service.withRetry');
+    expect(fingerprintSymbolPart('src/lending/fine.service.ts::withRetry::function')).toBe('fine.service.withRetry');
+    expect(fingerprintSymbolPart('src/x.d.ts::x::variable')).toBe('x.d.x');
+    expect(fingerprintSymbolPart('src/lending/loans.controller.ts::borrow::function')).toBe('loans.controller.borrow');
+    // A member keeps the last two segments of its own name: the file part is not involved.
+    expect(fingerprintSymbolPart('src/lending/loan.service.ts::LoanService.renew::method')).toBe('LoanService.renew');
   });
 
   it('a C# explicit interface implementation keeps its containing type (M3)', () => {

@@ -91,7 +91,9 @@ export function nameSegments(name: string): string[] {
  * H4: the last two `.` segments of `<file basename>.<symbol name without a trailing (...)>`, where the basename has
  * no directory and no last extension (W26). `src/Lending/LoanPolicy.cs::LibraryLending.Lending.LoanPolicy.CanBorrow::method`
  * gives `LoanPolicy.CanBorrow`, `src/lending/loan-policy.ts::canBorrow::function` gives `loan-policy.canBorrow`,
- * `src/app.ts::app::variable` gives `app.app`. An ID without a file part (`dbo.loans::table`) uses its name alone.
+ * `src/app.ts::app::variable` gives `app.app`. The basename is one segment even when it holds dots (D-M1):
+ * `src/lending/loan.service.ts::withRetry::function` gives `loan.service.withRetry`. An ID without a file part
+ * (`dbo.loans::table`) uses its name alone.
  * A `.` inside `<...>`, `[...]`, `(...)` or quotes does not split a segment (`segmentDots`).
  *
  * Amended H4 (fix rounds 1 and 2): a member whose name holds a `.` keeps its containing type. Without a container
@@ -116,9 +118,10 @@ export function fingerprintSymbolPart(symbolId: string, container?: string): str
   if (first < 0) segments = nameSegments(withoutParameterSuffix(symbolId));
   else if (first === last) segments = nameSegments(withoutParameterSuffix(symbolId.slice(0, first)));
   else {
-    // The basename splits at every `.`, so a quote in a file name never joins it with the symbol name.
-    const base = baseName(symbolId.slice(0, first)).split('.').filter((segment) => segment !== '');
-    segments = [...base, ...nameSegments(withoutParameterSuffix(symbolId.slice(first + 2, last)))];
+    // The basename is one segment (only its last extension dropped, D-M1), so `loan.service.ts` and
+    // `fine.service.ts` never share a part, and a quote in a file name never joins it with the symbol name.
+    const base = baseName(symbolId.slice(0, first));
+    segments = [...(base === '' ? [] : [base]), ...nameSegments(withoutParameterSuffix(symbolId.slice(first + 2, last)))];
   }
   return collapse(segments.slice(-2).join('.'));
 }
