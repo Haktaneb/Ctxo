@@ -114,7 +114,7 @@ Need the business rules or decisions behind code? With `@ctxo/domain` installed,
 
 ### Running the Deletion Test
 
-Running the Deletion Test? Use [`find_shadow_specs`](/mcp-tools/find-shadow-specs) for the context, then [`get_rule`](/mcp-tools/get-rule) for the rule that should pin each open candidate. Record a candidate that is not a rule in the context's `shadow-specs.yaml` with its fingerprint, copied verbatim.
+Running the Deletion Test? Use [`find_shadow_specs`](/mcp-tools/find-shadow-specs) for the context, then [`get_rule`](/mcp-tools/get-rule) for the rule that should pin each open candidate. Record a candidate that is not a rule in the context's `shadow-specs.yaml` with its fingerprint, copied verbatim as a YAML single-quoted scalar (`fingerprint: '...'`), the form `ctxo domain shadow-specs` prints.
 
 ### How mature is each context?
 

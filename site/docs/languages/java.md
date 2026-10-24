@@ -166,7 +166,7 @@ tier gives no SQL edges, and without `@ctxo/lang-sql` there are none.
 
 ## Facts
 
-When the host requests facts (`@ctxo/domain` installed, or `index.facts: true`), the plugin reports
+When the host requests facts (`@ctxo/domain` installed with a registry file, or `index.facts: true`), the plugin reports
 `literal-comparison`, `normalization`, `retry-timeout` and `endpoint` facts into each file's index JSON
 (`facts: []` when it finds none), with the rules every official plugin shares (see [facts](https://github.com/alperhankendi/Ctxo/blob/master/docs/features/domain-knowledge.md#facts)). They
 feed [`find_shadow_specs`](/mcp-tools/find-shadow-specs). At most 500 facts per file, text at most 200 code
@@ -183,7 +183,9 @@ The JDT tier collects evidence behind `--facts=`; the tree-sitter tier gives the
 enum body members, interface constants, compact constructors and the members of anonymous and enum constant
 bodies, as JDT does). Text blocks are decoded as the JLS says. An `int` expression that overflows, and a comparison
 whose literal overflows `int`, give no fact. An analyzer JAR older than this release ignores `--facts=`: the plugin
-prints `analyzer too old for facts; run ctxo install java --full-tier` once.
+prints `analyzer too old for facts; run ctxo install java --full-tier` once, and until then the full tier gives only
+the endpoint facts it reads from annotations. In `ctxo watch` a save reads the keep-alive analyzer's result, with no
+second JVM. A syntax-tier fact failure warns on stderr and gives `facts: []`.
 
 ## Full tier and the analyzer package
 

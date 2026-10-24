@@ -241,7 +241,7 @@ the method that constructs it.
 
 ## Facts
 
-When the host requests facts (`@ctxo/domain` installed, or `index.facts: true`), the plugin reports
+When the host requests facts (`@ctxo/domain` installed with a registry file, or `index.facts: true`), the plugin reports
 `literal-comparison`, `normalization`, `retry-timeout` and `endpoint` facts into each file's index JSON
 (`facts: []` when it finds none), with the rules every official plugin shares (see [facts](https://github.com/alperhankendi/Ctxo/blob/master/docs/features/domain-knowledge.md#facts)). They
 feed [`find_shadow_specs`](/mcp-tools/find-shadow-specs). At most 500 facts per file, text at most 200 code
@@ -257,7 +257,9 @@ points, and no `retry-timeout` facts in test files.
 The Roslyn tier reads `IOperation`s behind `--facts=`; the tree-sitter tier finds the same evidence and gives the
 same facts. Syntax-tier method IDs keep their `(n)` parameter suffix, which fingerprints ignore. Verbatim,
 interpolated, raw and `u8` strings are decoded by a C# decoder. Limits: only the first class `[Route]` is used, and
-a `Route` inherited from a base class is missed; `MapGroup` prefixes are not joined. The syntax tier now applies a
+a `Route` inherited from a base class is missed; `MapGroup` prefixes are not joined; in the Roslyn tier a fact in the
+second or a later declarator of one field declaration (`const int MaxRetries = 3, TimeoutMs = 5000;`) is owned by an
+ID that is not a symbol. The syntax tier now applies a
 file-scoped namespace to every type after it, a one-time ID change for syntax-tier users.
 
 ## Solution (.sln) discovery

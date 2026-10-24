@@ -77,7 +77,7 @@ unowned files and a missing context map are warnings until you set `domain.cover
 | --- | --- |
 | `0` | No errors (warnings allowed), or no registry (a hint is printed) |
 | `1` | At least one error, or a usage error |
-| `2` | No index (run `ctxo index`), a base ref that cannot be found, a git failure, or an internal error |
+| `2` | No index (run `ctxo index`), a base ref that cannot be found, a git failure, or an internal error (also a failure to build the domain graph that check 12 needs: checks 1 to 11 then do not report) |
 
 The human report goes to stderr. With `--json`, stdout holds
 `{ "registry", "checks", "summary", "exitCode" }` when the checks ran. **On exit 2 and on the no-registry path
@@ -148,7 +148,8 @@ It also proposes Characterization and Contract paths: folders named `Characteriz
 `<folder>/**`, listed after the configured globs.
 
 It prints the evidence and a proposed config, and writes only with `--write`, which merges the proposal into
-`.ctxo/config.yaml` (it adds values and removes none).
+`.ctxo/config.yaml` (it adds values and removes none). The printed config quotes every list value as a JSON string
+(`paths: ["**/Contract/**", "**/Contracts.Tests/**"]`), so the block is valid YAML to paste.
 
 ## ctxo domain map
 
@@ -187,22 +188,31 @@ ctxo domain shadow-specs <context> [--kinds <k,...>] [--all] [--json]
 ```text
 [ctxo] lending: 2 open, 2 resolved shadow-spec candidates (docs/domain/lending/shadow-specs.yaml)
   open  endpoint  src/lending/api/loans.controller.ts:8  GET /loans/:id
-      endpoint | LoansController.find | GET /loans/:id
+      'endpoint | LoansController.find | GET /loans/:id'
   resolved  endpoint  src/lending/api/loans.controller.ts:14  POST /loans  [linked: LEND-03]
-      endpoint | LoansController.borrow | POST /loans
+      'endpoint | LoansController.borrow | POST /loans'
   resolved  normalization  src/lending/member-directory.ts:2  email.trim()  [not a rule: input cleanup, not a business rule]
-      normalization | member-directory.memberKey | email.trim()
+      'normalization | member-directory.memberKey | email.trim()'
   open  normalization  src/lending/member-directory.ts:2  email.trim().toLowerCase()
-      normalization | member-directory.memberKey | email.trim().toLowerCase()
+      'normalization | member-directory.memberKey | email.trim().toLowerCase()'
 ```
 
 Both examples are `ctxo domain map` and `ctxo domain shadow-specs lending --kinds endpoint,normalization --all` on
 the in-repo library-lending sample, TypeScript variant (`packages/domain/test-fixtures/library-lending/typescript`),
-copied to a temp folder and indexed. A stale entry prints `  stale  <fingerprint> (line <n>)` and an entry naming
-an unknown rule `  unknown rule  <ID>  <fingerprint> (line <n>)`.
+copied to a temp folder and indexed. A stale entry prints `  stale  '<fingerprint>' (line <n>)` and an entry naming
+an unknown rule `  unknown rule  <ID>  '<fingerprint>' (line <n>)`.
 
-Each candidate's fingerprint is on the line below it: copy it verbatim into the context's `shadow-specs.yaml`
-with `resolution: { rule: <ID> }` or `resolution: { notARule: "<reason>" }`. The file is read on every run, so an
+Each candidate's fingerprint is on the line below it, printed as a YAML single-quoted scalar (`'...'`, a `'` inside
+written `''`): paste it as it is after `fingerprint: ` in the context's `shadow-specs.yaml`, with
+`resolution: { rule: <ID> }` or `resolution: { notARule: "<reason>" }`:
+
+```yaml
+- fingerprint: 'endpoint | LoansController.find | GET /loans/:id'
+  resolution: { notARule: "read-only lookup" }
+```
+
+The quotes matter: fact text can hold double quotes, backslashes, `: ` or ` #`, which break a double-quoted or plain
+scalar. `--json` prints the plain strings. The file is read on every run, so an
 edit shows at once; the candidates themselves refresh on `ctxo index` (not under `ctxo watch`). Output is not
 masked, as for `ctxo contexts --json`.
 
@@ -210,9 +220,9 @@ masked, as for `ctxo contexts --json`.
 
 | Exit | When |
 | --- | --- |
-| 0 | Done, or no registry (a hint is printed) |
+| 0 | Done (stale data, such as cards edited since the last index, prints a hint and still exits 0), or no registry (a hint is printed) |
 | 1 | Bad arguments, an unknown kind or an unknown context |
-| 2 | Registry problems; no index data (`[ctxo] No context map yet; run "ctxo index".`, `[ctxo] No shadow-spec data yet; run "ctxo index".`); index data built from another registry (`[ctxo] The domain registry changed since the last "ctxo index"; run it to rebuild the domain graph.`); an internal error (`[ctxo] domain <name> failed: <message>`) |
+| 2 | Registry problems; no index data (`[ctxo] No context map yet; run "ctxo index".`, `[ctxo] No shadow-spec data yet; run "ctxo index".`, also after an index run that could not build the loop data and removed it); index data built from another registry (`[ctxo] The domain registry changed since the last "ctxo index"; run it to rebuild the domain graph.`); an internal error (`[ctxo] domain <name> failed: <message>`) |
 
 ## See also
 

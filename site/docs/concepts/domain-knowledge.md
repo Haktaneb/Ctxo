@@ -77,7 +77,8 @@ tables and procedures a context owns and the rules that have no tests.
 - **The Deletion Test.** [`find_shadow_specs`](/mcp-tools/find-shadow-specs) lists a context's open candidates,
   each with a line-independent fingerprint. For each one, the agent or the owner finds or writes the rule that pins
   it ([`get_rule`](/mcp-tools/get-rule) shows its tests) and links it with a card `Code:` line or a `rule:`
-  comment, or records the outcome in `docs/domain/<context>/shadow-specs.yaml`
+  comment, or records the outcome in `docs/domain/<context>/shadow-specs.yaml` (the fingerprint single-quoted, as
+  `ctxo domain shadow-specs` prints it)
   (`{ rule: LEND-03 }` or `{ notARule: "<reason>" }`). A changed literal changes the fingerprint, so the candidate
   reopens; `ctxo verify-domain` check 12 warns about entries that no longer match.
 - **The context map.** [`get_context_map`](/mcp-tools/get-context-map) reports per context its rules and tests,

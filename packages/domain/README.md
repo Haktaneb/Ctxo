@@ -27,7 +27,7 @@ ctxo init --domain       # config defaults, registry skeleton, fold guard, skill
 - The `domain` scope of `get_ranked_context` (`scope: "domain"`): BM25 over rules, terms, decisions, card sections and the in-repo files decisions link to.
 - The `ctxo-domain-fold` skill and three `ctxo doctor` checks.
 
-Without a registry, the commands print a hint and exit 0, no fields are added, and the four tools answer `{ found: false, hint }`.
+Without a registry, the commands print a hint and exit 0, no fields are added, the four tools answer `{ found: false, hint }`, and no plugin is asked for facts, so the index JSON stays as it is without the package. After adding the registry, run a full `ctxo index`.
 
 ## Version line
 

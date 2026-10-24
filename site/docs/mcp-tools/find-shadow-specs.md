@@ -38,12 +38,12 @@ every call.
 From the in-repo library-lending sample, TypeScript variant
 (`packages/domain/test-fixtures/library-lending/typescript`), copied to a temp folder, made a git repository and
 indexed with `ctxo index` (`_meta.workspace` trimmed). The sample's `docs/domain/lending/shadow-specs.yaml` already
-resolves two candidates:
+resolves two candidates (shown with single-quoted fingerprints, the form to write):
 
 ```yaml
-- fingerprint: "literal-comparison | renewal-policy.canRenew | loanPeriods >= 2"
+- fingerprint: 'literal-comparison | renewal-policy.canRenew | loanPeriods >= 2'
   resolution: { rule: LEND-05 }
-- fingerprint: "normalization | member-directory.memberKey | email.trim()"
+- fingerprint: 'normalization | member-directory.memberKey | email.trim()'
   resolution: { notARule: "input cleanup, not a business rule" }
 ```
 
@@ -113,7 +113,7 @@ resolves two candidates:
 ```
 
 The seven resolved ones are hidden: four rules without tests carry an `Untested:` line, the `POST /loans` endpoint
-is linked to LEND-03 by a card `Code:` line, and the two entries above resolve the rest.
+is linked to LEND-03 by the `// rule: LEND-03` comment above it in `loans.controller.ts`, and the two entries above resolve the rest.
 `{ "context": "lending", "kinds": ["literal-comparison"], "includeResolved": true }` shows one of them:
 
 ```json
@@ -183,7 +183,11 @@ so the candidate reopens and the old entry is stale (`ctxo verify-domain` check 
 | `shadow-specs` | An entry of `shadow-specs.yaml` has the candidate's fingerprint (`rule` or `notARule`) |
 
 Fingerprints are `kind | symbol | normalized text` and do not depend on line numbers. Copy each one verbatim into
-`shadow-specs.yaml`: `%7C` and `%25` in the kind and symbol parts are an encoded `|` and `%`. Several candidates may
+`shadow-specs.yaml` as a YAML single-quoted scalar (`fingerprint: '...'`, with a `'` inside written `''`): fact text
+can hold double quotes, backslashes, `: ` or ` #`, which break a double-quoted or plain scalar.
+`ctxo domain shadow-specs` prints them in that form. `%7C` and `%25` in the kind and symbol parts are an encoded `|`
+and `%`. A multi-dot file name stays one segment of the symbol part (`loan.service.ts::withRetry` gives
+`loan.service.withRetry`). Several candidates may
 share one fingerprint (overloads, the same text twice), and one entry resolves them all. An entry with an unknown rule
 that matches no candidate is listed in both `staleResolutions` and `unknownRules`. See
 [the Deletion Test loop](https://github.com/alperhankendi/Ctxo/blob/master/docs/features/domain-knowledge.md#the-deletion-test-loop)
@@ -197,7 +201,7 @@ for the fingerprint rules and the file format.
 | A registry with problems | `{ "found": false, "hint": "The domain registry at <path> has problems; run \"ctxo verify-domain\"." }` |
 | No domain graph | `{ "found": false, "hint": "No domain graph yet; run \"ctxo index\"." }` |
 | The registry changed since the last index (the graph was built from another registry) | `{ "found": false, "hint": "The domain registry changed since the last \"ctxo index\"; run it to rebuild the domain graph." }` |
-| No loop artifacts (not indexed with this release) | `{ "found": false, "hint": "No shadow-spec data yet; run \"ctxo index\"." }` |
+| No loop artifacts (not indexed with this release, or removed because the last `ctxo index` built the graph but not the candidates or the maturity facts) | `{ "found": false, "hint": "No shadow-spec data yet; run \"ctxo index\"." }` |
 | A context the registry does not name | `{ "found": false, "hint": "No context <id> in the registry; get_context_map lists the contexts." }` |
 | A blank `context` (empty or whitespace) | Rejected by the input schema (an MCP input validation error) |
 | A loop artifact built for another registry than the current graph, or cards changed since the last index | The answer, plus `stale: true` and a hint to run `ctxo index` |

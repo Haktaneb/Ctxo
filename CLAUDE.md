@@ -217,7 +217,7 @@ domain:                        # read only when @ctxo/domain is installed (ADR-0
 * `index.ignoreProjects`: matched against workspace paths; skipped workspaces are never enumerated and their plugin deps are never imported.
 * `cochange`: see [ADR-016](docs/architecture/ADR/adr-016-co-change-engine-and-snapshot-policy.md). One `git log` pass builds `co-changes.json` (window recorded under `window`) and every blast-radius path reads it. Overrides: `--cochange-commits`, `--cochange-since`.
 * `communities` and `contextsView`: see the ADR-016 addendum. `ctxo index` writes `.ctxo/index/contexts-view.json` (skipped by `--skip-community`, not refreshed by `ctxo watch`), including `dataResources` and per-candidate `sharedTables` (ADR-017).
-* `index.facts`: sets `capabilities.facts`, so plugins that implement `extractFacts` write `facts` into the index JSON (`[]` when they find nothing). The TypeScript, C#, Java and Go plugins implement it (PR 4); an installed `@ctxo/domain` always requests facts. See [facts](docs/features/domain-knowledge.md#facts).
+* `index.facts`: sets `capabilities.facts`, so plugins that implement `extractFacts` write `facts` into the index JSON (`[]` when they find nothing). The TypeScript, C#, Java and Go plugins implement it (PR 4); an installed `@ctxo/domain` requests facts once its registry file (`domain.registry`) exists. See [facts](docs/features/domain-knowledge.md#facts).
 * `index.tests`: test files are also recognised by test-framework annotations (`Fact`, `Test`, `TestMethod` and 8 more); see [domain knowledge](docs/features/domain-knowledge.md).
 * Invalid globs (`index.*`, `cochange.include`, `cochange.exclude`, `contextsView.exclude`, `contextsView.hubs.paths`) surface as warnings via `ctxo doctor`; schema violations surface as fails. The loader falls back to defaults on any error (warn-and-continue).
 
@@ -493,7 +493,7 @@ try {
 * Valid symbol kinds: `function | class | interface | method | variable | type | table | view | procedure`
 * Valid edge kinds: `imports | calls | extends | implements | uses | reads | writes | executes`
 * Edge targets may be 2-part name references (`<name>::<kind>`); data edges point at canonical names such as `dbo.loans::table` (lowercase, delimiters stripped, default schema `dbo`)
-* Optional (protocol v2): `symbols[].annotations` (`[{ "name": "Trait", "args": ["Category", "Loans"] }]`; `args` and `named` are omitted when empty) and a file-level `facts` array (`{ kind, symbolId, line, text, detail? }`, only with a fact request: `index.facts: true` or `@ctxo/domain`; `[]` from a fact-capable plugin that found nothing)
+* Optional (protocol v2): `symbols[].annotations` (`[{ "name": "Trait", "args": ["Category", "Loans"] }]`; `args` and `named` are omitted when empty) and a file-level `facts` array (`{ kind, symbolId, line, text, detail? }`, only with a fact request: `index.facts: true` or `@ctxo/domain` with a registry file; `[]` from a fact-capable plugin that found nothing)
 
 ## Release & npm Publishing
 

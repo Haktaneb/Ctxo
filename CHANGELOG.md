@@ -25,7 +25,8 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (ten packages today). Per-pack
   finished by the same rules; their candidates carry `source: "text"`.
 - `find_shadow_specs({ context, kinds?, includeResolved? })`: shadow-spec candidates of a context (facts, owned
   tables, views and procedures, and rules without tests), each with file, line, symbol, a line-independent
-  fingerprint (`kind | symbol | normalized text`), its source and its resolution (a rule link, an `Untested:` line,
+  fingerprint (`kind | symbol | normalized text`; a multi-dot file name stays one segment, so `loan.service.ts::withRetry`
+  gives `loan.service.withRetry`), its source and its resolution (a rule link, an `Untested:` line,
   or `shadow-specs.yaml`), plus `counts`, `staleResolutions`, `unknownRules` and `resolutionProblems` (each capped at
   50 with `<name>Total`).
 - `get_context_map()`: per context its card, rules and the share with tests, characterization and contract test
@@ -33,18 +34,21 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (ten packages today). Per-pack
   owner's rung, a suggested rung and the status of every criterion (pinned, named, bounded, boring). Ctxo now has
   14 core tools, 18 with `@ctxo/domain`.
 - `ctxo domain map [--json]` and `ctxo domain shadow-specs <context> [--kinds <k,...>] [--all] [--json]`: the CLI
-  faces of the two tools (the same bodies without `_meta`); exit 0 done or no registry, 1 bad arguments or an
+  faces of the two tools (the same bodies without `_meta`; the human output prints each fingerprint as a YAML
+  single-quoted scalar, ready to paste); exit 0 done (stale data prints a hint and still exits 0) or no registry, 1 bad arguments or an
   unknown context, 2 registry problems, no index data, index data built from another registry (the stale-registry
   hint) or an internal error (`[ctxo] domain <name> failed: <message>`). Repeated `--kinds` options add up.
-- `<registry folder>/<context>/shadow-specs.yaml`: hand-written resolutions by fingerprint (`{ rule: <ID> }` or
-  `{ notARule: "<reason>" }`), with the JSON Schema `packages/domain/schema/shadow-specs.schema.json` in the npm
+- `<registry folder>/<context>/shadow-specs.yaml`: hand-written resolutions by fingerprint (`- fingerprint: '...'`,
+  single-quoted, with `{ rule: <ID> }` or `{ notARule: "<reason>" }`), with the JSON Schema `packages/domain/schema/shadow-specs.schema.json` in the npm
   package. It is read on every call, so an edit needs no re-index.
 - `ctxo verify-domain` check 12, "Shadow-spec resolutions" (twelve checks now): a `shadow-specs.yaml` that does
   not parse is an error; stale entries, unknown rules and a `shadow-specs.yaml` outside every context are warnings.
   When the candidates cannot be built and some file has entries, one warning `stale resolutions were not checked:
   <reason>` replaces the stale findings (exit stays 0).
 - `ctxo index` writes `.ctxo/index/domain/shadow-candidates.json` and `.ctxo/index/domain/maturity.json`
-  (`ctxoArtifact` markers, rewritten only when their content changed).
+  (`ctxoArtifact` markers, rewritten only when their content changed). Both are written or both removed: when the
+  graph builds but the candidates or the maturity facts fail, the pass removes both marked files with a warning, and
+  the tools answer "run ctxo index" instead of serving old data. A graph build failure keeps all three files.
 - Config: `domain.facts` (`trivialLiterals`, `normalizationMethods`, `textScanExtensions`), the K13a conventions
   `domain.tests.characterization` and `domain.tests.contract` (`annotations`, `paths`, `names`) and
   `domain.rungs.pinnedCoverage` (default 0.8).
@@ -60,12 +64,32 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (ten packages today). Per-pack
 
 ### Changed (agentic loop)
 
-- With a fact request (an installed `@ctxo/domain` or `index.facts: true`), files of fact-capable plugins carry
-  `facts` (possibly empty) in their index JSON: C#, TypeScript, Java and Go repositories with `@ctxo/domain` or
-  `index.facts: true` get a `facts` array in every indexed file's JSON on the next re-index. An adapter without
+- With a fact request (an installed `@ctxo/domain` whose registry file exists, or `index.facts: true`), files of
+  fact-capable plugins carry `facts` (possibly empty) in their index JSON: C#, TypeScript, Java and Go repositories
+  with `@ctxo/domain` and a registry, or `index.facts: true`, get a `facts` array in every indexed file's JSON on the next re-index. An adapter without
   `extractFacts` still writes no `facts` key. Run a full `ctxo index` once after upgrading: entries written by an
   older CLI, or untouched by an incremental `--commit` run, carry no `facts` key and get `text` candidates until
-  then. This supersedes the PR 2B note that no plugin implements `extractFacts` yet.
+  then. This supersedes the PR 2B notes that no plugin implements `extractFacts` yet and that an installed
+  `@ctxo/domain` turns the request on whatever the repository holds: without a registry file it now requests no
+  facts, so the index is byte-identical to a run without the package. Run a full `ctxo index` after adding the
+  registry, and restart a running `ctxo watch`.
+- Fact extraction warns and continues: when it fails for a file, the TypeScript, C#, Java and Go plugins print a
+  warning on stderr and return `[]`, so the file gets `facts: []`. TypeScript `typeof` guards
+  (`typeof x === 'string'`, `switch (typeof x)`) give no facts. Plugins receive `config.facts` as one deep-frozen
+  object.
+- `ctxo watch` and the analyzers: a saved Go file takes its facts from the tree-sitter tier (the analyzer batch is
+  not rerun); a saved Java file reads the keep-alive JDT result, with no second JVM. Concurrent builds of the Go
+  analyzer binary each write a temp file and rename it into place.
+- The text scan (text-scan facts, unindexed files, `rule:` comments) reads files through the checked reader the
+  cards use: a tracked symlink or junction whose target leaves the repository is skipped.
+- `ctxo domain discover` quotes every list value of the printed proposed config, so the block is valid YAML.
+- The C# syntax tier's unique-suffix base type match takes only C# classes and interfaces, with lookups built once
+  per symbol registry.
+- `@ctxo/plugin-api` ships `conformance/fact-vectors.json` in its npm package.
+- The domain e2e determinism tests skip with `C# tier differs between the two indexes (...)` when the two indexes
+  ran on different C# tiers, and fail under `CTXO_REQUIRE_DOTNET=1`.
+- Known limits (evidence caps, watch, incremental runs, fingerprints of whitespace in literals and more) are listed
+  in [the feature doc](docs/features/domain-knowledge.md#known-limits-of-facts-and-the-loop).
 - `ctxo watch` gets the loaded modules from the router and requests facts and options exactly as `ctxo index`
   does.
 - Test files get no `retry-timeout` facts: `ctxo index` and `ctxo watch` drop that kind for files the shared

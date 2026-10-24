@@ -120,7 +120,7 @@ create no graph edges, so a context tested only that way can stay below `pinned`
 | --- | --- |
 | No registry, a registry with problems, or no domain graph | `{ "found": false, "hint": "..." }` (the same hints as [`find_shadow_specs`](/mcp-tools/find-shadow-specs#graceful-misses)) |
 | The registry changed since the last index (the graph was built from another registry) | `{ "found": false, "hint": "The domain registry changed since the last \"ctxo index\"; run it to rebuild the domain graph." }` |
-| No loop artifacts (not indexed with this release) | `{ "found": false, "hint": "No shadow-spec data yet; run \"ctxo index\"." }` |
+| No loop artifacts (not indexed with this release, or removed because the last `ctxo index` built the graph but not the candidates or the maturity facts) | `{ "found": false, "hint": "No shadow-spec data yet; run \"ctxo index\"." }` |
 | No `boundaries.json` | The map, with `boundariesKnown: false` and a hint |
 | A loop artifact built for another registry than the current graph, or cards changed since the last index | The map, plus `stale: true` and a hint to run `ctxo index` |
 | An unexpected failure | `{ "error": true, "message": "..." }` |

@@ -158,7 +158,7 @@ plugins use. Without `@ctxo/lang-sql` it emits none.
 
 ## Facts
 
-When the host requests facts (`@ctxo/domain` installed, or `index.facts: true`), the plugin reports
+When the host requests facts (`@ctxo/domain` installed with a registry file, or `index.facts: true`), the plugin reports
 `literal-comparison`, `normalization`, `retry-timeout` and `endpoint` facts into each file's index JSON
 (`facts: []` when it finds none), with the rules every official plugin shares (see [facts](https://github.com/alperhankendi/Ctxo/blob/master/docs/features/domain-knowledge.md#facts)). They
 feed [`find_shadow_specs`](/mcp-tools/find-shadow-specs). At most 500 facts per file, text at most 200 code
@@ -172,8 +172,11 @@ points, and no `retry-timeout` facts in test files.
 | `endpoint` | Nest `@Get`, `@Post`, ..., `@All` in an exported class decorated `@Controller` (prefix from its path); Express and Fastify `get`, `post`, ..., `all` with a string path and a handler, on a receiver traced to `express` or `fastify`; Fastify `route({ method, url })` |
 
 Single-quoted strings and templates without substitutions are decoded for the trivial-literal check. ts-morph is
-the only tier, in process. Limits: a Nest controller must be exported; `app.use('/api', router)` prefixes are not
-joined; a route registered in top-level code belongs to the module symbol.
+the only tier, in process. Type guards give no fact: `typeof x === 'string'` and the labels of `switch (typeof x)`
+are skipped. A fact extraction failure warns on stderr (`ctxo:lang-typescript`) and gives `facts: []`. Limits: a Nest
+controller must be exported; `app.use('/api', router)` prefixes are not joined; a route registered in top-level code
+belongs to the module symbol; constructor parameter defaults (`constructor(private retries = 3)`) give no
+`retry-timeout` fact.
 
 ## Monorepo handling
 
