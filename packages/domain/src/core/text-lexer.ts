@@ -96,7 +96,7 @@ export function lexSource(text: string, style: CommentStyle): TextToken[] {
       }
       j++;
     }
-    return j;
+    return Math.min(j, n);
   };
   /** End of a string or comment spanning lines from `k + open.length` to the closing `close`, escapes optional. */
   const spanning = (k: number, openLength: number, close: string, escapes: boolean): number => {
@@ -176,7 +176,8 @@ export function lexSource(text: string, style: CommentStyle): TextToken[] {
         push('string', i, spanning(i, 3, '"""', true));
         continue;
       }
-      if (style === 'hash' && text.startsWith("'''", i)) {
+      // ''' strings: Python and Ruby (hash), Dart and Groovy (c; ''' is no valid char literal in the other c languages).
+      if ((style === 'hash' || style === 'c') && text.startsWith("'''", i)) {
         push('string', i, spanning(i, 3, "'''", true));
         continue;
       }
@@ -259,7 +260,7 @@ export function stringDecoderFor(style: CommentStyle): StringLiteralDecoder {
     }
     for (const quote of ['"""', "'''"]) {
       if (text.startsWith(quote)) {
-        if (quote === "'''" && style !== 'hash') return undefined;
+        if (quote === "'''" && style !== 'hash' && style !== 'c') return undefined;
         const inner = body(text, quote, quote);
         return inner === undefined ? undefined : decodeCommonEscapes(inner);
       }

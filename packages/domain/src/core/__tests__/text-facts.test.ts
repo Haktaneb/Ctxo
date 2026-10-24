@@ -148,4 +148,78 @@ describe('scanTextFacts', () => {
       expect(() => scanTextFacts(LEND, text, [], OPTIONS), text).not.toThrow();
     }
   });
+
+  it('names of Object.prototype members are ordinary names', () => {
+    expect(scan('src/a.js', 'if (routes.hasOwnProperty("/users")) go()')).toEqual([]);
+    expect(scan(LEND, 'if (kind == constructor) x')).toEqual([]);
+    expect(scan(LEND, 'if (kind == toString) x')).toEqual([]);
+    expect(scan(LEND, '  case valueOf:')).toEqual([]);
+    expect(scan(LEND, 'timeout = TimeSpan.valueOf(5)')).toEqual([]);
+    expect(scan(LEND, 'timeout = Duration.__proto__(5)')).toEqual([]);
+    expect(scan(LEND, 'wait := 5 * time.constructor')).toEqual([]);
+    expect(scan(LEND, 'app.toString("/x"); app.__proto__("/y"); app.constructor("/z")')).toEqual([]);
+  });
+
+  it('a file whose facts cannot be finished gives no facts and does not throw', () => {
+    const broken = { trivialLiterals: null, normalizationMethods: [] } as unknown as FactOptions;
+    expect(() => scanTextFacts(LEND, 'if days > 14 then x', [], broken)).not.toThrow();
+    expect(scanTextFacts(LEND, 'if days > 14 then x', [], broken)).toEqual([]);
+  });
+
+  it('the same output with Map lookups: case, literal words and router verbs still work', () => {
+    expect(scan(LEND, 'if (flag == true) x\nif (v != nil) y\n  case True:')).toEqual([]);
+    expect(scan(LEND, "app.options('/o', h)")).toEqual(['endpoint|OPTIONS /o']);
+  });
+});
+
+describe('scanTextFacts scale (every per-line rule is linear in the line length)', () => {
+  const timed = (file: string, text: string): { readonly ms: number; readonly facts: CodeFact[] } => {
+    const started = performance.now();
+    const facts = scanTextFacts(file, text, [], OPTIONS);
+    return { ms: performance.now() - started, facts };
+  };
+
+  it('a 300 KB line of generics without a condition word', () => {
+    const line = 'List<Map<K,V>> '.repeat(20_000);
+    const { ms, facts } = timed(LEND, line);
+    expect(facts).toEqual([]);
+    expect(ms).toBeLessThan(2000);
+  });
+
+  it('a 1 MiB line of generics', () => {
+    const { ms } = timed(LEND, 'List<Map<K,V>> '.repeat(70_000));
+    expect(ms).toBeLessThan(4000);
+  });
+
+  it('8000 unclosed a.trim( calls after if (', () => {
+    const { ms, facts } = timed(LEND, `if (${'a.trim('.repeat(8000)}`);
+    // Every call's text runs to the line end and is cut at 200 code points, so all but the last 28 are one fact.
+    expect(facts.length).toBe(29);
+    expect(facts.every((f) => f.kind === 'normalization' && Array.from(f.text).length <= 200)).toBe(true);
+    expect(ms).toBeLessThan(2000);
+  });
+
+  it('20000 nested x=( bindings', () => {
+    const { ms, facts } = timed(LEND, 'x=('.repeat(20_000));
+    expect(facts).toEqual([]);
+    expect(ms).toBeLessThan(2000);
+  });
+
+  it('nested comparisons and chained receivers', () => {
+    const nested = `if ${'('.repeat(5000)}x${')>2'.repeat(5000)}`;
+    const nestedRun = timed(LEND, nested);
+    expect(nestedRun.facts.length).toBeGreaterThan(0);
+    expect(nestedRun.ms).toBeLessThan(2000);
+    const chained = timed(LEND, `s${'.trim()'.repeat(20_000)}`);
+    // The texts grow by `.trim()` until the 200 code point cut, after which they are one fact.
+    expect(chained.facts.map((f) => f.text)).toEqual(timed(LEND, `s${'.trim()'.repeat(40)}`).facts.map((f) => f.text));
+    expect(chained.ms).toBeLessThan(2000);
+  });
+});
+
+describe("''' strings in Dart and Groovy", () => {
+  it("'''\\nif retries > 5\\n''' in a .groovy file gives no fact", () => {
+    expect(scan('src/Billing/q.groovy', "def q = '''\nif retries > 5\n'''")).toEqual([]);
+    expect(scan('src/Billing/q.dart', "var q = '''\nif retries > 5\n''';\nif (n > 3) {}")).toEqual(['literal-comparison|n > 3']);
+  });
 });

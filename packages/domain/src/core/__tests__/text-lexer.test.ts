@@ -67,6 +67,26 @@ describe('lexSource', () => {
     expect(lexSource('/* never closed\nif x > 5', 'c')).toEqual([]);
   });
 
+  it('a string ending in a backslash at the end of the text ends at the text length', () => {
+    for (const style of ['c', 'c-nested', 'hash', 'php'] as const) {
+      // Backticks are no string in the hash style.
+      for (const text of ['x = "abc\\', "x = 'abc\\", ...(style === 'hash' ? [] : ['x = `abc\\']), 'x = """abc\\']) {
+        const tokens = lexSource(text, style);
+        const last = tokens[tokens.length - 1]!;
+        expect(last.end, `${style}: ${text}`).toBe(text.length);
+        expect(last.text).toBe(text.slice(4));
+      }
+    }
+  });
+
+  it("''' strings span lines in the c style (Dart, Groovy)", () => {
+    const tokens = lexSource("def q = '''\nif retries > 5\n'''\nx", commentStyleFor('src/Billing/q.groovy'));
+    expect(tokens.map((t) => [t.kind, t.text, t.line])).toEqual([
+      ['word', 'def', 0], ['word', 'q', 0], ['op', '=', 0], ['string', "'''\nif retries > 5\n'''", 0], ['word', 'x', 3],
+    ]);
+    expect(stringDecoderFor('c')("''''''")).toBe('');
+  });
+
   it('a lone quote does not swallow later lines', () => {
     // On one line two lifetimes pair up as a string; the next line is never swallowed.
     expect(words("fn f<'a>(x: &'a str)\nif y", 'c-nested')).toEqual(['fn', 'f', 'a', 'str', 'if', 'y']);

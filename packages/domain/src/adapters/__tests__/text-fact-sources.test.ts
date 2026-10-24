@@ -124,6 +124,15 @@ describe('readTextFacts', () => {
     ]);
   });
 
+  it('a file whose facts cannot be finished is skipped and the other files keep theirs', () => {
+    put('src/Billing/a.py', 'if days > 14:\n');
+    put('src/Billing/b.py', 'MAX_RETRIES = 3\n');
+    // A broken trivial list makes only the comparison file fail in the finisher.
+    const broken = { trivialLiterals: null, normalizationMethods: [] } as unknown as FactOptions;
+    const facts = readTextFacts(root, [{ file: 'src/Billing/a.py', symbols: [] }, { file: 'src/Billing/b.py', symbols: [] }], broken);
+    expect([...facts.keys()]).toEqual(['src/Billing/b.py']);
+  });
+
   it('facts attach to the target symbols', () => {
     put('src/Billing/Fee.ts', 'class X {\n  timeout = 30\n}\n');
     const symbol: SymbolNode = { symbolId: 'src/Billing/Fee.ts::X::class', name: 'X', kind: 'class', startLine: 0, endLine: 2 };
