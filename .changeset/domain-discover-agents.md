@@ -1,9 +1,11 @@
 ---
 "@ctxo/domain": minor
+"@ctxo/cli": minor
 ---
 
 Agents adopting the domain layer never found `ctxo domain discover`, and its proposal turned security IDs into tracker keys, missed the GitHub issue tracker and missed contract tests marked by attributes or file names. Now:
 
+- `@ctxo/cli`: when `@ctxo/domain` is installed, the rules block `ctxo init` writes (compact and full) adds one line: "Adopting or tuning the domain layer? Run `ctxo domain discover` first (`--json` for the evidence, `--write` to merge the proposal)." Without the package the block is unchanged under the same template version. `ctxo doctor` (`ai_rules`) reports a block whose line does not match the installed package, and `ctxo doctor --fix` re-renders it.
 - The `ctxo-domain-fold` skill tells agents to run `ctxo domain discover` first when adopting or tuning the domain config. The `get_context_map` description names it, the "no registry" and "no domain graph" hints name it, and `get_context_map` and `ctxo domain map` add a hint while the conventions are all at their defaults and the last `ctxo index` found that discovery would add something (recorded in `maturity.json`).
 - Well-known external ID families (CWE, CVE, ADR, RFC, ISO, GHSA, OWASP and more) are reported as "external IDs: references, not rule IDs; no config needed" and never proposed. A plain mention of them never linked as a rule ID, since only IDs that exist in a card link; a family that equals a card rule prefix is flagged.
 - GitHub issue references (subjects, `(#N)` squash suffixes, `N-slug` branches) are reported with their share and named as the issue tracker when they are the largest family; lowercase `name-NN` branch families are reported as lowercase identifiers, marked as possible tracker keys when their upper case is a known prefix. Both are evidence only.

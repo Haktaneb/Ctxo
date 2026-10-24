@@ -10,6 +10,12 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (ten packages today). Per-pack
 
 ### Added (discovery)
 
+- The rules block `ctxo init` writes (`@ctxo/cli`) adds one line when `@ctxo/domain` is installed, in both tiers:
+  "Adopting or tuning the domain layer? Run `ctxo domain discover` first (`--json` for the evidence, `--write` to
+  merge the proposal)." Without the package the block is byte-identical to before, so `RULES_TEMPLATE_VERSION`
+  stays `0.13` and no block drifts. `ctxo init --domain` that installs the package renders the rules again after the
+  domain step; `ctxo doctor` (`ai_rules`) reports a block whose line does not match the installed package, and
+  `ctxo doctor --fix` re-renders it.
 - Agents adopting the domain layer did not find `ctxo domain discover` and reverse-engineered the config instead.
   The `ctxo-domain-fold` skill (now v0.17) tells them to run it first, dry run then hand edits or `--write`, when
   adopting or tuning the domain config. The `get_context_map` description and the "no registry" and "no domain
