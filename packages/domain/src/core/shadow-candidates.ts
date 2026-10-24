@@ -68,6 +68,8 @@ const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 const norm = (path: string): string => path.replace(/\\/g, '/');
 
 const KIND_RANK = new Map<string, number>(CANDIDATE_KINDS.map((kind, i) => [kind, i]));
+const TYPE_KINDS = new Set<string>(['class', 'interface', 'type']);
+const NO_TYPES: ReadonlySet<string> = new Set();
 const FACT_CANDIDATE_KINDS = new Set<string>(['literal-comparison', 'normalization', 'retry-timeout', 'endpoint']);
 
 function detailKey(detail: Readonly<Record<string, string>> | undefined): string {
@@ -108,15 +110,17 @@ export function candidatesOf(all: readonly ShadowCandidate[], context: string, k
  * - rules without tests (`card`), resolved by an `Untested:` line;
  * - a candidate with a symbol is resolved by the rules whose code links (card `Code:` lines, `rule:` comments, file
  *   links included) reach it.
- * Linear in facts and symbols, plus the sort.
+ * Exact duplicates are dropped; candidates sharing only a fingerprint are all kept (one resolution entry resolves
+ * each of them). Linear in facts and symbols, plus the sort.
  */
 export function buildShadowCandidates(input: CandidateInput): ShadowCandidate[] {
   const out: ShadowCandidate[] = [];
   const symbolParts = new Map<string, string>();
-  const symbolPart = (symbolId: string): string => {
+  /** `types`: the names of the file's class, interface and type symbols, for the containing type (M3). */
+  const symbolPart = (symbolId: string, types: ReadonlySet<string>): string => {
     let part = symbolParts.get(symbolId);
     if (part === undefined) {
-      part = fingerprintSymbolPart(symbolId);
+      part = fingerprintSymbolPart(symbolId, containerOf(symbolId, types));
       symbolParts.set(symbolId, part);
     }
     return part;
@@ -143,12 +147,18 @@ export function buildShadowCandidates(input: CandidateInput): ShadowCandidate[] 
   const dataKinds = new Set(input.dataResourceKinds);
   const ownerOf = (file: string): string | undefined => (input.isTestFile(file) ? undefined : input.ownership.ownerOf(file));
 
-  const pushFacts = (file: string, context: string, facts: readonly CodeFact[], source: 'native' | 'text'): void => {
+  const pushFacts = (
+    file: string,
+    context: string,
+    facts: readonly CodeFact[],
+    source: 'native' | 'text',
+    types: ReadonlySet<string>,
+  ): void => {
     for (const fact of facts) {
       if (!FACT_CANDIDATE_KINDS.has(fact.kind)) continue;
       out.push(
         withLinks({
-          fingerprint: fingerprint(fact.kind, symbolPart(fact.symbolId), fact.text),
+          fingerprint: fingerprint(fact.kind, symbolPart(fact.symbolId, types), fact.text),
           kind: fact.kind as CandidateKind,
           context,
           file,
@@ -171,8 +181,10 @@ export function buildShadowCandidates(input: CandidateInput): ShadowCandidate[] 
     indexed.add(file);
     const context = ownerOf(file);
     if (context === undefined) continue;
-    if (index.facts !== undefined) pushFacts(file, context, index.facts, 'native');
-    else pushFacts(file, context, textFacts.get(file) ?? [], 'text');
+    const types = new Set<string>();
+    for (const symbol of index.symbols) if (TYPE_KINDS.has(symbol.kind)) types.add(symbol.name);
+    if (index.facts !== undefined) pushFacts(file, context, index.facts, 'native', types);
+    else pushFacts(file, context, textFacts.get(file) ?? [], 'text', types);
     for (const symbol of index.symbols) {
       const kind: CandidateKind | undefined =
         symbol.kind === 'procedure' ? 'procedure' : dataKinds.has(symbol.kind) ? 'data-resource' : undefined;
@@ -180,7 +192,7 @@ export function buildShadowCandidates(input: CandidateInput): ShadowCandidate[] 
       const text = `${symbol.kind} ${middleSegment(symbol.symbolId)}`;
       out.push(
         withLinks({
-          fingerprint: fingerprint(kind, symbolPart(symbol.symbolId), text),
+          fingerprint: fingerprint(kind, symbolPart(symbol.symbolId, types), text),
           kind,
           context,
           file,
@@ -195,7 +207,7 @@ export function buildShadowCandidates(input: CandidateInput): ShadowCandidate[] 
   for (const [file, facts] of textFacts) {
     if (indexed.has(file)) continue;
     const context = ownerOf(file);
-    if (context !== undefined) pushFacts(file, context, facts, 'text');
+    if (context !== undefined) pushFacts(file, context, facts, 'text', NO_TYPES);
   }
 
   const contexts = input.registry.contexts.map((context) => context.id).sort(compare);
@@ -215,7 +227,27 @@ export function buildShadowCandidates(input: CandidateInput): ShadowCandidate[] 
     }
   }
 
-  return out.sort(compareCandidates);
+  // M1: an exact duplicate (every field equal) sorts next to its twin; equal fingerprints alone are kept.
+  out.sort(compareCandidates);
+  return out.filter((candidate, i) => i === 0 || compareCandidates(out[i - 1]!, candidate) !== 0);
+}
+
+/**
+ * The longest name in `types` that is a proper prefix of the symbol's name, ending at a `.` outside `<...>`; the
+ * symbol's own name never counts.
+ */
+function containerOf(symbolId: string, types: ReadonlySet<string>): string | undefined {
+  if (types.size === 0) return undefined;
+  const name = middleSegment(symbolId);
+  let depth = 0;
+  let best: string | undefined;
+  for (let i = 0; i < name.length; i++) {
+    const ch = name[i];
+    if (ch === '<') depth++;
+    else if (ch === '>') depth = Math.max(0, depth - 1);
+    else if (ch === '.' && depth === 0 && types.has(name.slice(0, i))) best = name.slice(0, i);
+  }
+  return best;
 }
 
 /** The name part of `<file>::<name>::<kind>` (everything between the first and the last `::`). */

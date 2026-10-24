@@ -28,6 +28,8 @@ const CHARGE = `${FINES}::Fines.Charge::method`;
 const RATE = 'src/Lending/scripts/rate.py';
 const RATE_MODULE = `${RATE}::rate::variable`;
 const MIGRATION = 'db/migrations/lending/001_create_loans.sql';
+const LOANS_TABLE = `${MIGRATION}::dbo.loans::table`;
+const CLOSE_LOAN = `${MIGRATION}::dbo.close_loan::procedure`;
 const TEST_FILE = 'tests/Lending.Tests/LoanLimitTests.cs';
 const TEST = `${TEST_FILE}::LoanLimitTests.Max::method`;
 const SHARED = 'src/Shared/Clock.cs';
@@ -64,9 +66,11 @@ const LENDING_TEXT = [
   '',
   '### LEND-03 Renewals are limited',
   `Tests: \`${RENEW}\``,
+  `Code: \`${CLOSE_LOAN}\``,
   '',
   '### LEND-04 Loans are counted',
   `Tests: \`${TEST}\``,
+  `Code: \`${LOANS_TABLE}\``,
   '',
 ].join('\n');
 
@@ -118,6 +122,7 @@ function indices(limit = 'openLoans >= 5', limitLine = 4): FileIndex[] {
         ['dbo.loans', 'table', 0, 5],
         ['dbo.open_loans', 'view', 10, 12],
         ['dbo.close_loan', 'procedure', 20, 30],
+        ['dbo.open_loan', 'procedure', 40, 50],
       ],
       [],
     ),
@@ -249,7 +254,7 @@ describe('buildShadowCandidates', () => {
       expect(files.has(file), file).toBe(false);
     }
     // The migration's `facts: []` is native: its text facts give nothing.
-    expect(all.filter((c) => c.file === MIGRATION).map((c) => c.kind)).toEqual(['data-resource', 'data-resource', 'procedure']);
+    expect(all.filter((c) => c.file === MIGRATION).map((c) => c.kind)).toEqual(['data-resource', 'data-resource', 'procedure', 'procedure']);
     expect(new Set(all.map((c) => c.context))).toEqual(new Set(['lending', 'billing']));
   });
 
@@ -262,9 +267,10 @@ describe('buildShadowCandidates', () => {
         context: 'lending',
         file: MIGRATION,
         line: 1,
-        symbolId: `${MIGRATION}::dbo.loans::table`,
+        symbolId: LOANS_TABLE,
         text: 'table dbo.loans',
         source: 'index',
+        resolution: { by: 'rule-link', rules: ['LEND-04'] },
       },
       {
         fingerprint: 'data-resource | dbo.open_loans | view dbo.open_loans',
@@ -282,8 +288,19 @@ describe('buildShadowCandidates', () => {
         context: 'lending',
         file: MIGRATION,
         line: 21,
-        symbolId: `${MIGRATION}::dbo.close_loan::procedure`,
+        symbolId: CLOSE_LOAN,
         text: 'procedure dbo.close_loan',
+        source: 'index',
+        resolution: { by: 'rule-link', rules: ['LEND-03'] },
+      },
+      {
+        fingerprint: 'procedure | dbo.open_loan | procedure dbo.open_loan',
+        kind: 'procedure',
+        context: 'lending',
+        file: MIGRATION,
+        line: 41,
+        symbolId: `${MIGRATION}::dbo.open_loan::procedure`,
+        text: 'procedure dbo.open_loan',
         source: 'index',
       },
     ]);
@@ -342,6 +359,52 @@ describe('buildShadowCandidates', () => {
     expect(bySymbol(SEND)?.resolution).toBeUndefined();
   });
 
+  it('rule links resolve data-resource and procedure candidates; unlinked ones stay open (M2)', () => {
+    const all = buildShadowCandidates(input());
+    const bySymbol = (symbolId: string): ShadowCandidate | undefined => all.find((c) => c.symbolId === symbolId);
+    expect(bySymbol(LOANS_TABLE)?.resolution).toEqual({ by: 'rule-link', rules: ['LEND-04'] });
+    expect(bySymbol(`${MIGRATION}::dbo.open_loans::view`)?.resolution).toBeUndefined();
+    expect(bySymbol(CLOSE_LOAN)?.resolution).toEqual({ by: 'rule-link', rules: ['LEND-03'] });
+    expect(bySymbol(`${MIGRATION}::dbo.open_loan::procedure`)?.resolution).toBeUndefined();
+  });
+
+  it('a fact emitted twice gives one candidate (M1)', () => {
+    const twice = indices();
+    twice[0] = { ...twice[0]!, facts: [...twice[0]!.facts!, twice[0]!.facts![0]!] };
+    const text = textFacts();
+    text.set(FINES, [...text.get(FINES)!, ...text.get(FINES)!]);
+    expect(buildShadowCandidates(input(twice, text))).toEqual(buildShadowCandidates(input()));
+    // Same fingerprint on another line is a second candidate, not a duplicate.
+    const otherLine = indices();
+    otherLine[0] = { ...otherLine[0]!, facts: [...otherLine[0]!.facts!, { ...otherLine[0]!.facts![0]!, line: 6 }] };
+    expect(buildShadowCandidates(input(otherLine)).filter((c) => c.symbolId === CAN_BORROW)).toHaveLength(2);
+  });
+
+  it('explicit interface implementations of two classes in one context get different fingerprints (M3)', () => {
+    const file = 'src/Lending/Models.cs';
+    const member = `${file}::Lending.Member.System.IComparable<Lending.Member>.CompareTo::method`;
+    const loan = `${file}::Lending.Loan.System.IComparable<Lending.Loan>.CompareTo::method`;
+    const dispose = `${file}::Lending.Loan.System.IDisposable.Dispose::method`;
+    const models = fileIndex(
+      file,
+      [
+        ['Lending.Member', 'class', 0, 10],
+        ['Lending.Member.System.IComparable<Lending.Member>.CompareTo', 'method', 2, 8],
+        ['Lending.Loan', 'class', 12, 30],
+        ['Lending.Loan.System.IComparable<Lending.Loan>.CompareTo', 'method', 14, 20],
+        ['Lending.Loan.System.IDisposable.Dispose', 'method', 22, 28],
+      ],
+      [fact('literal-comparison', member, 4, 'x.Count >= 5'), fact('literal-comparison', loan, 16, 'x.Count >= 5'), fact('literal-comparison', dispose, 24, 'x.Count >= 5')],
+    );
+    const all = buildShadowCandidates(input([...indices(), models]));
+    const fingerprints = all.filter((c) => c.file === file).map((c) => c.fingerprint);
+    expect(fingerprints).toEqual([
+      'literal-comparison | Member.IComparable<Lending.Member>.CompareTo | x.Count >= 5',
+      'literal-comparison | Loan.IComparable<Lending.Loan>.CompareTo | x.Count >= 5',
+      'literal-comparison | Loan.IDisposable.Dispose | x.Count >= 5',
+    ]);
+  });
+
   it('a changed literal changes the fingerprint', () => {
     const five = buildShadowCandidates(input(indices('openLoans >= 5')));
     const six = buildShadowCandidates(input(indices('openLoans >= 6')));
@@ -380,6 +443,7 @@ describe('buildShadowCandidates', () => {
       `lending ${MIGRATION} 1 data-resource`,
       `lending ${MIGRATION} 11 data-resource`,
       `lending ${MIGRATION} 21 procedure`,
+      `lending ${MIGRATION} 41 procedure`,
       `lending ${LENDING_CARD} 4 rule-without-tests`,
       `lending ${LENDING_CARD} 7 rule-without-tests`,
       `lending ${FINES} 4 retry-timeout`,
@@ -415,7 +479,7 @@ describe('buildShadowCandidates', () => {
     const started = performance.now();
     const all = buildShadowCandidates(scaled);
     const elapsed = performance.now() - started;
-    expect(all.length).toBe(files * perFile + 11);
+    expect(all.length).toBe(files * perFile + 12);
     expect(elapsed).toBeLessThan(2000);
   });
 });
@@ -424,10 +488,10 @@ describe('candidatesOf and compareCandidates', () => {
   it('candidatesOf keeps one context in order and filters by kind; no kinds or an empty list keep every kind', () => {
     const all = buildShadowCandidates(input());
     const lending = candidatesOf(all, 'lending');
-    expect(lending.length).toBe(9);
+    expect(lending.length).toBe(10);
     expect(lending.every((c) => c.context === 'lending')).toBe(true);
     expect(candidatesOf(all, 'lending', [])).toEqual(lending);
-    expect(candidatesOf(all, 'lending', ['procedure']).map((c) => c.text)).toEqual(['procedure dbo.close_loan']);
+    expect(candidatesOf(all, 'lending', ['procedure']).map((c) => c.text)).toEqual(['procedure dbo.close_loan', 'procedure dbo.open_loan']);
     expect(candidatesOf(all, 'nobody')).toEqual([]);
   });
 
