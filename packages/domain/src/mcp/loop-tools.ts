@@ -55,6 +55,7 @@ function resolvedCandidates(snapshot: LoopSnapshot, context: string): AppliedRes
  */
 export function shadowSpecsAnswer(snapshot: LoopSnapshot, query: ShadowSpecsQuery): Payload {
   const id = query.context.trim();
+  if (id === '') return { found: false, hint: 'Pass a context ID from the registry; get_context_map lists the contexts.' };
   const context = snapshot.domain.index.contexts.get(id);
   if (context === undefined) return { found: false, hint: `No context ${id} in the registry; get_context_map lists the contexts.` };
   const applied = resolvedCandidates(snapshot, id);
@@ -133,7 +134,8 @@ export function loopTools(host: CtxoHost, state: DomainState): ModuleToolDefinit
     name: FIND_SHADOW_SPECS,
     description: FIND_SHADOW_SPECS_DESCRIPTION,
     inputSchema: (z) => ({
-      context: z.string().min(1).describe('Context ID from the registry, e.g. lending'),
+      // Trimmed first, so a whitespace-only context is rejected.
+      context: z.string().trim().min(1).describe('Context ID from the registry, e.g. lending'),
       kinds: z.array(z.enum(CANDIDATE_KINDS)).optional().describe(KINDS_DESCRIPTION),
       includeResolved: z.boolean().optional().describe('Also return resolved candidates with their resolution (default false)'),
     }),

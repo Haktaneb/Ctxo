@@ -6,7 +6,7 @@ import type { ContextHistoryEntry, MovedFile } from '../core/context-metrics.js'
 import type { DomainSnapshot } from '../core/domain-graph-query.js';
 import type { MaturityArtifact } from '../core/maturity.js';
 import type { ShadowCandidate } from '../core/shadow-candidates.js';
-import { createRacyStamper, STALE_CARDS_HINT, type DomainState } from './domain-state.js';
+import { createRacyStamper, STALE_CARDS_HINT, type DomainState, type DomainStateReason } from './domain-state.js';
 
 /** `shadow-candidates.json` or `maturity.json` is missing or unreadable. */
 export const NO_LOOP_DATA_HINT = 'No shadow-spec data yet; run "ctxo index".';
@@ -36,7 +36,23 @@ export interface LoopSnapshot {
   readonly staleHint?: string;
 }
 
-export type LoopStateResult = { readonly ok: true; readonly snapshot: LoopSnapshot } | { readonly ok: false; readonly hint: string };
+/**
+ * Why a load gave no snapshot: `no-registry` (no registry file), `registry-problems` (the registry does not load or
+ * validate), `no-artifacts` (the domain graph or a loop artifact is missing or invalid, or the graph was built from
+ * another registry: each is fixed by `ctxo index`).
+ */
+export type LoopStateFailure = 'no-registry' | 'registry-problems' | 'no-artifacts';
+
+export type LoopStateResult =
+  | { readonly ok: true; readonly snapshot: LoopSnapshot }
+  | { readonly ok: false; readonly reason: LoopStateFailure; readonly hint: string };
+
+const FAILURE_OF: Readonly<Record<DomainStateReason, LoopStateFailure>> = {
+  'no-registry': 'no-registry',
+  'invalid-registry': 'registry-problems',
+  'no-graph': 'no-artifacts',
+  'stale-registry': 'no-artifacts',
+};
 
 export interface LoopState {
   load(): LoopStateResult;
@@ -76,12 +92,12 @@ export function createLoopState(host: CtxoHost, state: DomainState): LoopState {
   return {
     load() {
       const loaded = state.load();
-      if (!loaded.ok) return { ok: false, hint: loaded.hint };
+      if (!loaded.ok) return { ok: false, reason: FAILURE_OF[loaded.reason], hint: loaded.hint };
       const domain = loaded.snapshot;
 
       const candidates = cached('candidates', () => store.readShadowCandidates());
       const maturity = cached('maturity', () => store.readMaturity());
-      if (candidates === undefined || maturity === undefined) return { ok: false, hint: NO_LOOP_DATA_HINT };
+      if (candidates === undefined || maturity === undefined) return { ok: false, reason: 'no-artifacts', hint: NO_LOOP_DATA_HINT };
       const boundaries = cached('boundaries', () => store.readBoundaries());
       const contexts = cached('contexts', () => store.readContexts());
       const history = cached('history', () => store.readHistory());
@@ -92,7 +108,9 @@ export function createLoopState(host: CtxoHost, state: DomainState): LoopState {
       const staleRegistry =
         candidates.registryHash !== registryHash ||
         maturity.registryHash !== registryHash ||
-        (boundaries !== undefined && boundaries.registryHash !== registryHash);
+        (boundaries !== undefined && boundaries.registryHash !== registryHash) ||
+        // movedFiles name the contexts of the registry contexts.json was built from.
+        (contexts !== undefined && contexts.registryHash !== registryHash);
       const hints = [...(staleCards ? [STALE_CARDS_HINT] : []), ...(staleRegistry ? [STALE_LOOP_HINT] : [])];
 
       const shadowSpecs = readShadowSpecs(

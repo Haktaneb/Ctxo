@@ -177,7 +177,9 @@ describe('loop tools', () => {
       found: false,
       hint: 'No context shipping in the registry; get_context_map lists the contexts.',
     });
-    expect(await call(tool, {})).toEqual({ found: false, hint: 'No context  in the registry; get_context_map lists the contexts.' });
+    // The schema trims and rejects a blank context; a handler called without the schema still answers cleanly.
+    const blank = { found: false, hint: 'Pass a context ID from the registry; get_context_map lists the contexts.' };
+    for (const args of [{}, { context: '' }, { context: '   ' }, { context: 42 }]) expect(await call(tool, args), JSON.stringify(args)).toEqual(blank);
   });
 
   it('no registry gives found false, never an error', async () => {
@@ -342,6 +344,8 @@ describe('loop tools', () => {
     expect(Object.keys(all[1]!.inputSchema(zod))).toEqual([]);
     expect(calls).toEqual([
       'z.string()',
+      // Trimmed before the length check, so a whitespace-only context is rejected.
+      'string.trim()',
       'string.min(1)',
       'string.describe("Context ID from the registry, e.g. lending")',
       'z.enum(["literal-comparison","normalization","retry-timeout","endpoint","data-resource","procedure","rule-without-tests"])',

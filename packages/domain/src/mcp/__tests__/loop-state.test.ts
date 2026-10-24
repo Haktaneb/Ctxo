@@ -1,4 +1,4 @@
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDomainState, STALE_CARDS_HINT } from '../domain-state.js';
@@ -43,11 +43,12 @@ describe('createLoopState', () => {
     const state = loopState();
     expect(state.load()).toEqual({
       ok: false,
+      reason: 'no-registry',
       hint: 'No domain registry at docs/domain/contexts.yaml. Create one with "ctxo init --domain".',
     });
 
     project.write('docs/domain/contexts.yaml', REGISTRY);
-    expect(state.load()).toEqual({ ok: false, hint: 'No domain graph yet; run "ctxo index".' });
+    expect(state.load()).toEqual({ ok: false, reason: 'no-artifacts', hint: 'No domain graph yet; run "ctxo index".' });
 
     await project.index();
     const snapshot = snapshotOf(state);
@@ -65,7 +66,7 @@ describe('createLoopState', () => {
       const path = artifactPath(name);
       const saved = readFileSync(path, 'utf-8');
       rmSync(path);
-      expect(state.load(), name).toEqual({ ok: false, hint: NO_LOOP_DATA_HINT });
+      expect(state.load(), name).toEqual({ ok: false, reason: 'no-artifacts', hint: NO_LOOP_DATA_HINT });
       writeFileSync(path, saved, 'utf-8');
       project.age(`.ctxo/index/domain/${name}`, 5);
       expect(state.load().ok, name).toBe(true);
@@ -95,7 +96,7 @@ describe('createLoopState', () => {
     expect(snapshot.staleHint).toBe(STALE_CARDS_HINT);
   });
 
-  it.each(['shadow-candidates.json', 'maturity.json', 'boundaries.json'])(
+  it.each(['shadow-candidates.json', 'maturity.json', 'boundaries.json', 'contexts.json'])(
     'answers from %s built for another registry, marked stale',
     async (name) => {
       await project.index();
@@ -148,6 +149,46 @@ describe('createLoopState', () => {
 
     project.write('docs/domain/lending/shadow-specs.yaml', '[]\n');
     expect(lending(snapshotOf(state)).parsed?.entries).toEqual([]);
+  });
+
+  it('gives the reason registry-problems for a registry that does not validate', () => {
+    project.write('docs/domain/contexts.yaml', 'version: 1\ncontexts: 3\n');
+
+    expect(loopState().load()).toEqual({
+      ok: false,
+      reason: 'registry-problems',
+      hint: 'The domain registry at docs/domain/contexts.yaml has problems; run "ctxo verify-domain".',
+    });
+  });
+
+  it('gives the reason no-artifacts for invalid loop artifacts and a graph of another registry', async () => {
+    await project.index();
+    writeFileSync(artifactPath('shadow-candidates.json'), '{ "ctxoArtifact": "domain-shadow-candidates", "version": 2 }\n', 'utf-8');
+    expect(loopState().load()).toEqual({ ok: false, reason: 'no-artifacts', hint: NO_LOOP_DATA_HINT });
+
+    project.write('docs/domain/contexts.yaml', `${REGISTRY}  - id: shipping\n    name: Shipping\n    paths: ["src/Shipping/**"]\n    rung: fear\n`);
+    const loaded = loopState().load();
+    expect(loaded.ok).toBe(false);
+    expect(loaded.ok ? undefined : loaded.reason).toBe('no-artifacts');
+  });
+
+  it('rereads an artifact rewritten at the same size inside the racy window', async () => {
+    await project.index();
+    const path = artifactPath('maturity.json');
+    // A fresh mtime, inside the 2 s window: the same instant before and after the rewrite (one coarse mtime tick).
+    const tick = new Date(Math.floor(Date.now()) - 500);
+    utimesSync(path, tick, tick);
+    const state = loopState();
+    expect(snapshotOf(state).maturity.contexts[0]!.tests.characterization).toBe(0);
+
+    const before = readFileSync(path, 'utf-8');
+    const after = before.replace('"characterization": 0', '"characterization": 1');
+    expect(after.length).toBe(before.length);
+    writeFileSync(path, after, 'utf-8');
+    utimesSync(path, tick, tick);
+    expect(statSync(path).size).toBe(Buffer.byteLength(before));
+
+    expect(snapshotOf(state).maturity.contexts[0]!.tests.characterization).toBe(1);
   });
 
   it('caches the artifacts by mtime and size, and rereads a changed one', async () => {
