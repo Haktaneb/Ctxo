@@ -14,6 +14,7 @@ import { createEnrichers } from './mcp/enrichers.js';
 import { loopTools } from './mcp/loop-tools.js';
 import { taskContextReservation } from './mcp/graph-enrichers.js';
 import { DOMAIN_PACKAGE, domainVersion, sameMinor } from './version.js';
+import { repoIsFile } from './adapters/repo-files.js';
 
 /**
  * The domain config for the fact request. Read only when the CLI asks for `indexCapabilities` (`ctxo index`,
@@ -47,13 +48,19 @@ export const register: CtxoModuleRegister = async (host) => {
   }
   // One state for the enrichers, the reservation, the tools and the scope; it does no I/O until a first load (P19).
   const state = createDomainState(host);
-  let capabilities: { readonly facts: true; readonly factOptions: FactDetectorOptions } | undefined;
+  let capabilities: { readonly value: { readonly facts: true; readonly factOptions: FactDetectorOptions } | undefined } | undefined;
   return {
     id: 'domain',
-    // Lazy and read once: the config is loaded on the first fact request only.
+    // Lazy and read once: the config is loaded on the first fact request only. Facts are requested only when the
+    // registry file exists, so a repository without one keeps the index JSON it has without the module (PR 3).
     get indexCapabilities() {
-      capabilities ??= { facts: true, factOptions: toFactDetectorOptions(factRequestConfig(host)) };
-      return capabilities;
+      if (capabilities === undefined) {
+        const config = factRequestConfig(host);
+        capabilities = {
+          value: repoIsFile(host.projectRoot, config.registry) ? { facts: true, factOptions: toFactDetectorOptions(config) } : undefined,
+        };
+      }
+      return capabilities.value;
     },
     indexPass: domainIndexPass(host),
     registerCommands(registrar) {

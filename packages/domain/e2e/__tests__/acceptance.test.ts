@@ -350,6 +350,23 @@ describe.each(VARIANTS)('PR 2B acceptance, %s sample', (variant) => {
     }
   });
 
+  it('no registry: the index asks no plugin for facts, so no index JSON gains a facts key', () => {
+    const ws = SampleWorkspace.create(variant);
+    ws.remove(REGISTRY);
+    ws.commit('chore: no registry');
+    ws.index();
+    const withFacts: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.name.endsWith('.json') && 'facts' in (JSON.parse(readFileSync(full, 'utf-8')) as object)) withFacts.push(full);
+      }
+    };
+    walk(ws.path('.ctxo/index'));
+    expect(withFacts).toEqual([]);
+  });
+
   it.skipIf(variant !== 'csharp')('the guard blocks a sample session and lets it finish after a trailer commit', () => {
     const ws = SampleWorkspace.create(variant);
     ws.git('checkout', '-q', '-b', 'feat');
