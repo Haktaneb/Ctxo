@@ -6,7 +6,7 @@
 
 import type { CodeFact, FileIndex, TestFileCheck } from '@ctxo/cli/internal';
 import { rulesForSymbols, rulesWithoutTests, type GraphIndex } from './domain-graph-query.js';
-import { fingerprint, fingerprintSymbolPart } from './fingerprint.js';
+import { fingerprint, fingerprintSymbolPart, segmentDots } from './fingerprint.js';
 import type { Ownership } from './ownership.js';
 import type { DomainRegistry } from './registry.js';
 
@@ -213,14 +213,16 @@ export function buildShadowCandidates(input: CandidateInput): ShadowCandidate[] 
   const contexts = input.registry.contexts.map((context) => context.id).sort(compare);
   for (const context of contexts) {
     for (const rule of rulesWithoutTests(input.graph, [context])) {
+      const title = rule.title.trim();
       out.push({
-        fingerprint: fingerprint('rule-without-tests', rule.ruleId, rule.title),
+        // N2: a heading without a title (`### LEND-03`) uses the rule ID, so the text part is never empty.
+        fingerprint: fingerprint('rule-without-tests', rule.ruleId, title === '' ? rule.ruleId : title),
         kind: 'rule-without-tests',
         context: rule.context,
         file: rule.card,
         line: rule.line,
         ruleId: rule.ruleId,
-        text: `${rule.ruleId} ${rule.title}`,
+        text: title === '' ? rule.ruleId : `${rule.ruleId} ${title}`,
         source: 'card',
         ...(rule.untested === undefined ? {} : { resolution: { by: 'untested' as const, reason: rule.untested } }),
       });
@@ -239,13 +241,10 @@ export function buildShadowCandidates(input: CandidateInput): ShadowCandidate[] 
 function containerOf(symbolId: string, types: ReadonlySet<string>): string | undefined {
   if (types.size === 0) return undefined;
   const name = middleSegment(symbolId);
-  let depth = 0;
   let best: string | undefined;
-  for (let i = 0; i < name.length; i++) {
-    const ch = name[i];
-    if (ch === '<') depth++;
-    else if (ch === '>') depth = Math.max(0, depth - 1);
-    else if (ch === '.' && depth === 0 && types.has(name.slice(0, i))) best = name.slice(0, i);
+  for (const dot of segmentDots(name)) {
+    const prefix = name.slice(0, dot);
+    if (types.has(prefix)) best = prefix;
   }
   return best;
 }

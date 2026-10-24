@@ -36,19 +36,40 @@ function baseName(file: string): string {
   return dot > 0 ? name.slice(0, dot) : name;
 }
 
-/** `.` segments, never splitting inside generic arguments (`IComparable<Lending.Member>` is one segment); empty ones dropped. */
+const OPEN_BRACKETS = new Map<string, string>([
+  ['<', '>'],
+  ['[', ']'],
+  ['(', ')'],
+]);
+const QUOTES = new Set<string>(["'", '"', '`']);
+
+/**
+ * Offsets of the `.` that separate name segments: never inside `<...>` (`IComparable<Lending.Member>`), `[...]`
+ * (`[Symbol.iterator]`), `(...)` or a quoted name (`'a.b'`). An unclosed bracket or quote runs to the end.
+ */
+export function segmentDots(name: string): number[] {
+  const out: number[] = [];
+  const closers: string[] = [];
+  let quote: string | undefined;
+  for (let i = 0; i < name.length; i++) {
+    const ch = name[i]!;
+    if (quote !== undefined) {
+      if (ch === quote) quote = undefined;
+    } else if (QUOTES.has(ch)) quote = ch;
+    else if (OPEN_BRACKETS.has(ch)) closers.push(OPEN_BRACKETS.get(ch)!);
+    else if (closers.length > 0 && ch === closers[closers.length - 1]) closers.pop();
+    else if (ch === '.' && closers.length === 0) out.push(i);
+  }
+  return out;
+}
+
+/** `.` segments split at `segmentDots`; empty ones dropped. */
 export function nameSegments(name: string): string[] {
   const out: string[] = [];
-  let depth = 0;
   let start = 0;
-  for (let i = 0; i < name.length; i++) {
-    const ch = name[i];
-    if (ch === '<') depth++;
-    else if (ch === '>') depth = Math.max(0, depth - 1);
-    else if (ch === '.' && depth === 0) {
-      out.push(name.slice(start, i));
-      start = i + 1;
-    }
+  for (const dot of segmentDots(name)) {
+    out.push(name.slice(start, dot));
+    start = dot + 1;
   }
   out.push(name.slice(start));
   return out.filter((segment) => segment !== '');
@@ -59,12 +80,14 @@ export function nameSegments(name: string): string[] {
  * no directory and no last extension (W26). `src/Lending/LoanPolicy.cs::LibraryLending.Lending.LoanPolicy.CanBorrow::method`
  * gives `LoanPolicy.CanBorrow`, `src/lending/loan-policy.ts::canBorrow::function` gives `loan-policy.canBorrow`,
  * `src/app.ts::app::variable` gives `app.app`. An ID without a file part (`dbo.loans::table`) uses its name alone.
- * A `.` inside `<...>` does not split a segment.
+ * A `.` inside `<...>`, `[...]`, `(...)` or quotes does not split a segment (`segmentDots`).
  *
- * `container` is the name of the type that declares the symbol (the longest class, interface or type symbol of the
- * file whose name prefixes the symbol's name). When the rest of the name after it has more than one segment, as for
- * a C# explicit interface implementation (`NS.Loan.System.IComparable<Lending.Loan>.CompareTo`), the part keeps the
- * containing type: `Loan.IComparable<Lending.Loan>.CompareTo` (amends H4, fix round 1 M3).
+ * Amended H4 (fix rounds 1 and 2): a member whose name holds a `.` keeps its containing type. Without a container
+ * this follows from the segment rule (`Foo.[Symbol.iterator]`, `Foo.'a.b'`). `container` is the name of the type
+ * that declares the symbol (the longest class, interface or type symbol of the file whose name prefixes the
+ * symbol's name); when the name after it still has more than one segment, as for a C# explicit interface
+ * implementation (`NS.Loan.System.IComparable<Lending.Loan>.CompareTo`), the part is the type's last segment plus
+ * the last two segments of that rest: `Loan.IComparable<Lending.Loan>.CompareTo`.
  */
 export function fingerprintSymbolPart(symbolId: string, container?: string): string {
   const first = symbolId.indexOf('::');
@@ -77,11 +100,15 @@ export function fingerprintSymbolPart(symbolId: string, container?: string): str
       if (rest.length > 1 && type !== undefined) return collapse([type, ...rest.slice(-2)].join('.'));
     }
   }
-  let joined: string;
-  if (first < 0) joined = withoutParameterSuffix(symbolId);
-  else if (first === last) joined = withoutParameterSuffix(symbolId.slice(0, first));
-  else joined = `${baseName(symbolId.slice(0, first))}.${withoutParameterSuffix(symbolId.slice(first + 2, last))}`;
-  return collapse(nameSegments(joined).slice(-2).join('.'));
+  let segments: string[];
+  if (first < 0) segments = nameSegments(withoutParameterSuffix(symbolId));
+  else if (first === last) segments = nameSegments(withoutParameterSuffix(symbolId.slice(0, first)));
+  else {
+    // The basename splits at every `.`, so a quote in a file name never joins it with the symbol name.
+    const base = baseName(symbolId.slice(0, first)).split('.').filter((segment) => segment !== '');
+    segments = [...base, ...nameSegments(withoutParameterSuffix(symbolId.slice(first + 2, last)))];
+  }
+  return collapse(segments.slice(-2).join('.'));
 }
 
 /** Percent-encodes `%` (first) and `|` in a kind or symbol part, so the part never holds a separator (I1). */

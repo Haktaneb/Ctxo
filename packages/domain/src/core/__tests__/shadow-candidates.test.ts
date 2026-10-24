@@ -165,8 +165,8 @@ const RULE_COMMENT: RuleLinks = {
   unknown: [],
 };
 
-function fixture(fileIndices: FileIndex[]): FixtureInput {
-  return { registryText: REGISTRY_TEXT, cards: { [LENDING_CARD]: LENDING_TEXT, [BILLING_CARD]: BILLING_TEXT }, indices: fileIndices, codeRefs: RULE_COMMENT };
+function fixture(fileIndices: FileIndex[], billingText = BILLING_TEXT): FixtureInput {
+  return { registryText: REGISTRY_TEXT, cards: { [LENDING_CARD]: LENDING_TEXT, [BILLING_CARD]: billingText }, indices: fileIndices, codeRefs: RULE_COMMENT };
 }
 
 function input(fileIndices: FileIndex[] = indices(), facts: ReadonlyMap<string, readonly CodeFact[]> = textFacts(), graph?: GraphIndex): CandidateInput {
@@ -378,6 +378,39 @@ describe('buildShadowCandidates', () => {
     const otherLine = indices();
     otherLine[0] = { ...otherLine[0]!, facts: [...otherLine[0]!.facts!, { ...otherLine[0]!.facts![0]!, line: 6 }] };
     expect(buildShadowCandidates(input(otherLine)).filter((c) => c.symbolId === CAN_BORROW)).toHaveLength(2);
+  });
+
+  it('a rule heading without a title uses the rule ID as its text (N2)', () => {
+    const graph = indexGraph(buildFixtureGraph(fixture(indices(), `${BILLING_TEXT}
+### BILL-02
+`)));
+    const untitled = buildShadowCandidates(input(indices(), textFacts(), graph)).find((c) => c.ruleId === 'BILL-02');
+    expect(untitled).toMatchObject({ fingerprint: 'rule-without-tests | BILL-02 | BILL-02', text: 'BILL-02', kind: 'rule-without-tests' });
+    expect(normalizeFingerprint(untitled!.fingerprint)).toBe(untitled!.fingerprint);
+  });
+
+  it('TypeScript members of two classes whose names hold a dot get different fingerprints (N1)', () => {
+    const file = 'src/Lending/collections.ts';
+    const shelf = `${file}::Shelf.[Symbol.iterator]::method`;
+    const queue = `${file}::Queue.[Symbol.iterator]::method`;
+    const dotted = `${file}::Queue.'a.b.c'::method`;
+    const collections = fileIndex(
+      file,
+      [
+        ['Shelf', 'class', 0, 10],
+        ['Shelf.[Symbol.iterator]', 'method', 2, 8],
+        ['Queue', 'class', 12, 30],
+        ['Queue.[Symbol.iterator]', 'method', 14, 20],
+        ["Queue.'a.b.c'", 'method', 22, 28],
+      ],
+      [fact('literal-comparison', shelf, 4, 'i < 10'), fact('literal-comparison', queue, 16, 'i < 10'), fact('literal-comparison', dotted, 24, 'i < 10')],
+    );
+    const all = buildShadowCandidates(input([...indices(), collections]));
+    expect(all.filter((c) => c.file === file).map((c) => c.fingerprint)).toEqual([
+      'literal-comparison | Shelf.[Symbol.iterator] | i < 10',
+      'literal-comparison | Queue.[Symbol.iterator] | i < 10',
+      "literal-comparison | Queue.'a.b.c' | i < 10",
+    ]);
   });
 
   it('explicit interface implementations of two classes in one context get different fingerprints (M3)', () => {

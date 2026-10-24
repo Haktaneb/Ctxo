@@ -20,6 +20,8 @@ describe('fingerprintSymbolPart', () => {
   it('a nested parameter suffix, backslashes and a file without an extension', () => {
     expect(fingerprintSymbolPart('src\\Lending\\LoanPolicy.cs::NS.LoanPolicy.Pick(List<(int, int)>)::method')).toBe('LoanPolicy.Pick');
     expect(fingerprintSymbolPart('bin/run::main::function')).toBe('run.main');
+    expect(fingerprintSymbolPart("src/don't.ts::fn::function")).toBe("don't.fn");
+    expect(fingerprintSymbolPart('src/a.test.ts::fn::function')).toBe('test.fn');
   });
 
   it('a C# explicit interface implementation keeps its containing type (M3)', () => {
@@ -33,6 +35,17 @@ describe('fingerprintSymbolPart', () => {
     // A plain member of the container, or a container that is no prefix, keeps the H4 rule.
     expect(fingerprintSymbolPart('src/Lending/LoanPolicy.cs::NS.LoanPolicy.CanBorrow::method', 'NS.LoanPolicy')).toBe('LoanPolicy.CanBorrow');
     expect(fingerprintSymbolPart('src/Lending/LoanPolicy.cs::NS.LoanPolicy.CanBorrow::method', 'NS.Other')).toBe('LoanPolicy.CanBorrow');
+  });
+
+  it.each([
+    ['src/lending/shelf.ts::Shelf.[Symbol.iterator]::method', 'Shelf', 'Shelf.[Symbol.iterator]'],
+    ['src/lending/shelf.ts::Shelf.[Symbol.asyncIterator]::method', 'Shelf', 'Shelf.[Symbol.asyncIterator]'],
+    ["src/lending/shelf.ts::Shelf.'a.b'::method", 'Shelf', "Shelf.'a.b'"],
+    ["src/lending/shelf.ts::Shelf.'a.b.c'::method", 'Shelf', "Shelf.'a.b.c'"],
+    ['src/lending/shelf.ts::Shelf."x.y"::method', 'Shelf', 'Shelf."x.y"'],
+  ])('a member whose name holds a dot keeps its containing type (N1): %s', (symbolId, container, expected) => {
+    expect(fingerprintSymbolPart(symbolId, container)).toBe(expected);
+    expect(fingerprintSymbolPart(symbolId)).toBe(expected);
   });
 
   it('a dot inside generic arguments does not split a segment (M3)', () => {
