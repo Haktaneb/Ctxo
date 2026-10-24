@@ -53,14 +53,20 @@ export function textScanTargets(input: {
 
 /**
  * The text-scan facts of each target, read through `readRepoTexts` (files over 1 MiB, binary, missing or outside the
- * project are skipped). Files without facts are absent; the map is in codepoint order of path.
+ * project are skipped). Files without facts are absent; the map is in codepoint order of path. A file whose scan
+ * fails gives no facts and is passed to `onError` (the caller wires it to the `ctxo:domain` logger).
  */
-export function readTextFacts(projectRoot: string, targets: readonly TextScanTarget[], options: FactOptions): Map<string, CodeFact[]> {
+export function readTextFacts(
+  projectRoot: string,
+  targets: readonly TextScanTarget[],
+  options: FactOptions,
+  onError?: (file: string, error: unknown) => void,
+): Map<string, CodeFact[]> {
   const symbolsOf = new Map<string, readonly SymbolNode[]>();
   for (const target of targets) symbolsOf.set(norm(target.file), target.symbols);
   const out = new Map<string, CodeFact[]>();
   for (const { file, text } of readRepoTexts(projectRoot, [...symbolsOf.keys()], SOURCE_SCAN_MAX_BYTES)) {
-    const facts = scanTextFacts(file, text, symbolsOf.get(file) ?? [], options);
+    const facts = scanTextFacts(file, text, symbolsOf.get(file) ?? [], options, onError);
     if (facts.length > 0) out.set(file, facts);
   }
   return out;

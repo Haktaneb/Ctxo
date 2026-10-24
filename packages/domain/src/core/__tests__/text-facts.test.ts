@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CodeFact, SymbolNode } from '@ctxo/cli/internal';
-import { scanTextFacts } from '../text-facts.js';
+import { MAX_TEXT_SCAN_LINE, scanTextFacts } from '../text-facts.js';
 import { DEFAULT_DOMAIN_CONFIG } from '../domain-config.js';
 import type { FactOptions } from '../facts/fact-types.js';
 
@@ -173,47 +173,122 @@ describe('scanTextFacts', () => {
 });
 
 describe('scanTextFacts scale (every per-line rule is linear in the line length)', () => {
+  // Every line stays under MAX_TEXT_SCAN_LINE (W29), so the linear paths are exercised; files have many such lines.
   const timed = (file: string, text: string): { readonly ms: number; readonly facts: CodeFact[] } => {
     const started = performance.now();
     const facts = scanTextFacts(file, text, [], OPTIONS);
     return { ms: performance.now() - started, facts };
   };
+  const lines = (line: string, count: number): string => {
+    // 20 000 is MAX_TEXT_SCAN_LINE (pinned by the W29 test), written out so these cases also run on older code.
+    expect(line.length).toBeLessThanOrEqual(20_000);
+    return Array.from({ length: count }, () => line).join('\n');
+  };
 
-  it('a 300 KB line of generics without a condition word', () => {
-    const line = 'List<Map<K,V>> '.repeat(20_000);
-    const { ms, facts } = timed(LEND, line);
+  it('a 1 MB file of 19.5 KB generics lines without a condition word', () => {
+    const { ms, facts } = timed(LEND, lines('List<Map<K,V>> '.repeat(1300), 54));
     expect(facts).toEqual([]);
     expect(ms).toBeLessThan(2000);
   });
 
-  it('a 1 MiB line of generics', () => {
-    const { ms } = timed(LEND, 'List<Map<K,V>> '.repeat(70_000));
-    expect(ms).toBeLessThan(4000);
-  });
-
-  it('8000 unclosed a.trim( calls after if (', () => {
-    const { ms, facts } = timed(LEND, `if (${'a.trim('.repeat(8000)}`);
-    // Every call's text runs to the line end and is cut at 200 code points, so all but the last 28 are one fact.
-    expect(facts.length).toBe(29);
+  it('unclosed a.trim( calls after if (', () => {
+    const { ms, facts } = timed(LEND, lines(`if (${'a.trim('.repeat(2790)}`, 3));
+    // Every call's text runs to the line end and is cut at 200 code points, so all but the last 28 of a line are one fact.
+    expect(facts.length).toBe(3 * 29);
     expect(facts.every((f) => f.kind === 'normalization' && Array.from(f.text).length <= 200)).toBe(true);
     expect(ms).toBeLessThan(2000);
   });
 
-  it('20000 nested x=( bindings', () => {
-    const { ms, facts } = timed(LEND, 'x=('.repeat(20_000));
+  it('nested x=( bindings', () => {
+    const { ms, facts } = timed(LEND, lines('x=('.repeat(6600), 15));
     expect(facts).toEqual([]);
     expect(ms).toBeLessThan(2000);
   });
 
-  it('nested comparisons and chained receivers', () => {
-    const nested = `if ${'('.repeat(5000)}x${')>2'.repeat(5000)}`;
-    const nestedRun = timed(LEND, nested);
-    expect(nestedRun.facts.length).toBeGreaterThan(0);
-    expect(nestedRun.ms).toBeLessThan(2000);
-    const chained = timed(LEND, `s${'.trim()'.repeat(20_000)}`);
-    // The texts grow by `.trim()` until the 200 code point cut, after which they are one fact.
-    expect(chained.facts.map((f) => f.text)).toEqual(timed(LEND, `s${'.trim()'.repeat(40)}`).facts.map((f) => f.text));
-    expect(chained.ms).toBeLessThan(2000);
+  it('nested comparisons', () => {
+    const { ms, facts } = timed(LEND, lines(`if ${'('.repeat(4990)}x${')>2'.repeat(4990)}`, 4));
+    expect(facts.length).toBeGreaterThan(0);
+    expect(ms).toBeLessThan(2000);
+  });
+
+  it('chained receivers', () => {
+    const { ms, facts } = timed(LEND, lines(`s${'.trim()'.repeat(2800)}`, 20));
+    // The texts grow by `.trim()` until the 200 code point cut, after which they are one fact per line.
+    const reference = timed(LEND, `s${'.trim()'.repeat(40)}`).facts.map((f) => f.text);
+    expect(facts.filter((f) => f.line === 0).map((f) => f.text)).toEqual(reference);
+    expect(ms).toBeLessThan(2000);
+  });
+
+  it('nested setTimeout(f, calls', () => {
+    const { ms, facts } = timed(LEND, lines(`${'setTimeout(f,'.repeat(1400)}1${')'.repeat(1400)}`, 100));
+    // Only the innermost call has a constant amount.
+    expect(facts.filter((f) => f.line === 0).map((f) => f.text)).toEqual(['setTimeout = 1ms']);
+    expect(ms).toBeLessThan(2000);
+  });
+
+  it('many route decorators after a long methods list', () => {
+    const verbs = Array.from({ length: 1500 }, (_, i) => `"V${i}"`).join(',');
+    const line = `@app.route("/a", methods=[${verbs}]) ${'@app.route("/b") '.repeat(500)}`;
+    const { ms, facts } = timed(PY, lines(line, 8));
+    // The first 16 verbs of the call's own list, and one ANY fact for the 500 identical decorators.
+    expect(facts.filter((f) => f.line === 0).map((f) => f.text)).toEqual(['ANY /b', ...Array.from({ length: 16 }, (_, i) => `V${i} /a`)].sort());
+    expect(ms).toBeLessThan(2000);
+  });
+
+  it('a huge receiver token is read once, not by every chained call', () => {
+    const { ms, facts } = timed(LEND, lines(`"${'x'.repeat(12_000)}"${'.trim()'.repeat(1100)}`, 50));
+    expect(facts.filter((f) => f.line === 0)).toHaveLength(1);
+    expect(ms).toBeLessThan(2000);
+  });
+});
+
+describe('scanTextFacts output kept from the first version (N5)', () => {
+  it('values made of _ and digits are numbers, as canonicalNumber strips _', () => {
+    expect(scan(LEND, 'timeout = _5')).toEqual(['retry-timeout|timeout = 5']);
+    expect(scan(LEND, 'timeout = __30;')).toEqual(['retry-timeout|timeout = 30']);
+    expect(scan(LEND, 'd = TimeSpan.FromSeconds(_5)')).toEqual(['retry-timeout|d = 5s']);
+    expect(scan(LEND, 'return TimeSpan.FromSeconds(_5);')).toEqual(['retry-timeout|TimeSpan.FromSeconds = 5s']);
+  });
+
+  it('setTimeout with an unbalanced bracket before its last comma gives nothing', () => {
+    expect(scan(LEND, 'setTimeout(f[, 5)')).toEqual([]);
+    expect(scan(LEND, 'setTimeout(f], 5)')).toEqual([]);
+    expect(scan(LEND, 'timeout = setTimeout(f[, 5); x')).toEqual([]);
+    expect(scan(LEND, 'setTimeout(f[0], 5)')).toEqual(['retry-timeout|setTimeout = 5ms']);
+  });
+});
+
+describe('route methods lists', () => {
+  it('methods come only from the route call, deduplicated, at most 16', () => {
+    expect(scan(PY, '@app.route("/x") @app.route("/y", methods=["GET", "get", "POST"])')).toEqual(['endpoint|ANY /x', 'endpoint|GET /y', 'endpoint|POST /y']);
+    const twenty = Array.from({ length: 20 }, (_, i) => `"V${String(i).padStart(2, '0')}"`).join(', ');
+    expect(scan(PY, `@app.route("/z", methods=[${twenty}])`)).toHaveLength(16);
+  });
+});
+
+describe('long lines (W29)', () => {
+  it('a line longer than MAX_TEXT_SCAN_LINE gives no facts and the other lines keep theirs', () => {
+    expect(MAX_TEXT_SCAN_LINE).toBe(20_000);
+    const long = `if retries > 5 then x${' y'.repeat(12_500)}`;
+    expect(long.length).toBeGreaterThan(25_000);
+    const facts = scanTextFacts(LEND, `${long}\nif retries > 5 then x`, [], OPTIONS);
+    expect(facts.map((f) => [f.line, f.text])).toEqual([[1, 'retries > 5']]);
+    const atCap = `if retries > 5 then x${' '.repeat(MAX_TEXT_SCAN_LINE - 21)}`;
+    expect(atCap.length).toBe(MAX_TEXT_SCAN_LINE);
+    expect(scan(LEND, `${atCap}\r\n${atCap}x`)).toEqual(['literal-comparison|retries > 5']);
+  });
+});
+
+describe('scanTextFacts onError', () => {
+  it('reports the file and the error when its facts cannot be finished', () => {
+    const broken = { trivialLiterals: null, normalizationMethods: [] } as unknown as FactOptions;
+    const seen: [string, unknown][] = [];
+    expect(scanTextFacts(LEND, 'if days > 14 then x', [], broken, (file, error) => seen.push([file, error]))).toEqual([]);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]![0]).toBe(LEND);
+    expect(seen[0]![1]).toBeInstanceOf(Error);
+    expect(scanTextFacts(LEND, 'retries = 3', [], OPTIONS, () => seen.push(['unexpected', undefined]))).toHaveLength(1);
+    expect(seen).toHaveLength(1);
   });
 });
 

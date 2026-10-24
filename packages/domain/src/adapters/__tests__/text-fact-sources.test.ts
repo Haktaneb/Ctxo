@@ -133,6 +133,21 @@ describe('readTextFacts', () => {
     expect([...facts.keys()]).toEqual(['src/Billing/b.py']);
   });
 
+  it('readTextFacts passes a file whose facts cannot be finished to onError', () => {
+    put('src/Billing/a.py', 'if days > 14:\n');
+    put('src/Billing/b.py', 'MAX_RETRIES = 3\n');
+    const broken = { trivialLiterals: null, normalizationMethods: [] } as unknown as FactOptions;
+    const seen: string[] = [];
+    const facts = readTextFacts(
+      root,
+      [{ file: 'src/Billing/a.py', symbols: [] }, { file: 'src/Billing/b.py', symbols: [] }],
+      broken,
+      (file, error) => seen.push(`${file}: ${(error as Error).constructor.name}`),
+    );
+    expect(seen).toEqual(['src/Billing/a.py: TypeError']);
+    expect(facts.get('src/Billing/b.py')?.map((f) => f.text)).toEqual(['MAX_RETRIES = 3']);
+  });
+
   it('facts attach to the target symbols', () => {
     put('src/Billing/Fee.ts', 'class X {\n  timeout = 30\n}\n');
     const symbol: SymbolNode = { symbolId: 'src/Billing/Fee.ts::X::class', name: 'X', kind: 'class', startLine: 0, endLine: 2 };

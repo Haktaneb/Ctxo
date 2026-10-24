@@ -47,6 +47,11 @@ const MAP_CALL = /^Map(Get|Post|Put|Delete|Patch)$/;
 /** Operators a numeric constant (FC-7) may hold besides numbers and parentheses. */
 const ARITHMETIC_OPS = new Set(['+', '-', '*', '/']);
 
+/** Lines longer than this many UTF-16 code units are skipped by the text scan (W29): no facts, the rest of the file is scanned. */
+export const MAX_TEXT_SCAN_LINE = 20_000;
+/** Most verbs taken from one route call's `methods=[...]` list. */
+const MAX_ROUTE_VERBS = 16;
+
 /** One line's tokens and what the rules need to know about them, computed once per line. */
 interface Line {
   readonly tokens: readonly TextToken[];
@@ -64,7 +69,19 @@ interface Line {
   readonly firstCondition: number;
   /** Index of the last `?`, or -1. */
   readonly lastQuestion: number;
-  methods?: readonly string[];
+  /** Where the run of numeric tokens (`isNumericToken`) ending at index k starts, or -1 when token k is not numeric. */
+  readonly numericStart: Int32Array;
+  /** Prefix sums over the tokens before index k: net parentheses, and net brackets of every type. */
+  readonly parenDepth: Int32Array;
+  readonly bracketDepth: Int32Array;
+  /** The first `methods = [` word inside each `(`, keyed by the index of that `(`. */
+  readonly methodsIn: ReadonlyMap<number, number>;
+  /** Memo: verbs of a `methods` list, by the index of its `methods` word. */
+  readonly verbs: Map<number, readonly string[]>;
+  /** Memo: each token's text with whitespace runs collapsed, cut after MAX_FACT_TEXT + 1 code points. */
+  readonly factPieces: (string | undefined)[];
+  /** Whether the memoized piece was cut. */
+  readonly factPieceCut: Uint8Array;
 }
 
 const adjacent = (a: TextToken | undefined, b: TextToken | undefined): boolean => a !== undefined && b !== undefined && a.end === b.start;
@@ -86,18 +103,41 @@ function joinTokens(tokens: readonly TextToken[], from: number, to: number): str
  * `joinTokens` for a fact text, stopped once the text is longer than FC-2 keeps: when the whitespace-collapsed,
  * trimmed text has more than 200 code points, later tokens cannot change what `normalizeFactText` returns.
  */
-function joinFactText(tokens: readonly TextToken[], from: number, to: number): string {
+function joinFactText(line: Line, from: number, to: number): string {
+  const { tokens } = line;
   let out = '';
-  let check = 1024;
+  let check = 256;
   for (let k = from; k <= to; k++) {
     if (k > from && tokens[k - 1]!.end !== tokens[k]!.start) out += ' ';
-    out += tokens[k]!.text;
+    out += factPiece(line, k);
+    // A cut piece alone is past the 200 code points FC-2 keeps (a token never starts with whitespace).
+    if (line.factPieceCut[k]) break;
     if (out.length >= check) {
       if (Array.from(out.replace(/\s+/g, ' ').trim()).length > MAX_FACT_TEXT) break;
       check = out.length * 2;
     }
   }
   return out;
+}
+
+/**
+ * Token k's text with whitespace runs collapsed and cut after MAX_FACT_TEXT + 1 code points, computed once per token,
+ * so a huge token is read once however many fact texts start at it. Collapsing the joined pieces again (as
+ * `normalizeFactText` does) gives a prefix of the collapsed full text, so the 200 code point cut is unchanged.
+ */
+function factPiece(line: Line, k: number): string {
+  const cached = line.factPieces[k];
+  if (cached !== undefined) return cached;
+  let piece = line.tokens[k]!.text.replace(/\s+/g, ' ');
+  if (piece.length > MAX_FACT_TEXT + 1) {
+    const points = Array.from(piece);
+    if (points.length > MAX_FACT_TEXT + 1) {
+      piece = points.slice(0, MAX_FACT_TEXT + 1).join('');
+      line.factPieceCut[k] = 1;
+    }
+  }
+  line.factPieces[k] = piece;
+  return piece;
 }
 
 function lowerIfSql(style: CommentStyle, word: string): string {
@@ -121,22 +161,41 @@ function buildLine(tokens: readonly TextToken[], style: CommentStyle, decode: (l
   const pairs = new Int32Array(n).fill(-1);
   const stacks = new Map<string, number[]>([['(', []], ['[', []], ['{', []]]);
   const operand = new Uint8Array(n);
+  const numericStart = new Int32Array(n);
+  const parenDepth = new Int32Array(n + 1);
+  const bracketDepth = new Int32Array(n + 1);
+  const methodsIn = new Map<number, number>();
+  const parens = stacks.get('(')!;
   let firstCondition = n;
   let lastQuestion = -1;
   for (let k = 0; k < n; k++) {
     const t = tokens[k]!;
+    let paren = 0;
+    let bracket = 0;
     if (t.kind === 'punct' && OPENERS.has(t.text)) {
       stacks.get(t.text)!.push(k);
+      bracket = 1;
+      if (t.text === '(') paren = 1;
     } else if (t.kind === 'punct' && CLOSERS.has(t.text)) {
       const open = stacks.get(CLOSERS.get(t.text)!)!.pop();
       if (open !== undefined) {
         pairs[k] = open;
         pairs[open] = k;
       }
+      bracket = -1;
+      if (t.text === ')') paren = -1;
     }
+    parenDepth[k + 1] = parenDepth[k]! + paren;
+    bracketDepth[k + 1] = bracketDepth[k]! + bracket;
     if (isOperandToken(style, t)) operand[k] = 1;
+    numericStart[k] = isNumericToken(t) ? (k > 0 && numericStart[k - 1]! >= 0 ? numericStart[k - 1]! : k) : -1;
     if (firstCondition === n && isConditionWord(style, t)) firstCondition = k;
     if (isOp(t, '?')) lastQuestion = k;
+    // A `methods = [` list belongs to the innermost `(` still open where it starts.
+    if (t.kind === 'word' && t.text === 'methods' && isOp(tokens[k + 1], '=') && isOp(tokens[k + 2], '[') && parens.length > 0) {
+      const enclosing = parens[parens.length - 1]!;
+      if (!methodsIn.has(enclosing)) methodsIn.set(enclosing, k);
+    }
   }
   // runStart[f]: the run has reached token f; it grows left over an adjacent operand token or balanced group.
   const runStart = new Int32Array(n);
@@ -160,7 +219,10 @@ function buildLine(tokens: readonly TextToken[], style: CommentStyle, decode: (l
       runEnd[t] = t;
     }
   }
-  return { tokens, style, decode, pairs, operand, runStart, runEnd, firstCondition, lastQuestion };
+  return {
+    tokens, style, decode, pairs, operand, runStart, runEnd, firstCondition, lastQuestion, numericStart, parenDepth, bracketDepth, methodsIn,
+    verbs: new Map(), factPieces: new Array<string | undefined>(n), factPieceCut: new Uint8Array(n),
+  };
 }
 
 /** True when the token beyond an operand run lets the run stand as a whole operand. */
@@ -242,7 +304,7 @@ function comparisons(line: Line, lineNo: number, out: FactEvidence[]): void {
     out.push({
       kind: 'comparison',
       line: lineNo,
-      text: joinFactText(tokens, left[0], right[1]),
+      text: joinFactText(line, left[0], right[1]),
       operator: op.text,
       literal: joinTokens(tokens, from, to),
       literalKind: (leftKind ?? rightKind)!,
@@ -280,7 +342,7 @@ function calls(line: Line, lineNo: number, options: FactOptions, out: FactEviden
     const from = line.runStart[i]!;
     const close = line.pairs[i + 1]!;
     const to = close >= 0 ? close : tokens.length - 1;
-    out.push({ kind: 'call', line: lineNo, text: joinFactText(tokens, from, to), method: word.text, ...(qualifier !== undefined ? { qualifier } : {}) });
+    out.push({ kind: 'call', line: lineNo, text: joinFactText(line, from, to), method: word.text, ...(qualifier !== undefined ? { qualifier } : {}) });
   }
 }
 
@@ -293,11 +355,25 @@ interface Duration {
   readonly amount: string;
 }
 
-/** True for a token a numeric constant (FC-7) may hold: numbers, `+ - * /` and parentheses. */
+/**
+ * True for a token a numeric constant (FC-7) may hold: numbers, `+ - * /`, parentheses, and words that are a number
+ * once `_` is removed (`_5`, as `canonicalNumber` strips every `_`). Every other token makes `canonicalNumber`
+ * return undefined, so a value holding one is never kept.
+ */
 function isNumericToken(t: TextToken): boolean {
   if (t.kind === 'number') return true;
   if (t.kind === 'op') return ARITHMETIC_OPS.has(t.text);
+  if (t.kind === 'word') {
+    const stripped = t.text.replace(/_/g, '');
+    return stripped === '' || /^[0-9.]/.test(stripped);
+  }
   return t.kind === 'punct' && (t.text === '(' || t.text === ')');
+}
+
+/** True when tokens from `from` to `to` (inclusive) are all numeric. O(1) with the line's `numericStart` table. */
+function allNumeric(line: Line, from: number, to: number): boolean {
+  const start = line.numericStart[to]!;
+  return start >= 0 && start <= from;
 }
 
 /**
@@ -306,24 +382,26 @@ function isNumericToken(t: TextToken): boolean {
  */
 function numericArgument(line: Line, open: number): { readonly close: number; readonly amount: string } | undefined {
   const close = line.pairs[open]!;
-  if (close < 0 || close === open + 1) return undefined;
-  for (let k = open + 1; k < close; k++) if (!isNumericToken(line.tokens[k]!)) return undefined;
+  if (close < 0 || close === open + 1 || !allNumeric(line, open + 1, close - 1)) return undefined;
   return { close, amount: joinTokens(line.tokens, open + 1, close - 1) };
 }
 
-/** The last argument of `setTimeout(..., n)` when it can form a numeric constant and the call has two or more arguments. */
+/**
+ * The last argument of `setTimeout(..., n)` when it can form a numeric constant and the call has two or more
+ * arguments. The last argument starts after the last `,` at depth 0, counting brackets of every type as the first
+ * version did; its parentheses must balance, which is checked before anything is joined. O(1) plus the join.
+ */
 function lastNumericArgument(line: Line, open: number): { readonly close: number; readonly amount: string } | undefined {
   const { tokens } = line;
   const close = line.pairs[open]!;
-  if (close < 0) return undefined;
-  for (let k = close - 1; k > open; k--) {
-    const t = tokens[k]!;
-    if (t.kind === 'punct' && t.text === ',') {
-      return k + 1 <= close - 1 ? { close, amount: joinTokens(tokens, k + 1, close - 1) } : undefined;
-    }
-    if (!isNumericToken(t)) return undefined;
-  }
-  return undefined;
+  if (close < 0 || close - 1 <= open) return undefined;
+  const start = line.numericStart[close - 1]!;
+  if (start < 0 || start - 1 <= open) return undefined;
+  const comma = start - 1;
+  if (!isOp(tokens[comma], ',') || tokens[comma]!.kind !== 'punct') return undefined;
+  if (line.bracketDepth[comma]! - line.bracketDepth[open + 1]! !== 0) return undefined;
+  if (line.parenDepth[close]! - line.parenDepth[start]! !== 0) return undefined;
+  return { close, amount: joinTokens(tokens, start, close - 1) };
 }
 
 function durations(line: Line): Duration[] {
@@ -418,23 +496,23 @@ function stringValue(line: Line, t: TextToken | undefined): string | undefined {
   return line.decode(t.text);
 }
 
-/** Verbs from the first `methods=[...]` list on the line (computed once per line). */
-function methodsList(line: Line): readonly string[] {
-  if (line.methods !== undefined) return line.methods;
+/**
+ * Verbs of the first `methods=[...]` list inside the route call whose `(` is at `open`: upper-cased, each once, at
+ * most MAX_ROUTE_VERBS. Each list is read once per line.
+ */
+function methodsList(line: Line, open: number): readonly string[] {
+  const at = line.methodsIn.get(open);
+  if (at === undefined) return [];
+  const cached = line.verbs.get(at);
+  if (cached !== undefined) return cached;
   const { tokens } = line;
-  let verbs: string[] = [];
-  for (let i = 0; i + 2 < tokens.length; i++) {
-    if (tokens[i]!.kind === 'word' && tokens[i]!.text === 'methods' && isOp(tokens[i + 1], '=') && isOp(tokens[i + 2], '[')) {
-      const close = line.pairs[i + 2]!;
-      verbs = [];
-      for (let k = i + 3; k < (close < 0 ? tokens.length : close); k++) {
-        const value = stringValue(line, tokens[k]);
-        if (value !== undefined && value !== '') verbs.push(value);
-      }
-      break;
-    }
+  const close = line.pairs[at + 2]!;
+  const verbs: string[] = [];
+  for (let k = at + 3; k < (close < 0 ? tokens.length : close) && verbs.length < MAX_ROUTE_VERBS; k++) {
+    const value = stringValue(line, tokens[k])?.toUpperCase();
+    if (value !== undefined && value !== '' && !verbs.includes(value)) verbs.push(value);
   }
-  line.methods = verbs;
+  line.verbs.set(at, verbs);
   return verbs;
 }
 
@@ -491,7 +569,7 @@ function routes(line: Line, lineNo: number, out: FactEvidence[]): void {
     // @<word>.(get|post|put|delete|patch|route)("x")
     if (decorated && (DECORATOR_VERBS.has(t.text) || t.text === 'route')) {
       if (t.text === 'route') {
-        const verbs = methodsList(line);
+        const verbs = methodsList(line, i + 1);
         for (const verb of verbs.length > 0 ? verbs : ['ANY']) add(verb, firstArg);
       } else {
         add(t.text, firstArg);
@@ -507,15 +585,24 @@ function routes(line: Line, lineNo: number, out: FactEvidence[]): void {
 /**
  * The facts of one file from its text: comparisons, case labels, normalization calls, retry and timeout bindings,
  * durations and routes, each found on a single line, then finished like the plugins' facts (FC-2 to FC-10) with the
- * style's string decoder (W5). Never throws: a line whose rules fail loses its evidence, and a file whose facts
- * cannot be finished gives none (warn-and-continue; the caller keeps the other files).
+ * style's string decoder (W5). A line longer than MAX_TEXT_SCAN_LINE gives no facts (W29). Never throws: a line
+ * whose rules fail loses its evidence, and a file whose facts cannot be finished gives none and is passed to
+ * `onError` (warn-and-continue; the caller logs it and keeps the other files).
  */
-export function scanTextFacts(file: string, text: string, symbols: readonly SymbolNode[], options: FactOptions): CodeFact[] {
+export function scanTextFacts(
+  file: string,
+  text: string,
+  symbols: readonly SymbolNode[],
+  options: FactOptions,
+  onError?: (file: string, error: unknown) => void,
+): CodeFact[] {
   try {
     const style = commentStyleFor(file);
     const decode = stringDecoderFor(style);
+    const tooLong = longLines(text);
     const byLine = new Map<number, TextToken[]>();
     for (const token of lexSource(text, style)) {
+      if (tooLong.has(token.line)) continue;
       const list = byLine.get(token.line);
       if (list) list.push(token);
       else byLine.set(token.line, [token]);
@@ -534,7 +621,29 @@ export function scanTextFacts(file: string, text: string, symbols: readonly Symb
       }
     }
     return finishFacts(file, evidence, symbols, options, decode);
-  } catch {
+  } catch (error) {
+    try {
+      onError?.(file, error);
+    } catch {
+      // A failing callback must not undo the warn-and-continue.
+    }
     return [];
   }
+}
+
+/** The 0-based numbers of the lines longer than MAX_TEXT_SCAN_LINE (line breaks as the lexer counts them: LF, CRLF, CR). */
+function longLines(text: string): Set<number> {
+  const long = new Set<number>();
+  let line = 0;
+  let start = 0;
+  const n = text.length;
+  for (let k = 0; k <= n; k++) {
+    const ch = k < n ? text.charCodeAt(k) : 10;
+    if (ch !== 10 && ch !== 13) continue;
+    if (k - start > MAX_TEXT_SCAN_LINE) long.add(line);
+    if (ch === 13 && text.charCodeAt(k + 1) === 10) k++;
+    line++;
+    start = k + 1;
+  }
+  return long;
 }
