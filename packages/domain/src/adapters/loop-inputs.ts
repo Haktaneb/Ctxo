@@ -22,6 +22,11 @@ export interface LoopInputsRequest {
   readonly ownership: Ownership;
   /** The indexed files, forward slashes, codepoint order. */
   readonly files: readonly string[];
+  /**
+   * The tracked files, when the caller listed them itself (verify-domain: a git failure is exit 2 there, never a
+   * fallback). Absent: `listTrackedFiles`, else `files`.
+   */
+  readonly tracked?: readonly string[];
   /** The `ctxo:domain` logger's warning. */
   readonly warn: (message: string) => void;
 }
@@ -60,8 +65,8 @@ const norm = (path: string): string => path.replace(/\\/g, '/');
  *
  * - Cards and the glossary go through the checked repo reader (I2); the rule references of the test files and of
  *   the production `rule:` comments are composed by `buildDomainGraph`. External provenance is never fetched.
- * - Tracked files come from `listTrackedFiles`, else the indexed paths; they feed both the test-file read and the
- *   text scan targets.
+ * - Tracked files come from the request, else `listTrackedFiles`, else the indexed paths; they feed both the
+ *   test-file read and the text scan targets.
  * - Every card, test file and production file is read once per call: the text scan reuses the production texts of
  *   the `rule:` comment scan, and the result carries the cards and both rule-reference sets, so verify-domain needs
  *   no read of its own.
@@ -97,11 +102,13 @@ export async function composeLoopInputs(host: CtxoHost, request: LoopInputsReque
   const scanOptions = buildScanOptions(config, ruleIds, registry);
 
   // Test refs (P15: the shared scan), from the tracked files, else the indexed ones.
-  let tracked: readonly string[] | undefined;
-  try {
-    tracked = await host.services.createGit(projectRoot).listTrackedFiles?.();
-  } catch {
-    tracked = undefined;
+  let tracked = request.tracked;
+  if (tracked === undefined) {
+    try {
+      tracked = await host.services.createGit(projectRoot).listTrackedFiles?.();
+    } catch {
+      tracked = undefined;
+    }
   }
   const trackedFiles = tracked ?? request.files;
   const testTexts = readTestFiles(projectRoot, trackedFiles, isTestFile, indices);

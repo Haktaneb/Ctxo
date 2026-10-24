@@ -1,20 +1,23 @@
 import type { CtxoHost, FileIndex, IGitPort, ModuleCommand, ModuleCommandContext } from '@ctxo/cli/internal';
 import { GitChangeReader } from '../adapters/git-changes.js';
 import { loaderPlatforms, readExistingLoaderRules } from '../adapters/loader-rules-files.js';
+import { composeLoopInputs } from '../adapters/loop-inputs.js';
 import { readRegistry } from '../adapters/registry-reader.js';
-import { readCardText, readRepoText, readRepoTexts, repoFileExists, repoIsFile } from '../adapters/repo-files.js';
-import { readTestFiles } from '../adapters/test-file-source.js';
+import { readCardText, readRepoText, repoFileExists, repoIsFile } from '../adapters/repo-files.js';
+import { findOrphanShadowSpecs, readShadowSpecs } from '../adapters/shadow-specs-files.js';
 import { computeBoundaries } from '../core/boundaries.js';
-import { githubSlugs, parseCard, parseMarkdownHeadings, type ParsedCard } from '../core/card-parser.js';
+import { githubSlugs, parseMarkdownHeadings, type ParsedCard } from '../core/card-parser.js';
 import { resolveDomainConfig, type BoundaryMode } from '../core/domain-config.js';
+import type { UnresolvedRef } from '../core/domain-graph.js';
+import { canonicalRuleId, indexGraph } from '../core/domain-graph-query.js';
 import { diffLoaderRules, renderLoaderRules, type LoaderRulesDiff } from '../core/loader-rules.js';
 import { createOwnership } from '../core/ownership.js';
-import { buildGraphNodes, type UnresolvedRef } from '../core/domain-graph.js';
-import { buildScanOptions, resolveRuleRefs, scanRuleComments, scanTestFiles, type RuleRef } from '../core/rule-id-scan.js';
-import { ruleSymbolLinks } from '../core/rule-symbol-links.js';
-import { ruleTestLinks, type RefLookup } from '../core/rule-test-links.js';
+import { registryHash } from '../core/registry.js';
+import type { RuleLinks, RuleRef } from '../core/rule-id-scan.js';
+import { candidatesOf } from '../core/shadow-candidates.js';
+import { applyResolutions } from '../core/shadow-specs-file.js';
 import { computeTouched, type TouchedReport } from '../core/touched.js';
-import { runVerifyChecks, type CheckOutcome, type Finding } from '../core/verify-checks.js';
+import { runVerifyChecks, type CheckOutcome, type Finding, type ShadowSpecsCheckInput } from '../core/verify-checks.js';
 
 const NAME = 'verify-domain';
 
@@ -141,53 +144,55 @@ async function verify(host: CtxoHost, ctx: ModuleCommandContext, options: Option
     git = undefined;
   }
 
-  // Cards: only the ones the registry names, parsed once.
-  const cards = new Map<string, ParsedCard | undefined>();
-  for (const context of registry?.contexts ?? []) {
-    if (context.card === undefined || cards.has(context.card)) continue;
-    // Read like the index pass reads cards (I2), so check 7 and graph.json see the same text.
-    const text = readCardText(projectRoot, context.card, (message) => services.createLogger('ctxo:domain').warn(message));
-    cards.set(context.card, text === undefined ? undefined : parseCard(text));
-  }
+  const warn = (message: string): void => services.createLogger('ctxo:domain').warn(message);
 
-  // K6: rule IDs in tests, by file text and by indexed annotations.
-  const ruleIds = [...cards.values()].flatMap((card) => (card?.rules ?? []).map((rule) => rule.id));
-  const scanOptions = buildScanOptions(config, ruleIds, registry);
+  // Tracked files listed here, before the composition: a git failure is exit 2 in this CI gate, never a fallback.
   const tracked = (await git?.listTrackedFiles?.()) ?? indexedFiles;
-  const refs =
-    registry !== undefined ? scanTestFiles(readTestFiles(projectRoot, tracked, isTestFile, indices), indices, isTestFile, scanOptions) : [];
-  const ruleLinks = resolveRuleRefs(refs, scanOptions);
 
-  // F3 and F4: card Tests: and Code: references and production rule: comments, from the current index and the repo
-  // through the same functions as the index pass (E5); the stored graph is never read.
-  let cardRefProblems: UnresolvedRef[] = [];
-  let codeRuleRefs: RuleRef[] = [];
+  // A registry with problems runs check 1 only; the composition needs a valid registry and is never built for it.
+  let cards: ReadonlyMap<string, ParsedCard | undefined> = new Map();
+  let ruleLinks: RuleLinks = { links: new Map(), unknown: [] };
+  let cardRefProblems: readonly UnresolvedRef[] = [];
+  let codeRuleRefs: readonly RuleRef[] = [];
+  let shadowSpecs: ShadowSpecsCheckInput[] = [];
+  let orphanShadowSpecs: string[] = [];
   if (registry !== undefined) {
-    const byFile = new Map(indices.map((index) => [index.file.replace(/\\/g, '/'), index]));
-    const symbolNames = new Map(indices.flatMap((index) => index.symbols.map((symbol) => [symbol.symbolId, symbol.name] as const)));
-    const lookup: RefLookup = {
-      hasSymbol: (symbolId) => symbolNames.has(symbolId),
-      symbolName: (symbolId) => symbolNames.get(symbolId),
-      fileExists: (path) => repoIsFile(projectRoot, path),
-    };
-    const { cardRefs } = buildGraphNodes({
+    // W10, E5: the index pass's composition over the current index and repo; every card, test file and production
+    // file is read once, and the stored graph and candidates are never read.
+    const loop = await composeLoopInputs(host, {
+      projectRoot,
+      indices,
+      isTestFile,
       registry,
-      cards: registry.contexts.flatMap((context) => {
-        if (context.card === undefined) return [];
-        const card = cards.get(context.card);
-        return [{ context, path: context.card, ...(card === undefined ? {} : { card }) }];
-      }),
+      registryHash: registryHash(registryFile.text),
+      config,
+      ownership: createOwnership(registry, services.makeGlobMatcher),
+      files: indexedFiles,
+      tracked,
+      warn,
     });
-    const production = indexedFiles.filter((file) => !isTestFile(file));
-    const commentRefs = readRepoTexts(projectRoot, production).flatMap(({ file, text }) =>
-      scanRuleComments(file, text, byFile.get(file), scanOptions),
-    );
-    const codeRefs = resolveRuleRefs(commentRefs, scanOptions);
-    codeRuleRefs = [...codeRefs.unknown];
-    cardRefProblems = [
-      ...ruleTestLinks({ cardRefs, testRefs: ruleLinks, lookup }).unresolved,
-      ...ruleSymbolLinks({ cardRefs, codeRefs, lookup }).unresolved,
-    ];
+    cards = loop.parsedCards;
+    ruleLinks = loop.testRefs;
+    codeRuleRefs = loop.codeRefs.unknown;
+    // F3 and F4: the unresolved Tests: and Code: references of the graph (ruleTestLinks, then ruleSymbolLinks).
+    cardRefProblems = loop.graph.unresolved;
+
+    // Check 12 (H6): the current shadow-specs.yaml files against the current candidates.
+    const contextIds = registry.contexts.map((context) => context.id);
+    const graphIndex = indexGraph(loop.graph);
+    const candidates = loop.candidates?.candidates;
+    shadowSpecs = readShadowSpecs(projectRoot, registryFile.path, contextIds).map((spec) => {
+      const applied = applyResolutions(candidatesOf(candidates ?? [], spec.context), spec.parsed?.entries ?? [], (raw) =>
+        canonicalRuleId(graphIndex, raw),
+      );
+      return {
+        ...spec,
+        // Without candidates (a warning was logged) staleness is unknown: no entry is called stale.
+        stale: candidates === undefined ? [] : applied.stale,
+        unknownRules: applied.unknownRules,
+      };
+    });
+    orphanShadowSpecs = findOrphanShadowSpecs(projectRoot, registryFile.path, contextIds);
   }
 
   // Generated loader rules against disk, and the context map.
@@ -258,6 +263,8 @@ async function verify(host: CtxoHost, ctx: ModuleCommandContext, options: Option
     ruleLinks,
     cardRefProblems,
     codeRuleRefs,
+    shadowSpecs,
+    orphanShadowSpecs,
     loaderDiff,
     ...(contextMapText !== undefined ? { contextMapText } : {}),
     boundaries,

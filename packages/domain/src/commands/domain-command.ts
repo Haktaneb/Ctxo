@@ -7,21 +7,34 @@ import { readRegistry } from '../adapters/registry-reader.js';
 import { discoverConventions, formatDiscovery, proposalAddsSomething, type DiscoveryProposal } from '../core/discovery.js';
 import { resolveDomainConfig } from '../core/domain-config.js';
 import { diffLoaderRules, renderLoaderRules } from '../core/loader-rules.js';
+import type { ContextMapView } from '../core/context-map.js';
+import { CANDIDATE_KINDS, type CandidateKind, type CandidateResolution } from '../core/shadow-candidates.js';
+import { createDomainState } from '../mcp/domain-state.js';
+import { createLoopState, type LoopSnapshot, type LoopStateFailure } from '../mcp/loop-state.js';
+import { contextMapAnswer, shadowSpecsAnswer } from '../mcp/loop-tools.js';
 
 const NAME = 'domain';
 
 const USAGE = [
   'Usage: ctxo domain rules --write | --check',
   '       ctxo domain discover [--json] [--write]',
+  '       ctxo domain map [--json]',
+  '       ctxo domain shadow-specs <context> [--kinds <k,...>] [--all] [--json]',
   '',
   '  rules --write  Generate the path-scoped loader rules (.claude/rules, and .cursor/rules when .cursor/ exists)',
   '  rules --check  Exit 1 when a generated rule is missing, outdated or stale, or when a hand-written file blocks an expected path',
   '  discover       Propose tracker prefixes, rule trait keys and test folders from the repository; --json prints them, --write merges them into .ctxo/config.yaml',
+  '  map            The context map from the last "ctxo index": per context its rung, the suggested rung, rules with tests, open shadow-spec candidates and the rung criteria; --json prints the get_context_map body',
+  `  shadow-specs   The shadow-spec candidates of one context with fingerprints and resolutions; --kinds <k,...> keeps these kinds (${CANDIDATE_KINDS.join(', ')}), --all adds resolved ones, --json prints the find_shadow_specs body`,
+  '',
+  'Exit codes (map, shadow-specs): 0 done or no registry, 1 bad arguments or an unknown context, 2 registry problems or no index data (run "ctxo index").',
 ];
 
 const HELP_LINES = [
   'ctxo domain rules --write|--check   Generate or check the path-scoped loader rules per context',
   'ctxo domain discover [--json] [--write]   Propose domain conventions found in the repository',
+  'ctxo domain map   Context map: metrics, rungs and suggested rungs per context (--json)',
+  'ctxo domain shadow-specs <context>   Shadow-spec candidates of a context (--kinds, --all, --json)',
 ];
 
 const BLOCKED_NOTE = 'exists without the generated marker; rename it or delete it, then run --write';
@@ -128,13 +141,179 @@ async function discover(args: readonly string[], host: CtxoHost, ctx: ModuleComm
   }
 }
 
+const NO_MAP_HINT = '[ctxo] No context map yet; run "ctxo index".';
+const NO_SHADOW_DATA_HINT = '[ctxo] No shadow-spec data yet; run "ctxo index".';
+const KIND_SET: ReadonlySet<string> = new Set(CANDIDATE_KINDS);
+
+function printUsage(): void {
+  for (const line of USAGE) console.error(line);
+}
+
+/** The exit code of a load that failed (H15): no registry is no error; registry problems and missing data are 2. */
+const FAILURE_EXIT: Readonly<Record<LoopStateFailure, number>> = { 'no-registry': 0, 'registry-problems': 2, 'no-artifacts': 2 };
+
+/**
+ * The loop snapshot the MCP tools answer from (C26: same state, same bodies), or the exit code after the hint. A
+ * missing or stale index prints `noData`; the other failures print the state's own hint.
+ */
+function loadLoop(host: CtxoHost, noData: string): LoopSnapshot | number {
+  const loaded = createLoopState(host, createDomainState(host)).load();
+  if (loaded.ok) return loaded.snapshot;
+  console.error(loaded.reason === 'no-artifacts' ? noData : `[ctxo] ${loaded.hint}`);
+  return FAILURE_EXIT[loaded.reason];
+}
+
+const mark = (met: boolean): string => (met ? '✓' : '✗');
+
+function printHint(body: Record<string, unknown>): void {
+  if (typeof body['hint'] === 'string') console.error(`[ctxo] ${body['hint']}`);
+}
+
+async function map(args: readonly string[], host: CtxoHost): Promise<number> {
+  const unknown = args.find((arg) => arg !== '--json');
+  if (unknown !== undefined) {
+    console.error(`[ctxo] Unknown domain map argument: ${unknown}`);
+    printUsage();
+    return 1;
+  }
+  const snapshot = loadLoop(host, NO_MAP_HINT);
+  if (typeof snapshot === 'number') return snapshot;
+  const body = contextMapAnswer(host.projectRoot, snapshot);
+  if (args.includes('--json')) {
+    process.stdout.write(`${JSON.stringify(body, null, 2)}\n`);
+    return 0;
+  }
+  const view = body as unknown as ContextMapView;
+  console.error(`[ctxo] Context map: ${view.summary.contexts} contexts (${view.summary.agree} agree with the suggested rung)`);
+  for (const entry of view.contextMap) {
+    const { pinned, named, bounded, boring } = entry.criteria;
+    console.error(
+      `  ${entry.id}  rung ${entry.rung}  suggested ${entry.suggestedRung}  rules ${entry.rules.count} (${entry.rules.withTests} tested)` +
+        `  open candidates ${entry.shadowSpecs.open}  pinned ${mark(pinned.met)} named ${mark(named.met)} bounded ${mark(bounded.met)} boring ${mark(boring.met)}`,
+    );
+  }
+  printHint(body);
+  return 0;
+}
+
+interface ShadowSpecsArgs {
+  readonly context: string;
+  readonly kinds: readonly CandidateKind[];
+  readonly all: boolean;
+  readonly json: boolean;
+}
+
+/** The arguments, or the exit code after the message (1). */
+function parseShadowSpecsArgs(args: readonly string[]): ShadowSpecsArgs | number {
+  let context: string | undefined;
+  let kinds: CandidateKind[] = [];
+  let all = false;
+  let json = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === '--all') all = true;
+    else if (arg === '--json') json = true;
+    else if (arg === '--kinds') {
+      const value = args[i + 1];
+      if (value === undefined || value.startsWith('-')) {
+        console.error('[ctxo] --kinds needs a comma-separated list of kinds');
+        printUsage();
+        return 1;
+      }
+      i++;
+      // An empty list means every kind, as on the MCP tool.
+      const listed = value.split(',').map((kind) => kind.trim()).filter((kind) => kind !== '');
+      const bad = listed.find((kind) => !KIND_SET.has(kind));
+      if (bad !== undefined) {
+        console.error(`[ctxo] Unknown kind "${bad}"; use one of: ${CANDIDATE_KINDS.join(', ')}`);
+        return 1;
+      }
+      kinds = listed as CandidateKind[];
+    } else if (arg.startsWith('-') || context !== undefined) {
+      console.error(`[ctxo] Unknown domain shadow-specs argument: ${arg}`);
+      printUsage();
+      return 1;
+    } else context = arg;
+  }
+  if (context === undefined || context.trim() === '') {
+    printUsage();
+    return 1;
+  }
+  return { context: context.trim(), kinds, all, json };
+}
+
+function resolutionText(resolution: CandidateResolution | undefined): string {
+  if (resolution === undefined) return '';
+  if (resolution.by === 'rule-link') return `  [linked: ${resolution.rules.join(', ')}]`;
+  if (resolution.by === 'untested') return `  [untested: ${resolution.reason}]`;
+  return 'rule' in resolution ? `  [rule ${resolution.rule}]` : `  [not a rule: ${resolution.notARule}]`;
+}
+
+/** A list the view capped (W28): the rest is counted, never listed. */
+function printMore(body: Record<string, unknown>, name: string, shown: number, what: string): void {
+  const total = body[`${name}Total`];
+  if (typeof total === 'number' && total > shown) console.error(`  ... ${total - shown} more ${what}`);
+}
+
+interface ShadowSpecsBody {
+  readonly counts: { readonly open: number; readonly resolved: number };
+  readonly shadowSpecs: readonly {
+    readonly fingerprint: string;
+    readonly kind: string;
+    readonly file: string;
+    readonly line: number;
+    readonly text: string;
+    readonly resolution?: CandidateResolution;
+  }[];
+  readonly resolutionFile: string;
+  readonly staleResolutions: readonly { readonly fingerprint: string; readonly line: number }[];
+  readonly unknownRules: readonly { readonly fingerprint: string; readonly rule: string; readonly line: number }[];
+  readonly resolutionProblems: readonly { readonly line: number; readonly severity: string; readonly message: string }[];
+}
+
+async function shadowSpecs(args: readonly string[], host: CtxoHost): Promise<number> {
+  const parsed = parseShadowSpecsArgs(args);
+  if (typeof parsed === 'number') return parsed;
+  const snapshot = loadLoop(host, NO_SHADOW_DATA_HINT);
+  if (typeof snapshot === 'number') return snapshot;
+  const body = shadowSpecsAnswer(snapshot, { context: parsed.context, kinds: parsed.kinds, includeResolved: parsed.all });
+  if (body['found'] === false) {
+    console.error(`[ctxo] No context "${parsed.context}" in the registry.`);
+    return 1;
+  }
+  if (parsed.json) {
+    process.stdout.write(`${JSON.stringify(body, null, 2)}\n`);
+    return 0;
+  }
+  const view = body as unknown as ShadowSpecsBody;
+  console.error(
+    `[ctxo] ${parsed.context}: ${view.counts.open} open, ${view.counts.resolved} resolved shadow-spec candidates (${view.resolutionFile})`,
+  );
+  for (const candidate of view.shadowSpecs) {
+    const state = candidate.resolution === undefined ? 'open' : 'resolved';
+    console.error(`  ${state}  ${candidate.kind}  ${candidate.file}:${candidate.line}  ${candidate.text}${resolutionText(candidate.resolution)}`);
+    console.error(`      ${candidate.fingerprint}`);
+  }
+  // Stale entries and unknown rules are separate reports, never summed (an entry can be in both).
+  for (const entry of view.staleResolutions) console.error(`  stale  ${entry.fingerprint} (line ${entry.line})`);
+  printMore(body, 'staleResolutions', view.staleResolutions.length, 'stale entries');
+  for (const entry of view.unknownRules) console.error(`  unknown rule  ${entry.rule}  ${entry.fingerprint} (line ${entry.line})`);
+  printMore(body, 'unknownRules', view.unknownRules.length, 'unknown rules');
+  for (const problem of view.resolutionProblems) {
+    console.error(`  ${problem.severity}  ${view.resolutionFile}:${problem.line} ${problem.message}`);
+  }
+  printMore(body, 'resolutionProblems', view.resolutionProblems.length, 'problems');
+  printHint(body);
+  return 0;
+}
+
 function printAdded(key: string, proposed: DiscoveryProposal[keyof DiscoveryProposal], configured: readonly string[]): void {
   const have = new Set(configured);
   const added = proposed.filter((value) => !have.has(value));
   if (added.length > 0) console.error(`  ${key}: added ${added.join(', ')}`);
 }
 
-/** `ctxo domain`: the domain subcommands,`rules` and `discover`. */
+/** `ctxo domain`: the domain subcommands `rules`, `discover`, `map` and `shadow-specs`. */
 export function domainCommand(host: CtxoHost): ModuleCommand {
   return {
     name: NAME,
@@ -148,6 +327,8 @@ export function domainCommand(host: CtxoHost): ModuleCommand {
       }
       if (sub === 'rules') return rules(rest, host, ctx);
       if (sub === 'discover') return discover(rest, host, ctx);
+      if (sub === 'map') return map(rest, host);
+      if (sub === 'shadow-specs') return shadowSpecs(rest, host);
       if (sub !== undefined) console.error(`[ctxo] Unknown domain subcommand: ${sub}`);
       for (const line of USAGE) console.error(line);
       return 1;

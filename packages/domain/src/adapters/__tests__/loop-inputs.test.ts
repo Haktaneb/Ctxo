@@ -177,6 +177,28 @@ describe('composeLoopInputs', () => {
     ]);
   });
 
+  it('a tracked list in the request is used as given and git is not asked', async () => {
+    const host = createModuleHost({ cliVersion: '0.0.0', mode: 'cli', projectRoot: root });
+    const asked: string[] = [];
+    const noGit: CtxoHost = {
+      ...host,
+      services: {
+        ...host.services,
+        createGit: () =>
+          ({
+            listTrackedFiles: async () => {
+              asked.push('listTrackedFiles');
+              throw new Error('not expected');
+            },
+          }) as never,
+      },
+    };
+    const inputs = await composeLoopInputs(noGit, { ...request(noGit, []), tracked: [NATIVE, PY, TEXT, TESTS] });
+    expect(asked).toEqual([]);
+    expect([...inputs.candidates!.textFacts.keys()]).toEqual([TEXT, PY]);
+    expect(inputs.testTexts.map((t) => t.file)).toEqual([TESTS]);
+  });
+
   it('a text scan error is a warning and that file gives no facts', async () => {
     failingFile = TEXT;
     const host = createModuleHost({ cliVersion: '0.0.0', mode: 'cli', projectRoot: root });
