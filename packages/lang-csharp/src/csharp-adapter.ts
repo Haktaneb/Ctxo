@@ -32,6 +32,8 @@ export class CSharpAdapter extends TreeSitterAdapter {
 
   /** Namespaces of the plain `using` directives of the file whose edges are being extracted. */
   private usings: readonly string[] = [];
+  /** Base type lookups of the current symbol registry, built on first use. */
+  private lookup: RegistryLookup | undefined;
   /** Fact detector options; undefined when facts are off. */
   readonly facts: FactOptions | undefined;
 
@@ -349,29 +351,78 @@ export class CSharpAdapter extends TreeSitterAdapter {
   /**
    * A base type's symbol id from the registry, in the order C# looks names up: (a) the file's own
    * namespace, (b) each namespace of a `using` directive, (c) the global namespace, then (d) a name
-   * ending in `.<Base>` that only one registry symbol has. Anything else (also an ambiguous suffix)
-   * falls back to `<namespace>.<Base>::<Base>::<kind>`.
+   * ending in `.<Base>` that only one C# class or interface of the registry has (a property, a method or
+   * another language's symbol never counts). Anything else (also an ambiguous suffix) falls back to
+   * `<namespace>.<Base>::<Base>::<kind>`. Each lookup is O(1) on maps built once per registry.
    */
   private resolveBaseType(baseName: string, namespace: string, defaultKind: SymbolKind): string {
+    const lookup = this.registryLookup();
     const candidates = [
       namespace ? `${namespace}.${baseName}` : baseName,
       ...this.usings.map(using => `${using}.${baseName}`),
       baseName,
     ];
     for (const name of candidates) {
-      for (const [id] of this.symbolRegistry) {
-        if (id.includes(`::${name}::`)) return id;
-      }
+      const id = lookup.byName.get(name);
+      if (id !== undefined) return id;
     }
-    const suffixMatches = [...this.symbolRegistry.keys()].filter(id => {
-      const name = id.split('::')[1] ?? '';
-      return name.endsWith(`.${baseName}`);
-    });
-    if (suffixMatches.length === 1) return suffixMatches[0]!;
+    const suffixMatches = lookup.typesBySuffix.get(baseName);
+    if (suffixMatches?.length === 1) return suffixMatches[0]!;
     // Fallback: assume same namespace
     const qualifiedName = namespace ? `${namespace}.${baseName}` : baseName;
     return `${qualifiedName}::${baseName}::${defaultKind}`;
   }
+
+  /** The lookup maps of the current registry; rebuilt when the registry is replaced or changes size. */
+  private registryLookup(): RegistryLookup {
+    const registry = this.symbolRegistry;
+    const cached = this.lookup;
+    if (cached && cached.registry === registry && cached.size === registry.size) return cached;
+    const built = buildRegistryLookup(registry);
+    this.lookup = built;
+    return built;
+  }
+}
+
+/** Registry lookups for base types, built in one pass over the registry. */
+interface RegistryLookup {
+  readonly registry: ReadonlyMap<string, SymbolKind>;
+  readonly size: number;
+  /** A name between `::` separators of an id, to the first id (registry order) that has it there. */
+  readonly byName: ReadonlyMap<string, string>;
+  /** Every dot suffix of the name of a C# class or interface (`.cs` file), to those ids in registry order. */
+  readonly typesBySuffix: ReadonlyMap<string, readonly string[]>;
+}
+
+/**
+ * `byName` answers what `id.includes(`::${name}::`)` over the registry in order answers: the key is any run
+ * of inner segments of the id (for `file::name::kind`, the name), first id wins.
+ */
+function buildRegistryLookup(registry: Map<string, SymbolKind>): RegistryLookup {
+  const byName = new Map<string, string>();
+  const typesBySuffix = new Map<string, string[]>();
+  for (const [id, kind] of registry) {
+    const parts = id.split('::');
+    for (let first = 1; first < parts.length - 1; first++) {
+      let key = parts[first]!;
+      for (let last = first; last < parts.length - 1; last++) {
+        if (last > first) key = `${key}::${parts[last]}`;
+        if (!byName.has(key)) byName.set(key, id);
+      }
+    }
+    if ((kind !== 'class' && kind !== 'interface') || !(parts[0] ?? '').toLowerCase().endsWith('.cs')) continue;
+    const name = parts[1] ?? '';
+    for (let dot = name.indexOf('.'); dot !== -1; dot = name.indexOf('.', dot + 1)) {
+      const suffix = name.slice(dot + 1);
+      const ids = typesBySuffix.get(suffix);
+      if (ids) {
+        if (ids[ids.length - 1] !== id) ids.push(id);
+      } else {
+        typesBySuffix.set(suffix, [id]);
+      }
+    }
+  }
+  return { registry, size: registry.size, byName, typesBySuffix };
 }
 
 /** Namespaces named by plain `using X.Y;` directives anywhere in the file (not aliases, not `using static`). */

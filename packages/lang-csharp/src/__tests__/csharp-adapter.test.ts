@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CSharpAdapter } from '../csharp-adapter.js';
+import type { SymbolKind } from '@ctxo/plugin-api';
 import { DEFAULT_FACT_OPTIONS } from '../facts/fact-options.js';
 
 const FIXTURES_DIR = join(import.meta.dirname, 'fixtures');
@@ -501,6 +502,76 @@ describe('CSharpAdapter - base types across namespaces', () => {
     }));
     const edges = await adapter.extractEdges('Holds/HoldService.cs', 'namespace Lending.Holds;\n\npublic class HoldService : HoldBase { }\n');
     expect(edges.find(e => e.kind === 'extends')?.to).toBe('Lending.Holds.HoldBase::HoldBase::class');
+  });
+
+  it('a suffix match takes only C# classes and interfaces, never a property or another language\'s symbol', async () => {
+    const adapter = new CSharpAdapter();
+    adapter.setSymbolRegistry(new Map<string, SymbolKind>([
+      ['src/Users/User.cs::App.Users.User::class', 'class'],
+      ['src/Users/User.cs::App.Users.User.Profile::variable', 'variable'],
+      ['pkg/server/server.go::Server.Handler::method', 'method'],
+      ['web/app.ts::Shell.Controller::class', 'class'],
+    ]));
+    const source = 'using AutoMapper;\nnamespace App.Mapping;\npublic class UserProfile : Profile {}\npublic class H : Handler {}\npublic class C : Controller {}\n';
+    expect((await adapter.extractEdges('src/Mapping/UserProfile.cs', source)).filter(e => e.kind === 'extends').map(e => e.to)).toEqual([
+      'App.Mapping.Profile::Profile::class',
+      'App.Mapping.Handler::Handler::class',
+      'App.Mapping.Controller::Controller::class',
+    ]);
+  });
+
+  it('a suffix match ignores non-type ids when counting matches, and resolves interfaces', async () => {
+    const adapter = new CSharpAdapter();
+    adapter.setSymbolRegistry(new Map<string, SymbolKind>([
+      ['src/Core/Base.cs::Lending.Core.HoldBase::class', 'class'],
+      ['src/Core/Loan.cs::Lending.Core.Loan.HoldBase::variable', 'variable'],
+      ['src/Core/IClock.cs::Lending.Core.IClock::interface', 'interface'],
+    ]));
+    const source = 'namespace Lending.Holds;\npublic class HoldService : HoldBase, IClock { }\n';
+    expect((await adapter.extractEdges('Holds/HoldService.cs', source)).filter(e => e.kind !== 'imports').map(e => [e.kind, e.to])).toEqual([
+      ['extends', 'src/Core/Base.cs::Lending.Core.HoldBase::class'],
+      ['implements', 'src/Core/IClock.cs::Lending.Core.IClock::interface'],
+    ]);
+  });
+
+  it('resolves registry lookups without rescanning the registry for every base type (scale)', async () => {
+    let scans = 0;
+    class CountingMap<K, V> extends Map<K, V> {
+      override [Symbol.iterator](): MapIterator<[K, V]> { scans++; return super[Symbol.iterator](); }
+      override entries(): MapIterator<[K, V]> { scans++; return super.entries(); }
+      override keys(): MapIterator<K> { scans++; return super.keys(); }
+      override values(): MapIterator<V> { scans++; return super.values(); }
+      override forEach(fn: (value: V, key: K, map: Map<K, V>) => void): void { scans++; super.forEach(fn); }
+    }
+    const registry = new CountingMap<string, SymbolKind>();
+    for (let i = 0; i < 50_000; i++) registry.set(`f${i}.cs::Ns${i % 50}.T${i}::class`, 'class');
+    const adapter = new CSharpAdapter();
+    let source = 'using A.B;\nusing C.D;\nusing E.F;\nnamespace X;\n';
+    for (let i = 0; i < 200; i++) source += `public class K${i} : ControllerBase, IDisposable {}\n`;
+
+    const started = Date.now();
+    for (let file = 0; file < 3; file++) {
+      adapter.setSymbolRegistry(registry);
+      const edges = (await adapter.extractEdges(`E${file}.cs`, source)).filter(e => e.kind === 'extends' || e.kind === 'implements');
+      expect(edges).toHaveLength(400);
+      expect(edges[0]!.to).toBe('X.ControllerBase::ControllerBase::class');
+    }
+    const elapsed = Date.now() - started;
+    // One pass builds the lookup maps; the old code scanned the registry about 5 times per base type (6,000 scans).
+    expect(scans).toBeLessThanOrEqual(2);
+    expect(elapsed).toBeLessThan(5_000);
+  }, 120_000);
+
+  it('rebuilds the lookup maps when the registry grows or is replaced', async () => {
+    const adapter = new CSharpAdapter();
+    const registry = new Map<string, SymbolKind>();
+    adapter.setSymbolRegistry(registry);
+    const source = 'namespace Lending.Holds;\npublic class HoldService : HoldBase { }\n';
+    expect((await adapter.extractEdges('Holds/HoldService.cs', source))[0]!.to).toBe('Lending.Holds.HoldBase::HoldBase::class');
+    registry.set('Holds/HoldBase.cs::Lending.Holds.HoldBase::class', 'class');
+    expect((await adapter.extractEdges('Holds/HoldService.cs', source))[0]!.to).toBe('Holds/HoldBase.cs::Lending.Holds.HoldBase::class');
+    adapter.setSymbolRegistry(new Map<string, SymbolKind>([['Deep/HoldBase.cs::Lending.Deep.HoldBase::class', 'class']]));
+    expect((await adapter.extractEdges('Holds/HoldService.cs', source))[0]!.to).toBe('Deep/HoldBase.cs::Lending.Deep.HoldBase::class');
   });
 });
 
