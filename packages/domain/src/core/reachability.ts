@@ -29,24 +29,48 @@ function fileOf(symbolId: string): string {
   return norm(sep < 0 ? symbolId : symbolId.slice(0, sep));
 }
 
+type Offsets = { readonly start: number; readonly end: number };
+
+function offsetsOf(symbol: SymbolNode): Offsets | undefined {
+  return symbol.startOffset !== undefined && symbol.endOffset !== undefined ? { start: symbol.startOffset, end: symbol.endOffset } : undefined;
+}
+
 /**
- * The innermost container of each symbol: smallest span that includes it, then symbol ID. A container of equal
- * span must have a smaller symbol ID, so two symbols never contain each other.
+ * True when `outer` contains `inner`. Lines decide first; on the same lines character offsets decide when both
+ * symbols carry them (the outer span wins, as in classifyTests). Only when the spans are equal, or offsets are
+ * missing, the smaller symbol ID is the container, so two symbols never contain each other.
  */
+function contains(outer: SymbolNode, inner: SymbolNode): boolean {
+  if (outer.symbolId === inner.symbolId) return false;
+  if (outer.startLine > inner.startLine || outer.endLine < inner.endLine) return false;
+  const o = offsetsOf(outer);
+  const i = offsetsOf(inner);
+  if (o !== undefined && i !== undefined) {
+    if (o.start > i.start || o.end < i.end) return false;
+    if (o.start !== i.start || o.end !== i.end) return true;
+  } else if (spanLength(outer) !== spanLength(inner)) {
+    return true;
+  }
+  return compare(outer.symbolId, inner.symbolId) < 0;
+}
+
+/** Innermost first: fewer lines, then fewer characters when both carry offsets, then the smaller symbol ID. */
+function innerFirst(a: SymbolNode, b: SymbolNode): number {
+  const lines = spanLength(a) - spanLength(b);
+  if (lines !== 0) return lines;
+  const oa = offsetsOf(a);
+  const ob = offsetsOf(b);
+  if (oa !== undefined && ob !== undefined && oa.end - oa.start !== ob.end - ob.start) return oa.end - oa.start - (ob.end - ob.start);
+  return compare(a.symbolId, b.symbolId);
+}
+
+/** The innermost container of each symbol (`contains`, then `innerFirst`). */
 function containers(index: FileIndex, out: Map<string, string>): void {
   for (const symbol of index.symbols) {
     let best: SymbolNode | undefined;
     for (const other of index.symbols) {
-      if (other.symbolId === symbol.symbolId) continue;
-      if (other.startLine > symbol.startLine || other.endLine < symbol.endLine) continue;
-      if (spanLength(other) === spanLength(symbol) && compare(other.symbolId, symbol.symbolId) >= 0) continue;
-      if (
-        best === undefined ||
-        spanLength(other) < spanLength(best) ||
-        (spanLength(other) === spanLength(best) && compare(other.symbolId, best.symbolId) < 0)
-      ) {
-        best = other;
-      }
+      if (!contains(other, symbol)) continue;
+      if (best === undefined || innerFirst(other, best) < 0) best = other;
     }
     if (best !== undefined) out.set(symbol.symbolId, best.symbolId);
   }

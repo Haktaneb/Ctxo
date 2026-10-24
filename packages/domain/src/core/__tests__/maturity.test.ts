@@ -1,9 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import { createModuleHost, type CoChangeEntry, type CodeFact, type FileIndex, type GraphEdge, type SymbolNode } from '@ctxo/cli/internal';
 import { DEFAULT_DOMAIN_CONFIG } from '../domain-config.js';
-import { COCHANGE_TOP, CROSS_CONTEXT_COCHANGE_MIN, UNREACHED_CAP, buildMaturityFacts, type ContextMaturityFacts } from '../maturity.js';
+import {
+  COCHANGE_TOP,
+  CROSS_CONTEXT_COCHANGE_MIN,
+  UNREACHED_CAP,
+  buildMaturityFacts,
+  type ContextMaturityFacts,
+  type MaturityInput,
+} from '../maturity.js';
 import { createOwnership } from '../ownership.js';
-import { buildReachGraph } from '../reachability.js';
+import { buildReachGraph, reachableFrom, reachedVia } from '../reachability.js';
 import { parseRegistry } from '../registry.js';
 import type { TestTitle } from '../rule-id-scan.js';
 import { classifyTests } from '../test-conventions.js';
@@ -43,10 +50,11 @@ interface Fixture {
   readonly facts: [string, CodeFact[]][];
   readonly titles?: TestTitle[];
   readonly coChange?: CoChangeEntry[];
+  readonly registry?: string;
 }
 
-function run(fixture: Fixture): ContextMaturityFacts[] {
-  const { registry, problems } = parseRegistry(REGISTRY);
+function prepare(fixture: Fixture): MaturityInput {
+  const { registry, problems } = parseRegistry(fixture.registry ?? REGISTRY);
   expect(problems).toEqual([]);
   const tests = classifyTests({
     indices: fixture.indices,
@@ -56,7 +64,7 @@ function run(fixture: Fixture): ContextMaturityFacts[] {
     contract: DEFAULT_DOMAIN_CONFIG.tests.contract,
     makeMatcher,
   });
-  return buildMaturityFacts({
+  return {
     registry: registry!,
     ownership: createOwnership(registry!, makeMatcher),
     isTestFile,
@@ -64,10 +72,58 @@ function run(fixture: Fixture): ContextMaturityFacts[] {
     facts: new Map(fixture.facts),
     reach: buildReachGraph(host.services.buildGraph(fixture.indices), fixture.indices),
     tests,
-    makeMatcher,
     ...(fixture.coChange === undefined ? {} : { coChange: fixture.coChange }),
-  });
+  };
 }
+
+function run(fixture: Fixture): ContextMaturityFacts[] {
+  return buildMaturityFacts(prepare(fixture));
+}
+
+/**
+ * The W17 counts by definition: one walk per test, a test in a singly owned file counts for its owner, any
+ * other test for every context with a main path in its own reach. The fast implementation must agree.
+ */
+function referenceCounts(input: MaturityInput, facts: readonly ContextMaturityFacts[]): Record<string, { characterization: number; contract: number }> {
+  const mainPaths = new Map<string, string[]>();
+  for (const f of facts) {
+    const file = (id: string): string => id.slice(0, id.indexOf('::'));
+    const ids = new Set<string>();
+    for (const [path, list] of input.facts) {
+      if (input.isTestFile(path) || input.ownership.ownerOf(path) !== f.context) continue;
+      for (const fact of list) if (fact.kind === 'endpoint') ids.add(fact.symbolId);
+    }
+    for (const index of input.indices) {
+      if (input.isTestFile(index.file) || input.ownership.ownerOf(index.file) !== f.context) continue;
+      for (const s of index.symbols) {
+        const leaf = ![...input.reach.containerOf.values()].includes(s.symbolId);
+        if (leaf && facts.some((o) => o.context !== f.context && input.ownership.isContract(o.context, file(s.symbolId)))) ids.add(s.symbolId);
+      }
+    }
+    mainPaths.set(f.context, [...ids]);
+  }
+  const out: Record<string, { characterization: number; contract: number }> = {};
+  for (const f of facts) {
+    const count = (kind: ReadonlySet<string>): number => {
+      let n = 0;
+      for (const test of kind) {
+        const owner = input.ownership.ownerOf(test.slice(0, test.indexOf('::')));
+        if (owner !== undefined) {
+          if (owner === f.context) n++;
+          continue;
+        }
+        const visited = reachableFrom(input.reach, [test]);
+        if (mainPaths.get(f.context)!.some((id) => reachedVia(input.reach, visited, id) !== undefined)) n++;
+      }
+      return n;
+    };
+    out[f.context] = { characterization: count(input.tests.characterization), contract: count(input.tests.contract) };
+  }
+  return out;
+}
+
+const countsOf = (facts: readonly ContextMaturityFacts[]): Record<string, { characterization: number; contract: number }> =>
+  Object.fromEntries(facts.map((f) => [f.context, { ...f.tests }]));
 
 const API = 'src/Billing/Api/ChargeApi.cs';
 const CHARGE = `${API}::ChargeApi.Charge::method`;
@@ -221,4 +277,110 @@ describe('buildMaturityFacts', () => {
     };
     expect(run(shuffled)).toEqual(run(fixture));
   });
+
+  it('test counts equal one walk per test (W17) on the fixtures', () => {
+    for (const fixture of [sampleFixture(), multiOwnedFixture()]) {
+      const input = prepare(fixture);
+      const facts = buildMaturityFacts(input);
+      expect(countsOf(facts)).toEqual(referenceCounts(input, facts));
+    }
+    expect(countsOf(run(sampleFixture()))).toEqual({ lending: { characterization: 1, contract: 0 }, billing: { characterization: 1, contract: 1 } });
+  });
+
+  it('a test file owned by two contexts counts for each owner it reaches, not for its first owner', () => {
+    expect(countsOf(run(multiOwnedFixture()))).toEqual({
+      // lending: its own LoanFlow plus SharedFlow.Both; billing: ChargeFlow plus SharedFlow.Billing and SharedFlow.Both.
+      lending: { characterization: 2, contract: 0 },
+      billing: { characterization: 3, contract: 1 },
+    });
+  });
+
+  it('a one-line class is the container of its member, so the member is the contract leaf', () => {
+    const file = 'src/Billing/Api/ChargeId.ts';
+    const klass: SymbolNode = { symbolId: `${file}::ChargeId::class`, name: 'ChargeId', kind: 'class', startLine: 0, endLine: 0, startOffset: 0, endOffset: 60 };
+    const ctor: SymbolNode = {
+      symbolId: `${file}::ChargeId.constructor::method`,
+      name: 'ChargeId.constructor',
+      kind: 'method',
+      startLine: 0,
+      endLine: 0,
+      startOffset: 17,
+      endOffset: 58,
+    };
+    const fixture = sampleFixture();
+    const billing = run({ ...fixture, indices: [...fixture.indices, fileIndex(file, [klass, ctor])] }).find((f) => f.context === 'billing')!;
+    expect(billing.contractSymbols.unreached).toEqual([ctor.symbolId]);
+    expect(billing.contractSymbols.total).toBe(3);
+  });
+
+  it('2,000 unowned tests over a long import chain are counted in one pass per context', () => {
+    const chainFile = 'src/Billing/Chain.ts';
+    const chainLength = 10000;
+    const chainId = (i: number): string => `${chainFile}::f${String(i).padStart(5, '0')}::function`;
+    const chainSymbols: SymbolNode[] = [];
+    const chainEdges: GraphEdge[] = [];
+    for (let i = 0; i < chainLength; i++) {
+      chainSymbols.push(sym(chainFile, `f${String(i).padStart(5, '0')}`, 'function', i * 2, i * 2 + 1));
+      if (i + 1 < chainLength) chainEdges.push({ from: chainId(i), to: chainId(i + 1), kind: 'imports' });
+    }
+    const testFile = 'tests/Characterization/Scale.test.ts';
+    const testSymbols: SymbolNode[] = [];
+    const testEdges: GraphEdge[] = [];
+    for (let i = 0; i < 2000; i++) {
+      const name = `t${String(i).padStart(4, '0')}`;
+      testSymbols.push(sym(testFile, name, 'function', i * 2, i * 2 + 1));
+      testEdges.push({ from: `${testFile}::${name}::function`, to: chainId(0), kind: 'imports' });
+    }
+    const input = prepare({
+      indices: [
+        fileIndex(chainFile, chainSymbols, chainEdges),
+        fileIndex(testFile, testSymbols, testEdges),
+        fileIndex(LOANS, [sym(LOANS, 'Loans', 'class', 0, 20), sym(LOANS, 'Loans.Get', 'method', 2, 6)]),
+      ],
+      facts: [
+        [chainFile, [endpoint(chainFile, chainId(chainLength - 1))]],
+        [LOANS, [endpoint(LOANS, LOANS_GET)]],
+      ],
+    });
+    expect(input.tests.characterization.size).toBe(2000);
+    const started = performance.now();
+    const facts = buildMaturityFacts(input);
+    const elapsed = performance.now() - started;
+    expect(countsOf(facts)).toEqual({ lending: { characterization: 0, contract: 0 }, billing: { characterization: 2000, contract: 0 } });
+    expect(facts.find((f) => f.context === 'billing')!.mainPaths).toEqual({ total: 1, reached: 1, unreached: [] });
+    expect(elapsed).toBeLessThan(1000);
+  });
 });
+
+function multiOwnedFixture(): Fixture {
+  const shared = 'src/Shared/tests/Characterization/SharedFlow.cs';
+  const base = sampleFixture();
+  return {
+    ...base,
+    registry: `version: 1
+contexts:
+  - id: lending
+    name: Lending
+    paths: ["src/Lending/**", "src/Shared/**"]
+    rung: named
+    contracts:
+      billing: ["src/Billing/Api/**"]
+  - id: billing
+    name: Billing
+    paths: ["src/Billing/**", "src/Shared/**"]
+    rung: named
+`,
+    indices: [
+      ...base.indices,
+      fileIndex(
+        shared,
+        [sym(shared, 'SharedFlow', 'class', 0, 20), sym(shared, 'SharedFlow.Billing', 'method', 2, 6), sym(shared, 'SharedFlow.Both', 'method', 8, 12)],
+        [
+          { from: `${shared}::SharedFlow.Billing::method`, to: CHARGE, kind: 'calls' },
+          { from: `${shared}::SharedFlow.Both::method`, to: CHARGE, kind: 'calls' },
+          { from: `${shared}::SharedFlow.Both::method`, to: LOANS_GET, kind: 'calls' },
+        ],
+      ),
+    ],
+  };
+}

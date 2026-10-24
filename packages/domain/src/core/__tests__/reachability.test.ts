@@ -86,6 +86,31 @@ describe('reachability', () => {
     expect(reachedVia(graph, visited, 'src/Other.cs::<module>::variable')).toBeUndefined();
   });
 
+  it('on one line the outer span by offsets is the container: class ChargeId { constructor(...) {} }', () => {
+    const file = 'src/Billing/ChargeId.ts';
+    const klass: SymbolNode = { symbolId: `${file}::ChargeId::class`, name: 'ChargeId', kind: 'class', startLine: 0, endLine: 0, startOffset: 0, endOffset: 60 };
+    const ctor: SymbolNode = {
+      symbolId: `${file}::ChargeId.constructor::method`,
+      name: 'ChargeId.constructor',
+      kind: 'method',
+      startLine: 0,
+      endLine: 0,
+      startOffset: 17,
+      endOffset: 58,
+    };
+    const indices = [testFile([{ from: TEST, to: klass.symbolId, kind: 'uses' }]), fileIndex(file, [ctor, klass])];
+    const graph = reach(indices);
+    expect(graph.containerOf.get(ctor.symbolId)).toBe(klass.symbolId);
+    expect(graph.containerOf.has(klass.symbolId)).toBe(false);
+    expect(reachedVia(graph, reachableFrom(graph, [TEST]), ctor.symbolId)).toBe('type');
+
+    // Without offsets (or with equal ones) the smaller symbol ID stays the tie-break.
+    const bare = (s: SymbolNode): SymbolNode => ({ symbolId: s.symbolId, name: s.name, kind: s.kind, startLine: 0, endLine: 0 });
+    const tie = reach([fileIndex(file, [bare(klass), bare(ctor)])]);
+    expect(tie.containerOf.get(klass.symbolId)).toBe(ctor.symbolId);
+    expect(tie.containerOf.has(ctor.symbolId)).toBe(false);
+  });
+
   it('data edges are not followed', () => {
     const indices = [
       testFile([

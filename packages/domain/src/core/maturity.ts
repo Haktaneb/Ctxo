@@ -5,7 +5,7 @@
  */
 
 import type { CoChangeEntry, CodeFact, FileIndex, TestFileCheck } from '@ctxo/cli/internal';
-import type { GlobMatcherFactory, Ownership } from './ownership.js';
+import type { Ownership } from './ownership.js';
 import { reachableFrom, reachedVia, type ReachGraph } from './reachability.js';
 import type { DomainRegistry } from './registry.js';
 import type { TestClassification } from './test-conventions.js';
@@ -59,12 +59,56 @@ export interface MaturityInput {
   readonly facts: ReadonlyMap<string, readonly CodeFact[]>;
   readonly reach: ReachGraph;
   readonly tests: TestClassification;
-  readonly makeMatcher: GlobMatcherFactory;
   readonly coChange?: readonly CoChangeEntry[];
 }
 
 const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 const norm = (path: string): string => path.replace(/\\/g, '/');
+
+function fileOf(symbolId: string): string {
+  const sep = symbolId.indexOf('::');
+  return norm(sep < 0 ? symbolId : symbolId.slice(0, sep));
+}
+
+/** The reverse of `successors`: who points at each symbol. */
+function reversed(reach: ReachGraph): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const [from, targets] of reach.successors) {
+    for (const to of targets) {
+      const list = out.get(to);
+      if (list === undefined) out.set(to, [from]);
+      else list.push(from);
+    }
+  }
+  return out;
+}
+
+/**
+ * Every symbol whose forward walk visits an ID that makes `reachedVia` succeed for one of the main paths: the
+ * path itself, its container (`type`), and for a module symbol every symbol of its file (`file`).
+ */
+function reachers(
+  reach: ReachGraph,
+  predecessors: ReadonlyMap<string, readonly string[]>,
+  indexed: ReadonlySet<string>,
+  mainPaths: readonly string[],
+): Set<string> {
+  const seen = new Set<string>();
+  const queue: string[] = [];
+  const add = (id: string): void => {
+    if (seen.has(id)) return;
+    seen.add(id);
+    queue.push(id);
+  };
+  for (const id of mainPaths) {
+    add(id);
+    const container = reach.containerOf.get(id);
+    if (container !== undefined) add(container);
+    if (!indexed.has(id)) for (const other of reach.symbolsByFile.get(fileOf(id)) ?? []) add(other);
+  }
+  for (let i = 0; i < queue.length; i++) for (const from of predecessors.get(queue[i]!) ?? []) add(from);
+  return seen;
+}
 
 function summarize(reach: ReachGraph, visited: ReadonlySet<string>, ids: readonly string[]): ReachSummary {
   const unreached = ids.filter((id) => reachedVia(reach, visited, id) === undefined);
@@ -127,30 +171,39 @@ export function buildMaturityFacts(input: MaturityInput): ContextMaturityFacts[]
   const contractVisited = reachableFrom(reach, tests.contract);
 
   // W17: a test counts for the context owning its file alone; a test in an unowned or multiply owned file counts
-  // for every context with a main path it reaches.
-  const perTest = new Map<string, ReadonlySet<string>>();
-  const visitedBy = (test: string): ReadonlySet<string> => {
-    let visited = perTest.get(test);
-    if (visited === undefined) {
-      visited = reachableFrom(reach, [test]);
-      perTest.set(test, visited);
-    }
-    return visited;
-  };
-  const countFor = (context: string, kind: ReadonlySet<string>): number => {
-    let count = 0;
-    for (const test of kind) {
-      const file = caseFile.get(test);
-      const owner = file === undefined ? undefined : ownership.ownerOf(file);
-      if (owner !== undefined) {
-        if (owner === context) count++;
-        continue;
+  // for every context with a main path in its own reach. That reach is never walked per test: one reverse walk per
+  // context, from every ID whose visit makes `reachedVia` succeed for a main path, finds the symbols that reach one.
+  const ownerOfCase = new Map<string, string | undefined>();
+  const unownedCases = new Set<string>();
+  for (const test of [...tests.characterization, ...tests.contract]) {
+    if (ownerOfCase.has(test)) continue;
+    const file = caseFile.get(test);
+    const owner = file === undefined ? undefined : ownership.ownerOf(file);
+    ownerOfCase.set(test, owner);
+    if (owner === undefined) unownedCases.add(test);
+  }
+  const predecessors = unownedCases.size === 0 ? new Map<string, string[]>() : reversed(reach);
+  const indexed = new Set<string>();
+  if (unownedCases.size > 0) for (const ids of reach.symbolsByFile.values()) for (const id of ids) indexed.add(id);
+  const countsOf = new Map<string, { characterization: number; contract: number }>();
+  for (const context of contextIds) {
+    const reaching = unownedCases.size === 0 ? new Set<string>() : reachers(reach, predecessors, indexed, mainPathsOf.get(context)!);
+    const counts = (kind: ReadonlySet<string>): number => {
+      let count = 0;
+      for (const test of kind) {
+        const owner = ownerOfCase.get(test);
+        if (owner !== undefined) {
+          if (owner === context) count++;
+          continue;
+        }
+        // reachableFrom starts at the test, and at its container when the test has no successors.
+        const container = (reach.successors.get(test)?.length ?? 0) === 0 ? reach.containerOf.get(test) : undefined;
+        if (reaching.has(test) || (container !== undefined && reaching.has(container))) count++;
       }
-      const visited = visitedBy(test);
-      if (mainPathsOf.get(context)!.some((id) => reachedVia(reach, visited, id) !== undefined)) count++;
-    }
-    return count;
-  };
+      return count;
+    };
+    countsOf.set(context, { characterization: counts(tests.characterization), contract: counts(tests.contract) });
+  }
 
   const coChangeOf = new Map<string, Map<string, CrossContextCoChange>>(contextIds.map((id) => [id, new Map()]));
   for (const entry of input.coChange ?? []) {
@@ -177,7 +230,7 @@ export function buildMaturityFacts(input: MaturityInput): ContextMaturityFacts[]
     const pairs = [...coChangeOf.get(id)!.values()].sort(compareCoChange);
     return {
       context: id,
-      tests: { characterization: countFor(id, tests.characterization), contract: countFor(id, tests.contract) },
+      tests: countsOf.get(id)!,
       mainPaths: summarize(reach, characterizationVisited, mainPathsOf.get(id)!),
       contractSymbols: summarize(reach, contractVisited, contractSymbolsOf.get(id)!),
       coChange: { pairs: pairs.length, top: pairs.slice(0, COCHANGE_TOP) },
