@@ -1,5 +1,5 @@
 import type { z, ZodRawShape } from 'zod';
-import type { CommitChangeSet, FileIndex, SearchDocument, SearchResponse } from '../core/types.js';
+import type { CoChangeEntry, CommitChangeSet, FileIndex, SearchDocument, SearchResponse } from '../core/types.js';
 import type { CtxoConfig } from '../core/config/config-schema.js';
 import type { LoadedConfig } from '../core/config/load-config.js';
 import type { SymbolGraph } from '../core/graph/symbol-graph.js';
@@ -223,6 +223,11 @@ export interface CtxoHostServices {
   buildGraph(indices: readonly FileIndex[]): SymbolGraph;
   /** The configured co-change window (`cochange.maxCommits`, `cochange.since`); undefined without git history. */
   readCoChangeWindow(projectRoot: string, config: CtxoConfig): Promise<CoChangeWindowCommits | undefined>;
+  /**
+   * The entries of `<ctxoRoot>/index/co-changes.json` as stored, one per file pair, validated and cached by
+   * mtime like every other co-change read. Frozen and shared; undefined when the file is missing or invalid.
+   */
+  readCoChangeEntries(ctxoRoot: string): readonly CoChangeEntry[] | undefined;
   /** The nearest directory at or above `dir` that holds `.git`. */
   findGitRoot(dir: string): string | undefined;
   /** Short names of the attributes that mark a test (`Fact`, `Test`, `TestMethod`, ...): the classifier's own list. */

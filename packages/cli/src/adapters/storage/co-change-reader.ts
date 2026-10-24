@@ -9,13 +9,19 @@ const log = createLogger('ctxo:co-change');
 
 type CoChangeMap = Map<string, CoChangeEntry[]>;
 
+/** One usable matrix in both shapes: the lookup by file and the entries as stored, sharing the same frozen entries. */
+interface CoChangeContent {
+  readonly map: CoChangeMap;
+  readonly entries: readonly CoChangeEntry[];
+}
+
 /**
- * What one version of the file, told apart by mtime and size, held: a usable map, or `undefined` for
+ * What one version of the file, told apart by mtime and size, held: a usable matrix, or `undefined` for
  * content that was read but is unusable. It never stands for an I/O failure.
  */
 interface CachedContent {
   readonly version: string;
-  readonly map: CoChangeMap | undefined;
+  readonly content: CoChangeContent | undefined;
 }
 
 /** The problem is in the content, so nothing changes until the file does. */
@@ -42,7 +48,10 @@ const UNTIL_RETRY = 'co-change is ignored for now and the next call tries again'
  * The warning is deduplicated by its own key (`lastWarning`), not by the data cache, because the cache
  * deliberately forgets failures that are worth retrying.
  *
+ * `readEntries` answers from the same read and the same cache with the stored `entries`, one per file pair.
+ *
  * The returned map is shared between calls and frozen (every list and every entry): treat it as read-only.
+ * The entries list is frozen too, and holds the same entry objects as the map.
  */
 export class CoChangeReader implements ICoChangePort {
   private readonly filePath: string;
@@ -55,6 +64,14 @@ export class CoChangeReader implements ICoChangePort {
   }
 
   readCoChangeMap(): CoChangeMap | undefined {
+    return this.read()?.map;
+  }
+
+  readEntries(): readonly CoChangeEntry[] | undefined {
+    return this.read()?.entries;
+  }
+
+  private read(): CoChangeContent | undefined {
     let stats: Stats;
     try {
       stats = statSync(this.filePath);
@@ -73,11 +90,11 @@ export class CoChangeReader implements ICoChangePort {
     // The stat is taken before the read: a file replaced in between is cached under the older key, so the
     // next call sees a different stat and reads again. The other order could keep stale content under a new key.
     const version = `${stats.mtimeMs}:${stats.size}`;
-    if (this.cached?.version === version) return this.cached.map;
+    if (this.cached?.version === version) return this.cached.content;
     return this.load(version);
   }
 
-  private load(version: string): CoChangeMap | undefined {
+  private load(version: string): CoChangeContent | undefined {
     let raw: string;
     try {
       raw = readFileSync(this.filePath, 'utf-8');
@@ -87,13 +104,13 @@ export class CoChangeReader implements ICoChangePort {
       return undefined;
     }
 
-    const map = this.parse(raw, version);
-    this.cached = { version, map };
-    if (map) this.lastWarning = undefined;
-    return map;
+    const content = this.parse(raw, version);
+    this.cached = { version, content };
+    if (content) this.lastWarning = undefined;
+    return content;
   }
 
-  private parse(raw: string, version: string): CoChangeMap | undefined {
+  private parse(raw: string, version: string): CoChangeContent | undefined {
     let data: unknown;
     try {
       data = JSON.parse(raw);
@@ -107,7 +124,9 @@ export class CoChangeReader implements ICoChangePort {
       const where = issue && issue.path.length > 0 ? `${issue.path.map(String).join('.')}: ` : '';
       return this.unusable(version, `is not a valid co-change matrix (${where}${issue?.message ?? 'unknown problem'})`);
     }
-    return freezeEntries(loadCoChangeMap(parsed.data));
+    // The map is built from the frozen list, so both shapes hand out the same frozen entry objects.
+    const entries = Object.freeze(parsed.data.entries.map((entry) => Object.freeze(entry)));
+    return { map: freezeEntries(loadCoChangeMap({ ...parsed.data, entries })), entries };
   }
 
   private unusable(version: string, problem: string): undefined {

@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import type { CoChangeWindowCommits, CtxoHost, CtxoHostServices } from '../ports/i-ctxo-module.js';
 import type { CtxoConfig } from '../core/config/config-schema.js';
 import { DATA_RESOURCE_KINDS } from '@ctxo/plugin-api';
-import type { FileIndex, SearchDocument } from '../core/types.js';
+import type { CoChangeEntry, FileIndex, SearchDocument } from '../core/types.js';
 import { DOCUMENT_SEARCH_CONFIG, SearchEngine } from '../core/search/search-engine.js';
 import { SymbolTokenizer } from '../core/search/symbol-tokenizer.js';
 import { indexTestPatterns, loadConfig, makeGlobMatcher, resolveCoChangeConfig } from '../core/config/load-config.js';
@@ -16,6 +16,7 @@ import {
 } from '../core/test-files/test-file-classifier.js';
 import { SimpleGitAdapter } from '../adapters/git/simple-git-adapter.js';
 import { JsonIndexReader } from '../adapters/storage/json-index-reader.js';
+import { CoChangeReader } from '../adapters/storage/co-change-reader.js';
 import { buildGraphFromIndices } from '../adapters/mcp/get-logic-slice.js';
 import { getVersion, locateGitRoot } from './cli-paths.js';
 
@@ -44,6 +45,21 @@ async function readCoChangeWindow(projectRoot: string, config: CtxoConfig): Prom
   }
 }
 
+/**
+ * One co-change reader per `.ctxo` root, kept for the life of the process, so a long-running MCP server
+ * re-reads `co-changes.json` only when its mtime or size changes (the reader's own cache).
+ */
+const coChangeReaders = new Map<string, CoChangeReader>();
+
+function readCoChangeEntries(ctxoRoot: string): readonly CoChangeEntry[] | undefined {
+  let reader = coChangeReaders.get(ctxoRoot);
+  if (reader === undefined) {
+    reader = new CoChangeReader(ctxoRoot);
+    coChangeReaders.set(ctxoRoot, reader);
+  }
+  return reader.readEntries();
+}
+
 /** The host's services: thin bindings to the CLI's own config, glob, test-file, git, index and graph code. */
 const HOST_SERVICES: CtxoHostServices = Object.freeze({
   createLogger,
@@ -59,6 +75,7 @@ const HOST_SERVICES: CtxoHostServices = Object.freeze({
   readIndex: (ctxoRoot: string) => new JsonIndexReader(ctxoRoot).readAll(),
   buildGraph: buildGraphFromIndices,
   readCoChangeWindow,
+  readCoChangeEntries,
   findGitRoot: (dir: string) => locateGitRoot(dir) ?? undefined,
   testFrameworkAnnotations: TEST_FRAMEWORK_ANNOTATIONS,
   dataResourceKinds: DATA_RESOURCE_KINDS,
