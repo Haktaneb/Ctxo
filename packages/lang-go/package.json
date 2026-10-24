@@ -1,6 +1,6 @@
 {
   "name": "@ctxo/lang-go",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Ctxo Go language plugin (ctxo-go-analyzer + tree-sitter, full tier)",
   "type": "module",
   "engines": {
