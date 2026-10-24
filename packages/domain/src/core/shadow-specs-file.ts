@@ -36,7 +36,6 @@ const ROOT_MESSAGE = 'the file must be a YAML list of { fingerprint, resolution 
 const ITEM_MESSAGE = 'an entry must be a map with fingerprint and resolution';
 const FINGERPRINT_MESSAGE = 'fingerprint must read "<kind> | <symbol> | <text>"';
 const RESOLUTION_MESSAGE = 'resolution must be { rule: <ID> } or { notARule: <reason> }';
-const UTF8_MESSAGE = 'the file is not valid UTF-8 (U+FFFD on this line)';
 const ITEM_KEYS: ReadonlySet<string> = new Set(['fingerprint', 'resolution']);
 
 /** The 1-based line of a character offset (line 1 when unknown). */
@@ -77,6 +76,7 @@ function parseItem(item: unknown, counter: LineCounter): ResolutionEntry | Shado
   let resolutionNode: unknown;
   let fingerprintLine = line;
   let resolutionLine = line;
+  const seen = new Set<string>();
   for (const pair of item.items) {
     const keyLine = nodeLine(counter, pair.key, line);
     const key = isScalar(pair.key) ? pair.key.value : undefined;
@@ -84,6 +84,9 @@ function parseItem(item: unknown, counter: LineCounter): ResolutionEntry | Shado
       const shown = typeof key === 'string' || typeof key === 'number' || typeof key === 'boolean' ? String(key) : '?';
       return { line: keyLine, severity: 'error', message: `unknown key "${shown}"; ${ITEM_MESSAGE}` };
     }
+    // The document is parsed without `uniqueKeys`, so a repeated key skips only this item (M1).
+    if (seen.has(key)) return { line: keyLine, severity: 'error', message: `repeated key "${key}"; ${ITEM_MESSAGE}` };
+    seen.add(key);
     if (key === 'fingerprint') {
       fingerprintNode = pair.value;
       fingerprintLine = nodeLine(counter, pair.value, keyLine);
@@ -100,31 +103,15 @@ function parseItem(item: unknown, counter: LineCounter): ResolutionEntry | Shado
   return { fingerprint: normalized, resolution, line };
 }
 
-/** Errors for every line holding U+FFFD: the reader decoded a byte that is not UTF-8. */
-function replacementProblems(text: string): ShadowSpecsProblem[] {
-  const out: ShadowSpecsProblem[] = [];
-  if (!text.includes('\uFFFD')) return out;
-  let line = 1;
-  let reported = 0;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text.charCodeAt(i);
-    if (ch === 0x0a) line++;
-    else if (ch === 0xfffd && reported !== line) {
-      out.push({ line, severity: 'error', message: UTF8_MESSAGE });
-      reported = line;
-    }
-  }
-  return out;
-}
-
 function byLine(problems: ShadowSpecsProblem[]): ShadowSpecsProblem[] {
   return problems.map((problem, i) => ({ problem, i })).sort((a, b) => a.problem.line - b.problem.line || a.i - b.i).map((x) => x.problem);
 }
 
 /**
- * Parses `shadow-specs.yaml` (BOM stripped, CRLF read as LF). Empty text, comments only or `[]` give no entries;
- * a root that is not a list or a YAML syntax error give one error; a broken item is an error and is skipped; a
- * repeated normalized fingerprint is a warning and the first entry wins. Never throws.
+ * Parses `shadow-specs.yaml` (BOM stripped, CRLF read as LF). Empty text, comments only, a null document (`---`,
+ * `~`, `null`) or `[]` give no entries; a root that is not a list or a YAML syntax error give one error; a broken
+ * item (also one with a repeated key) is an error and is skipped; a repeated normalized fingerprint is a warning
+ * and the first entry wins. Text is taken as given: invalid UTF-8 is the reader's concern. Never throws.
  */
 export function parseShadowSpecs(text: string): ParsedShadowSpecs {
   try {
@@ -136,9 +123,10 @@ export function parseShadowSpecs(text: string): ParsedShadowSpecs {
 
 function parseUnsafe(input: string): ParsedShadowSpecs {
   const text = (input.charCodeAt(0) === 0xfeff ? input.slice(1) : input).replace(/\r\n?/g, '\n');
-  const problems = replacementProblems(text);
+  const problems: ShadowSpecsProblem[] = [];
   const counter = new LineCounter();
-  const doc = parseDocument(text, { lineCounter: counter, prettyErrors: false, uniqueKeys: true });
+  // Repeated keys are checked per item (parseItem), so one bad item never discards the whole file.
+  const doc = parseDocument(text, { lineCounter: counter, prettyErrors: false, uniqueKeys: false });
   if (doc.errors.length > 0) {
     const err = doc.errors[0]!;
     // An error at the end of the text (an unclosed flow collection) is reported on the last line that has text.
@@ -147,7 +135,8 @@ function parseUnsafe(input: string): ParsedShadowSpecs {
     return { entries: [], problems: byLine(problems) };
   }
   const root = doc.contents as YamlNode | null;
-  if (root === null) return { entries: [], problems: byLine(problems) };
+  // No document, `---` alone, `~` or `null`: an empty file (M2).
+  if (root === null || (isScalar(root) && root.value === null)) return { entries: [], problems: byLine(problems) };
   if (!isSeq(root)) {
     problems.push({ line: nodeLine(counter, root, 1), severity: 'error', message: ROOT_MESSAGE });
     return { entries: [], problems: byLine(problems) };

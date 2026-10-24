@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 import { canonicalRuleId, indexGraph } from '../domain-graph-query.js';
 import { fingerprint, normalizeFingerprint } from '../fingerprint.js';
 import type { ShadowCandidate } from '../shadow-candidates.js';
@@ -66,6 +67,12 @@ describe('parseShadowSpecs', () => {
     ['whitespace only', '  \n\n'],
     ['comments only', '# nothing resolved yet\n'],
     ['an empty list', '[]\n'],
+    ['a document marker only', '---\n'],
+    ['a document marker with a comment', '--- # nothing yet\n'],
+    ['a marker and an end marker', '---\n...\n'],
+    ['a tilde', '~\n'],
+    ['null', 'null\n'],
+    ['a marker and null', '---\nnull\n'],
   ])('%s gives no entries and no problems', (_name, text) => {
     expect(parseShadowSpecs(text)).toEqual({ entries: [], problems: [] });
   });
@@ -74,7 +81,10 @@ describe('parseShadowSpecs', () => {
     ['a mapping root', 'fingerprint: "a | b | c"\nresolution: { rule: LEND-03 }\n', 1, 'the file must be a YAML list of { fingerprint, resolution } entries'],
     ['a scalar root', '\n\nhello\n', 3, 'the file must be a YAML list of { fingerprint, resolution } entries'],
     ['a syntax error', '- fingerprint: "a | b | c"\n  resolution: { rule: LEND-03\n', 2, 'YAML syntax error'],
-    ['a duplicate key', '- fingerprint: "a | b | c"\n  fingerprint: "a | b | d"\n  resolution: { rule: LEND-03 }\n', 2, 'YAML syntax error'],
+    ['a repeated key', '- fingerprint: "a | b | c"\n  fingerprint: "a | b | d"\n  resolution: { rule: LEND-03 }\n', 2, 'repeated key "fingerprint"'],
+    ['a repeated resolution key', '- fingerprint: "a | b | c"\n  resolution: { rule: LEND-03, rule: LEND-04 }\n', 2, 'resolution must be { rule: <ID> } or { notARule: <reason> }'],
+    ['a string root', '"hello"\n', 1, 'the file must be a YAML list of { fingerprint, resolution } entries'],
+    ['a false root', 'false\n', 1, 'the file must be a YAML list of { fingerprint, resolution } entries'],
     ['two documents', '- fingerprint: "a | b | c"\n  resolution: { rule: LEND-03 }\n---\n- x\n', 3, 'YAML syntax error'],
     ['an item that is not a map', '- just text\n', 1, 'an entry must be a map with fingerprint and resolution'],
     ['an unknown key', '- fingerprint: "a | b | c"\n  resolution: { rule: LEND-03 }\n  note: hi\n', 3, 'unknown key "note"'],
@@ -135,16 +145,55 @@ describe('parseShadowSpecs', () => {
     expect(applied.candidates[0]!.resolution).toEqual({ by: 'shadow-specs', rule: 'LEND-03' });
   });
 
-  it('a non-UTF-8 byte (decoded as U+FFFD) is an error at its line; the other entries still parse', () => {
-    const text = SPEC_EXAMPLE.replace('transport timeout', 'transport \uFFFD timeout');
+  it('one item with a repeated key is skipped; the other entries still apply (M1)', () => {
+    const text = [
+      '- fingerprint: "literal-comparison | LoanPolicy.CanBorrow | loans.Count >= 5"',
+      '  resolution: { rule: LEND-03 }',
+      '- fingerprint: "a | b | c"',
+      '  resolution: { notARule: x }',
+      '  resolution: { notARule: y }',
+      '- fingerprint: "retry-timeout | SmtpSender.Send | Timeout = 30s"',
+      '  resolution: { notARule: transport }',
+      '',
+    ].join('\n');
     const parsed = parseShadowSpecs(text);
-    expect(parsed.entries).toHaveLength(2);
-    expect(parsed.problems).toEqual([{ line: 4, severity: 'error', message: 'the file is not valid UTF-8 (U+FFFD on this line)' }]);
+    expect(parsed.entries.map((e) => [e.fingerprint, e.line])).toEqual([
+      [FP_LIMIT, 1],
+      [FP_RETRY, 6],
+    ]);
+    expect(parsed.problems).toEqual([
+      { line: 5, severity: 'error', message: 'repeated key "resolution"; an entry must be a map with fingerprint and resolution' },
+    ]);
   });
 
-  it('never throws on hostile input', () => {
+  it('a literal U+FFFD in valid UTF-8 text parses normally (I1)', () => {
+    const fp = fingerprint('literal-comparison', 'Menu.Name', 'name == "caf\uFFFD"');
+    const parsed = parseShadowSpecs(`- fingerprint: ${JSON.stringify(fp)}\n  resolution: { notARule: "menu label \uFFFD" }\n`);
+    expect(parsed.problems).toEqual([]);
+    expect(parsed.entries).toEqual([{ fingerprint: fp, resolution: { notARule: 'menu label \uFFFD' }, line: 1 }]);
+  });
+
+  it('hostile input gives the expected problems, never a throw (M5)', () => {
+    const safetyNet = (problems: readonly { message: string }[]): boolean => problems.some((p) => p.message.startsWith('cannot parse the file'));
+
+    // Billion laughs, as a map root and as a sequence root: the node tree is read, aliases are never expanded.
+    const levels = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i'];
+    const mapBomb = levels.map((name, i) => `${name}: &${name} [${Array(9).fill(i === 0 ? '"lol"' : `*${levels[i - 1]}`).join(', ')}]`).join('\n');
+    const seqBomb = levels.map((name, i) => `- &${name} [${Array(9).fill(i === 0 ? '"lol"' : `*${levels[i - 1]}`).join(', ')}]`).join('\n');
+    const started = performance.now();
+    const fromMap = parseShadowSpecs(mapBomb);
+    const fromSeq = parseShadowSpecs(seqBomb);
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(fromMap).toEqual({ entries: [], problems: [{ line: 1, severity: 'error', message: 'the file must be a YAML list of { fingerprint, resolution } entries' }] });
+    expect(fromSeq.entries).toEqual([]);
+    expect(fromSeq.problems).toEqual(levels.map((_, i) => ({ line: i + 1, severity: 'error', message: 'an entry must be a map with fingerprint and resolution' })));
+
+    // An alias item is not expanded either.
+    const alias = parseShadowSpecs('- &a { fingerprint: "a | b | c", resolution: { rule: X-1 } }\n- *a\n');
+    expect(alias.entries.map((e) => e.line)).toEqual([1]);
+    expect(alias.problems).toEqual([{ line: 2, severity: 'error', message: 'an entry must be a map with fingerprint and resolution' }]);
+
     const inputs = [
-      '- &a { fingerprint: "a | b | c", resolution: { rule: X-1 } }\n- *a\n',
       '- fingerprint: !!binary aGVsbG8=\n  resolution: { rule: X-1 }\n',
       '- ? [complex, key]\n  : value\n',
       '\0\0\0',
@@ -154,6 +203,7 @@ describe('parseShadowSpecs', () => {
     ];
     for (const text of inputs) {
       const parsed = parseShadowSpecs(text);
+      expect(safetyNet(parsed.problems)).toBe(false);
       for (const problem of parsed.problems) expect(problem.line).toBeGreaterThanOrEqual(1);
     }
   });
@@ -262,7 +312,7 @@ describe('shadow-specs.schema.json', () => {
 
   it('the JSON Schema agrees with the parser', () => {
     expect(schema['$schema']).toBe('https://json-schema.org/draft/2020-12/schema');
-    expect(schema['type']).toBe('array');
+    expect(schema['type']).toContain('array');
     const item = schema['items'];
     expect(item.type).toBe('object');
     expect(item.additionalProperties).toBe(false);
@@ -294,6 +344,17 @@ describe('shadow-specs.schema.json', () => {
       expect(value.test('')).toBe(false);
       const parsed = parseShadowSpecs(`- fingerprint: "a | b | c"\n  resolution: { ${key}: "   " }\n`);
       expect(parsed.entries).toEqual([]);
+    }
+  });
+
+  it('the JSON Schema and the parser agree on empty and null documents (M2)', () => {
+    const types = schema['type'] as string[];
+    expect([...types].sort()).toEqual(['array', 'null']);
+    const rootTypeOk = (value: unknown): boolean => (value === null ? types.includes('null') : Array.isArray(value) ? types.includes('array') : false);
+    for (const text of ['', '# only a comment\n', '---\n', '--- # nothing\n', '~\n', 'null\n', '[]\n', 'hello\n', 'a: 1\n', '"x"\n', '0\n']) {
+      const schemaOk = rootTypeOk(parseYaml(text));
+      const parserOk = !parseShadowSpecs(text).problems.some((p) => p.message === 'the file must be a YAML list of { fingerprint, resolution } entries');
+      expect([text, schemaOk]).toEqual([text, parserOk]);
     }
   });
 });

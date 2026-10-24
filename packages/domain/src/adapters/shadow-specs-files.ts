@@ -1,4 +1,4 @@
-import { lstatSync, readdirSync } from 'node:fs';
+import { lstatSync, readdirSync, statSync } from 'node:fs';
 import { join, posix } from 'node:path';
 import { parseShadowSpecs, SHADOW_SPECS_FILE, shadowSpecsPath, type ParsedShadowSpecs } from '../core/shadow-specs-file.js';
 import { locateRepoPath, readCheckedRepoText } from './repo-files.js';
@@ -23,20 +23,23 @@ const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 export function readShadowSpecs(projectRoot: string, registryPath: string, contexts: readonly string[]): LoadedShadowSpecs[] {
   return contexts.map((context) => {
     const path = shadowSpecsPath(registryPath, context);
-    const read = readCheckedRepoText(projectRoot, path, SHADOW_SPECS_MAX_BYTES);
+    const read = readCheckedRepoText(projectRoot, path, SHADOW_SPECS_MAX_BYTES, { strictUtf8: true });
     if ('text' in read) return { context, path, parsed: parseShadowSpecs(read.text) };
     if (read.skip === undefined) return { context, path };
+    // Not read (outside the repository, too large, binary, not valid UTF-8): one error, at the first bad line when known.
+    const line = 'line' in read && read.line !== undefined ? read.line : 1;
     return {
       context,
       path,
-      parsed: { entries: [], problems: [{ line: 1, severity: 'error', message: `${SHADOW_SPECS_FILE} is not read: ${read.skip}` }] },
+      parsed: { entries: [], problems: [{ line, severity: 'error', message: `${SHADOW_SPECS_FILE} is not read: ${read.skip}` }] },
     };
   });
 }
 
 /**
  * Repo paths of `<registry folder>/<folder>/shadow-specs.yaml` files whose folder is no context id, in codepoint
- * order. Only real folders inside the repository are listed (symlinked folders are not followed). Never throws.
+ * order. Folders follow the reader's policy (M3): a symlinked or junctioned folder is listed when its real path stays
+ * inside the repository and skipped when it leads outside. Never throws.
  */
 export function findOrphanShadowSpecs(projectRoot: string, registryPath: string, contexts: readonly string[]): string[] {
   const parentOf = posix.dirname(posix.dirname(shadowSpecsPath(registryPath, 'context')));
@@ -52,10 +55,14 @@ export function findOrphanShadowSpecs(projectRoot: string, registryPath: string,
     }
     const out: string[] = [];
     for (const dirent of readdirSync(base, { withFileTypes: true })) {
-      if (!dirent.isDirectory() || known.has(dirent.name)) continue;
-      const stat = lstatSync(join(base, dirent.name, SHADOW_SPECS_FILE), { throwIfNoEntry: false });
+      if (known.has(dirent.name) || !(dirent.isDirectory() || dirent.isSymbolicLink())) continue;
+      const repoFolder = folder === '' ? dirent.name : `${folder}/${dirent.name}`;
+      const located = locateRepoPath(projectRoot, repoFolder);
+      if (!('real' in located)) continue;
+      if (!(statSync(located.real, { throwIfNoEntry: false })?.isDirectory() ?? false)) continue;
+      const stat = lstatSync(join(located.real, SHADOW_SPECS_FILE), { throwIfNoEntry: false });
       if (stat === undefined || stat.isDirectory()) continue;
-      out.push(folder === '' ? `${dirent.name}/${SHADOW_SPECS_FILE}` : `${folder}/${dirent.name}/${SHADOW_SPECS_FILE}`);
+      out.push(`${repoFolder}/${SHADOW_SPECS_FILE}`);
     }
     return out.sort(compare);
   } catch {

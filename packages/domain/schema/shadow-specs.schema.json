@@ -2,8 +2,8 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ctxo.dev/schema/domain-shadow-specs.schema.json",
   "title": "Ctxo shadow-spec resolutions",
-  "description": "<registry folder>/<context>/shadow-specs.yaml: resolutions of shadow-spec candidates by fingerprint (find_shadow_specs). One entry resolves every candidate with its fingerprint; an entry matching no candidate is stale.",
-  "type": "array",
+  "description": "<registry folder>/<context>/shadow-specs.yaml: resolutions of shadow-spec candidates by fingerprint (find_shadow_specs). One entry resolves every candidate with its fingerprint; an entry matching no candidate is stale. An empty file or a null document (---, ~, null) holds no entries.",
+  "type": ["array", "null"],
   "items": {
     "type": "object",
     "additionalProperties": false,

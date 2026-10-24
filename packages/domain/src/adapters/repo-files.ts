@@ -51,6 +51,8 @@ const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 /** Why a file's text was not read. `unreadable` carries the error code (`EACCES`). */
 export type TextSkip =
   | { readonly reason: 'missing' | 'not-a-file' | 'too-large' | 'binary' | 'changed' }
+  /** Only with `strictUtf8`: the bytes are not valid UTF-8; `line` (1-based) holds the first bad sequence. */
+  | { readonly reason: 'not-utf8'; readonly line: number }
   | { readonly reason: 'unreadable'; readonly code: string };
 
 export type TextRead = { readonly text: string } | { readonly skip: TextSkip };
@@ -63,6 +65,32 @@ export interface ReadFileTextOptions {
   readonly verify?: (fd: number) => boolean;
   /** Do not follow a symlink in the last path component (where the platform can refuse it). */
   readonly noFollow?: boolean;
+  /** Skip a file whose bytes are not valid UTF-8 (`not-utf8`) instead of decoding it with U+FFFD replacements. */
+  readonly strictUtf8?: boolean;
+}
+
+/** The 1-based line of the first invalid UTF-8 sequence, or undefined when the bytes are valid UTF-8. */
+export function invalidUtf8Line(buffer: Uint8Array): number | undefined {
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  try {
+    decoder.decode(buffer);
+    return undefined;
+  } catch {
+    // A multi-byte sequence never holds 0x0A, so each line decodes on its own.
+  }
+  let line = 1;
+  let start = 0;
+  for (let i = 0; i <= buffer.length; i++) {
+    if (i < buffer.length && buffer[i] !== 0x0a) continue;
+    try {
+      decoder.decode(buffer.subarray(start, i));
+    } catch {
+      return line;
+    }
+    line++;
+    start = i + 1;
+  }
+  return 1;
 }
 
 function errorCode(err: unknown): string {
@@ -76,7 +104,7 @@ function errorCode(err: unknown): string {
  * it opened the same file, and `noFollow`. Never throws.
  */
 export function readFileText(absolute: string, maxBytes: number, options: ReadFileTextOptions = {}): TextRead {
-  const { verify, noFollow = false } = options;
+  const { verify, noFollow = false, strictUtf8 = false } = options;
   let fd: number | undefined;
   try {
     // Size and type come from the open descriptor, so the checks and the read see the same file.
@@ -88,6 +116,10 @@ export function readFileText(absolute: string, maxBytes: number, options: ReadFi
     const buffer = readFileSync(fd);
     if (buffer.length > maxBytes) return { skip: { reason: 'too-large' } };
     if (buffer.subarray(0, BINARY_PROBE_BYTES).includes(0)) return { skip: { reason: 'binary' } };
+    if (strictUtf8) {
+      const line = invalidUtf8Line(buffer);
+      if (line !== undefined) return { skip: { reason: 'not-utf8', line } };
+    }
     const text = buffer.toString('utf-8');
     return { text: text.charCodeAt(0) === 0xfeff ? text.slice(1) : text };
   } catch (err) {
@@ -158,31 +190,42 @@ function skipText(skip: TextSkip, maxBytes: number): string | undefined {
       return 'changed while it was read';
     case 'unreadable':
       return `unreadable (${skip.code})`;
+    case 'not-utf8':
+      return 'not valid UTF-8';
   }
 }
 
 export interface CheckedReadOptions {
   /** Test seam: runs between the path check and the open, with the real path the check returned. */
   readonly afterCheck?: (real: string) => void;
+  /** Skip a file that is not valid UTF-8 (`not valid UTF-8`, with `line`) instead of decoding it with replacements. */
+  readonly strictUtf8?: boolean;
 }
 
 /**
  * One repo-relative file's text, read only when its real path lies inside the repository: the checked real path is
  * opened without following a symlink (where the OS can refuse one), the open descriptor is checked to be that file,
  * and the file is skipped when it is over `maxBytes` or binary. `skip` carries the reason, undefined when the file
- * is simply missing. Never throws.
+ * is simply missing. With `strictUtf8`, a skip for invalid UTF-8 also carries the 1-based `line` of the first bad
+ * sequence. Never throws.
  */
 export function readCheckedRepoText(
   projectRoot: string,
   repoPath: string,
   maxBytes: number,
   options: CheckedReadOptions = {},
-): { readonly text: string } | { readonly skip: string | undefined } {
+): { readonly text: string } | { readonly skip: string | undefined; readonly line?: number } {
   const located = locateRepoPath(projectRoot, repoPath);
   if (!('real' in located)) return { skip: located.skip };
   options.afterCheck?.(located.real);
-  const read = readFileText(located.real, maxBytes, { noFollow: true, verify: (fd) => sameFile(located.root, located.real, fd) });
-  return 'text' in read ? { text: read.text } : { skip: skipText(read.skip, maxBytes) };
+  const read = readFileText(located.real, maxBytes, {
+    noFollow: true,
+    strictUtf8: options.strictUtf8 ?? false,
+    verify: (fd) => sameFile(located.root, located.real, fd),
+  });
+  if ('text' in read) return { text: read.text };
+  const skip = skipText(read.skip, maxBytes);
+  return read.skip.reason === 'not-utf8' ? { skip, line: read.skip.line } : { skip };
 }
 
 /** Cards and the glossary above this size are not read (1 MiB). */

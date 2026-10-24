@@ -94,12 +94,21 @@ describe('readShadowSpecs', () => {
     ]);
   });
 
-  it('a non-UTF-8 file gives an error at the line of the bad byte', () => {
-    const bytes = Buffer.concat([Buffer.from(ENTRY.replace('transport', 'transport '), 'utf-8'), Buffer.from('# caf'), Buffer.from([0xe9]), Buffer.from('\n')]);
+  it('a file with bytes that are not UTF-8 is not parsed: one error at the line of the first bad byte (I1)', () => {
+    const bytes = Buffer.concat([Buffer.from(ENTRY, 'utf-8'), Buffer.from('# caf'), Buffer.from([0xe9]), Buffer.from('\n# more\n'), Buffer.from([0xff])]);
     write('docs/domain/lending/shadow-specs.yaml', bytes);
     const [lending] = readShadowSpecs(root, REGISTRY, ['lending']);
+    expect(lending!.parsed).toEqual({
+      entries: [],
+      problems: [{ line: 3, severity: 'error', message: 'shadow-specs.yaml is not read: not valid UTF-8' }],
+    });
+  });
+
+  it('a valid UTF-8 file holding a literal U+FFFD parses normally (I1)', () => {
+    write('docs/domain/lending/shadow-specs.yaml', `${ENTRY}# copied from a fingerprint: caf\uFFFD\n`);
+    const [lending] = readShadowSpecs(root, REGISTRY, ['lending']);
+    expect(lending!.parsed!.problems).toEqual([]);
     expect(lending!.parsed!.entries).toHaveLength(1);
-    expect(lending!.parsed!.problems).toEqual([{ line: 3, severity: 'error', message: 'the file is not valid UTF-8 (U+FFFD on this line)' }]);
   });
 
   it('a directory where the file should be is an error at line 1', () => {
@@ -108,8 +117,8 @@ describe('readShadowSpecs', () => {
     expect(lending!.parsed!.problems).toEqual([{ line: 1, severity: 'error', message: 'shadow-specs.yaml is not read: not a regular file' }]);
   });
 
-  it('a file symlinked outside the repository is not read (W18)', () => {
-    if (!link(join(parent, 'secret.yaml'), 'docs/domain/lending/shadow-specs.yaml')) return;
+  it('a file symlinked outside the repository is not read (W18)', (ctx) => {
+    if (!link(join(parent, 'secret.yaml'), 'docs/domain/lending/shadow-specs.yaml')) ctx.skip();
     const [lending] = readShadowSpecs(root, REGISTRY, ['lending']);
     expect(lending!.parsed).toEqual({
       entries: [],
@@ -117,20 +126,37 @@ describe('readShadowSpecs', () => {
     });
   });
 
-  it('a context folder symlinked outside the repository is not read (W18)', () => {
+  it('a context folder symlinked outside the repository is not read (W18)', (ctx) => {
     mkdirSync(join(parent, 'elsewhere'), { recursive: true });
     writeFileSync(join(parent, 'elsewhere', 'shadow-specs.yaml'), ENTRY, 'utf-8');
-    if (!link(join(parent, 'elsewhere'), 'docs/domain/lending', 'dir')) return;
+    if (!link(join(parent, 'elsewhere'), 'docs/domain/lending', 'dir')) ctx.skip();
     const [lending] = readShadowSpecs(root, REGISTRY, ['lending']);
-    expect(lending!.parsed!.entries).toEqual([]);
-    expect(lending!.parsed!.problems[0]!.message).toBe('shadow-specs.yaml is not read: outside the repository');
+    expect(lending!.parsed).toEqual({
+      entries: [],
+      problems: [{ line: 1, severity: 'error', message: 'shadow-specs.yaml is not read: outside the repository' }],
+    });
   });
 
-  it('a registry path outside the project reads nothing', () => {
-    writeFileSync(join(parent, 'lending-shadow.yaml'), ENTRY);
+  it('a context folder symlinked inside the repository is read, as cards are', (ctx) => {
+    write('docs/shared/lending/shadow-specs.yaml', ENTRY);
+    if (!link(join(root, 'docs/shared/lending'), 'docs/domain/lending', 'dir')) ctx.skip();
+    const [lending] = readShadowSpecs(root, REGISTRY, ['lending']);
+    expect(lending!.parsed!.problems).toEqual([]);
+    expect(lending!.parsed!.entries).toHaveLength(1);
+  });
+
+  it('a registry path outside the project reads nothing: the path check refuses it', () => {
+    // The file the path names exists, outside the project: without the check its entry would be read.
+    mkdirSync(join(parent, 'lending'), { recursive: true });
+    writeFileSync(join(parent, 'lending', 'shadow-specs.yaml'), ENTRY, 'utf-8');
     const loaded = readShadowSpecs(root, '../contexts.yaml', ['lending']);
-    expect(loaded).toHaveLength(1);
-    expect(loaded[0]!.parsed?.entries ?? []).toEqual([]);
+    expect(loaded).toEqual([
+      {
+        context: 'lending',
+        path: '../lending/shadow-specs.yaml',
+        parsed: { entries: [], problems: [{ line: 1, severity: 'error', message: 'shadow-specs.yaml is not read: outside the repository' }] },
+      },
+    ]);
   });
 });
 
@@ -147,8 +173,27 @@ describe('findOrphanShadowSpecs', () => {
     ]);
   });
 
-  it('gives an empty list when the registry folder is missing or outside the project', () => {
+  it('lists a linked folder that stays inside the repository and skips one that leads outside (M3)', (ctx) => {
+    write('docs/domain/lending/shadow-specs.yaml', ENTRY);
+    write('docs/old/loans/shadow-specs.yaml', ENTRY);
+    mkdirSync(join(parent, 'elsewhere'), { recursive: true });
+    writeFileSync(join(parent, 'elsewhere', 'shadow-specs.yaml'), ENTRY, 'utf-8');
+    const inside = link(join(root, 'docs/old/loans'), 'docs/domain/loans', 'dir');
+    const outside = link(join(parent, 'elsewhere'), 'docs/domain/external', 'dir');
+    if (!inside || !outside) ctx.skip();
+    expect(findOrphanShadowSpecs(root, REGISTRY, ['lending'])).toEqual(['docs/domain/loans/shadow-specs.yaml']);
+    // A linked folder that is a context id is not an orphan.
+    expect(findOrphanShadowSpecs(root, REGISTRY, ['lending', 'loans'])).toEqual([]);
+  });
+
+  it('gives an empty list when the registry folder is missing', () => {
     expect(findOrphanShadowSpecs(root, REGISTRY, ['lending'])).toEqual([]);
+  });
+
+  it('gives an empty list when the registry folder is outside the project: the path check refuses it', () => {
+    // The folder exists outside the project and holds an orphan: without the check it would be listed.
+    mkdirSync(join(parent, 'x', 'payments'), { recursive: true });
+    writeFileSync(join(parent, 'x', 'payments', 'shadow-specs.yaml'), ENTRY, 'utf-8');
     expect(findOrphanShadowSpecs(root, '../x/contexts.yaml', ['lending'])).toEqual([]);
   });
 });

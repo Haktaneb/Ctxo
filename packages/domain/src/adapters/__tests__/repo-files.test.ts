@@ -2,7 +2,16 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { leavesProject, readRepoText, readRepoTexts, repoFileExists, repoIsFile, SOURCE_SCAN_MAX_BYTES } from '../repo-files.js';
+import {
+  invalidUtf8Line,
+  leavesProject,
+  readCheckedRepoText,
+  readRepoText,
+  readRepoTexts,
+  repoFileExists,
+  repoIsFile,
+  SOURCE_SCAN_MAX_BYTES,
+} from '../repo-files.js';
 
 describe('readRepoTexts', () => {
   let parent: string;
@@ -94,5 +103,29 @@ describe('repo-files path gate (M12)', () => {
     expect(leavesProject('..hidden/x.md')).toBe(false);
     expect(leavesProject('docs/card.md')).toBe(false);
     expect(leavesProject('')).toBe(false);
+  });
+});
+
+describe('invalidUtf8Line', () => {
+  it('finds the line of the first invalid UTF-8 sequence; valid text (U+FFFD included) gives undefined', () => {
+    const utf8 = (text: string): Buffer => Buffer.from(text, 'utf-8');
+    expect(invalidUtf8Line(utf8(''))).toBeUndefined();
+    expect(invalidUtf8Line(utf8('caf\u00E9\n\u4E2D\n\uFFFD\n\u{1F600}\n'))).toBeUndefined();
+    expect(invalidUtf8Line(Buffer.concat([utf8('a\nb\n'), Buffer.from([0xe9]), utf8('\n'), Buffer.from([0xff])]))).toBe(3);
+    // A truncated sequence at the end, an overlong form and a lone surrogate are invalid too.
+    expect(invalidUtf8Line(Buffer.concat([utf8('a\n'), Buffer.from([0xe4, 0xb8])]))).toBe(2);
+    expect(invalidUtf8Line(Buffer.from([0xc0, 0xaf]))).toBe(1);
+    expect(invalidUtf8Line(Buffer.concat([utf8('x\ny\n'), Buffer.from([0xed, 0xa0, 0x80])]))).toBe(3);
+  });
+
+  it('readCheckedRepoText skips invalid UTF-8 only with strictUtf8, with the line', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ctxo-domain-utf8-'));
+    try {
+      writeFileSync(join(dir, 'f.yaml'), Buffer.concat([Buffer.from('ok\n'), Buffer.from([0xe9]), Buffer.from('\n')]));
+      expect(readCheckedRepoText(dir, 'f.yaml', 1024, { strictUtf8: true })).toEqual({ skip: 'not valid UTF-8', line: 2 });
+      expect(readCheckedRepoText(dir, 'f.yaml', 1024)).toEqual({ text: 'ok\n\uFFFD\n' });
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
   });
 });
