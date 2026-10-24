@@ -224,6 +224,9 @@ type collector struct {
 	opts     Options
 	out      []emit.FactEvidence
 	consumed map[ast.Node]bool // duration expressions already reported as bound values
+	steps    int               // duration products evaluated (the B-M2 test counts them)
+
+	durations map[*ast.BinaryExpr]*durationMatch // durationMatch results, nil for no match
 }
 
 // Collect walks every function declaration body of file (closures belong to
@@ -236,14 +239,22 @@ func Collect(pkg *packages.Package, file *ast.File, relFile string, opts Options
 }
 
 func collect(pkg *packages.Package, file *ast.File, relFile string, opts Options, src []byte) []emit.FactEvidence {
-	c := &collector{
-		info:     pkg.TypesInfo,
-		fset:     pkg.Fset,
-		tf:       pkg.Fset.File(file.Pos()),
-		src:      src,
-		opts:     opts,
-		consumed: map[ast.Node]bool{},
+	return newCollector(pkg, file, opts, src).run(file, relFile)
+}
+
+func newCollector(pkg *packages.Package, file *ast.File, opts Options, src []byte) *collector {
+	return &collector{
+		info:      pkg.TypesInfo,
+		fset:      pkg.Fset,
+		tf:        pkg.Fset.File(file.Pos()),
+		src:       src,
+		opts:      opts,
+		consumed:  map[ast.Node]bool{},
+		durations: map[*ast.BinaryExpr]*durationMatch{},
 	}
+}
+
+func (c *collector) run(file *ast.File, relFile string) []emit.FactEvidence {
 	for _, decl := range file.Decls {
 		switch d := decl.(type) {
 		case *ast.FuncDecl:
@@ -533,10 +544,64 @@ func (c *collector) timeConst(e ast.Expr) (unit, name string, ok bool) {
 // nodes are the nested duration products, which the caller must not report
 // again.
 func (c *collector) duration(e ast.Expr) (emit.FactEvidence, []ast.Node, bool) {
-	bin, ok := e.(*ast.BinaryExpr)
-	if !ok || bin.Op != token.MUL {
+	m := c.durationMatch(e)
+	if m == nil {
 		return emit.FactEvidence{}, nil, false
 	}
+	// Walk down the chain once for the nested products and the factors.
+	var nested []ast.Node
+	var rests []ast.Expr
+	base := m
+	for base.side != nil {
+		nested = append(nested, base.side)
+		rests = append(rests, base.rest)
+		base = c.durationMatch(base.side)
+	}
+	// amount(k) = "(" + amount(k-1) + ") * (" + rest(k) + ")", unrolled:
+	// k opening parentheses, the base amount, then ") * (rest)" from the
+	// innermost product outwards.
+	var amount strings.Builder
+	amount.WriteString(strings.Repeat("(", len(rests)))
+	amount.WriteString(c.text(c.amountOf(base.other)))
+	for i := len(rests) - 1; i >= 0; i-- {
+		amount.WriteString(") * (")
+		amount.WriteString(c.text(c.amountOf(rests[i])))
+		amount.WriteString(")")
+	}
+	for i, j := 0, len(nested)-1; i < j; i, j = i+1, j-1 {
+		nested[i], nested[j] = nested[j], nested[i]
+	}
+	return emit.FactEvidence{
+		Kind: "duration", Text: c.text(e), Constructor: "time." + base.name, Unit: base.unit, Amount: amount.String(),
+	}, nested, true
+}
+
+// durationMatch is a matched duration product: a base (other * time.<Unit>)
+// or a chain step (side is a matched product, rest the factor).
+type durationMatch struct {
+	unit, name string
+	other      ast.Expr
+	side, rest ast.Expr
+}
+
+// durationMatch is the match of duration for e, memoised per product, so a
+// chain of n products costs O(n) over the whole file (B-M2); nil when e is not
+// a duration product.
+func (c *collector) durationMatch(e ast.Expr) *durationMatch {
+	bin, ok := e.(*ast.BinaryExpr)
+	if !ok || bin.Op != token.MUL {
+		return nil
+	}
+	if m, seen := c.durations[bin]; seen {
+		return m
+	}
+	c.steps++
+	m := c.combineDuration(bin)
+	c.durations[bin] = m
+	return m
+}
+
+func (c *collector) combineDuration(bin *ast.BinaryExpr) *durationMatch {
 	other := bin.Y
 	unit, name, isConst := c.timeConst(bin.X)
 	if !isConst {
@@ -545,30 +610,25 @@ func (c *collector) duration(e ast.Expr) (emit.FactEvidence, []ast.Node, bool) {
 	}
 	if isConst {
 		if _, _, both := c.timeConst(other); both {
-			return emit.FactEvidence{}, nil, false
+			return nil
 		}
-		return emit.FactEvidence{
-			Kind: "duration", Text: c.text(bin), Constructor: "time." + name, Unit: unit, Amount: c.text(c.amountOf(other)),
-		}, nil, true
+		return &durationMatch{unit: unit, name: name, other: other}
 	}
 	for _, pair := range [][2]ast.Expr{{bin.X, bin.Y}, {bin.Y, bin.X}} {
 		side, rest := unparen(pair[0]), pair[1]
-		inner, nested, ok := c.duration(side)
-		if !ok {
+		inner := c.durationMatch(side)
+		if inner == nil {
 			continue
 		}
 		if _, _, isUnit := c.timeConst(rest); isUnit {
-			return emit.FactEvidence{}, nil, false
+			return nil
 		}
-		if _, _, isDuration := c.duration(unparen(rest)); isDuration {
-			return emit.FactEvidence{}, nil, false
+		if c.durationMatch(unparen(rest)) != nil {
+			return nil
 		}
-		return emit.FactEvidence{
-			Kind: "duration", Text: c.text(bin), Constructor: inner.Constructor, Unit: inner.Unit,
-			Amount: "(" + inner.Amount + ") * (" + c.text(c.amountOf(rest)) + ")",
-		}, append(nested, side), true
+		return &durationMatch{unit: inner.unit, name: inner.name, side: side, rest: rest}
 	}
-	return emit.FactEvidence{}, nil, false
+	return nil
 }
 
 // amountOf unwraps time.Duration(n) to n.

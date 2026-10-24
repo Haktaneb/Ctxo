@@ -35,6 +35,22 @@ type DurationEvidence = Mutable<Extract<FactEvidence, { kind: 'duration' }>>;
 
 const nodeKey = (node: SyntaxNode) => `${node.startIndex}:${node.endIndex}:${node.type}`;
 
+/** A matched duration product: a base (`other` * time.<Unit>) or a chain step over a matched `side`. */
+interface DurationMatch {
+  readonly unit: DurationUnit;
+  readonly unitName: string;
+  readonly other?: SyntaxNode;
+  readonly chain?: { readonly side: SyntaxNode; readonly rest: SyntaxNode };
+}
+
+/** The operands of an `x * y` binary expression, or undefined for any other node. */
+function productOperands(node: SyntaxNode): readonly [SyntaxNode, SyntaxNode] | undefined {
+  if (node.type !== 'binary_expression' || node.childForFieldName('operator')?.text !== '*') return undefined;
+  const x = node.childForFieldName('left');
+  const y = node.childForFieldName('right');
+  return x && y ? [x, y] : undefined;
+}
+
 function children(node: SyntaxNode | null | undefined): SyntaxNode[] {
   return node ? node.namedChildren.filter((c) => c.type !== 'comment') : [];
 }
@@ -125,18 +141,19 @@ function readScope(root: SyntaxNode): FileScope {
   const constants = new Map<string, string | undefined>();
   const constSpecs: SyntaxNode[] = [];
 
-  const visit = (node: SyntaxNode): void => {
+  // Pre-order with an explicit stack, so deep expressions cannot overflow the stack (B-M2); false skips the children.
+  const visit = (node: SyntaxNode): boolean => {
     switch (node.type) {
       case 'import_spec': {
         const path = node.childForFieldName('path');
         const value = path ? decodeInterpreted(path.text) ?? (path.type === 'raw_string_literal' ? path.text.slice(1, -1) : undefined) : undefined;
         const name = node.childForFieldName('name');
         if (value !== undefined && (!name || name.type === 'package_identifier')) imports.set(value, name ? name.text : defaultImportName(value));
-        return;
+        return false;
       }
       case 'identifier':
         if (UNIVERSE_LITERALS.has(node.text)) shadowed.add(node.text);
-        return;
+        return false;
       case 'short_var_declaration':
         for (const target of children(node.childForFieldName('left'))) {
           if (UNIVERSE_LITERALS.has(target.type)) shadowed.add(target.type);
@@ -146,9 +163,15 @@ function readScope(root: SyntaxNode): FileScope {
         constSpecs.push(node);
         break;
     }
-    for (const child of node.namedChildren) visit(child);
+    return true;
   };
-  visit(root);
+  const stack: SyntaxNode[] = [root];
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    if (!visit(node)) continue;
+    const kids = node.namedChildren;
+    for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]!);
+  }
 
   const scope: FileScope = { imports, importNames: new Set(imports.values()), shadowed, stringConstants: new Map() };
   for (const spec of constSpecs) {
@@ -205,6 +228,8 @@ function httpPattern(pattern: string): { verb: string; route: string } | undefin
 class Collector {
   readonly out: FactEvidence[] = [];
   private readonly consumed = new Set<string>();
+  /** `durationMatch` results by `nodeKey`; null when the node is not a duration product. */
+  private readonly durationMatches = new Map<string, DurationMatch | null>();
   private readonly timeName: string | undefined;
   private readonly httpName: string | undefined;
   private readonly ginImported: boolean;
@@ -223,13 +248,15 @@ class Collector {
     return sid !== undefined ? { symbolId: sid } : {};
   }
 
-  /** Pre-order walk of a body or value, like the analyzer's ast.Inspect. */
+  /** Pre-order walk of a body or value, like the analyzer's ast.Inspect; iterative, so deep expressions cannot overflow the stack. */
   inspect(root: SyntaxNode, sid: string | undefined): void {
-    const visit = (node: SyntaxNode): void => {
+    const stack: SyntaxNode[] = [root];
+    while (stack.length > 0) {
+      const node = stack.pop()!;
       this.visitNode(node, sid);
-      for (const child of node.namedChildren) visit(child);
-    };
-    visit(root);
+      const kids = node.namedChildren;
+      for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]!);
+    }
   }
 
   private visitNode(node: SyntaxNode, sid: string | undefined): void {
@@ -434,10 +461,63 @@ class Collector {
    * duration whose amount multiplies the parts, and `nested` holds the inner products the caller must not report again.
    */
   private duration(node: SyntaxNode): { evidence: Omit<DurationEvidence, 'line'>; nested: SyntaxNode[] } | undefined {
-    if (node.type !== 'binary_expression' || node.childForFieldName('operator')?.text !== '*') return undefined;
-    const x = node.childForFieldName('left');
-    const y = node.childForFieldName('right');
-    if (!x || !y) return undefined;
+    const match = this.durationMatch(node);
+    if (!match) return undefined;
+    // Walk down the chain once: the nested products and the amounts multiplied on the way up.
+    const nested: SyntaxNode[] = [];
+    const rests: SyntaxNode[] = [];
+    let base = match;
+    while (base.chain) {
+      nested.push(base.chain.side);
+      rests.push(base.chain.rest);
+      base = this.durationMatch(base.chain.side)!;
+    }
+    // amount(k) = `(${amount(k - 1)}) * (${rest(k)})`, unrolled: k opening parentheses, the base amount, then
+    // `) * (rest)` from the innermost product outwards.
+    let amount = '('.repeat(rests.length) + this.amountOf(base.other!).text;
+    for (let i = rests.length - 1; i >= 0; i--) amount += `) * (${this.amountOf(rests[i]!).text})`;
+    return {
+      evidence: { kind: 'duration', constructor: `time.${base.unitName}`, unit: base.unit, amount },
+      nested: nested.reverse(),
+    };
+  }
+
+  /**
+   * The match of `duration`, memoised per node and computed bottom-up with an explicit stack, so a chain of n
+   * products costs O(n) over the whole file and cannot overflow the stack (B-M2). A match is either a base
+   * product (`other` * time.<Unit>) or a chain step (`chain.side` is a matched product, `chain.rest` the factor).
+   */
+  private durationMatch(root: SyntaxNode): DurationMatch | undefined {
+    const rootKey = nodeKey(root);
+    if (!this.durationMatches.has(rootKey)) {
+      const stack: Array<{ node: SyntaxNode; expanded: boolean }> = [{ node: root, expanded: false }];
+      while (stack.length > 0) {
+        const top = stack[stack.length - 1]!;
+        const key = nodeKey(top.node);
+        if (this.durationMatches.has(key)) {
+          stack.pop();
+          continue;
+        }
+        const operands = productOperands(top.node);
+        if (!operands) {
+          this.durationMatches.set(key, null);
+          stack.pop();
+          continue;
+        }
+        if (!top.expanded) {
+          top.expanded = true;
+          stack.push({ node: unparen(operands[1]), expanded: false }, { node: unparen(operands[0]), expanded: false });
+          continue;
+        }
+        this.durationMatches.set(key, this.combineDuration(operands[0], operands[1]));
+        stack.pop();
+      }
+    }
+    return this.durationMatches.get(rootKey) ?? undefined;
+  }
+
+  /** One step of `durationMatch` for x * y, with the matches of both (unparenthesised) operands already known. */
+  private combineDuration(x: SyntaxNode, y: SyntaxNode): DurationMatch | null {
     let other = y;
     let unit = this.timeConst(x);
     if (!unit) {
@@ -445,24 +525,18 @@ class Collector {
       unit = this.timeConst(y);
     }
     if (unit) {
-      if (this.timeConst(other)) return undefined;
-      return {
-        evidence: { kind: 'duration', constructor: `time.${unit.name}`, unit: unit.unit, amount: this.amountOf(other).text },
-        nested: [],
-      };
+      if (this.timeConst(other)) return null;
+      return { unit: unit.unit, unitName: unit.name, other };
     }
     for (const [first, rest] of [[x, y], [y, x]] as const) {
       const side = unparen(first);
-      const inner = this.duration(side);
+      const inner = this.durationMatches.get(nodeKey(side));
       if (!inner) continue;
-      if (this.timeConst(rest)) return undefined;
-      if (this.duration(unparen(rest))) return undefined;
-      return {
-        evidence: { ...inner.evidence, amount: `(${inner.evidence.amount}) * (${this.amountOf(rest).text})` },
-        nested: [...inner.nested, side],
-      };
+      if (this.timeConst(rest)) return null;
+      if (this.durationMatches.get(nodeKey(unparen(rest)))) return null;
+      return { unit: inner.unit, unitName: inner.unitName, chain: { side, rest } };
     }
-    return undefined;
+    return null;
   }
 
   /** x.m(...) calls matching a normalization pattern, and routes. */

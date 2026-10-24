@@ -135,6 +135,32 @@ describe('Go syntax-tier facts', () => {
     ]);
   });
 
+  it('a product chain of 10,000 terms is linear and keeps the file\'s other facts (B-M2)', async () => {
+    const product = Array.from({ length: 10_000 }, (_, i) => `x${i % 7}`).join(' * ');
+    const source = `package p\n\nimport "time"\n\nfunc F(x int) {\n\ty := ${product}\n\t_ = y\n\tif x == 5 {\n\t}\n\tw := 2 * time.Second\n\t_ = w\n}\n`;
+    const started = Date.now();
+    const facts = await syntaxFacts('p.go', source);
+    // The old code took 1.8 s for 1,000 terms (quadratic) and overflowed the stack at 10,000.
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(rows(facts).map(([line, kind, text]) => [line, kind, text])).toEqual([
+      [7, 'literal-comparison', 'x == 5'],
+      [9, 'retry-timeout', 'w = 2s'],
+    ]);
+  });
+
+  it('a long matched duration chain is one duration with the nested amount', async () => {
+    const source = (n: number) => `package p\n\nimport "time"\n\nfunc F() {\n\tw := 2 * time.Second${' * 1'.repeat(n)} * 3\n\t_ = w\n}\n`;
+    const tree = new Parser();
+    tree.setLanguage(GoLanguage as never);
+    const short = collectTreeSitterEvidence(tree.parse(source(2)).rootNode, 'p.go', [], DEFAULT_FACT_OPTIONS);
+    expect(short).toEqual([
+      { kind: 'duration', symbolId: 'p.go::F::function', line: 5, name: 'w', constructor: 'time.Second', unit: 's', amount: '(((2) * (1)) * (1)) * (3)' },
+    ]);
+    const started = Date.now();
+    expect(rows(await syntaxFacts('p.go', source(1_000)))).toEqual([[5, 'retry-timeout', 'w = 6s', 'F::function']]);
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
   it('net/http, ServeMux and gin routes; a Group prefix is not joined', async () => {
     expect(rows(await syntaxFacts('app.go', AGREEING_SAMPLES['routes']!)).map(([line, , text]) => [line, text])).toEqual([
       [11, 'POST /renew/{id}'],

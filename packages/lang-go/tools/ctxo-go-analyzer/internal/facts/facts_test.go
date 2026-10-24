@@ -467,6 +467,53 @@ func Wait() {
 	}
 }
 
+// collectorRun loads app.go with body and runs a collector over it, returning
+// the collector (for its step count) and the evidence.
+func collectorRun(t *testing.T, body string) (*collector, []emit.FactEvidence) {
+	t.Helper()
+	dir := writeFiles(t, map[string]string{"go.mod": "module app\n\ngo 1.22\n", "app.go": body})
+	res := load.Packages(dir)
+	if res.FatalError != nil {
+		t.Fatalf("load: %v", res.FatalError)
+	}
+	for _, pkg := range res.Packages {
+		for _, e := range pkg.Errors {
+			t.Fatalf("package error: %v", e)
+		}
+		for _, file := range pkg.Syntax {
+			c := newCollector(pkg, file, defaultOptions, readSource(pkg.Fset, file))
+			return c, c.run(file, "app.go")
+		}
+	}
+	t.Fatal("app.go not loaded")
+	return nil, nil
+}
+
+// B-M2: every product in a chain used to re-walk the whole chain below it
+// (quadratic); each product is now evaluated once.
+func TestProductChainsAreEvaluatedOncePerProduct(t *testing.T) {
+	const n = 10000
+	terms := make([]string, n)
+	for i := range terms {
+		terms[i] = "x"
+	}
+	c, got := collectorRun(t, "package app\n\nimport \"time\"\n\nfunc F(x int) {\n\ty := "+strings.Join(terms, " * ")+
+		"\n\t_ = y\n\tif x == 5 {\n\t}\n\tw := 2 * time.Second"+strings.Repeat(" * 1", 50)+" * 3\n\t_ = w\n}\n")
+	if limit := 2 * n; c.steps > limit {
+		t.Errorf("duration steps: %d, want at most %d", c.steps, limit)
+	}
+	f := "app.go::F::function"
+	want := []emit.FactEvidence{
+		{Kind: "comparison", SymbolID: f, Line: 7, Text: "x == 5", Operator: "==", Literal: "5", LiteralKind: "number"},
+		{Kind: "duration", SymbolID: f, Line: 9, Text: "2 * time.Second" + strings.Repeat(" * 1", 50) + " * 3", Name: "w",
+			Constructor: "time.Second", Unit: "s", Amount: strings.Repeat("(", 51) + "2" + strings.Repeat(") * (1)", 50) + ") * (3)"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		gotJSON, _ := json.MarshalIndent(got, "", "  ")
+		t.Errorf("got:\n%s", gotJSON)
+	}
+}
+
 func TestSourceHashIsOfTheBytesTheCollectorRead(t *testing.T) {
 	files := map[string]string{"go.mod": appGoMod, "app.go": "package app\n\nfunc F(n int) {\n\tif n > 7 {\n\t}\n}\n"}
 	for k, v := range ginStub {
