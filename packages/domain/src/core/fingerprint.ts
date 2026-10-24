@@ -45,20 +45,32 @@ const QUOTES = new Set<string>(["'", '"', '`']);
 
 /**
  * Offsets of the `.` that separate name segments: never inside `<...>` (`IComparable<Lending.Member>`), `[...]`
- * (`[Symbol.iterator]`), `(...)` or a quoted name (`'a.b'`). An unclosed bracket or quote runs to the end.
+ * (`[Symbol.iterator]`), `(...)` or a quoted segment (`'a.b'`).
+ * - Brackets nest by kind; a closer that does not match the innermost opener is text, and an unclosed opener runs
+ *   to the end.
+ * - A quote opens only at the start of a segment (the start of the name or right after a separating `.`), so an
+ *   apostrophe inside a segment (`o'brien.loans`, `[o'brien].loans`) is text. Inside a quoted segment a backslash
+ *   escapes the next character (`'a\'.b'`); an unclosed quote runs to the end.
  */
 export function segmentDots(name: string): number[] {
   const out: number[] = [];
   const closers: string[] = [];
   let quote: string | undefined;
+  let segmentStart = true;
   for (let i = 0; i < name.length; i++) {
     const ch = name[i]!;
+    const atStart = segmentStart;
+    segmentStart = false;
     if (quote !== undefined) {
-      if (ch === quote) quote = undefined;
-    } else if (QUOTES.has(ch)) quote = ch;
+      if (ch === '\\') i++;
+      else if (ch === quote) quote = undefined;
+    } else if (atStart && QUOTES.has(ch)) quote = ch;
     else if (OPEN_BRACKETS.has(ch)) closers.push(OPEN_BRACKETS.get(ch)!);
     else if (closers.length > 0 && ch === closers[closers.length - 1]) closers.pop();
-    else if (ch === '.' && closers.length === 0) out.push(i);
+    else if (ch === '.' && closers.length === 0) {
+      out.push(i);
+      segmentStart = true;
+    }
   }
   return out;
 }

@@ -235,8 +235,10 @@ export function buildShadowCandidates(input: CandidateInput): ShadowCandidate[] 
 }
 
 /**
- * The longest name in `types` that is a proper prefix of the symbol's name, ending at a `.` outside `<...>`; the
- * symbol's own name never counts.
+ * The containing type of a symbol: the longest name in `types` (the file's class, interface and type symbols) that
+ * is a proper prefix of the symbol's name ending at a separating `.` (`segmentDots`: never inside brackets or a
+ * quoted segment). The symbol's own name never counts. `fingerprintSymbolPart` keeps this type when the rest of the
+ * name has more than one segment (the amended H4).
  */
 function containerOf(symbolId: string, types: ReadonlySet<string>): string | undefined {
   if (types.size === 0) return undefined;

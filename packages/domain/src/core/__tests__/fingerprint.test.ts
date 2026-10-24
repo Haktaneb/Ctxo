@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decodeFingerprintPart, fingerprint, fingerprintSymbolPart, normalizeFingerprint } from '../fingerprint.js';
+import { decodeFingerprintPart, fingerprint, fingerprintSymbolPart, nameSegments, normalizeFingerprint, segmentDots } from '../fingerprint.js';
 
 const SPEC = 'literal-comparison | LoanPolicy.CanBorrow | loans.Count >= 5';
 
@@ -20,7 +20,9 @@ describe('fingerprintSymbolPart', () => {
   it('a nested parameter suffix, backslashes and a file without an extension', () => {
     expect(fingerprintSymbolPart('src\\Lending\\LoanPolicy.cs::NS.LoanPolicy.Pick(List<(int, int)>)::method')).toBe('LoanPolicy.Pick');
     expect(fingerprintSymbolPart('bin/run::main::function')).toBe('run.main');
-    expect(fingerprintSymbolPart("src/don't.ts::fn::function")).toBe("don't.fn");
+    // The file name splits on its own: a quote opening it never swallows the symbol name.
+    expect(fingerprintSymbolPart("src/'odd.ts::Foo.bar::method")).toBe('Foo.bar');
+    expect(fingerprintSymbolPart("src/don't.ts::Foo.bar::method")).toBe('Foo.bar');
     expect(fingerprintSymbolPart('src/a.test.ts::fn::function')).toBe('test.fn');
   });
 
@@ -57,6 +59,35 @@ describe('fingerprintSymbolPart', () => {
   it('an id without a file part gives the last two segments of its name', () => {
     expect(fingerprintSymbolPart('dbo.loans::table')).toBe('dbo.loans');
     expect(fingerprintSymbolPart('Loose')).toBe('Loose');
+  });
+});
+
+describe('segmentDots', () => {
+  it.each([
+    ['plain', 'a.b.c', [1, 3]],
+    ['an unbalanced closer is text', 'a>b.c', [3]],
+    ['an unclosed opener runs to the end', 'a<b.c', []],
+    ['nested brackets', 'A<B<C.D>.E>.F', [11]],
+    ['a mismatched closer does not close', 'a<b].c', []],
+    ['mismatched brackets nest by kind', 'a[b>.c].d', [7]],
+    ['an unclosed quote runs to the end', "Foo.'a.b", [3]],
+    ['an apostrophe inside a segment is text', "o'brien.loans", [7]],
+    ['an apostrophe inside brackets is text', "[o'brien].loans", [9]],
+    ['a quote opens at the start of the name', "'a.b'.c", [5]],
+    ['a backslash escapes inside a quote', "Foo.'a\\'.b'.c", [3, 11]],
+  ])('%s: %s', (_label, name, dots) => {
+    expect(segmentDots(name)).toEqual(dots);
+  });
+
+  it('a backslash escape keeps the quoted segment whole', () => {
+    expect(nameSegments("Foo.'a\\'.b'.c")).toEqual(['Foo', "'a\\'.b'", 'c']);
+    expect(fingerprintSymbolPart("src/f.ts::Foo.'a\\'.b'.c::method")).toBe("'a\\'.b'.c");
+  });
+
+  it('SQL names with an apostrophe and TypeScript quoted members', () => {
+    expect(fingerprintSymbolPart("db/migrations/x.sql::o'brien.loans::table")).toBe("o'brien.loans");
+    expect(fingerprintSymbolPart("db/migrations/x.sql::[o'brien].loans::table")).toBe("[o'brien].loans");
+    expect(fingerprintSymbolPart("src/foo.ts::Foo.'a.b'::method")).toBe("Foo.'a.b'");
   });
 });
 
