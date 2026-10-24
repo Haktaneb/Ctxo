@@ -1,7 +1,7 @@
 import type { CodeFact, ILanguageAdapter, SymbolNode } from '@ctxo/plugin-api';
 import type { CtxoConfig } from '../core/config/config-schema.js';
 import { factsRequested } from '../core/config/load-config.js';
-import { createTestFileClassifier, filesWithTestAnnotations } from '../core/test-files/test-file-classifier.js';
+import { createTestFileClassifier, filesWithTestAnnotations, type TestFileClassifier } from '../core/test-files/test-file-classifier.js';
 import type { FactDetectorOptions, LoadedModule } from '../ports/i-ctxo-module.js';
 
 /** The fact request `ctxo index` and `ctxo watch` hand to the plugins. */
@@ -19,7 +19,18 @@ export function pluginFactRequest(config: CtxoConfig, modules: readonly LoadedMo
   if (!facts) return { facts };
   const factOptions = modules.find((module) => module.registration.indexCapabilities?.factOptions !== undefined)
     ?.registration.indexCapabilities?.factOptions;
-  return factOptions ? { facts, factOptions } : { facts };
+  return factOptions ? { facts, factOptions: frozenCopy(factOptions) } : { facts };
+}
+
+/**
+ * A deep-frozen copy of the detector options: every plugin of the run receives this one object, so a plugin that
+ * tried to change a list would change it for the others (and for the module). The lists hold only primitives.
+ */
+function frozenCopy(options: FactDetectorOptions): FactDetectorOptions {
+  return Object.freeze({
+    trivialLiterals: Object.freeze([...options.trivialLiterals]),
+    normalizationMethods: Object.freeze([...options.normalizationMethods]),
+  });
 }
 
 /**
@@ -37,10 +48,19 @@ export function dropTestFileRetryTimeouts(
   facts: readonly CodeFact[],
   testGlobs: readonly string[],
 ): CodeFact[] {
-  const isTestFile = createTestFileClassifier(testGlobs, filesWithTestAnnotations([{ file, symbols: [...symbols] }]), {
-    annotationAware: true,
-  });
-  return isTestFile(file) ? facts.filter((fact) => fact.kind !== 'retry-timeout') : [...facts];
+  const isTestFile = globClassifier(testGlobs)(file) || filesWithTestAnnotations([{ file, symbols: [...symbols] }]).size > 0;
+  return isTestFile ? facts.filter((fact) => fact.kind !== 'retry-timeout') : [...facts];
+}
+
+/**
+ * The glob part of the classifier (default globs without the name-only ones, plus `testGlobs`), compiled once per
+ * glob list: a run (`ctxo index`, `ctxo watch`) passes the same list for every file. One entry is kept.
+ */
+let compiled: { readonly key: string; readonly classify: TestFileClassifier } | undefined;
+function globClassifier(testGlobs: readonly string[]): TestFileClassifier {
+  const key = testGlobs.join('\0');
+  if (compiled?.key !== key) compiled = { key, classify: createTestFileClassifier(testGlobs, undefined, { annotationAware: true }) };
+  return compiled.classify;
 }
 
 /**

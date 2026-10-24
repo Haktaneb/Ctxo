@@ -75,7 +75,8 @@ function buildContext(
     },
     projectRoot,
     workspace,
-    // Each plugin gets its own object; `facts` is the one key the host sets.
+    // Each plugin gets its own config object; `facts` is the one key the host sets, one deep-frozen object shared by
+    // every plugin of the run (`pluginFactRequest`).
     config: factOptions ? { facts: factOptions } : {},
     capabilities,
   };

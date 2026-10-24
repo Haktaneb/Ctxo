@@ -4,7 +4,14 @@ import { dropTestFileRetryTimeouts, extractFileFacts, pluginFactRequest } from '
 import type { CtxoConfig } from '../../core/config/config-schema.js';
 import type { CtxoModuleRegistration, FactDetectorOptions, LoadedModule } from '../../ports/i-ctxo-module.js';
 
-const FACT: CodeFact = { kind: 'endpoint', symbolId: 'src/a.fake::run::function', line: 3, text: 'GET /loans' };
+const { makeGlobMatcherSpy } = vi.hoisted(() => ({ makeGlobMatcherSpy: vi.fn() }));
+vi.mock('../../core/config/load-config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../core/config/load-config.js')>();
+  makeGlobMatcherSpy.mockImplementation(actual.makeGlobMatcher);
+  return { ...actual, makeGlobMatcher: makeGlobMatcherSpy };
+});
+
+const FACT: CodeFact ={ kind: 'endpoint', symbolId: 'src/a.fake::run::function', line: 3, text: 'GET /loans' };
 
 function adapter(extra: Partial<ILanguageAdapter>): ILanguageAdapter {
   return {
@@ -80,6 +87,19 @@ describe('dropTestFileRetryTimeouts', () => {
     expect(dropTestFileRetryTimeouts(named, [symbol(named)], facts(named), [])).toEqual(facts(named));
   });
 
+  it('compiles the test globs once per glob list, not once per file (C-M)', () => {
+    const before = makeGlobMatcherSpy.mock.calls.length;
+    for (let i = 0; i < 200; i++) {
+      const file = `src/loans/policy-${i}.ts`;
+      dropTestFileRetryTimeouts(file, [symbol(file)], facts(file), ['qa/**', 'checks/**']);
+    }
+    expect(makeGlobMatcherSpy.mock.calls.length - before).toBeLessThanOrEqual(1);
+    // Another glob list compiles once more, and its own globs decide.
+    const file = 'qa2/loan.ts';
+    expect(dropTestFileRetryTimeouts(file, [symbol(file)], facts(file), ['qa2/**']).map((f) => f.kind)).toEqual(['literal-comparison', 'endpoint']);
+    expect(dropTestFileRetryTimeouts(file, [symbol(file)], facts(file), ['qa/**'])).toEqual(facts(file));
+  });
+
   it('backslash paths are classified like forward-slash ones', () => {
     const file = 'src\\__tests__\\loan.test.ts';
     expect(dropTestFileRetryTimeouts(file, [], facts(file), []).map((f) => f.kind)).toEqual(['literal-comparison', 'endpoint']);
@@ -105,5 +125,20 @@ describe('pluginFactRequest', () => {
     ['a module with options but no facts', noConfig, [mod({ factOptions: O })], { facts: false }],
   ] as const)('pluginFactRequest combines index.facts with module requests: %s', (_name, config, modules, expected) => {
     expect(pluginFactRequest(config, modules)).toStrictEqual(expected);
+  });
+
+  it('hands the plugins a deep-frozen copy of the options, so no plugin can change another one\'s (C-M)', () => {
+    const own: FactDetectorOptions = { trivialLiterals: [0, 1], normalizationMethods: ['trim'] };
+    const request = pluginFactRequest(noConfig, [mod({ facts: true, factOptions: own })]);
+    const options = request.factOptions!;
+    expect(options).not.toBe(own);
+    expect(Object.isFrozen(options)).toBe(true);
+    expect(Object.isFrozen(options.trivialLiterals)).toBe(true);
+    expect(Object.isFrozen(options.normalizationMethods)).toBe(true);
+    expect(() => (options.trivialLiterals as unknown[]).push(5)).toThrow(TypeError);
+    expect(() => (options.normalizationMethods as string[]).splice(0)).toThrow(TypeError);
+    // The module's own object stays as it was, and a later change to it does not reach the plugins.
+    (own.normalizationMethods as string[]).push('toLowerCase');
+    expect(options.normalizationMethods).toEqual(['trim']);
   });
 });
