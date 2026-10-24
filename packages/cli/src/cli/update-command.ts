@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { getVersion } from './cli-paths.js';
 import { discoverPlugins, resolvePackageCandidates } from '../adapters/language/plugin-discovery.js';
 import { DOMAIN_MODULE_PACKAGE } from '../adapters/modules/module-loader.js';
@@ -133,7 +133,7 @@ export interface UpdateOptions {
 }
 
 export interface UpdateCommandDeps {
-  readonly discoverInstalled?: (projectRoot: string) => Promise<ReadonlyArray<{ name: string; version: string }>>;
+  readonly discoverInstalled?: (projectRoot: string, opts?: { global?: boolean }) => Promise<ReadonlyArray<{ name: string; version: string }>>;
   readonly fetcher?: HttpsFetcher;
   readonly runner?: (command: string, args: readonly string[], cwd: string) => Promise<number>;
   readonly setExitCode?: (code: number) => void;
@@ -154,7 +154,15 @@ export class UpdateCommand {
     }
 
     const discover = this.deps.discoverInstalled ?? defaultDiscoverInstalled;
-    const installed = await discover(this.projectRoot);
+    const runningVersion = getVersion();
+    const installed = await discover(this.projectRoot, { global: options.global });
+    const localCli = installed.find((p) => p.name === CTXO_CLI_PACKAGE);
+    if (!options.global && !options.json && localCli && runningVersion !== 'unknown' && localCli.version !== runningVersion) {
+      this.emitError(
+        `running ctxo ${runningVersion} differs from the project's @ctxo/cli ${localCli.version}. ` +
+          'Run "ctxo update --global" to update the global binary, or use "npx ctxo".',
+      );
+    }
     if (installed.length === 0) {
       this.emit(options.json ? '{}\n' : 'ctxo update — no @ctxo/* packages discovered.\n');
       return;
@@ -177,7 +185,7 @@ export class UpdateCommand {
     const states = markWorkspaceLinks(rawStates, readWorkspaceLinks(this.projectRoot));
     const targets = selectInstallTargets(states);
 
-    const cliVersion = getVersion();
+    const cliVersion = runningVersion;
     const channel = detectChannel(cliVersion);
     const plan = targets.length === 0 ? null : this.buildPlan(targets, options);
     const strategy = this.pickStrategy(targets, options);
@@ -282,12 +290,25 @@ export class UpdateCommand {
   }
 }
 
-export async function defaultDiscoverInstalled(projectRoot: string): Promise<ReadonlyArray<{ name: string; version: string }>> {
-  const out: Array<{ name: string; version: string }> = [{ name: CTXO_CLI_PACKAGE, version: getVersion() }];
+export async function defaultDiscoverInstalled(
+  projectRoot: string,
+  opts: { global?: boolean } = {},
+): Promise<ReadonlyArray<{ name: string; version: string }>> {
+  // A local install plan targets the project's node_modules, so CURRENT comes
+  // from the installed package.json. The running binary (often a stale global)
+  // and a plugin's self-reported version can both lag behind it. --global
+  // upgrades the running binary, so that one is compared instead.
+  const localCli = opts.global ? undefined : resolvePackageCandidates(CTXO_CLI_PACKAGE, projectRoot)[0];
+  const out: Array<{ name: string; version: string }> = [
+    { name: CTXO_CLI_PACKAGE, version: localCli?.version ?? getVersion() },
+  ];
   const manifestPath = loadManifestPath(projectRoot);
   if (manifestPath) {
     const { plugins } = await discoverPlugins({ manifestPath });
-    for (const p of plugins) out.push({ name: p.specifier, version: p.plugin.version });
+    for (const p of plugins) {
+      const installed = resolvePackageCandidates(p.specifier, dirname(manifestPath))[0];
+      out.push({ name: p.specifier, version: installed?.version ?? p.plugin.version });
+    }
   }
   // The domain package is not a language plugin; list the copy the CLI would load (the project's, else the CLI's).
   const domain = resolvePackageCandidates(DOMAIN_MODULE_PACKAGE, projectRoot)[0];

@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import type { CtxoLanguagePlugin, PluginContext, ILanguageAdapter } from '@ctxo/plugin-api';
 import { CSharpCompositeAdapter } from './composite-adapter.js';
 import { readFactOptions } from './facts/fact-options.js';
@@ -7,7 +8,8 @@ export { CSharpAdapter } from './csharp-adapter.js';
 export { RoslynAdapter } from './roslyn/roslyn-adapter.js';
 export { TreeSitterAdapter } from './tree-sitter-adapter.js';
 
-const VERSION = '0.7.0-alpha.0';
+// package.json sits one level above both src/ and dist/, so the same path resolves in dev and when published.
+const VERSION = (createRequire(import.meta.url)('../package.json') as { version: string }).version;
 
 export const plugin: CtxoLanguagePlugin = {
   apiVersion: '1',
