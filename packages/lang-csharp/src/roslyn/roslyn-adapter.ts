@@ -1,6 +1,10 @@
 import { relative, dirname, resolve } from 'node:path';
-import type { SymbolNode, GraphEdge, ComplexityMetrics, SymbolKind, ILanguageAdapter, ReindexResult } from '@ctxo/plugin-api';
+import type { CodeFact, SymbolNode, GraphEdge, ComplexityMetrics, SymbolKind, ILanguageAdapter, ReindexResult } from '@ctxo/plugin-api';
 import { createLogger } from '../logger.js';
+import { annotationRouteEvidence } from '../facts/annotation-endpoints.js';
+import { decodeCsharpStringLiteral } from '../facts/csharp-string-literal.js';
+import type { FactOptions } from '../facts/fact-types.js';
+import { finishFacts } from '../facts/finish-facts.js';
 import { detectDotnetSdk, discoverSolution, findCtxoRoslynProject } from './solution-discovery.js';
 import {
   runBatchIndex,
@@ -8,6 +12,7 @@ import {
   type RoslynBatchResult,
   type RoslynEdge,
   type RoslynFileResult,
+  type RoslynRunOptions,
   type RoslynSymbol,
 } from './roslyn-process.js';
 
@@ -49,6 +54,8 @@ export function toGraphEdges(edges: readonly RoslynEdge[]): GraphEdge[] {
 export interface RoslynAdapterOptions {
   /** Pass `--sql-call-sites` to the helper (batch and keep-alive): SQL text at known call sites becomes data edges. */
   readonly sqlCallSites?: boolean;
+  /** Fact detector options; when set, the helper gets `--facts=` (batch, keep-alive start and restart) and `extractFacts` reports facts. */
+  readonly facts?: FactOptions;
 }
 
 /** Maps a helper symbol to a SymbolNode; optional fields appear only when present. */
@@ -70,6 +77,8 @@ export class RoslynAdapter implements ILanguageAdapter {
   readonly tier = 'full' as const;
   /** Whether the helper emits SQL call-site edges, as constructed. */
   readonly sqlCallSites: boolean;
+  /** The fact detector options as constructed; undefined when facts are off. */
+  readonly facts: FactOptions | undefined;
 
   private roslynProjectDir: string | null = null;
   private solutionPath: string | null = null;
@@ -83,6 +92,12 @@ export class RoslynAdapter implements ILanguageAdapter {
 
   constructor(options: RoslynAdapterOptions = {}) {
     this.sqlCallSites = options.sqlCallSites === true;
+    this.facts = options.facts;
+  }
+
+  /** The helper options of every run: the batch, the keep-alive start and its restart. */
+  private runOptions(): RoslynRunOptions {
+    return { sqlCallSites: this.sqlCallSites, ...(this.facts ? { facts: this.facts } : {}) };
   }
 
   isSupported(filePath: string): boolean {
@@ -138,7 +153,7 @@ export class RoslynAdapter implements ILanguageAdapter {
   async batchIndex(): Promise<RoslynBatchResult | null> {
     if (!this.isReady()) return null;
 
-    const result = await runBatchIndex(this.roslynProjectDir!, this.solutionPath!, { sqlCallSites: this.sqlCallSites });
+    const result = await runBatchIndex(this.roslynProjectDir!, this.solutionPath!, this.runOptions());
     if (!result.ok) {
       this.failure = result.error || 'the batch run failed';
       this.cache.clear();
@@ -197,12 +212,27 @@ export class RoslynAdapter implements ILanguageAdapter {
   }
 
   /**
+   * The file's facts: the helper's evidence plus the attribute routes of its symbols, finished with
+   * the C# string literal decoder. `[]` without the facts option or for a file the helper did not
+   * report. The cache holds the batch result, replaced by each keep-alive reindex of the file.
+   */
+  async extractFacts(filePath: string, _source: string): Promise<CodeFact[]> {
+    if (!this.facts) return [];
+    const cached = this.cache.get(filePath);
+    if (!cached) return [];
+
+    const symbols = cached.symbols.map(toSymbolNode);
+    const evidence = [...(cached.factEvidence ?? []), ...annotationRouteEvidence(symbols)];
+    return finishFacts(filePath, evidence, symbols, this.facts, decodeCsharpStringLiteral);
+  }
+
+  /**
    * Start keep-alive process for watch mode.
    */
   async startKeepAlive(): Promise<boolean> {
     if (!this.isReady()) return false;
 
-    this.keepAlive = new RoslynKeepAlive(this.roslynProjectDir!, this.solutionPath!, { sqlCallSites: this.sqlCallSites });
+    this.keepAlive = new RoslynKeepAlive(this.roslynProjectDir!, this.solutionPath!, this.runOptions());
     const started = await this.keepAlive.start();
     if (!started) this.failure = 'the keep-alive helper did not start';
     return started;
@@ -260,7 +290,7 @@ export class RoslynAdapter implements ILanguageAdapter {
   private restartKeepAlive(): Promise<boolean> {
     this.restarting ??= (async () => {
       log.info('Roslyn keep-alive is not running (idle shutdown or exit); restarting it');
-      const keepAlive = new RoslynKeepAlive(this.roslynProjectDir!, this.solutionPath!, { sqlCallSites: this.sqlCallSites });
+      const keepAlive = new RoslynKeepAlive(this.roslynProjectDir!, this.solutionPath!, this.runOptions());
       this.keepAlive = keepAlive;
       const started = await keepAlive.start();
       if (!started) this.failure = 'the keep-alive helper stopped and did not restart';
@@ -317,5 +347,8 @@ function rewriteAllPaths(
       ...c,
       symbolId: rewrite(c.symbolId),
     })),
+    ...(file.factEvidence
+      ? { factEvidence: file.factEvidence.map(e => (e.symbolId !== undefined ? { ...e, symbolId: rewrite(e.symbolId) } : e)) }
+      : {}),
   };
 }

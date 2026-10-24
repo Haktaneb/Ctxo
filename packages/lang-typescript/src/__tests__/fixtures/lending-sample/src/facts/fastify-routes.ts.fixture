@@ -1,0 +1,6 @@
+import type { FastifyInstance } from 'fastify';
+
+export async function routes(app: FastifyInstance) {
+  app.get('/members/:id', async () => ({}));
+  app.route({ method: ['POST', 'PUT'], url: '/members', handler: async () => ({}) });
+}

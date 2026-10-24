@@ -16,29 +16,51 @@ public final class Main {
   private static final PrintStream OUT = System.out;
   private static final char[] HEX = "0123456789abcdef".toCharArray();
 
-  public static void main(String[] args) {
-    List<String> positional = new ArrayList<>();
-    boolean keepAlive = false, allowBuildTools = false, sqlCallSites = false;
+  /** The parsed command line. Package-private for the tests. */
+  static final class Args {
+    final List<String> positional = new ArrayList<>();
+    boolean keepAlive, allowBuildTools, sqlCallSites;
     String[] cpOverride = new String[0];
+    /** From {@code --facts=<base64>}; null without it or when the value does not decode. */
+    Dtos.FactOptions facts;
+  }
+
+  /**
+   * {@code --facts=<value>} is matched by prefix before the exact-match switch, whose default
+   * branch would take it for a positional argument. Package-private for the tests.
+   */
+  static Args parseArgs(String[] args) {
+    Args out = new Args();
     for (int i = 0; i < args.length; i++) {
+      if (args[i].startsWith("--facts=")) {
+        out.facts = Dtos.FactOptions.decode(args[i].substring("--facts=".length()));
+        if (out.facts == null) err("ignoring --facts=: not base64 of {\"normalizationMethods\":[...]}");
+        continue;
+      }
       switch (args[i]) {
-        case "--keep-alive": keepAlive = true; break;
-        case "--allow-build-tools": allowBuildTools = true; break;
-        case "--sql-call-sites": sqlCallSites = true; break;
-        case "--classpath": if (i + 1 < args.length) cpOverride = splitPath(args[++i]); break;
-        default: positional.add(args[i]);
+        case "--keep-alive": out.keepAlive = true; break;
+        case "--allow-build-tools": out.allowBuildTools = true; break;
+        case "--sql-call-sites": out.sqlCallSites = true; break;
+        case "--classpath": if (i + 1 < args.length) out.cpOverride = splitPath(args[++i]); break;
+        default: out.positional.add(args[i]);
       }
     }
-    if (positional.isEmpty()) { err("Usage: java -jar ctxo-jdt-analyzer.jar <projectRoot> [--keep-alive] [--classpath p1;p2] [--allow-build-tools] [--sql-call-sites]"); System.exit(1); return; }
-    String root = Paths.get(positional.get(0)).toAbsolutePath().normalize().toString();
-    String[] classpath = new ClasspathResolver(root, cpOverride, allowBuildTools).resolve();
-    Analyzer analyzer = new Analyzer(root, classpath, sqlCallSites);
-    if (keepAlive) runKeepAlive(root, analyzer, System.in, OUT); else runBatch(root, analyzer, OUT);
+    return out;
+  }
+
+  public static void main(String[] argv) {
+    Args args = parseArgs(argv);
+    if (args.positional.isEmpty()) { err("Usage: java -jar ctxo-jdt-analyzer.jar <projectRoot> [--keep-alive] [--classpath p1;p2] [--allow-build-tools] [--sql-call-sites] [--facts=<base64>]"); System.exit(1); return; }
+    String root = Paths.get(args.positional.get(0)).toAbsolutePath().normalize().toString();
+    String[] classpath = new ClasspathResolver(root, args.cpOverride, args.allowBuildTools).resolve();
+    Analyzer analyzer = new Analyzer(root, classpath, args.sqlCallSites, args.facts);
+    if (args.keepAlive) runKeepAlive(root, analyzer, System.in, OUT); else runBatch(root, analyzer, OUT);
   }
 
   /**
    * One JSONL line per file, then the {@code done} line; with {@code --sql-call-sites} the
-   * {@code done} line carries {@code "sql":{"constant":n,"nonConstant":m}}. Package-private for the tests.
+   * {@code done} line carries {@code "sql":{"constant":n,"nonConstant":m}}, with {@code --facts=}
+   * {@code "facts":true} (so does the keep-alive {@code ready} line). Package-private for the tests.
    */
   static void runBatch(String root, Analyzer analyzer, PrintStream out) {
     long start = System.nanoTime();
@@ -52,6 +74,8 @@ public final class Main {
     done.addProperty("elapsed", String.format("%.1fs", (System.nanoTime() - start) / 1e9));
     Dtos.SqlStats sql = analyzer.sqlStats();
     if (sql != null) done.add("sql", GSON.toJsonTree(sql));
+    // Only with --facts=: the plugin tells an analyzer that understood it from an older one that ignored it.
+    if (analyzer.factsEnabled()) done.addProperty("facts", true);
     out.println(json(done));
   }
 
@@ -81,6 +105,7 @@ public final class Main {
     ready.addProperty("type", "ready");
     ready.addProperty("projectCount", 1);
     ready.addProperty("fileCount", allFiles.size());
+    if (analyzer.factsEnabled()) ready.addProperty("facts", true);
     out.println(json(ready));
     // The plugin writes UTF-8; the platform charset (Cp1254 and the like on JRE 11-17) would garble non-ASCII paths.
     try (BufferedReader in = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8))) {

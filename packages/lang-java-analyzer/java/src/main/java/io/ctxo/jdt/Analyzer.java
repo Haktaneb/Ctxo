@@ -3,6 +3,9 @@ package io.ctxo.jdt;
 import org.eclipse.jdt.core.JavaCore;
 import org.eclipse.jdt.core.dom.*;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
@@ -10,9 +13,19 @@ import java.util.*;
 /** Runs JDT batch analysis over a set of source files and emits FileResults. */
 public final class Analyzer {
   private static final String SOURCE_ENCODING = "UTF-8";
+
+  /** The fact evidence collector of one compilation unit ({@link FactEvidence#collect}). */
+  @FunctionalInterface
+  interface FactCollector {
+    void collect(CompilationUnit cu, String source, String file, Dtos.FactOptions options, List<Dtos.Evidence> out);
+  }
+
+  /** {@link FactEvidence#collect}; a test seam, so a collector failure can be simulated. */
+  static volatile FactCollector factCollector = FactEvidence::collect;
   private final String rootDir;
   private final String[] classpath;
   private final boolean sqlCallSites;
+  private final Dtos.FactOptions facts;
   private Dtos.SqlStats sqlStats;
 
   public Analyzer(String rootDir, String[] classpath) {
@@ -21,10 +34,19 @@ public final class Analyzer {
 
   /** With {@code sqlCallSites}, file results carry the SQL text at known call sites ({@link SqlCallSites}). */
   public Analyzer(String rootDir, String[] classpath, boolean sqlCallSites) {
+    this(rootDir, classpath, sqlCallSites, null);
+  }
+
+  /**
+   * With {@code facts} (the {@code --facts=} options), file results also carry fact evidence
+   * ({@link FactEvidence}); null leaves the output exactly as without facts.
+   */
+  public Analyzer(String rootDir, String[] classpath, boolean sqlCallSites, Dtos.FactOptions facts) {
     this.rootDir = rootDir;
     this.classpath = classpath;
     this.sqlCallSites = sqlCallSites;
     this.sqlStats = sqlCallSites ? new Dtos.SqlStats() : null;
+    this.facts = facts;
   }
 
   /**
@@ -33,6 +55,11 @@ public final class Analyzer {
    */
   public Dtos.SqlStats sqlStats() {
     return sqlStats;
+  }
+
+  /** True when the analyzer collects fact evidence ({@code --facts=} was parsed). */
+  public boolean factsEnabled() {
+    return facts != null;
   }
 
   public List<Dtos.FileResult> analyze(List<String> sourceFiles) {
@@ -62,6 +89,18 @@ public final class Analyzer {
         if (sites != null && !sites.isEmpty()) {
           sites.sort(SQL_SITE_ORDER);
           fr.sqlCallSites = sites;
+        }
+        if (facts != null) {
+          String source = sourceOf(sourceFilePath, cu);
+          List<Dtos.Evidence> evidence = new ArrayList<>();
+          try {
+            if (source != null) factCollector.collect(cu, source, rel, facts, evidence);
+          } catch (RuntimeException | StackOverflowError e) {
+            // The file keeps its symbols and edges; only its (possibly partial) evidence is dropped.
+            evidence.clear();
+            System.err.println("[ctxo-jdt-analyzer] fact evidence skipped for " + rel + ": " + e.getClass().getName());
+          }
+          if (!evidence.isEmpty()) fr.factEvidence = evidence;
         }
         // imports: anchor on the first top-level type symbol (JDT visits imports before types,
         // so this must run after the visitor has populated symbols).
@@ -95,6 +134,21 @@ public final class Analyzer {
     };
     parser.createASTs(files, encodings, new String[0], requestor, null);
     return new ArrayList<>(byPath.values());
+  }
+
+  /**
+   * The text JDT parsed (UTF-8, as {@code setEnvironment} reads it), so node offsets index into it;
+   * a byte order mark JDT skipped is dropped. Null when unreadable or when the offsets do not fit.
+   */
+  private static String sourceOf(String path, CompilationUnit cu) {
+    try {
+      String source = new String(Files.readAllBytes(Paths.get(path)), StandardCharsets.UTF_8);
+      int end = cu.getStartPosition() + cu.getLength();
+      if (source.startsWith("\uFEFF") && end < source.length()) source = source.substring(1);
+      return end <= source.length() ? source : null;
+    } catch (IOException | RuntimeException e) {
+      return null;
+    }
   }
 
   private String relativize(String absSourcePath) {
@@ -171,6 +225,12 @@ public final class Analyzer {
       String prev = enclosingTypeId; enclosingTypeId = symId(name, "type");
       for (Object o : node.superInterfaceTypes())
         out.edges.add(new Dtos.Edge(enclosingTypeId, typeId((Type) o, "interface"), "implements"));
+      // The class bodies of the constants (`GOLD { void q() {} }`): their members are symbols, as in
+      // the syntax tier, since the fact evidence names them as owners. The arguments are not walked.
+      for (Object o : node.enumConstants()) {
+        AnonymousClassDeclaration body = ((EnumConstantDeclaration) o).getAnonymousClassDeclaration();
+        if (body != null) body.accept(this);
+      }
       node.bodyDeclarations().forEach(b -> ((ASTNode) b).accept(this));
       enclosingTypeId = prev;
       return false;

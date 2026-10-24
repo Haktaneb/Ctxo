@@ -8,6 +8,7 @@ vi.mock('node:child_process', () => ({
 
 import { spawn } from 'node:child_process';
 import { buildGoAnalyzerArgs, runBatchAnalyze } from '../analyzer/analyzer-process.js';
+import { DEFAULT_FACT_OPTIONS, encodeFactOptions } from '../facts/fact-options.js';
 
 const mockedSpawn = vi.mocked(spawn);
 
@@ -165,5 +166,41 @@ describe('SQL call sites', () => {
     const result = await runBatchAnalyze('/fake/binary', '/some/module');
     expect(mockedSpawn).toHaveBeenCalledWith('/fake/binary', ['--root', '/some/module'], expect.anything());
     expect(result.sql).toBeUndefined();
+  });
+
+  it('buildGoAnalyzerArgs appends --facts= only with facts', () => {
+    const encoded = encodeFactOptions(DEFAULT_FACT_OPTIONS);
+    expect(buildGoAnalyzerArgs('/m', { facts: DEFAULT_FACT_OPTIONS })).toEqual(['--root', '/m', `--facts=${encoded}`]);
+    expect(buildGoAnalyzerArgs('/m', { sqlCallSites: true, facts: DEFAULT_FACT_OPTIONS })).toEqual([
+      '--root',
+      '/m',
+      '--sql-call-sites',
+      `--facts=${encoded}`,
+    ]);
+    expect(buildGoAnalyzerArgs('/m', { sqlCallSites: true })).toEqual(['--root', '/m', '--sql-call-sites']);
+    expect(JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'))).toEqual({
+      normalizationMethods: DEFAULT_FACT_OPTIONS.normalizationMethods,
+    });
+  });
+
+  it('runBatchAnalyze reads factEvidence and factSourceHash', async () => {
+    const evidence = { kind: 'comparison', symbolId: 'a.go::Foo::function', line: 4, text: 'n >= 5', operator: '>=', literal: '5', literalKind: 'number' };
+    fakeProcess({
+      stdout: [
+        `{"type":"file","file":"a.go","symbols":[],"edges":[],"complexity":[],"factEvidence":[${JSON.stringify(evidence)}],"factSourceHash":"ab12"}`,
+        '{"type":"file","file":"b.go","symbols":[],"edges":[],"complexity":[]}',
+        '{"type":"summary","totalFiles":2,"elapsed":"1ms"}',
+        '',
+      ].join('\n'),
+    });
+    const result = await runBatchAnalyze('/fake/binary', '/some/module', { facts: DEFAULT_FACT_OPTIONS });
+    expect(mockedSpawn).toHaveBeenCalledWith(
+      '/fake/binary',
+      ['--root', '/some/module', `--facts=${encodeFactOptions(DEFAULT_FACT_OPTIONS)}`],
+      expect.anything(),
+    );
+    expect(result.files[0]!.factEvidence).toEqual([evidence]);
+    expect(result.files[0]!.factSourceHash).toBe('ab12');
+    expect(result.files[1]!.factEvidence).toBeUndefined();
   });
 });

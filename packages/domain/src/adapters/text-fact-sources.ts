@@ -1,0 +1,93 @@
+import type { CodeFact, FileIndex, SymbolNode, TestFileCheck } from '@ctxo/cli/internal';
+import type { Ownership } from '../core/ownership.js';
+import type { FactOptions } from '../core/facts/fact-types.js';
+import { scanTextFacts } from '../core/text-facts.js';
+import { readRepoTexts, SOURCE_SCAN_MAX_BYTES } from './repo-files.js';
+
+/** A file the text scan reads, with the symbols its facts attach to (`[]` for an unindexed file). */
+export interface TextScanTarget {
+  readonly file: string;
+  readonly symbols: readonly SymbolNode[];
+}
+
+const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+const norm = (path: string): string => path.replace(/\\/g, '/');
+
+function extensionOf(file: string): string {
+  const base = file.slice(file.lastIndexOf('/') + 1);
+  const dot = base.lastIndexOf('.');
+  return dot > 0 ? base.slice(dot).toLowerCase() : '';
+}
+
+/**
+ * The text scan's files (H2), in codepoint order of path, each once: indexed, non-test files with exactly one owner
+ * whose index has no `facts` key (their plugin has no fact detector), and tracked, unindexed, non-test files with
+ * exactly one owner whose extension is listed (lower-cased) in `extensions`.
+ */
+export function textScanTargets(input: {
+  readonly indices: readonly FileIndex[];
+  readonly tracked: readonly string[];
+  readonly ownership: Ownership;
+  readonly isTestFile: TestFileCheck;
+  readonly extensions: readonly string[];
+}): TextScanTarget[] {
+  const { indices, tracked, ownership, isTestFile } = input;
+  const extensions = new Set(input.extensions.map((e) => e.toLowerCase()));
+  const eligible = (file: string): boolean => !isTestFile(file) && ownership.ownerOf(file) !== undefined;
+
+  const targets = new Map<string, TextScanTarget>();
+  const indexed = new Set<string>();
+  for (const index of indices) {
+    const file = norm(index.file);
+    indexed.add(file);
+    if (index.facts !== undefined || targets.has(file) || !eligible(file)) continue;
+    targets.set(file, { file, symbols: index.symbols });
+  }
+  for (const raw of tracked) {
+    const file = norm(raw);
+    if (indexed.has(file) || targets.has(file) || !extensions.has(extensionOf(file)) || !eligible(file)) continue;
+    targets.set(file, { file, symbols: [] });
+  }
+  return [...targets.values()].sort((a, b) => compare(a.file, b.file));
+}
+
+/**
+ * The text-scan facts of each target, read through `readRepoTexts` (files over 1 MiB, binary, missing, outside the
+ * project or reached through a link that leaves the repository are skipped). Files without facts are absent; the map
+ * is in codepoint order of path. A file whose scan fails gives no facts and is passed to `onError` (the caller wires
+ * it to the `ctxo:domain` logger).
+ */
+export function readTextFacts(
+  projectRoot: string,
+  targets: readonly TextScanTarget[],
+  options: FactOptions,
+  onError?: (file: string, error: unknown) => void,
+): Map<string, CodeFact[]> {
+  const files = [...new Set(targets.map((target) => norm(target.file)))];
+  const texts = new Map(readRepoTexts(projectRoot, files, SOURCE_SCAN_MAX_BYTES).map(({ file, text }) => [file, text] as const));
+  return scanTargetTexts(targets, (file) => texts.get(file), options, onError);
+}
+
+/**
+ * The text-scan facts of each target whose text `textOf` gives (undefined: not read, so no facts), each path once, in
+ * codepoint order of path; a repeated target keeps its last symbols. Files without facts are absent. A file whose
+ * scan fails gives no facts and is passed to `onError`. `readTextFacts` reads the texts itself; the W10 composition
+ * hands in the texts it has already read.
+ */
+export function scanTargetTexts(
+  targets: readonly TextScanTarget[],
+  textOf: (file: string) => string | undefined,
+  options: FactOptions,
+  onError?: (file: string, error: unknown) => void,
+): Map<string, CodeFact[]> {
+  const symbolsOf = new Map<string, readonly SymbolNode[]>();
+  for (const target of targets) symbolsOf.set(norm(target.file), target.symbols);
+  const out = new Map<string, CodeFact[]>();
+  for (const file of [...symbolsOf.keys()].sort(compare)) {
+    const text = textOf(file);
+    if (text === undefined) continue;
+    const facts = scanTextFacts(file, text, symbolsOf.get(file) ?? [], options, onError);
+    if (facts.length > 0) out.set(file, facts);
+  }
+  return out;
+}

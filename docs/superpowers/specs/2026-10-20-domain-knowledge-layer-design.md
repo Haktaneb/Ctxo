@@ -374,7 +374,7 @@ export interface CtxoLanguagePlugin { readonly apiVersion: '1' | '2'; /* existin
 
 - v1 plugins keep working unchanged; a v2 plugin's kinds, annotations and facts survive the JSON round trip.
 - The corpus passes on both sides (`@ctxo/sql-extract` and ScriptDom).
-- Fixture: tables shared by two or more candidates are listed; resources and per-unit access are compared with the oracle (baseline: 72 tables, 29 procedures), and every difference is explained. Expected sources of difference: the oracle scans every string literal in a file, Ctxo only constant SQL at known call sites; the oracle's regexes can misread aliases and comments.
+- Fixture: tables shared by two or more candidates are listed; resources and per-unit access are compared with the oracle, and every difference is explained. Expected sources of difference: the oracle scans every string literal in a file, Ctxo only constant SQL at known call sites; the oracle's regexes can misread aliases and comments.
 - Test methods carry `Fact`/`Trait` annotations on the fixture.
 
 ---
@@ -795,15 +795,15 @@ Free text; references to contract files.
   - Endpoints without a rule link.
   - Procedures and data resources owned by the context without a rule link.
   - Rules without tests.
-- **Fingerprint:** `kind | symbol | normalized text`, independent of line numbers. A changed literal changes the fingerprint, so the candidate reopens.
+- **Fingerprint:** `kind | symbol | normalized text`, independent of line numbers. A changed literal changes the fingerprint, so the candidate reopens. In `shadow-specs.yaml` it is written as a YAML single-quoted scalar (a `'` inside written `''`), because fact text can hold double quotes and backslashes; `ctxo domain shadow-specs` prints it in that form. A multi-dot file name is one segment of the symbol part (`loan.service.ts::withRetry` gives `loan.service.withRetry`).
 - **Resolution (K13b):**
   - Automatic when a rule links to the candidate's symbol.
   - Otherwise from `docs/domain/<ctx>/shadow-specs.yaml`:
 
 ```yaml
-- fingerprint: "literal-comparison | LoanPolicy.CanBorrow | loans.Count >= 5"
+- fingerprint: 'literal-comparison | LoanPolicy.CanBorrow | loans.Count >= 5'
   resolution: { rule: LEND-03 }
-- fingerprint: "retry-timeout | SmtpSender.Send | Timeout = 30s"
+- fingerprint: 'retry-timeout | SmtpSender.Send | Timeout = 30s'
   resolution: { notARule: "transport timeout, not a business rule" }
 ```
 
@@ -895,6 +895,8 @@ domain:
 | `.ctxo/index/communities.json`, `communities.history/` (one per commit) | yes | PR 0 |
 | `.ctxo/index/contexts-view.json` | yes | PR 1A |
 | `.ctxo/index/domain/{contexts,boundaries,graph}.json`, `domain/history/` | yes | PR 2B, 3 |
+| `.ctxo/index/domain/shadow-candidates.json`, `domain/maturity.json` | yes | PR 4 |
+| `<registry folder>/<context>/shadow-specs.yaml` | yes (hand-written) | the team (PR 4 reads it) |
 | `.ctxo/.cache/domain-guard/<session>.json` | no | PR 2B |
 | `.ctxo/.cache/cochange-log.json` (only if needed) | no | PR 0 |
 
@@ -920,15 +922,13 @@ domain:
 - **Clone only.** Work in a local clone outside the repo, made with `git clone --no-hardlinks`, with `dotnet restore` done there. Never index, edit, switch branches or write files in the original checkout.
 - **Dev build.** The dev build of Ctxo indexes the clone. The oracle runs inside the clone.
 - **Comparison scripts** that map Ctxo output onto the oracle's units are private: they live in the clone or a scratch directory and are never committed to Ctxo.
-- **Baseline (2026-10-20):**
-  - Oracle: 970 commits used, 3 mass commits skipped, 81 units, 553 files, 72 tables, 29 procedures.
-  - Ctxo index: 10,036 symbols, 2,327 communities, modularity 0.83, empty co-change list.
+- Baseline numbers are kept in the owner's private notes, never in the repository.
 - **What the oracle does** (its rules, so the builder can match them; its location and the clone path are in the owner's private brief and never go into the repo, plans or PRs):
-  - Window: the whole history of the default branch (`git log --no-merges -M --name-status <default branch> -- <production and test folders>`), not a `since` window. 1077 commits are scanned; 970 remain after filtering.
+  - Window: the whole history of the default branch (`git log --no-merges -M --name-status <default branch> -- <production and test folders>`), not a `since` window.
   - Files: only current production `.cs` and `.sql` files count. Tests are classified by folder; deleted files drop out.
   - Renames: walked newest first with a canonical map, the same rule as 6.2.
   - Mass threshold: more than 30 files, counted after filtering.
-  - Co-change is aggregated to 81 units defined by the fixture's folder layout. Dependencies come from Ctxo's own index edges, aggregated to units, so they are not independent. Tables and procedures come from regexes over the SQL scripts and over every string literal in C# files.
+  - Co-change is aggregated to units defined by the fixture's folder layout. Dependencies come from Ctxo's own index edges, aggregated to units, so they are not independent. Tables and procedures come from regexes over the SQL scripts and over every string literal in C# files.
 - **Same filters.** For co-change comparisons, run Ctxo in the clone with `cochange.maxCommits: all`, `cochange.exclude` set to the test folders and, before lang-sql exists, `cochange.include: ["**/*.sql"]`. Compare `commitsUsed`, `massSkipped` and unit-pair shared counts after mapping files to units with a private script.
 - **PR 2B to 4 on the fixture.** The fixture has no registry or cards yet. Semantics are accepted on the synthetic library-lending sample. On the fixture, a private registry derived mechanically from the contexts-view candidates (rung fear, no cards, kept only in the clone) checks scale, speed and the absence of crashes. If the owner's team adds real cards later, the comparison is rerun.
 - **Explain every difference.** The oracle can be wrong too, for example a regex reading an alias as a table.

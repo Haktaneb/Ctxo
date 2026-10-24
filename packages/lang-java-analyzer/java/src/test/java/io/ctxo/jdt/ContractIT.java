@@ -133,6 +133,44 @@ class ContractIT {
     assertEquals("statement", site.get("kind").getAsString());
   }
 
+  @Test
+  void factEvidenceSerializesWithKindLineText() throws Exception {
+    Path root = Paths.get("src/test/resources/lending").toAbsolutePath();
+    String rules = "src/main/java/lending/facts/LoanRules.java";
+    List<String> source = Files.readAllLines(root.resolve(rules), StandardCharsets.UTF_8);
+    int retries = indexOf(source, "MAX_RETRIES = 3");
+    int openLoans = indexOf(source, "openLoans >= 5");
+    Dtos.FactOptions options = new Dtos.FactOptions(List.of("trim"));
+
+    List<Dtos.FileResult> r = new Analyzer(root.toString(), new String[0], false, options)
+        .analyze(Main.discoverJavaFiles(root.toString()));
+    String line = Main.json(fileResult(r, rules));
+    assertTrue(line.contains("\"factEvidence\":[{\"kind\":\"binding\",\"symbolId\":\"" + rules
+        + "::MAX_RETRIES::variable\",\"line\":" + retries + ",\"name\":\"MAX_RETRIES\",\"value\":\"3\"},"), line);
+    assertTrue(line.contains("{\"kind\":\"comparison\",\"symbolId\":\"" + rules + "::canBorrow::method\",\"line\":"
+        + openLoans + ",\"text\":\"openLoans >= 5\",\"operator\":\">=\",\"literal\":\"5\",\"literalKind\":\"number\"}"),
+        line);
+    assertTrue(line.contains("{\"kind\":\"call\",\"symbolId\":\"" + rules + "::key::method\",\"line\":"
+        + indexOf(source, "email.trim()") + ",\"text\":\"email.trim()\",\"method\":\"trim\",\"qualifier\":\"email\"}"),
+        line);
+    assertFalse(line.contains("toLowerCase\",\"qualifier"), "only the configured patterns are reported");
+    assertTrue(line.indexOf("\"factEvidence\"") > line.indexOf("\"complexity\""), "factEvidence is the last member");
+
+    // The keep-alive answers with the same evidence.
+    byte[] request = ("{\"file\":\"" + rules + "\"}\n").getBytes(StandardCharsets.UTF_8);
+    ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+    Main.runKeepAlive(root.toString(), new Analyzer(root.toString(), new String[0], false, options),
+        new ByteArrayInputStream(request), new PrintStream(bytes, true, "UTF-8"));
+    String keepAlive = lines(bytes.toString("UTF-8")).stream().filter(o -> o.get("type").getAsString().equals("file"))
+        .findFirst().orElseThrow(() -> new AssertionError(bytes.toString())).toString();
+    assertEquals(JsonParser.parseString(line).getAsJsonObject().get("factEvidence").toString(),
+        JsonParser.parseString(keepAlive).getAsJsonObject().get("factEvidence").toString());
+
+    List<Dtos.FileResult> off = new Analyzer(root.toString(), new String[0])
+        .analyze(Main.discoverJavaFiles(root.toString()));
+    assertFalse(Main.json(fileResult(off, rules)).contains("factEvidence"));
+  }
+
   private static List<JsonObject> batchLines(String root, Analyzer analyzer) {
     ByteArrayOutputStream bytes = new ByteArrayOutputStream();
     Main.runBatch(root, analyzer, new PrintStream(bytes, true));

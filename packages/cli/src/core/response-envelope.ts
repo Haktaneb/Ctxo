@@ -81,6 +81,12 @@ const TRUNCATABLE_FIELDS: Record<string, string> = {
   symbols: 'Use get_blast_radius on one linked symbol for its impact.',
   provenance: 'Open the linked files directly; external references are never fetched.',
   unresolved: 'Run "ctxo verify-domain --json" for every unresolved card reference.',
+  // The primary arrays of the @ctxo/domain loop tools (find_shadow_specs, get_context_map). The secondary
+  // find_shadow_specs lists (staleResolutions, unknownRules, resolutionProblems) are capped at their source
+  // with a `<name>Total`: listed here, a longer one would take truncation over from shadowSpecs.
+  shadowSpecs:
+    'Use find_shadow_specs with kinds to narrow the list, or run "ctxo domain shadow-specs <context> --json" for every candidate.',
+  contextMap: 'Run "ctxo domain map --json" for the full context map.',
 };
 
 /** The response limit in bytes: `CTXO_RESPONSE_LIMIT` when it is a positive integer, else 8192. */

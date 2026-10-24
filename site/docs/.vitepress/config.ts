@@ -178,6 +178,8 @@ export default defineConfig({
               items: [
                 { text: 'get_domain_context', link: '/mcp-tools/get-domain-context' },
                 { text: 'get_rule', link: '/mcp-tools/get-rule' },
+                { text: 'find_shadow_specs', link: '/mcp-tools/find-shadow-specs' },
+                { text: 'get_context_map', link: '/mcp-tools/get-context-map' },
               ],
             },
           ],

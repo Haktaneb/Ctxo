@@ -4,8 +4,7 @@ Billing turns late returns into fines and invoices.
 
 ## Language
 
-- Payer account: the payer id and the balance owed.
-- Invoice: one bill for the fines of one payer.
+- **Account**: the payer who settles invoices: the payer id and the balance owed.
 
 ## Rules and invariants
 

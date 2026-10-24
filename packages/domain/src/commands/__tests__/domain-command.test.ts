@@ -4,6 +4,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createModuleHost } from '@ctxo/cli/internal';
+import { createDomainState } from '../../mcp/domain-state.js';
+import { FIND_SHADOW_SPECS, GET_CONTEXT_MAP, loopTools } from '../../mcp/loop-tools.js';
+import { createLoopProject, POLICY_FILE, type LoopProject } from '../../mcp/__tests__/loop-fixture.js';
 import { domainCommand } from '../domain-command.js';
 
 const REGISTRY = `version: 1
@@ -273,5 +276,247 @@ describe('ctxo domain discover', () => {
     put(dir, 'docs/domain/contexts.yaml', REGISTRY.replace('src/Lending/**"]\n    rung: named', 'src/Lending/**"]\n    rung: named\n    rulePrefix: LEND'));
     expect(await run(dir, 'discover')).toBe(0);
     expect(stderr.join('\n')).toMatch(/LEND in 5 commit subjects\/branches\s+<- overlaps a rule prefix/);
+  });
+});
+
+describe('ctxo domain map and ctxo domain shadow-specs', () => {
+  const LITERAL = 'literal-comparison | LoanPolicy.canBorrow | loans.length >= 5';
+  const UNTESTED = 'rule-without-tests | LEND-04 | A loan lasts three weeks';
+  let loop: LoopProject;
+  let stdout: string[];
+
+  beforeEach(() => {
+    loop = createLoopProject();
+    stdout = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
+      stdout.push(String(chunk));
+      return true;
+    });
+  });
+
+  afterEach(() => {
+    loop.dispose();
+  });
+
+  const runLoop = (...args: string[]): Promise<number> => run(loop.root, ...args);
+  const printed = (): Record<string, unknown> => JSON.parse(stdout.join('')) as Record<string, unknown>;
+
+  /** The MCP tool's body for the same project: the CLI prints exactly this (the CLI adds `_meta` only on MCP). */
+  async function toolBody(name: string, args: Record<string, unknown> = {}): Promise<unknown> {
+    const host = createModuleHost({ projectRoot: loop.root, mode: 'mcp' });
+    const tool = loopTools(host, createDomainState(host)).find((t) => t.name === name)!;
+    return tool.handler(args);
+  }
+
+  it('domain map --json prints the context map and exits 0', async () => {
+    await loop.index();
+    expect(await runLoop('map', '--json')).toBe(0);
+    const body = printed();
+    expect(stdout.join('')).toBe(`${JSON.stringify(body, null, 2)}\n`);
+    expect(body).toEqual(await toolBody(GET_CONTEXT_MAP));
+    expect((body['contextMap'] as { id: string }[]).map((entry) => entry.id).sort()).toEqual(['billing', 'lending']);
+  });
+
+  it('domain map prints the summary and one line per context to stderr', async () => {
+    await loop.index();
+    expect(await runLoop('map')).toBe(0);
+    expect(stdout.join('')).toBe('');
+    const body = (await toolBody(GET_CONTEXT_MAP)) as { summary: { agree: number } };
+    const text = stderr.join('\n');
+    expect(text).toContain(`[ctxo] Context map: 2 contexts (${body.summary.agree} agree with the suggested rung)`);
+    expect(text).toMatch(
+      /^ {2}lending {2}rung bounded {2}suggested \S+ {2}rules 2 \(1 tested\) {2}open candidates 2 {2}pinned [✓✗] named [✓✗] bounded [✓✗] boring ✗$/m,
+    );
+    expect(text).toMatch(/^ {2}billing {2}rung pinned {2}suggested \S+ {2}rules 0 \(0 tested\) {2}open candidates 0 {2}pinned /m);
+  });
+
+  it('domain map without artifacts exits 2 with the hint', async () => {
+    await loop.index();
+    rmSync(join(loop.ctxoRoot, 'index', 'domain', 'maturity.json'));
+    expect(await runLoop('map')).toBe(2);
+    expect(stderr.join('\n')).toContain('[ctxo] No context map yet; run "ctxo index".');
+    expect(stdout.join('')).toBe('');
+    stderr.length = 0;
+    expect(await runLoop('shadow-specs', 'lending', '--json')).toBe(2);
+    expect(stderr.join('\n')).toContain('[ctxo] No shadow-spec data yet; run "ctxo index".');
+    expect(stdout.join('')).toBe('');
+  });
+
+  it('a graph built from another registry prints the stale-registry hint and exits 2', async () => {
+    // domain-state.ts STALE_REGISTRY_HINT (not exported).
+    const STALE_REGISTRY_HINT = 'The domain registry changed since the last "ctxo index"; run it to rebuild the domain graph.';
+    await loop.index();
+    loop.write('docs/domain/contexts.yaml', `${readFileSync(join(loop.root, 'docs/domain/contexts.yaml'), 'utf-8')}# edited\n`);
+    loop.age('docs/domain/contexts.yaml');
+    stderr.length = 0;
+    expect(await runLoop('map')).toBe(2);
+    expect(stderr).toEqual([`[ctxo] ${STALE_REGISTRY_HINT}`]);
+    stderr.length = 0;
+    expect(await runLoop('shadow-specs', 'lending', '--json')).toBe(2);
+    expect(stderr).toEqual([`[ctxo] ${STALE_REGISTRY_HINT}`]);
+    expect(stdout.join('')).toBe('');
+  });
+
+  it('an unexpected failure prints an internal-error line and exits 2, never 1', async () => {
+    await loop.index();
+    const host = createModuleHost({ projectRoot: loop.root, mode: 'cli' });
+    const failing = {
+      ...host,
+      services: {
+        ...host.services,
+        loadConfig: () => {
+          throw new Error('config exploded');
+        },
+      },
+    };
+    const ctx = { projectRoot: loop.root, ctxoRoot: host.ctxoRoot, readStdin: async () => '' };
+    stderr.length = 0;
+    expect(await domainCommand(failing).run(['map'], ctx)).toBe(2);
+    expect(stderr).toContain('[ctxo] domain map failed: config exploded');
+    expect(await domainCommand(failing).run(['shadow-specs', 'lending', '--json'], ctx)).toBe(2);
+    expect(stderr).toContain('[ctxo] domain shadow-specs failed: config exploded');
+    expect(stdout.join('')).toBe('');
+  });
+
+  it('no registry exits 0 with the hint; registry problems exit 2', async () => {
+    const empty = project(null);
+    expect(await run(empty, 'map')).toBe(0);
+    expect(await run(empty, 'shadow-specs', 'lending')).toBe(0);
+    expect(stderr.join('\n')).toContain('[ctxo] No domain registry at docs/domain/contexts.yaml. Create one with "ctxo init --domain".');
+    stderr.length = 0;
+    const broken = project('version: 2\n');
+    expect(await run(broken, 'map', '--json')).toBe(2);
+    expect(await run(broken, 'shadow-specs', 'lending')).toBe(2);
+    expect(stderr.join('\n')).toContain('has problems; run "ctxo verify-domain".');
+    expect(stdout.join('')).toBe('');
+  });
+
+  it('domain shadow-specs lending --json prints open candidates and --all adds resolved ones', async () => {
+    await loop.index();
+    loop.write('docs/domain/lending/shadow-specs.yaml', `- fingerprint: "${LITERAL}"\n  resolution: { notARule: "a paging limit" }\n`);
+    expect(await runLoop('shadow-specs', 'lending', '--json')).toBe(0);
+    const open = printed();
+    expect(open).toEqual(await toolBody(FIND_SHADOW_SPECS, { context: 'lending' }));
+    expect((open['shadowSpecs'] as { fingerprint: string }[]).map((c) => c.fingerprint)).toEqual([UNTESTED]);
+
+    stdout.length = 0;
+    expect(await runLoop('shadow-specs', 'lending', '--all', '--json')).toBe(0);
+    const all = printed();
+    expect(all).toEqual(await toolBody(FIND_SHADOW_SPECS, { context: 'lending', includeResolved: true }));
+    expect((all['shadowSpecs'] as { fingerprint: string }[]).map((c) => c.fingerprint)).toEqual([UNTESTED, LITERAL]);
+  });
+
+  it('domain shadow-specs prints candidates, fingerprints, resolutions and stale entries to stderr', async () => {
+    await loop.index();
+    loop.write(
+      'docs/domain/lending/shadow-specs.yaml',
+      `- fingerprint: "${LITERAL}"\n  resolution: { rule: lend03 }\n- fingerprint: "endpoint | Gone.handler | GET /gone"\n  resolution: { notARule: "removed" }\n`,
+    );
+    stderr.length = 0;
+    expect(await runLoop('shadow-specs', 'lending', '--all')).toBe(0);
+    expect(stdout.join('')).toBe('');
+    expect(stderr).toEqual([
+      '[ctxo] lending: 1 open, 1 resolved shadow-spec candidates (docs/domain/lending/shadow-specs.yaml)',
+      '  open  rule-without-tests  docs/domain/lending/domain.md:13  LEND-04 A loan lasts three weeks',
+      `      '${UNTESTED}'`,
+      `  resolved  literal-comparison  ${POLICY_FILE}:3  loans.length >= 5  [rule LEND-03]`,
+      `      '${LITERAL}'`,
+      "  stale  'endpoint | Gone.handler | GET /gone' (line 3)",
+    ]);
+  });
+
+  it('domain shadow-specs prints each fingerprint as a YAML single-quoted scalar that pastes back as is (D-I1)', async () => {
+    await loop.index();
+    stderr.length = 0;
+    expect(await runLoop('shadow-specs', 'lending')).toBe(0);
+    const quoted = stderr.filter((l) => l.startsWith("      '")).map((l) => l.trim());
+    expect(quoted).toHaveLength(2);
+    loop.write('docs/domain/lending/shadow-specs.yaml', quoted.map((q) => `- fingerprint: ${q}\n  resolution: { notARule: "pasted" }\n`).join(''));
+    stdout.length = 0;
+    expect(await runLoop('shadow-specs', 'lending', '--json')).toBe(0);
+    const body = printed();
+    expect(body['shadowSpecs']).toEqual([]);
+    expect(body['resolutionProblems']).toEqual([]);
+    expect(body['staleResolutions']).toEqual([]);
+  });
+
+  it('--kinds filters and an unknown kind exits 1', async () => {
+    await loop.index();
+    expect(await runLoop('shadow-specs', 'lending', '--kinds', 'literal-comparison', '--json')).toBe(0);
+    const filtered = printed();
+    expect(filtered).toEqual(await toolBody(FIND_SHADOW_SPECS, { context: 'lending', kinds: ['literal-comparison'] }));
+    expect((filtered['shadowSpecs'] as { fingerprint: string }[]).map((c) => c.fingerprint)).toEqual([LITERAL]);
+
+    // An empty list means every kind.
+    stdout.length = 0;
+    expect(await runLoop('shadow-specs', 'lending', '--kinds', '', '--json')).toBe(0);
+    expect(printed()).toEqual(await toolBody(FIND_SHADOW_SPECS, { context: 'lending' }));
+
+    // A repeated --kinds adds to the list (union, deduplicated, in CANDIDATE_KINDS order).
+    stdout.length = 0;
+    expect(await runLoop('shadow-specs', 'lending', '--kinds', 'rule-without-tests', '--kinds', 'literal-comparison,literal-comparison', '--json')).toBe(0);
+    expect(printed()).toEqual(await toolBody(FIND_SHADOW_SPECS, { context: 'lending', kinds: ['literal-comparison', 'rule-without-tests'] }));
+    expect((printed()['shadowSpecs'] as unknown[]).length).toBe(2);
+    stdout.length = 0;
+    expect(await runLoop('shadow-specs', 'lending', '--kinds', 'endpoint', '--kinds', '', '--json')).toBe(0);
+    expect((printed()['counts'] as { open: number }).open).toBe(0);
+
+    stdout.length = 0;
+    expect(await runLoop('shadow-specs', 'lending', '--kinds', 'endpoint', '--kinds', 'bogus')).toBe(1);
+    stdout.length = 0;
+    expect(await runLoop('shadow-specs', 'lending', '--kinds', 'endpoint,bogus')).toBe(1);
+    expect(stderr.join('\n')).toContain(
+      '[ctxo] Unknown kind "bogus"; use one of: literal-comparison, normalization, retry-timeout, endpoint, data-resource, procedure, rule-without-tests',
+    );
+    expect(stdout.join('')).toBe('');
+  });
+
+  it('an unknown context exits 1', async () => {
+    await loop.index();
+    expect(await runLoop('shadow-specs', 'nope')).toBe(1);
+    expect(stderr.join('\n')).toContain('[ctxo] No context "nope" in the registry.');
+    stderr.length = 0;
+    expect(await runLoop('shadow-specs', 'nope', '--json')).toBe(1);
+    expect(stdout.join('')).toBe('');
+  });
+
+  it('a missing context argument or a bad flag prints the usage and exits 1', async () => {
+    await loop.index();
+    expect(await runLoop('shadow-specs')).toBe(1);
+    expect(stderr.join('\n')).toContain('Usage: ctxo domain rules --write | --check');
+    stderr.length = 0;
+    expect(await runLoop('shadow-specs', '--json')).toBe(1);
+    expect(await runLoop('shadow-specs', 'lending', '--kinds')).toBe(1);
+    expect(await runLoop('shadow-specs', 'lending', 'billing')).toBe(1);
+    expect(await runLoop('shadow-specs', 'lending', '--bogus')).toBe(1);
+    expect(await runLoop('map', '--bogus')).toBe(1);
+    expect(stderr.join('\n')).toContain('ctxo domain shadow-specs <context> [--kinds <k,...>] [--all] [--json]');
+    expect(stdout.join('')).toBe('');
+  });
+
+  it('help lists map and shadow-specs', async () => {
+    const host = createModuleHost({ projectRoot: loop.root, mode: 'cli' });
+    expect(domainCommand(host).help).toEqual([
+      'ctxo domain rules --write|--check   Generate or check the path-scoped loader rules per context',
+      'ctxo domain discover [--json] [--write]   Propose domain conventions found in the repository',
+      'ctxo domain map   Context map: metrics, rungs and suggested rungs per context (--json)',
+      'ctxo domain shadow-specs <context>   Shadow-spec candidates of a context (--kinds, --all, --json)',
+    ]);
+    // --help never runs the command: there is no index here, and every form exits 0 with the full usage.
+    for (const args of [['map', '--help'], ['shadow-specs', '--help'], ['shadow-specs', 'lending', '-h']]) {
+      stderr.length = 0;
+      expect(await runLoop(...args)).toBe(0);
+      const text = stderr.join('\n');
+      expect(text).toContain('       ctxo domain map [--json]');
+      expect(text).toContain('       ctxo domain shadow-specs <context> [--kinds <k,...>] [--all] [--json]');
+      expect(text).toContain('Exit codes (map, shadow-specs)');
+      // The help says what the code does (C-M): stale data answers with a hint and exit 0; a graph from another
+      // registry exits 2.
+      expect(text).toContain(
+        'Exit codes (map, shadow-specs): 0 done (stale data, such as cards edited since the last index, prints a hint and still exits 0) or no registry, ' +
+          '1 bad arguments or an unknown context, 2 registry problems, no index data or a graph built from another registry (run "ctxo index"), or an internal error.',
+      );
+    }
+    expect(stdout.join('')).toBe('');
   });
 });

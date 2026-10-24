@@ -1,5 +1,5 @@
 import { isMap, isScalar, isSeq, parseDocument, type Document, type YAMLMap } from 'yaml';
-import { DEFAULT_DOMAIN_CONFIG, type BoundaryMode } from '../core/domain-config.js';
+import { DEFAULT_DOMAIN_CONFIG, type BoundaryMode, type TestConvention } from '../core/domain-config.js';
 
 const BOM = String.fromCharCode(0xfeff);
 
@@ -16,12 +16,30 @@ const DOMAIN_BLOCK = String.raw`domain:
     trackerPrefixes: []
   tests:
     ruleTraitKeys: [Rule]
+    characterization:
+      annotations: ["Trait:Kind=Characterization", "Tag:characterization"]
+      paths: ["**/Characterization/**"]
+      names: ["[characterization]"]
+    contract:
+      annotations: ["Trait:Kind=Contract", "Tag:contract"]
+      paths: ["**/Contract/**", "**/Contracts.Tests/**"]
+      names: ["[contract]"]
+  rungs:
+    pinnedCoverage: 0.8
   guard:
     enabled: true
     subagents: false
 `;
 
-/** The defaults as a plain tree, the order the block lists them in; `guard.base` has no default. */
+/** A convention as a plain tree for `addMissing`; the lists are written in flow style. */
+function conventionTree(convention: TestConvention): Record<string, unknown> {
+  return { annotations: [...convention.annotations], paths: [...convention.paths], names: [...convention.names] };
+}
+
+/**
+ * The defaults as a plain tree, the order the block lists them in; `guard.base` has no default, and the fact
+ * lists are left out (H14): they stay defaults until someone writes them.
+ */
 function defaultTree(mode: BoundaryMode): Record<string, unknown> {
   const d = DEFAULT_DOMAIN_CONFIG;
   return {
@@ -29,7 +47,12 @@ function defaultTree(mode: BoundaryMode): Record<string, unknown> {
     coverage: { unowned: d.coverage.unowned },
     boundaries: { enforce: mode, blockingRungs: [...d.boundaries.blockingRungs] },
     rules: { idPattern: d.rules.idPattern, trackerPrefixes: [...d.rules.trackerPrefixes] },
-    tests: { ruleTraitKeys: [...d.tests.ruleTraitKeys] },
+    tests: {
+      ruleTraitKeys: [...d.tests.ruleTraitKeys],
+      characterization: conventionTree(d.tests.characterization),
+      contract: conventionTree(d.tests.contract),
+    },
+    rungs: { pinnedCoverage: d.rungs.pinnedCoverage },
     guard: { enabled: d.guard.enabled, subagents: d.guard.subagents },
   };
 }
@@ -96,6 +119,10 @@ export interface DiscoveryValues {
   readonly trackerPrefixes: readonly string[];
   readonly ruleTraitKeys: readonly string[];
   readonly indexTests: readonly string[];
+  /** Globs for `domain.tests.characterization.paths`. */
+  readonly characterizationPaths: readonly string[];
+  /** Globs for `domain.tests.contract.paths`. */
+  readonly contractPaths: readonly string[];
 }
 
 /** Makes sure every ancestor of `path` is a mapping (a null scalar is replaced), so `setIn` can reach the leaf. */
@@ -111,13 +138,16 @@ function ensureParents(doc: Document, path: readonly string[]): void {
   }
 }
 
-/** Appends the values the sequence at `path` lacks, keeping the order and the comments of what is there. */
-function unionInto(doc: Document, path: readonly string[], values: readonly string[]): boolean {
+/**
+ * Appends the values the sequence at `path` lacks, keeping the order and the comments of what is there. An
+ * absent sequence starts from `seed` (the default the key replaces), so a proposal adds to the defaults.
+ */
+function unionInto(doc: Document, path: readonly string[], values: readonly string[], seed: readonly string[] = []): boolean {
   if (values.length === 0) return false;
   ensureParents(doc, path);
   const node = doc.getIn(path, true);
   if (node === undefined || (isScalar(node) && (node.value === null || node.value === ''))) {
-    doc.setIn(path, doc.createNode([...values], { flow: true }));
+    doc.setIn(path, doc.createNode([...new Set([...seed, ...values])], { flow: true }));
     return true;
   }
   if (!isSeq(node)) throw new Error(`${path.join('.')} must be a sequence`);
@@ -129,7 +159,8 @@ function unionInto(doc: Document, path: readonly string[], values: readonly stri
 
 /**
  * Unions a discovery proposal into the text of `.ctxo/config.yaml`: `domain.rules.trackerPrefixes`,
- * `domain.tests.ruleTraitKeys` and `index.tests`. Existing values stay in place and in order, new ones are
+ * `domain.tests.ruleTraitKeys`, `index.tests` and the `paths` of `domain.tests.characterization` and
+ * `domain.tests.contract` (an absent list starts from its default globs). Existing values stay in place and in order, new ones are
  * appended; comments, a UTF-8 BOM and CRLF line endings are kept. Nothing new returns the text unchanged.
  * Throws when the text is not valid YAML or a target is not a sequence.
  */
@@ -149,6 +180,11 @@ export function mergeDiscoveryProposal(text: string, proposal: DiscoveryValues):
   let changed = unionInto(doc, ['domain', 'rules', 'trackerPrefixes'], proposal.trackerPrefixes);
   changed = unionInto(doc, ['domain', 'tests', 'ruleTraitKeys'], proposal.ruleTraitKeys) || changed;
   changed = unionInto(doc, ['index', 'tests'], proposal.indexTests) || changed;
+  const tests = DEFAULT_DOMAIN_CONFIG.tests;
+  changed =
+    unionInto(doc, ['domain', 'tests', 'characterization', 'paths'], proposal.characterizationPaths, tests.characterization.paths) ||
+    changed;
+  changed = unionInto(doc, ['domain', 'tests', 'contract', 'paths'], proposal.contractPaths, tests.contract.paths) || changed;
   if (!changed) return { text, changed: false };
   const out = doc.toString({ lineWidth: 0 });
   return { text: (bom ? BOM : '') + (crlf ? out.replace(/\n/g, '\r\n') : out), changed: true };

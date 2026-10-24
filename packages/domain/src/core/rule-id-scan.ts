@@ -304,6 +304,24 @@ export function scanTestText(file: string, text: string, index: FileIndex | unde
   return out;
 }
 
+/** A declared test title (`it`, `test`, `describe`, `t.Run`, `@DisplayName`, xUnit `DisplayName =`). */
+export interface TestTitle {
+  readonly file: string;
+  /** 1-based, like every line of this module (W16). */
+  readonly line: number;
+  readonly title: string;
+}
+
+/** Every test-declaration title of a text, in text order, with the 1-based line its declaration starts on. */
+export function scanTestTitles(file: string, text: string): TestTitle[] {
+  const starts = lineStarts(text);
+  const titles: TestTitle[] = [];
+  for (const m of text.matchAll(new RegExp(TEST_DECLARATION.source, TEST_DECLARATION.flags))) {
+    titles.push({ file, line: lineOf(starts, m.index), title: m[2]! });
+  }
+  return titles;
+}
+
 /** A tracked test file's text, with its index entry when it has one. */
 export interface TestText {
   readonly file: string;

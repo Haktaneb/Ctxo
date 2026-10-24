@@ -5,7 +5,10 @@ import { tmpdir } from 'node:os';
 import { SqliteStorageAdapter } from '../../adapters/storage/sqlite-storage-adapter.js';
 import * as detectorModule from '../../core/overlay/community-detector.js';
 import type { FileIndex } from '../../core/types.js';
-import { buildWatchCommunitySnapshot, buildWatchFileIndex } from '../watch-command.js';
+import { buildWatchCommunitySnapshot, buildWatchFileIndex, watchPluginOptions } from '../watch-command.js';
+import { pluginFactRequest } from '../index-facts.js';
+import type { CtxoConfig } from '../../core/config/config-schema.js';
+import type { FactDetectorOptions, LoadedModule } from '../../ports/i-ctxo-module.js';
 
 describe('WatchCommand', () => {
   it('computes relative paths correctly with path.relative', () => {
@@ -120,9 +123,37 @@ describe('buildWatchFileIndex', () => {
     expect(index.edges).toEqual([edges[0]]);
   });
 
+  it('buildWatchFileIndex drops retry-timeout facts of test files, as ctxo index does', () => {
+    const retry = { kind: 'retry-timeout' as const, symbolId: 'x::f::function', line: 2, text: 'maxRetries = 3', detail: { name: 'maxRetries', value: '3' } };
+    const cmp = { kind: 'literal-comparison' as const, symbolId: 'x::f::function', line: 3, text: 'n >= 5', detail: { operator: '>=', literal: '5' } };
+    const parts = { ...base, symbols: [], edges: [], facts: [retry, cmp] };
+    expect(buildWatchFileIndex('src/__tests__/loan.test.ts', parts).facts).toEqual([cmp]);
+    expect(buildWatchFileIndex('checks/loan.ts', { ...parts, testGlobs: ['checks/**'] }).facts).toEqual([cmp]);
+    expect(buildWatchFileIndex('src/loan.ts', parts).facts).toEqual([retry, cmp]);
+  });
+
   it('buildWatchFileIndex writes facts only when given', () => {
     const fact = { kind: 'endpoint' as const, symbolId: 'a.fake::p::procedure', line: 1, text: 'GET /x' };
     expect('facts' in buildWatchFileIndex('a.fake', { ...base, symbols: [], edges: [] })).toBe(false);
     expect(buildWatchFileIndex('a.fake', { ...base, symbols: [], edges: [], facts: [fact] }).facts).toEqual([fact]);
+    expect(buildWatchFileIndex('a.fake', { ...base, symbols: [], edges: [], facts: [] }).facts).toEqual([]);
+  });
+});
+
+describe('watchPluginOptions', () => {
+  const O: FactDetectorOptions = { trivialLiterals: [0, ''], normalizationMethods: ['trim'] };
+  const domain: LoadedModule = {
+    name: '@ctxo/domain',
+    version: '0.0.0',
+    registration: { id: 'domain', indexCapabilities: { facts: true, factOptions: O } },
+  };
+  const noConfig = {} as CtxoConfig;
+
+  // Review Focus 3: the plugins a watch loads get the same fact request as an index run.
+  it('watch requests facts like index', () => {
+    expect(watchPluginOptions(noConfig, [domain])).toEqual({ facts: true, factOptions: O });
+    expect(watchPluginOptions(noConfig, [domain])).toEqual(pluginFactRequest(noConfig, [domain]));
+    expect(watchPluginOptions(noConfig, [])).toEqual({ facts: false });
+    expect(watchPluginOptions({ index: { facts: true } } as unknown as CtxoConfig, [])).toEqual({ facts: true });
   });
 });

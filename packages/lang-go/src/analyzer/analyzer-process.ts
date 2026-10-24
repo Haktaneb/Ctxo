@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process';
 import { createLogger } from '../logger.js';
 import type { SqlCallSite } from '../sql-edges.js';
+import { encodeFactOptions } from '../facts/fact-options.js';
+import type { FactOptions } from '../facts/fact-types.js';
 
 const log = createLogger('ctxo:lang-go');
 
@@ -31,6 +33,34 @@ export interface AnalyzerFileResult {
   complexity: unknown[];
   /** Raw SQL at known database call sites; only with `--sql-call-sites`, omitted when the file has none. */
   sqlCallSites?: SqlCallSite[];
+  /** Fact evidence (0-based lines); only with `--facts=`, omitted when the file has none. */
+  factEvidence?: AnalyzerFactEvidence[];
+  /** Hex SHA-256 of the bytes the fact collector read; only with `--facts=`. */
+  factSourceHash?: string;
+}
+
+/**
+ * One evidence record as the analyzer writes it: `kind`, `line` and `text` always, the other fields by kind
+ * (comparison: operator, literal, literalKind; call: method, qualifier; binding: name, value; duration:
+ * name?, constructor, unit, amount; route: verb, route).
+ */
+export interface AnalyzerFactEvidence {
+  kind: string;
+  symbolId?: string;
+  line: number;
+  text: string;
+  operator?: string;
+  literal?: string;
+  literalKind?: string;
+  method?: string;
+  qualifier?: string;
+  name?: string;
+  value?: string;
+  constructor?: string;
+  unit?: string;
+  amount?: string;
+  verb?: string;
+  route?: string;
 }
 
 export interface AnalyzerBatchResult {
@@ -49,13 +79,21 @@ export interface AnalyzerBatchResult {
 export interface GoAnalyzerRunOptions {
   /** Pass `--sql-call-sites`: the analyzer reports raw SQL at known call sites. */
   readonly sqlCallSites?: boolean;
+  /** Pass `--facts=<encodeFactOptions>`: the analyzer reports fact evidence. */
+  readonly facts?: FactOptions;
   /** Kill the analyzer after this long (default 120_000). */
   readonly timeoutMs?: number;
 }
 
-/** The analyzer's command line for one module; `--sql-call-sites` only when the option asks for it. */
+/**
+ * The analyzer's command line for one module; `--sql-call-sites` and `--facts=` only when the options ask
+ * for them, so a run without either has the pre-facts command line.
+ */
 export function buildGoAnalyzerArgs(moduleRoot: string, options: GoAnalyzerRunOptions = {}): string[] {
-  return options.sqlCallSites === true ? ['--root', moduleRoot, '--sql-call-sites'] : ['--root', moduleRoot];
+  const args = ['--root', moduleRoot];
+  if (options.sqlCallSites === true) args.push('--sql-call-sites');
+  if (options.facts) args.push(`--facts=${encodeFactOptions(options.facts)}`);
+  return args;
 }
 
 /**

@@ -775,6 +775,23 @@ export async function register() {
       expect(modules).toEqual([expect.objectContaining({ name: '@ctxo/domain' })]);
     }
   });
+
+  it('ctxo watch receives the loaded modules', async () => {
+    const project = tempDir();
+    writeStubDomainPackage(project, STUB);
+    const seen: unknown[] = [];
+    const watchModule = await import('../watch-command.js');
+    // Replaced: a real watch would start chokidar and SQLite and register signal handlers.
+    vi.spyOn(watchModule, 'WatchCommand' as never).mockImplementation(
+      function (this: unknown) {
+        return { run: async (options: { modules?: unknown }) => { seen.push(options.modules); } };
+      } as never,
+    );
+
+    await routerFor(project).route(['watch']);
+
+    expect(seen).toEqual([[expect.objectContaining({ name: '@ctxo/domain' })]]);
+  });
 });
 
 describe('cli-router init parts flags', () => {

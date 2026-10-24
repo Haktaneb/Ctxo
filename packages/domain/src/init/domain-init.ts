@@ -133,7 +133,7 @@ async function applyDiscovery(host: CtxoHost, ctx: InitPartContext, config: Doma
     const { evidence, proposal } = discoverConventions(input);
     if (!proposalAddsSomething(proposal, config, input.indexTests)) return [];
 
-    console.error(formatDiscovery(evidence, proposal));
+    console.error(formatDiscovery(evidence, proposal, config));
     if (ctx.dryRun) return [{ file: CONFIG_FILE, action: 'updated' }];
     if (!ctx.yes && !(await ctx.prompt.confirm(PROPOSAL_QUESTION, true))) return [];
 

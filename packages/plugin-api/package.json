@@ -17,6 +17,7 @@
   },
   "files": [
     "dist/",
+    "conformance/fact-vectors.json",
     "README.md"
   ],
   "scripts": {

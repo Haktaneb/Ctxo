@@ -334,6 +334,8 @@ describe('wrapResponse: domain fields', () => {
     ['symbols', 'Use get_blast_radius on one linked symbol for its impact.'],
     ['provenance', 'Open the linked files directly; external references are never fetched.'],
     ['unresolved', 'Run "ctxo verify-domain --json" for every unresolved card reference.'],
+    ['shadowSpecs', 'Use find_shadow_specs with kinds to narrow the list, or run "ctxo domain shadow-specs <context> --json" for every candidate.'],
+    ['contextMap', 'Run "ctxo domain map --json" for the full context map.'],
   ])("the new tools' arrays are truncatable with their hints: %s", (field, hint) => {
     process.env['CTXO_RESPONSE_LIMIT'] = '1024';
 
@@ -346,7 +348,18 @@ describe('wrapResponse: domain fields', () => {
     expect((result[field] as unknown[]).length).toBeLessThan(100);
   });
 
-  it.each(['rulesAffected', 'cardsToUpdate', 'decisions', 'contextsTouched', 'cardsChanged', 'rulesWithoutTests'])(
+  it.each([
+    'rulesAffected',
+    'cardsToUpdate',
+    'decisions',
+    'contextsTouched',
+    'cardsChanged',
+    'rulesWithoutTests',
+    // find_shadow_specs' secondary lists, capped at their source (W28).
+    'staleResolutions',
+    'unknownRules',
+    'resolutionProblems',
+  ])(
     'the additive domain fields are not truncatable: %s',
     (field) => {
       process.env['CTXO_RESPONSE_LIMIT'] = '1024';
@@ -358,6 +371,22 @@ describe('wrapResponse: domain fields', () => {
       expect((result[field] as unknown[]).length).toBe(100);
     },
   );
+
+  it('a find_shadow_specs payload over the limit truncates shadowSpecs, not the longer staleResolutions', () => {
+    process.env['CTXO_RESPONSE_LIMIT'] = '1024';
+    const staleResolutions = items(250);
+
+    const result = wrapResponse({ shadowSpecs: items(200), staleResolutions });
+
+    const meta = result._meta as Record<string, unknown>;
+    expect(meta.truncated).toBe(true);
+    expect(meta.totalItems).toBe(200);
+    expect(meta.hint).toBe(
+      'Use find_shadow_specs with kinds to narrow the list, or run "ctxo domain shadow-specs <context> --json" for every candidate.',
+    );
+    expect((result.shadowSpecs as unknown[]).length).toBeLessThan(200);
+    expect(result.staleResolutions).toEqual(staleResolutions);
+  });
 
   it('two arrays in one response: the primary array is truncated, the capped additive array is not', () => {
     process.env['CTXO_RESPONSE_LIMIT'] = '2048';

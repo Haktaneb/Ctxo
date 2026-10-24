@@ -67,16 +67,45 @@ type SqlStats struct {
 	NonConstant int `json:"nonConstant"`
 }
 
+// FactEvidence is one piece of syntactic evidence for a code fact, as
+// reported with --facts. Kind is comparison, call, binding, duration or
+// route; Line is 0-based; Text is the source of the evidence. The fields
+// after Text belong to some kinds only and are omitted when empty. The
+// TypeScript side's shared finisher decides which evidence becomes a fact.
+type FactEvidence struct {
+	Kind        string `json:"kind"`
+	SymbolID    string `json:"symbolId,omitempty"`
+	Line        int    `json:"line"`
+	Text        string `json:"text"`
+	Operator    string `json:"operator,omitempty"`
+	Literal     string `json:"literal,omitempty"`
+	LiteralKind string `json:"literalKind,omitempty"`
+	Method      string `json:"method,omitempty"`
+	Qualifier   string `json:"qualifier,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Value       string `json:"value,omitempty"`
+	Constructor string `json:"constructor,omitempty"`
+	Unit        string `json:"unit,omitempty"`
+	Amount      string `json:"amount,omitempty"`
+	Verb        string `json:"verb,omitempty"`
+	Route       string `json:"route,omitempty"`
+}
+
 // FileRecord is emitted once per source file analyzed. SqlCallSites is
 // sorted by line, then text, and omitted when empty (always without
-// --sql-call-sites).
+// --sql-call-sites). FactEvidence is sorted by line, kind, then text, and
+// omitted when empty; FactSourceHash is the hex SHA-256 of the bytes the
+// fact collector read, so the TypeScript side can tell stale evidence. Both
+// are always omitted without --facts.
 type FileRecord struct {
-	Type         string        `json:"type"`
-	File         string        `json:"file"`
-	Symbols      []Symbol      `json:"symbols"`
-	Edges        []Edge        `json:"edges"`
-	Complexity   []Complexity  `json:"complexity"`
-	SqlCallSites []SqlCallSite `json:"sqlCallSites,omitempty"`
+	Type           string         `json:"type"`
+	File           string         `json:"file"`
+	Symbols        []Symbol       `json:"symbols"`
+	Edges          []Edge         `json:"edges"`
+	Complexity     []Complexity   `json:"complexity"`
+	SqlCallSites   []SqlCallSite  `json:"sqlCallSites,omitempty"`
+	FactEvidence   []FactEvidence `json:"factEvidence,omitempty"`
+	FactSourceHash string         `json:"factSourceHash,omitempty"`
 }
 
 // ProjectRecord is emitted once per run to describe module-level edges.

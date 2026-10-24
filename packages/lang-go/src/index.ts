@@ -1,5 +1,6 @@
 import type { CtxoLanguagePlugin, PluginContext, ILanguageAdapter } from '@ctxo/plugin-api';
 import { GoCompositeAdapter } from './composite-adapter.js';
+import { readFactOptions } from './facts/fact-options.js';
 
 export { GoAdapter } from './go-adapter.js';
 export { GoAnalyzerAdapter } from './analyzer/analyzer-adapter.js';
@@ -16,7 +17,8 @@ export const plugin: CtxoLanguagePlugin = {
   extensions: ['.go'],
   tier: 'full',
   createAdapter(ctx: PluginContext): ILanguageAdapter {
-    return new GoCompositeAdapter({ sqlCallSites: ctx.capabilities?.sqlCallSites === true });
+    const facts = ctx.capabilities?.facts === true ? readFactOptions(ctx.config) : undefined;
+    return new GoCompositeAdapter({ sqlCallSites: ctx.capabilities?.sqlCallSites === true, ...(facts ? { facts } : {}) });
   },
 };
 

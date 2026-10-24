@@ -12,7 +12,7 @@ function packedFiles(): string[] {
 }
 
 describe('@ctxo/domain packaging (M8)', () => {
-  it('npm pack --dry-run carries the entry, its types, the bundled skill, the schema and the README', { timeout: 60_000 }, () => {
+  it('npm pack --dry-run carries the entry, its types, the bundled skill, both schemas and the README', { timeout: 60_000 }, () => {
     const files = packedFiles();
     for (const required of [
       'package.json',
@@ -21,6 +21,7 @@ describe('@ctxo/domain packaging (M8)', () => {
       'dist/index.d.ts',
       'skills/ctxo-domain-fold/SKILL.md',
       'schema/contexts.schema.json',
+      'schema/shadow-specs.schema.json',
     ]) {
       expect(files, required).toContain(required);
     }

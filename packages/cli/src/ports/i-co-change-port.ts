@@ -10,4 +10,10 @@ import type { CoChangeEntry } from '../core/types.js';
  */
 export interface ICoChangePort {
   readCoChangeMap(): Map<string, CoChangeEntry[]> | undefined;
+  /**
+   * The validated matrix's `entries` as stored: one per file pair, in file order. Same validation and the
+   * same cache as `readCoChangeMap` (one read serves both); `undefined` when there is no usable matrix.
+   * Frozen and shared between calls.
+   */
+  readEntries(): readonly CoChangeEntry[] | undefined;
 }

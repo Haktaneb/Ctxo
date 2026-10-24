@@ -18,7 +18,11 @@ export interface CodeFact {
   readonly symbolId: SymbolId;
   /** 0-based line, like `SymbolNode.startLine`. */
   readonly line: number;
-  /** Single-line, trimmed, at most 200 characters. */
+  /** Single-line, trimmed, at most 200 Unicode code points (never cut inside a surrogate pair). */
   readonly text: string;
+  /**
+   * Kind-specific values. The official plugins cap `literal` (of `literal-comparison`) like `text`:
+   * at most 200 Unicode code points, never inside a surrogate pair, trimmed at the end after a cut.
+   */
   readonly detail?: Readonly<Record<string, string>>;
 }

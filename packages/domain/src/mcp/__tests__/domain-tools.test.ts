@@ -158,12 +158,13 @@ describe('domain tools', () => {
     );
   });
 
-  it('register adds the two tools whenever the module is loaded', async () => {
+  it('register adds the four domain tools whenever the module is loaded', async () => {
     const registration = await register(newHost(domainVersion()));
     const names: string[] = [];
     registration!.registerTools!({ registerTool: (tool) => names.push(tool.name) });
 
-    expect(names).toEqual(['get_domain_context', 'get_rule']);
+    // The two PR 3 tools, then the two loop tools (W12): 14 core tools plus these give 18.
+    expect(names).toEqual(['get_domain_context', 'get_rule', 'find_shadow_specs', 'get_context_map']);
   });
 
   it('get_domain_context answers by symbolId, by path and with neither', async () => {

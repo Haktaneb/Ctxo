@@ -5,7 +5,9 @@ import type { BoundaryViolationRecord, CrossContextSummary } from '../core/bound
 import type { ContextHistoryEntry, MovedFile } from '../core/context-metrics.js';
 import type { BoundaryMode } from '../core/domain-config.js';
 import type { DomainGraph } from '../core/domain-graph.js';
+import type { MaturityArtifact } from '../core/maturity.js';
 import { RUNGS, type Rung } from '../core/registry.js';
+import type { ShadowCandidatesArtifact } from '../core/shadow-candidates.js';
 
 /** `.ctxo/index/domain/contexts.json`: the file-to-context map of the current registry (E1, E2). */
 export interface ContextsArtifact {
@@ -29,7 +31,18 @@ export interface BoundariesArtifact {
   readonly violations: readonly BoundaryViolationRecord[];
 }
 
-type ArtifactName = 'contexts.json' | 'boundaries.json' | 'graph.json';
+type ArtifactName = 'contexts.json' | 'boundaries.json' | 'graph.json' | 'shadow-candidates.json' | 'maturity.json';
+
+type Artifact = ContextsArtifact | BoundariesArtifact | DomainGraph | ShadowCandidatesArtifact | MaturityArtifact;
+
+/** Every artifact `removeAll` deletes, with the marker it must carry. */
+const MARKED_ARTIFACTS = [
+  ['contexts.json', 'domain-contexts'],
+  ['boundaries.json', 'domain-boundaries'],
+  ['graph.json', 'domain-graph'],
+  ['shadow-candidates.json', 'domain-shadow-candidates'],
+  ['maturity.json', 'domain-maturity'],
+] as const;
 
 const GRAPH_ARRAYS = ['contexts', 'rules', 'terms', 'decisions', 'sections', 'openQuestions', 'links', 'unresolved'] as const;
 
@@ -124,6 +137,30 @@ function isGraph(v: unknown): v is DomainGraph {
   );
 }
 
+/** The marker, version 1, both hashes and the array; the candidates themselves are the index pass's own output. */
+function isShadowCandidates(v: unknown): v is ShadowCandidatesArtifact {
+  return (
+    isRecord(v) &&
+    v['ctxoArtifact'] === 'domain-shadow-candidates' &&
+    v['version'] === 1 &&
+    isString(v['registryHash']) &&
+    isString(v['cardsHash']) &&
+    Array.isArray(v['candidates'])
+  );
+}
+
+/** The marker, version 1, both hashes and the array; the entries themselves are the index pass's own output. */
+function isMaturity(v: unknown): v is MaturityArtifact {
+  return (
+    isRecord(v) &&
+    v['ctxoArtifact'] === 'domain-maturity' &&
+    v['version'] === 1 &&
+    isString(v['registryHash']) &&
+    isString(v['cardsHash']) &&
+    Array.isArray(v['contexts'])
+  );
+}
+
 function isHistoryEntry(v: unknown): v is ContextHistoryEntry {
   return (
     isRecord(v) &&
@@ -175,7 +212,7 @@ export class DomainArtifactStore {
   }
 
   /** Writes the artifact unless the file already holds the same JSON (after CRLF and BOM normalisation). */
-  writeIfChanged(name: ArtifactName, artifact: ContextsArtifact | BoundariesArtifact | DomainGraph): boolean {
+  writeIfChanged(name: ArtifactName, artifact: Artifact): boolean {
     const target = join(this.dir, name);
     const content = serialize(artifact);
     const existing = this.readText(target);
@@ -230,6 +267,18 @@ export class DomainArtifactStore {
     return isGraph(value) ? value : undefined;
   }
 
+  /** `shadow-candidates.json`: undefined unless it carries the `domain-shadow-candidates` marker, version 1 and its array. */
+  readShadowCandidates(): ShadowCandidatesArtifact | undefined {
+    const value = this.readJson(join(this.dir, 'shadow-candidates.json'));
+    return isShadowCandidates(value) ? value : undefined;
+  }
+
+  /** `maturity.json`: undefined unless it carries the `domain-maturity` marker, version 1 and its array. */
+  readMaturity(): MaturityArtifact | undefined {
+    const value = this.readJson(join(this.dir, 'maturity.json'));
+    return isMaturity(value) ? value : undefined;
+  }
+
   /** Valid history entries, newest first by committer date. */
   readHistory(): ContextHistoryEntry[] {
     const out: ContextHistoryEntry[] = [];
@@ -241,17 +290,14 @@ export class DomainArtifactStore {
   }
 
   /**
-   * Deletes the domain artifacts: `contexts.json`, `boundaries.json`, `graph.json` and the history entries, each
+   * Deletes the domain artifacts: `contexts.json`, `boundaries.json`, `graph.json`, `shadow-candidates.json`,
+   * `maturity.json` and the history entries, each
    * only when it carries the matching `ctxoArtifact` marker (ADR-018 C3). The folder also holds the index entries of
    * a source folder named `domain/` (`domain/graph` has its entry at `graph.json`), which are never touched. An
    * emptied `history/` folder is removed.
    */
   removeAll(): void {
-    for (const [name, marker] of [
-      ['contexts.json', 'domain-contexts'],
-      ['boundaries.json', 'domain-boundaries'],
-      ['graph.json', 'domain-graph'],
-    ] as const) {
+    for (const [name, marker] of MARKED_ARTIFACTS) {
       const path = join(this.dir, name);
       if (this.isMarked(path, marker)) rmSync(path, { force: true });
     }
@@ -263,6 +309,18 @@ export class DomainArtifactStore {
       rmdirSync(this.historyDir);
     } catch {
       // not empty (source entries live here) or already gone
+    }
+  }
+
+  /**
+   * Deletes `shadow-candidates.json` and `maturity.json`, each only when it carries its `ctxoArtifact` marker: the
+   * index pass calls it when it cannot rebuild them, so the two loop files are written together or removed together.
+   */
+  removeLoopArtifacts(): void {
+    for (const [name, marker] of MARKED_ARTIFACTS) {
+      if (name !== 'shadow-candidates.json' && name !== 'maturity.json') continue;
+      const path = join(this.dir, name);
+      if (this.isMarked(path, marker)) rmSync(path, { force: true });
     }
   }
 

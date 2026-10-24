@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { assertBuilt, cleanupWorkspaces, type McpSession, SampleWorkspace, type Variant } from './sample-workspace.js';
+import { assertBuilt, cleanupWorkspaces, type McpSession, requireSameTier, SampleWorkspace, type Variant } from './sample-workspace.js';
 
 /**
  * The PR 3 acceptance tests (spec 11.5, 13.1, Review Focus 1 to 5): the domain graph of the synthetic
@@ -245,8 +245,11 @@ describe.each(VARIANTS)('PR 3 acceptance, %s sample', (variant) => {
     }
   });
 
-  it('the same input twice gives a byte-identical graph.json and identical get_rule responses', async () => {
+  it('the same input twice gives a byte-identical graph.json and identical get_rule responses', async (context) => {
     const other = prepared(variant);
+    // W20, E-M5: a cold Roslyn start can fall back to the syntax tier, whose symbol IDs differ; that is no
+    // nondeterminism, so the comparison is skipped (and fails under CTXO_REQUIRE_DOTNET=1).
+    requireSameTier(shared.ws, other, (note) => context.skip(note));
     expect(other.read(GRAPH)).toBe(shared.ws.read(GRAPH));
     const session = await other.connect();
     try {
@@ -332,10 +335,13 @@ describe.each(VARIANTS)('PR 3 acceptance, %s sample', (variant) => {
       session = await ws.connect();
       try {
         const rule = (await session.call('get_rule', { ruleId: 'LEND-03' })) as unknown as RulePayload;
-        expect(rule.symbols).toEqual([
+        // PR 4's loans controller links LEND-03 by a rule: comment as well; the card's Code: link is the fallback.
+        const fromCard = rule.symbols.filter((s) => s.file === LOAN_LIMIT[variant]);
+        expect(fromCard).toEqual([
           expect.objectContaining({ file: LOAN_LIMIT[variant], fallback: true, sources: [expect.objectContaining({ source: 'card-code', file: CARD })] }),
         ]);
-        expect(rule.symbols[0]!.symbolId).toBeUndefined();
+        expect(fromCard[0]!.symbolId).toBeUndefined();
+        expect(rule.symbols.filter((s) => s.file !== LOAN_LIMIT[variant]).map((s) => s.sources.map((source) => source.source))).toEqual([['rule-comment']]);
         const blast = await session.call('get_blast_radius', { symbolId: indexed });
         expect(blast['rulesAffected']).toEqual(expect.arrayContaining([expect.objectContaining({ ruleId: 'LEND-03' })]));
       } finally {
@@ -379,9 +385,9 @@ describe.each(VARIANTS)('PR 3 acceptance, %s sample', (variant) => {
     }
   });
 
-  it.skipIf(variant !== 'csharp')('tools/list holds 16 tools and the scope parameter lists code and domain', async () => {
+  it.skipIf(variant !== 'csharp')('tools/list holds 18 tools and the scope parameter lists code and domain', async () => {
     const tools = await shared.session.listToolDefinitions();
-    expect(tools).toHaveLength(16);
+    expect(tools).toHaveLength(18);
     const ranked = tools.find((t) => t.name === 'get_ranked_context')!;
     const scope = (ranked.inputSchema['properties'] as Record<string, { enum?: string[] }>)['scope'];
     expect(scope?.enum).toEqual(['code', 'domain']);

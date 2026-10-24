@@ -1,0 +1,879 @@
+{
+  "itest/smoke_test.go": {
+    "symbols": [
+      {
+        "symbolId": "itest/smoke_test.go::TestSmoke::function",
+        "name": "TestSmoke",
+        "kind": "function",
+        "startLine": 4,
+        "endLine": 4,
+        "startOffset": 33,
+        "endOffset": 64
+      }
+    ],
+    "edges": [
+      {
+        "from": "itest/smoke_test.go::TestSmoke::function",
+        "to": "testing::testing::variable",
+        "kind": "imports"
+      }
+    ],
+    "complexity": [
+      {
+        "symbolId": "itest/smoke_test.go::TestSmoke::function",
+        "cyclomatic": 1
+      }
+    ]
+  },
+  "loans/facts.go": {
+    "symbols": [
+      {
+        "symbolId": "loans/facts.go::MayBorrow::function",
+        "name": "MayBorrow",
+        "kind": "function",
+        "startLine": 18,
+        "endLine": 26,
+        "startOffset": 288,
+        "endOffset": 449
+      },
+      {
+        "symbolId": "loans/facts.go::Fee::function",
+        "name": "Fee",
+        "kind": "function",
+        "startLine": 29,
+        "endLine": 37,
+        "startOffset": 503,
+        "endOffset": 610
+      },
+      {
+        "symbolId": "loans/facts.go::Key::function",
+        "name": "Key",
+        "kind": "function",
+        "startLine": 40,
+        "endLine": 42,
+        "startOffset": 656,
+        "endOffset": 739
+      },
+      {
+        "symbolId": "loans/facts.go::Routes::function",
+        "name": "Routes",
+        "kind": "function",
+        "startLine": 45,
+        "endLine": 49,
+        "startOffset": 784,
+        "endOffset": 933
+      },
+      {
+        "symbolId": "loans/facts.go::Note::function",
+        "name": "Note",
+        "kind": "function",
+        "startLine": 52,
+        "endLine": 54,
+        "startOffset": 978,
+        "endOffset": 1036
+      }
+    ],
+    "edges": [
+      {
+        "from": "loans/facts.go::MayBorrow::function",
+        "to": "net/http::http::variable",
+        "kind": "imports"
+      },
+      {
+        "from": "loans/facts.go::MayBorrow::function",
+        "to": "strings::strings::variable",
+        "kind": "imports"
+      },
+      {
+        "from": "loans/facts.go::MayBorrow::function",
+        "to": "time::time::variable",
+        "kind": "imports"
+      },
+      {
+        "from": "loans/facts.go::MayBorrow::function",
+        "to": "github.com/gin-gonic/gin::gin::variable",
+        "kind": "imports"
+      }
+    ],
+    "complexity": [
+      {
+        "symbolId": "loans/facts.go::MayBorrow::function",
+        "cyclomatic": 3
+      },
+      {
+        "symbolId": "loans/facts.go::Fee::function",
+        "cyclomatic": 4
+      },
+      {
+        "symbolId": "loans/facts.go::Key::function",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "loans/facts.go::Routes::function",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "loans/facts.go::Note::function",
+        "cyclomatic": 1
+      }
+    ]
+  },
+  "loans/loan.go": {
+    "symbols": [
+      {
+        "symbolId": "loans/loan.go::Base::class",
+        "name": "Base",
+        "kind": "class",
+        "startLine": 2,
+        "endLine": 2,
+        "startOffset": 20,
+        "endOffset": 50
+      },
+      {
+        "symbolId": "loans/loan.go::Loan::class",
+        "name": "Loan",
+        "kind": "class",
+        "startLine": 4,
+        "endLine": 10,
+        "startOffset": 57,
+        "endOffset": 235,
+        "annotations": [
+          {
+            "name": "tag",
+            "named": {
+              "member": "LoanID",
+              "json": "loan_id",
+              "gorm": "column:loan_id;primaryKey"
+            }
+          },
+          {
+            "name": "tag",
+            "named": {
+              "member": "MemberID",
+              "json": "member_id"
+            }
+          },
+          {
+            "name": "tag",
+            "named": {
+              "member": "CopyID",
+              "json": "member_id"
+            }
+          },
+          {
+            "name": "tag",
+            "named": {
+              "member": "Due",
+              "json": "due_at"
+            }
+          }
+        ]
+      }
+    ],
+    "edges": [],
+    "complexity": []
+  },
+  "loans/policy.go": {
+    "symbols": [
+      {
+        "symbolId": "loans/policy.go::Store::interface",
+        "name": "Store",
+        "kind": "interface",
+        "startLine": 3,
+        "endLine": 5,
+        "startOffset": 71,
+        "endOffset": 114
+      },
+      {
+        "symbolId": "loans/policy.go::CanBorrow::function",
+        "name": "CanBorrow",
+        "kind": "function",
+        "startLine": 8,
+        "endLine": 10,
+        "startOffset": 195,
+        "endOffset": 245
+      }
+    ],
+    "edges": [],
+    "complexity": [
+      {
+        "symbolId": "loans/policy.go::CanBorrow::function",
+        "cyclomatic": 1
+      }
+    ]
+  },
+  "loans/policy_external_test.go": {
+    "symbols": [
+      {
+        "symbolId": "loans/policy_external_test.go::TestPolicyFromOutside::function",
+        "name": "TestPolicyFromOutside",
+        "kind": "function",
+        "startLine": 8,
+        "endLine": 12,
+        "startOffset": 61,
+        "endOffset": 184
+      }
+    ],
+    "edges": [
+      {
+        "from": "loans/policy_external_test.go::TestPolicyFromOutside::function",
+        "to": "testing::testing::variable",
+        "kind": "imports"
+      },
+      {
+        "from": "loans/policy_external_test.go::TestPolicyFromOutside::function",
+        "to": "lending/loans::loans::variable",
+        "kind": "imports"
+      }
+    ],
+    "complexity": [
+      {
+        "symbolId": "loans/policy_external_test.go::TestPolicyFromOutside::function",
+        "cyclomatic": 2
+      }
+    ]
+  },
+  "loans/policy_test.go": {
+    "symbols": [
+      {
+        "symbolId": "loans/policy_test.go::fakeStore.Open::method",
+        "name": "fakeStore.Open",
+        "kind": "method",
+        "startLine": 6,
+        "endLine": 6,
+        "startOffset": 58,
+        "endOffset": 121
+      },
+      {
+        "symbolId": "loans/policy_test.go::TestCanBorrow::function",
+        "name": "TestCanBorrow",
+        "kind": "function",
+        "startLine": 8,
+        "endLine": 13,
+        "startOffset": 123,
+        "endOffset": 265
+      }
+    ],
+    "edges": [
+      {
+        "from": "loans/policy_test.go::TestCanBorrow::function",
+        "to": "testing::testing::variable",
+        "kind": "imports"
+      }
+    ],
+    "complexity": [
+      {
+        "symbolId": "loans/policy_test.go::fakeStore.Open::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "loans/policy_test.go::TestCanBorrow::function",
+        "cyclomatic": 2
+      }
+    ]
+  },
+  "loans/repository.go": {
+    "symbols": [
+      {
+        "symbolId": "loans/repository.go::Hold::class",
+        "name": "Hold",
+        "kind": "class",
+        "startLine": 14,
+        "endLine": 14,
+        "startOffset": 272,
+        "endOffset": 293
+      },
+      {
+        "symbolId": "loans/repository.go::ActiveLoans::function",
+        "name": "ActiveLoans",
+        "kind": "function",
+        "startLine": 17,
+        "endLine": 19,
+        "startOffset": 351,
+        "endOffset": 468
+      },
+      {
+        "symbolId": "loans/repository.go::CloseLoan::function",
+        "name": "CloseLoan",
+        "kind": "function",
+        "startLine": 22,
+        "endLine": 25,
+        "startOffset": 529,
+        "endOffset": 675
+      },
+      {
+        "symbolId": "loans/repository.go::HoldsFor::function",
+        "name": "HoldsFor",
+        "kind": "function",
+        "startLine": 28,
+        "endLine": 32,
+        "startOffset": 713,
+        "endOffset": 880
+      },
+      {
+        "symbolId": "loans/repository.go::Archive::function",
+        "name": "Archive",
+        "kind": "function",
+        "startLine": 35,
+        "endLine": 38,
+        "startOffset": 935,
+        "endOffset": 1120
+      },
+      {
+        "symbolId": "loans/repository.go::Purge::function",
+        "name": "Purge",
+        "kind": "function",
+        "startLine": 41,
+        "endLine": 43,
+        "startOffset": 1158,
+        "endOffset": 1253
+      },
+      {
+        "symbolId": "loans/repository.go::ByTable::function",
+        "name": "ByTable",
+        "kind": "function",
+        "startLine": 46,
+        "endLine": 48,
+        "startOffset": 1310,
+        "endOffset": 1414
+      },
+      {
+        "symbolId": "loans/repository.go::Prepared::function",
+        "name": "Prepared",
+        "kind": "function",
+        "startLine": 51,
+        "endLine": 54,
+        "startOffset": 1484,
+        "endOffset": 1559
+      },
+      {
+        "symbolId": "loans/repository.go::Models::function",
+        "name": "Models",
+        "kind": "function",
+        "startLine": 57,
+        "endLine": 61,
+        "startOffset": 1617,
+        "endOffset": 1725
+      }
+    ],
+    "edges": [
+      {
+        "from": "loans/repository.go::Hold::class",
+        "to": "context::context::variable",
+        "kind": "imports"
+      },
+      {
+        "from": "loans/repository.go::Hold::class",
+        "to": "database/sql::sql::variable",
+        "kind": "imports"
+      },
+      {
+        "from": "loans/repository.go::Hold::class",
+        "to": "github.com/jackc/pgx/v5::v5::variable",
+        "kind": "imports"
+      },
+      {
+        "from": "loans/repository.go::Hold::class",
+        "to": "github.com/jmoiron/sqlx::sqlx::variable",
+        "kind": "imports"
+      },
+      {
+        "from": "loans/repository.go::Hold::class",
+        "to": "gorm.io/gorm::gorm::variable",
+        "kind": "imports"
+      }
+    ],
+    "complexity": [
+      {
+        "symbolId": "loans/repository.go::ActiveLoans::function",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "loans/repository.go::CloseLoan::function",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "loans/repository.go::HoldsFor::function",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "loans/repository.go::Archive::function",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "loans/repository.go::Purge::function",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "loans/repository.go::ByTable::function",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "loans/repository.go::Prepared::function",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "loans/repository.go::Models::function",
+        "cyclomatic": 1
+      }
+    ]
+  },
+  "loans/repository_test.go": {
+    "symbols": [
+      {
+        "symbolId": "loans/repository_test.go::TestActiveLoanCount::function",
+        "name": "TestActiveLoanCount",
+        "kind": "function",
+        "startLine": 7,
+        "endLine": 14,
+        "startOffset": 54,
+        "endOffset": 226
+      }
+    ],
+    "edges": [
+      {
+        "from": "loans/repository_test.go::TestActiveLoanCount::function",
+        "to": "database/sql::sql::variable",
+        "kind": "imports"
+      },
+      {
+        "from": "loans/repository_test.go::TestActiveLoanCount::function",
+        "to": "testing::testing::variable",
+        "kind": "imports"
+      }
+    ],
+    "complexity": [
+      {
+        "symbolId": "loans/repository_test.go::TestActiveLoanCount::function",
+        "cyclomatic": 2
+      }
+    ]
+  },
+  "stubs/gin/gin.go": {
+    "symbols": [
+      {
+        "symbolId": "stubs/gin/gin.go::HandlerFunc::type",
+        "name": "HandlerFunc",
+        "kind": "type",
+        "startLine": 4,
+        "endLine": 4,
+        "startOffset": 137,
+        "endOffset": 155
+      },
+      {
+        "symbolId": "stubs/gin/gin.go::IRoutes::interface",
+        "name": "IRoutes",
+        "kind": "interface",
+        "startLine": 6,
+        "endLine": 6,
+        "startOffset": 162,
+        "endOffset": 181
+      },
+      {
+        "symbolId": "stubs/gin/gin.go::RouterGroup::class",
+        "name": "RouterGroup",
+        "kind": "class",
+        "startLine": 8,
+        "endLine": 8,
+        "startOffset": 188,
+        "endOffset": 208
+      },
+      {
+        "symbolId": "stubs/gin/gin.go::Engine::class",
+        "name": "Engine",
+        "kind": "class",
+        "startLine": 10,
+        "endLine": 10,
+        "startOffset": 215,
+        "endOffset": 243
+      },
+      {
+        "symbolId": "stubs/gin/gin.go::RouterGroup.GET::method",
+        "name": "RouterGroup.GET",
+        "kind": "method",
+        "startLine": 12,
+        "endLine": 12,
+        "startOffset": 245,
+        "endOffset": 332
+      },
+      {
+        "symbolId": "stubs/gin/gin.go::RouterGroup.POST::method",
+        "name": "RouterGroup.POST",
+        "kind": "method",
+        "startLine": 13,
+        "endLine": 13,
+        "startOffset": 333,
+        "endOffset": 420
+      },
+      {
+        "symbolId": "stubs/gin/gin.go::RouterGroup.Any::method",
+        "name": "RouterGroup.Any",
+        "kind": "method",
+        "startLine": 14,
+        "endLine": 14,
+        "startOffset": 421,
+        "endOffset": 508
+      },
+      {
+        "symbolId": "stubs/gin/gin.go::RouterGroup.Handle::method",
+        "name": "RouterGroup.Handle",
+        "kind": "method",
+        "startLine": 15,
+        "endLine": 17,
+        "startOffset": 509,
+        "endOffset": 607
+      }
+    ],
+    "edges": [],
+    "complexity": [
+      {
+        "symbolId": "stubs/gin/gin.go::RouterGroup.GET::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "stubs/gin/gin.go::RouterGroup.POST::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "stubs/gin/gin.go::RouterGroup.Any::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "stubs/gin/gin.go::RouterGroup.Handle::method",
+        "cyclomatic": 1
+      }
+    ]
+  },
+  "stubs/gorm/gorm.go": {
+    "symbols": [
+      {
+        "symbolId": "stubs/gorm/gorm.go::DB::class",
+        "name": "DB",
+        "kind": "class",
+        "startLine": 5,
+        "endLine": 5,
+        "startOffset": 152,
+        "endOffset": 163
+      },
+      {
+        "symbolId": "stubs/gorm/gorm.go::DB.Raw::method",
+        "name": "DB.Raw",
+        "kind": "method",
+        "startLine": 8,
+        "endLine": 8,
+        "startOffset": 210,
+        "endOffset": 280
+      },
+      {
+        "symbolId": "stubs/gorm/gorm.go::DB.Exec::method",
+        "name": "DB.Exec",
+        "kind": "method",
+        "startLine": 11,
+        "endLine": 11,
+        "startOffset": 304,
+        "endOffset": 375
+      },
+      {
+        "symbolId": "stubs/gorm/gorm.go::DB.Where::method",
+        "name": "DB.Where",
+        "kind": "method",
+        "startLine": 14,
+        "endLine": 14,
+        "startOffset": 404,
+        "endOffset": 481
+      },
+      {
+        "symbolId": "stubs/gorm/gorm.go::DB.Find::method",
+        "name": "DB.Find",
+        "kind": "method",
+        "startLine": 17,
+        "endLine": 17,
+        "startOffset": 516,
+        "endOffset": 592
+      }
+    ],
+    "edges": [],
+    "complexity": [
+      {
+        "symbolId": "stubs/gorm/gorm.go::DB.Raw::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "stubs/gorm/gorm.go::DB.Exec::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "stubs/gorm/gorm.go::DB.Where::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "stubs/gorm/gorm.go::DB.Find::method",
+        "cyclomatic": 1
+      }
+    ]
+  },
+  "stubs/pgx/conn.go": {
+    "symbols": [
+      {
+        "symbolId": "stubs/pgx/conn.go::CommandTag::class",
+        "name": "CommandTag",
+        "kind": "class",
+        "startLine": 7,
+        "endLine": 7,
+        "startOffset": 198,
+        "endOffset": 217
+      },
+      {
+        "symbolId": "stubs/pgx/conn.go::Rows::interface",
+        "name": "Rows",
+        "kind": "interface",
+        "startLine": 10,
+        "endLine": 10,
+        "startOffset": 249,
+        "endOffset": 274
+      },
+      {
+        "symbolId": "stubs/pgx/conn.go::Row::interface",
+        "name": "Row",
+        "kind": "interface",
+        "startLine": 13,
+        "endLine": 13,
+        "startOffset": 307,
+        "endOffset": 347
+      },
+      {
+        "symbolId": "stubs/pgx/conn.go::Conn::class",
+        "name": "Conn",
+        "kind": "class",
+        "startLine": 16,
+        "endLine": 16,
+        "startOffset": 390,
+        "endOffset": 403
+      },
+      {
+        "symbolId": "stubs/pgx/conn.go::Conn.Exec::method",
+        "name": "Conn.Exec",
+        "kind": "method",
+        "startLine": 19,
+        "endLine": 21,
+        "startOffset": 438,
+        "endOffset": 558
+      },
+      {
+        "symbolId": "stubs/pgx/conn.go::Conn.Query::method",
+        "name": "Conn.Query",
+        "kind": "method",
+        "startLine": 24,
+        "endLine": 26,
+        "startOffset": 600,
+        "endOffset": 701
+      },
+      {
+        "symbolId": "stubs/pgx/conn.go::Conn.QueryRow::method",
+        "name": "Conn.QueryRow",
+        "kind": "method",
+        "startLine": 29,
+        "endLine": 31,
+        "startOffset": 745,
+        "endOffset": 834
+      },
+      {
+        "symbolId": "stubs/pgx/conn.go::Tx::interface",
+        "name": "Tx",
+        "kind": "interface",
+        "startLine": 34,
+        "endLine": 36,
+        "startOffset": 867,
+        "endOffset": 943
+      }
+    ],
+    "edges": [
+      {
+        "from": "stubs/pgx/conn.go::CommandTag::class",
+        "to": "context::context::variable",
+        "kind": "imports"
+      }
+    ],
+    "complexity": [
+      {
+        "symbolId": "stubs/pgx/conn.go::Conn.Exec::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "stubs/pgx/conn.go::Conn.Query::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "stubs/pgx/conn.go::Conn.QueryRow::method",
+        "cyclomatic": 1
+      }
+    ]
+  },
+  "stubs/pgx/pgxpool/pool.go": {
+    "symbols": [
+      {
+        "symbolId": "stubs/pgx/pgxpool/pool.go::Pool::class",
+        "name": "Pool",
+        "kind": "class",
+        "startLine": 11,
+        "endLine": 11,
+        "startOffset": 210,
+        "endOffset": 223
+      },
+      {
+        "symbolId": "stubs/pgx/pgxpool/pool.go::Pool.Exec::method",
+        "name": "Pool.Exec",
+        "kind": "method",
+        "startLine": 14,
+        "endLine": 16,
+        "startOffset": 258,
+        "endOffset": 386
+      }
+    ],
+    "edges": [
+      {
+        "from": "stubs/pgx/pgxpool/pool.go::Pool::class",
+        "to": "context::context::variable",
+        "kind": "imports"
+      },
+      {
+        "from": "stubs/pgx/pgxpool/pool.go::Pool::class",
+        "to": "github.com/jackc/pgx/v5::v5::variable",
+        "kind": "imports"
+      }
+    ],
+    "complexity": [
+      {
+        "symbolId": "stubs/pgx/pgxpool/pool.go::Pool.Exec::method",
+        "cyclomatic": 1
+      }
+    ]
+  },
+  "stubs/sqlx/sqlx.go": {
+    "symbols": [
+      {
+        "symbolId": "stubs/sqlx/sqlx.go::DB::class",
+        "name": "DB",
+        "kind": "class",
+        "startLine": 7,
+        "endLine": 9,
+        "startOffset": 210,
+        "endOffset": 232
+      },
+      {
+        "symbolId": "stubs/sqlx/sqlx.go::Tx::class",
+        "name": "Tx",
+        "kind": "class",
+        "startLine": 12,
+        "endLine": 14,
+        "startOffset": 288,
+        "endOffset": 310
+      },
+      {
+        "symbolId": "stubs/sqlx/sqlx.go::Rows::class",
+        "name": "Rows",
+        "kind": "class",
+        "startLine": 17,
+        "endLine": 19,
+        "startOffset": 342,
+        "endOffset": 368
+      },
+      {
+        "symbolId": "stubs/sqlx/sqlx.go::Queryer::interface",
+        "name": "Queryer",
+        "kind": "interface",
+        "startLine": 22,
+        "endLine": 24,
+        "startOffset": 405,
+        "endOffset": 484
+      },
+      {
+        "symbolId": "stubs/sqlx/sqlx.go::DB.Select::method",
+        "name": "DB.Select",
+        "kind": "method",
+        "startLine": 27,
+        "endLine": 29,
+        "startOffset": 537,
+        "endOffset": 632
+      },
+      {
+        "symbolId": "stubs/sqlx/sqlx.go::DB.Get::method",
+        "name": "DB.Get",
+        "kind": "method",
+        "startLine": 32,
+        "endLine": 34,
+        "startOffset": 681,
+        "endOffset": 773
+      },
+      {
+        "symbolId": "stubs/sqlx/sqlx.go::DB.Queryx::method",
+        "name": "DB.Queryx",
+        "kind": "method",
+        "startLine": 37,
+        "endLine": 39,
+        "startOffset": 818,
+        "endOffset": 909
+      },
+      {
+        "symbolId": "stubs/sqlx/sqlx.go::DB.NamedExec::method",
+        "name": "DB.NamedExec",
+        "kind": "method",
+        "startLine": 42,
+        "endLine": 44,
+        "startOffset": 944,
+        "endOffset": 1039
+      },
+      {
+        "symbolId": "stubs/sqlx/sqlx.go::DB.MustExec::method",
+        "name": "DB.MustExec",
+        "kind": "method",
+        "startLine": 47,
+        "endLine": 49,
+        "startOffset": 1088,
+        "endOffset": 1172
+      },
+      {
+        "symbolId": "stubs/sqlx/sqlx.go::Get::function",
+        "name": "Get",
+        "kind": "function",
+        "startLine": 52,
+        "endLine": 54,
+        "startOffset": 1226,
+        "endOffset": 1320
+      }
+    ],
+    "edges": [
+      {
+        "from": "stubs/sqlx/sqlx.go::DB::class",
+        "to": "database/sql::sql::variable",
+        "kind": "imports"
+      }
+    ],
+    "complexity": [
+      {
+        "symbolId": "stubs/sqlx/sqlx.go::DB.Select::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "stubs/sqlx/sqlx.go::DB.Get::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "stubs/sqlx/sqlx.go::DB.Queryx::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "stubs/sqlx/sqlx.go::DB.NamedExec::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "stubs/sqlx/sqlx.go::DB.MustExec::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "stubs/sqlx/sqlx.go::Get::function",
+        "cyclomatic": 1
+      }
+    ]
+  }
+}

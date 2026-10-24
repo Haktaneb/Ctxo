@@ -208,13 +208,13 @@ describe.each(VARIANTS)('PR 2B acceptance, %s sample', (variant) => {
     expect([...domainArtifacts(first).entries()]).toEqual([...a.entries()]);
   });
 
-  it('the server lists the 14 core tools plus get_domain_context and get_rule, which answer without a registry too', async () => {
+  it('the server lists the 14 core tools plus get_domain_context, get_rule, find_shadow_specs and get_context_map, which answer without a registry too', async () => {
     const ws = prepared(variant);
     let session = await ws.connect();
     try {
       const names = await session.listTools();
-      expect(names).toHaveLength(16);
-      expect(names).toEqual(expect.arrayContaining(['get_domain_context', 'get_rule', 'get_blast_radius']));
+      expect(names).toHaveLength(18);
+      expect(names).toEqual(expect.arrayContaining(['get_domain_context', 'get_rule', 'find_shadow_specs', 'get_context_map', 'get_blast_radius']));
 
       const rule = (await session.call('get_rule', { ruleId: 'lend_03' })) as {
         rule: { ruleId: string; context: { id: string } };
@@ -236,11 +236,13 @@ describe.each(VARIANTS)('PR 2B acceptance, %s sample', (variant) => {
     ws.remove(REGISTRY);
     session = await ws.connect();
     try {
-      expect(await session.listTools()).toHaveLength(16);
+      expect(await session.listTools()).toHaveLength(18);
       const hint = 'No domain registry at docs/domain/contexts.yaml. Create one with "ctxo init --domain".';
       for (const [name, args] of [
         ['get_rule', { ruleId: 'LEND-03' }],
         ['get_domain_context', {}],
+        ['find_shadow_specs', { context: 'lending' }],
+        ['get_context_map', {}],
       ] as const) {
         const response = await session.call(name, args);
         expect(response['error'], name).toBeUndefined();
@@ -273,7 +275,7 @@ describe.each(VARIANTS)('PR 2B acceptance, %s sample', (variant) => {
     ws.remove(REGISTRY);
     ws.index();
     // The artifacts go; the folder itself may stay, since other files in it are not ours to delete.
-    for (const artifact of ['contexts.json', 'boundaries.json', 'history']) expect(ws.exists(`.ctxo/index/domain/${artifact}`), artifact).toBe(false);
+    for (const artifact of ['contexts.json', 'boundaries.json', 'history', 'shadow-candidates.json', 'maturity.json']) expect(ws.exists(`.ctxo/index/domain/${artifact}`), artifact).toBe(false);
 
     const symbolId = CANBORROW_ID[variant];
     session = await ws.connect();
@@ -287,7 +289,22 @@ describe.each(VARIANTS)('PR 2B acceptance, %s sample', (variant) => {
         await session.call('get_why_context', { symbolId }),
         await session.call('get_context_for_task', { symbolId, taskType: 'understand' }),
       ];
-      const added = ['rulesAffected', 'cardsToUpdate', 'cardExcerpt', 'decisions', 'contextsTouched', 'cardsChanged', 'rulesWithoutTests'];
+      const added = [
+        'rulesAffected',
+        'cardsToUpdate',
+        'cardExcerpt',
+        'decisions',
+        'contextsTouched',
+        'cardsChanged',
+        'rulesWithoutTests',
+        // PR 4: the loop tools' fields never reach a core response.
+        'shadowSpecs',
+        'contextMap',
+        'suggestedRung',
+        'criteria',
+        'fingerprint',
+        'resolution',
+      ];
       responses.forEach((response, i) => {
         expect(response['error'], `response ${i}`).toBeUndefined();
         const keys = allKeys(response);
@@ -304,6 +321,8 @@ describe.each(VARIANTS)('PR 2B acceptance, %s sample', (variant) => {
         ['get_domain_context', { path: LOAN_LIMIT[variant] }],
         ['get_rule', { ruleId: 'LEND-03' }],
         ['get_ranked_context', { query: 'five loans', scope: 'domain' }],
+        ['find_shadow_specs', { context: 'lending' }],
+        ['get_context_map', {}],
       ] as const) {
         const response = await session.call(name, args);
         expect(response['error'], name).toBeUndefined();
@@ -329,6 +348,23 @@ describe.each(VARIANTS)('PR 2B acceptance, %s sample', (variant) => {
     } finally {
       await session.close();
     }
+  });
+
+  it('no registry: the index asks no plugin for facts, so no index JSON gains a facts key', () => {
+    const ws = SampleWorkspace.create(variant);
+    ws.remove(REGISTRY);
+    ws.commit('chore: no registry');
+    ws.index();
+    const withFacts: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.name.endsWith('.json') && 'facts' in (JSON.parse(readFileSync(full, 'utf-8')) as object)) withFacts.push(full);
+      }
+    };
+    walk(ws.path('.ctxo/index'));
+    expect(withFacts).toEqual([]);
   });
 
   it.skipIf(variant !== 'csharp')('the guard blocks a sample session and lets it finish after a trailer commit', () => {

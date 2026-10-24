@@ -1,8 +1,9 @@
 import { describe, it, expect, afterAll } from 'vitest';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GoCompositeAdapter } from '../composite-adapter.js';
+import { DEFAULT_FACT_OPTIONS } from '../facts/fact-options.js';
 import { GoAdapter } from '../go-adapter.js';
 import { detectGoToolchain } from '../analyzer/toolchain-detect.js';
 
@@ -82,6 +83,118 @@ describe.skipIf(!detectGoToolchain().available)('lending module struct tags', ()
         to: 'loans/policy.go::Store::interface',
         kind: 'implements',
       });
+    } finally {
+      await composite.dispose();
+    }
+  }, 180_000);
+});
+
+const FACTS = 'loans/facts.go';
+const factId = (name: string, kind: string) => `${FACTS}::${name}::${kind}`;
+
+/** The facts of loans/facts.go in the full tier; MayBorrow's nil and "" comparisons and Fee's `case ""` are trivial. */
+const EXPECTED_FACTS = [
+  { kind: 'retry-timeout', symbolId: factId('maxRetries', 'variable'), line: 10, text: 'maxRetries = 3', detail: { name: 'maxRetries', value: '3' } },
+  { kind: 'retry-timeout', symbolId: factId('holdTimeout', 'variable'), line: 14, text: 'holdTimeout = 90min', detail: { name: 'holdTimeout', value: '90min' } },
+  { kind: 'literal-comparison', symbolId: factId('MayBorrow', 'function'), line: 22, text: 'openLoans >= 5', detail: { operator: '>=', literal: '5' } },
+  { kind: 'literal-comparison', symbolId: factId('Fee', 'function'), line: 31, text: 'tier case "gold"', detail: { operator: 'case', literal: '"gold"' } },
+  { kind: 'normalization', symbolId: factId('Key', 'function'), line: 41, text: 'strings.ToLower(strings.TrimSpace(email))', detail: { method: 'ToLower' } },
+  { kind: 'normalization', symbolId: factId('Key', 'function'), line: 41, text: 'strings.TrimSpace(email)', detail: { method: 'TrimSpace' } },
+  { kind: 'endpoint', symbolId: factId('Routes', 'function'), line: 46, text: 'GET /holds/{id}', detail: { verb: 'GET', route: '/holds/{id}' } },
+  { kind: 'endpoint', symbolId: factId('Routes', 'function'), line: 47, text: 'ANY /health', detail: { verb: 'ANY', route: '/health' } },
+  { kind: 'endpoint', symbolId: factId('Routes', 'function'), line: 48, text: 'GET /loans/:id', detail: { verb: 'GET', route: '/loans/:id' } },
+];
+
+/** A copy of the fixture with LF line endings, so lines and source hashes do not depend on the checkout. */
+function copyFixtureLf(target: string): void {
+  cpSync(FIXTURE, target, { recursive: true });
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else writeFileSync(path, readFileSync(path, 'utf-8').replace(/\r\n/g, '\n'));
+    }
+  };
+  walk(target);
+}
+
+describe.skipIf(!detectGoToolchain().available)('lending module facts', () => {
+  const dirs: string[] = [];
+  afterAll(() => {
+    for (const d of dirs) rmSync(d, { recursive: true, force: true });
+  });
+
+  it('the facts fixture gives the expected facts in the full tier', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ctxo-lending-facts-'));
+    dirs.push(dir);
+    copyFixtureLf(dir);
+
+    const composite = new GoCompositeAdapter({ facts: DEFAULT_FACT_OPTIONS });
+    await composite.initialize(dir);
+    try {
+      expect(composite.getTier()).toBe('full');
+      const source = readFileSync(join(dir, 'loans', 'facts.go'), 'utf-8');
+      expect(await composite.extractFacts(FACTS, source)).toEqual(EXPECTED_FACTS);
+      expect(await composite.extractFacts('loans/loan.go', readFileSync(join(dir, 'loans', 'loan.go'), 'utf-8'))).toEqual([]);
+      const testSource = readFileSync(join(dir, 'loans', 'repository_test.go'), 'utf-8');
+      // `db == nil` is the only evidence of the test file, and nil is trivial.
+      expect(await composite.extractFacts('loans/repository_test.go', testSource)).toEqual([]);
+    } finally {
+      await composite.dispose();
+    }
+  }, 180_000);
+
+  it('without the facts option extractFacts gives nothing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ctxo-lending-facts-'));
+    dirs.push(dir);
+    copyFixtureLf(dir);
+
+    const composite = new GoCompositeAdapter();
+    await composite.initialize(dir);
+    try {
+      expect(composite.facts).toBeUndefined();
+      expect(await composite.extractFacts(FACTS, readFileSync(join(dir, 'loans', 'facts.go'), 'utf-8'))).toEqual([]);
+    } finally {
+      await composite.dispose();
+    }
+  }, 180_000);
+
+  it('evidence ids carry the module prefix when go.mod sits in a subdirectory', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ctxo-lending-facts-'));
+    dirs.push(dir);
+    const moduleDir = join(dir, 'services', 'lending');
+    mkdirSync(moduleDir, { recursive: true });
+    copyFixtureLf(moduleDir);
+
+    const composite = new GoCompositeAdapter({ facts: DEFAULT_FACT_OPTIONS });
+    await composite.initialize(dir);
+    try {
+      expect(composite.getTier()).toBe('full');
+      const source = readFileSync(join(moduleDir, 'loans', 'facts.go'), 'utf-8');
+      const facts = await composite.extractFacts(`services/lending/${FACTS}`, source);
+      expect(facts).toEqual(EXPECTED_FACTS.map((f) => ({ ...f, symbolId: `services/lending/${f.symbolId}` })));
+    } finally {
+      await composite.dispose();
+    }
+  }, 180_000);
+
+  it('a file changed after the batch gets fresh facts, never the stale evidence', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ctxo-lending-facts-'));
+    dirs.push(dir);
+    copyFixtureLf(dir);
+
+    const composite = new GoCompositeAdapter({ facts: DEFAULT_FACT_OPTIONS });
+    await composite.initialize(dir);
+    try {
+      const path = join(dir, 'loans', 'facts.go');
+      const before = readFileSync(path, 'utf-8');
+      expect((await composite.extractFacts(FACTS, before)).map((f) => f.text)).toContain('openLoans >= 5');
+
+      const after = before.replace('openLoans >= 5', 'openLoans >= 6');
+      writeFileSync(path, after);
+      const texts = (await composite.extractFacts(FACTS, after)).map((f) => f.text);
+      expect(texts).toContain('openLoans >= 6');
+      expect(texts).not.toContain('openLoans >= 5');
     } finally {
       await composite.dispose();
     }

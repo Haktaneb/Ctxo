@@ -1,6 +1,6 @@
 ---
 title: "ctxo domain commands"
-description: "verify-domain, contexts-touched, domain rules and domain discover: the CLI of the opt-in @ctxo/domain package."
+description: "verify-domain, contexts-touched, domain rules, domain discover, domain map and domain shadow-specs: the CLI of the opt-in @ctxo/domain package."
 ---
 
 # Domain commands
@@ -43,6 +43,7 @@ ctxo verify-domain [--since <ref>] [--boundaries by-rung|report] [--json]
 | 9 | `context-map.md` has a `Context` / `Rung` table that agrees with the registry (a missing file is a warning) | error |
 | 10 | Boundaries: edges outside `contracts` | error for `blockingRungs` in `by-rung` mode, else warning |
 | 11 | With `--since`: no unresolved touched contexts | error |
+| 12 | Shadow-spec resolutions: a `shadow-specs.yaml` that does not parse; stale entries, unknown rules, files in folders of no context | error for a broken file, else warning |
 
 Check 6 also covers the links of the domain graph:
 
@@ -54,7 +55,20 @@ Check 6 also covers the links of the domain graph:
 - A `rule:` comment in production code that names an unknown rule warns (`rule: comment names unknown rule
   LEND-09`), but only when its prefix is a rule prefix, so `# rule: E501` in a linter comment stays silent.
 
-A registry that does not parse or validate skips checks 2 to 11. Day one is green: with the init skeleton (no contexts) or a partial registry,
+Check 12 computes the shadow-spec candidates from the current index and repository (never from the stored
+artifacts) and reads each context's `<registry folder>/<context>/shadow-specs.yaml`:
+
+- A file that does not parse, is not a list, or cannot be read (outside the repository, over 1 MiB, binary, not
+  valid UTF-8) is an error, and a broken item is an error (the valid items still apply).
+- `stale resolution "<fingerprint>" matches no candidate of <id>` (warning): the code changed, so the entry no
+  longer matches. Update the fingerprint from `ctxo domain shadow-specs <id>` or remove the entry.
+- `resolution names unknown rule <ID>` (warning): no card defines the rule, so the entry resolves nothing.
+- `<path> belongs to no context` (warning): a `shadow-specs.yaml` in a folder that is no context ID.
+- `stale resolutions were not checked: <reason>` (warning): the candidates could not be built, so no entry can be
+  called stale; given only when some `shadow-specs.yaml` has entries. The exit code stays 0 unless another finding
+  is an error.
+
+A registry that does not parse or validate skips checks 2 to 12. Day one is green: with the init skeleton (no contexts) or a partial registry,
 unowned files and a missing context map are warnings until you set `domain.coverage.unowned: error`.
 
 ### Exit codes and `--json`
@@ -63,7 +77,7 @@ unowned files and a missing context map are warnings until you set `domain.cover
 | --- | --- |
 | `0` | No errors (warnings allowed), or no registry (a hint is printed) |
 | `1` | At least one error, or a usage error |
-| `2` | No index (run `ctxo index`), a base ref that cannot be found, a git failure, or an internal error |
+| `2` | No index (run `ctxo index`), a base ref that cannot be found, a git failure, or an internal error (also a failure to build the domain graph that check 12 needs: checks 1 to 11 then do not report) |
 
 The human report goes to stderr. With `--json`, stdout holds
 `{ "registry", "checks", "summary", "exitCode" }` when the checks ran. **On exit 2 and on the no-registry path
@@ -129,8 +143,86 @@ subjects or branch names), `Trait` keys that carry rule-like IDs, and test folde
 ctxo domain discover [--json] [--write]
 ```
 
+It also proposes Characterization and Contract paths: folders named `Characterization`, `Contract`, `Contracts` or
+`Contracts.Tests` that `domain.tests.characterization.paths` and `domain.tests.contract.paths` do not cover, as
+`<folder>/**`, listed after the configured globs.
+
 It prints the evidence and a proposed config, and writes only with `--write`, which merges the proposal into
-`.ctxo/config.yaml` (it adds values and removes none).
+`.ctxo/config.yaml` (it adds values and removes none). The printed config quotes every list value as a JSON string
+(`paths: ["**/Contract/**", "**/Contracts.Tests/**"]`), so the block is valid YAML to paste.
+
+## ctxo domain map
+
+The context map from the last `ctxo index`: per context its rung, the suggested rung, rules with tests, open
+shadow-spec candidates and the rung criteria. The CLI face of [`get_context_map`](/mcp-tools/get-context-map).
+
+```shell
+ctxo domain map [--json]
+```
+
+```text
+[ctxo] Context map: 3 contexts (3 agree with the suggested rung)
+  lending  rung pinned  suggested pinned  rules 5 (1 tested)  open candidates 4  pinned ✓ named ✗ bounded ✗ boring ✗
+  billing  rung bounded  suggested bounded  rules 3 (0 tested)  open candidates 4  pinned ✓ named ✓ bounded ✓ boring ✗
+  catalog  rung fear  suggested fear  rules 0 (0 tested)  open candidates 1  pinned ✗ named ✗ bounded ✗ boring ✗
+```
+
+`--json` prints the whole `get_context_map` body (no `_meta`, no truncation). The suggestion never changes the
+registry.
+
+## ctxo domain shadow-specs
+
+The shadow-spec candidates of one context with their fingerprints and resolutions. The CLI face of
+[`find_shadow_specs`](/mcp-tools/find-shadow-specs).
+
+```shell
+ctxo domain shadow-specs <context> [--kinds <k,...>] [--all] [--json]
+```
+
+| Flag | Description |
+| --- | --- |
+| `--kinds <k,...>` | Keep these kinds: `literal-comparison`, `normalization`, `retry-timeout`, `endpoint`, `data-resource`, `procedure`, `rule-without-tests`. Repeated options add up; an empty list means all |
+| `--all` | Also list resolved candidates |
+| `--json` | Print the `find_shadow_specs` body |
+
+```text
+[ctxo] lending: 2 open, 2 resolved shadow-spec candidates (docs/domain/lending/shadow-specs.yaml)
+  open  endpoint  src/lending/api/loans.controller.ts:8  GET /loans/:id
+      'endpoint | LoansController.find | GET /loans/:id'
+  resolved  endpoint  src/lending/api/loans.controller.ts:14  POST /loans  [linked: LEND-03]
+      'endpoint | LoansController.borrow | POST /loans'
+  resolved  normalization  src/lending/member-directory.ts:2  email.trim()  [not a rule: input cleanup, not a business rule]
+      'normalization | member-directory.memberKey | email.trim()'
+  open  normalization  src/lending/member-directory.ts:2  email.trim().toLowerCase()
+      'normalization | member-directory.memberKey | email.trim().toLowerCase()'
+```
+
+Both examples are `ctxo domain map` and `ctxo domain shadow-specs lending --kinds endpoint,normalization --all` on
+the in-repo library-lending sample, TypeScript variant (`packages/domain/test-fixtures/library-lending/typescript`),
+copied to a temp folder and indexed. A stale entry prints `  stale  '<fingerprint>' (line <n>)` and an entry naming
+an unknown rule `  unknown rule  <ID>  '<fingerprint>' (line <n>)`.
+
+Each candidate's fingerprint is on the line below it, printed as a YAML single-quoted scalar (`'...'`, a `'` inside
+written `''`): paste it as it is after `fingerprint: ` in the context's `shadow-specs.yaml`, with
+`resolution: { rule: <ID> }` or `resolution: { notARule: "<reason>" }`:
+
+```yaml
+- fingerprint: 'endpoint | LoansController.find | GET /loans/:id'
+  resolution: { notARule: "read-only lookup" }
+```
+
+The quotes matter: fact text can hold double quotes, backslashes, `: ` or ` #`, which break a double-quoted or plain
+scalar. `--json` prints the plain strings. The file is read on every run, so an
+edit shows at once; the candidates themselves refresh on `ctxo index` (not under `ctxo watch`). Output is not
+masked, as for `ctxo contexts --json`.
+
+**Exit codes (map and shadow-specs):**
+
+| Exit | When |
+| --- | --- |
+| 0 | Done (stale data, such as cards edited since the last index, prints a hint and still exits 0), or no registry (a hint is printed) |
+| 1 | Bad arguments, an unknown kind or an unknown context |
+| 2 | Registry problems; no index data (`[ctxo] No context map yet; run "ctxo index".`, `[ctxo] No shadow-spec data yet; run "ctxo index".`, also after an index run that could not build the loop data and removed it); index data built from another registry (`[ctxo] The domain registry changed since the last "ctxo index"; run it to rebuild the domain graph.`); an internal error (`[ctxo] domain <name> failed: <message>`) |
 
 ## See also
 

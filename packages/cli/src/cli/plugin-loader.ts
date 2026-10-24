@@ -5,6 +5,7 @@ import { discoverPlugins, type DiscoveredPlugin } from '../adapters/language/plu
 import { detectWorkspace } from '../adapters/workspace/single-package-workspace.js';
 import { createLogger } from '../core/logger.js';
 import { makeGlobMatcher } from '../core/config/load-config.js';
+import type { FactDetectorOptions } from '../ports/i-ctxo-module.js';
 
 const log = createLogger('ctxo:plugin-loader');
 
@@ -62,6 +63,7 @@ function buildContext(
   workspace: IWorkspace,
   pluginId: string,
   capabilities: PluginCapabilities,
+  factOptions: FactDetectorOptions | undefined,
 ): PluginContext {
   const pluginLog = createLogger(`ctxo:plugin:${pluginId}`);
   return {
@@ -73,7 +75,9 @@ function buildContext(
     },
     projectRoot,
     workspace,
-    config: {},
+    // Each plugin gets its own config object; `facts` is the one key the host sets, one deep-frozen object shared by
+    // every plugin of the run (`pluginFactRequest`).
+    config: factOptions ? { facts: factOptions } : {},
     capabilities,
   };
 }
@@ -87,6 +91,11 @@ export interface LoadPluginsOptions {
   readonly ignoreProjects?: readonly string[];
   /** Facts extraction requested (`index.facts: true`); handed to every plugin as a capability. */
   readonly facts?: boolean;
+  /**
+   * Fact detector options from a module. Handed to every plugin as `config.facts`, only together with
+   * `facts: true`.
+   */
+  readonly factOptions?: FactDetectorOptions;
 }
 
 /**
@@ -125,11 +134,12 @@ export async function loadPlugins(
     result.plugins.map((p) => p.plugin),
     { facts: options.facts ?? false },
   );
+  const factOptions = options.facts === true ? options.factOptions : undefined;
 
   const loaded: LoadedPlugin[] = [];
   for (const { plugin, specifier } of result.plugins as readonly DiscoveredPlugin[]) {
     try {
-      const ctx = buildContext(projectRoot, workspace, plugin.id, capabilities);
+      const ctx = buildContext(projectRoot, workspace, plugin.id, capabilities, factOptions);
       const adapter = plugin.createAdapter(ctx);
       loaded.push({ plugin, adapter, specifier });
     } catch (err) {

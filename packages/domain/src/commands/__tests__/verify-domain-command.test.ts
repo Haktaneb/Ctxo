@@ -262,7 +262,7 @@ describe('ctxo verify-domain', () => {
     expect(code).toBe(1);
     expect(Object.keys(report)).toEqual(['registry', 'checks', 'summary', 'exitCode']);
     expect(report.registry).toBe('docs/domain/contexts.yaml');
-    expect(report.checks.map((c: any) => c.id)).toEqual(['1', '2', '3', '4a', '4b', '5', '6', '7', '8', '9', '10', '11']);
+    expect(report.checks.map((c: any) => c.id)).toEqual(['1', '2', '3', '4a', '4b', '5', '6', '7', '8', '9', '10', '11', '12']);
     expect(report.summary).toEqual({ errors: 1, warnings: 0 });
     expect(report.exitCode).toBe(1);
   });
@@ -322,5 +322,148 @@ describe('ctxo verify-domain', () => {
     const dir = await project({ registry: 'version: 2\ncontexts: []\n' });
     expect(await runCommand(dir)).toBe(1);
     expect(stderr.join('\n')).toContain('✗ 1 Registry and config');
+    expect(stderr.join('\n')).toContain('[ctxo] - 12 Shadow-spec resolutions');
+  });
+});
+
+describe('ctxo verify-domain check 12', () => {
+  // BILL-01 is `Untested: later`: a rule-without-tests candidate the current index pass resolves automatically.
+  const BILLING_CANDIDATE = 'rule-without-tests | BILL-01 | A rule';
+  const STALE = 'literal-comparison | Invoice.total | amount > 100';
+  const LENDING_SPECS = 'docs/domain/lending/shadow-specs.yaml';
+  const BILLING_SPECS = 'docs/domain/billing/shadow-specs.yaml';
+
+  const twelve = (): any => json().checks.find((c: any) => c.id === '12');
+
+  it('passes on a clean project without shadow-specs files', async () => {
+    const dir = await project();
+    expect(await runCommand(dir, '--json')).toBe(0);
+    expect(twelve()).toEqual({ id: '12', title: 'Shadow-spec resolutions', status: 'pass', findings: [] });
+  });
+
+  it('verify-domain computes candidates from the index and warns about a stale resolution', async () => {
+    const dir = await project();
+    put(
+      dir,
+      BILLING_SPECS,
+      `- fingerprint: "${BILLING_CANDIDATE}"\n  resolution: { notARule: "covered by the card" }\n- fingerprint: "${STALE}"\n  resolution: { notARule: "gone" }\n`,
+    );
+    expect(await runCommand(dir, '--json')).toBe(0);
+    expect(twelve().status).toBe('warn');
+    expect(twelve().findings).toEqual([
+      {
+        check: '12',
+        severity: 'warning',
+        message: `stale resolution "${STALE}" matches no candidate of billing`,
+        file: BILLING_SPECS,
+        line: 3,
+        context: 'billing',
+      },
+    ]);
+    expect(json().summary).toEqual({ errors: 0, warnings: 1 });
+  });
+
+  it('warns about an unknown rule and an orphan file', async () => {
+    const dir = await project();
+    put(dir, BILLING_SPECS, `- fingerprint: "${BILLING_CANDIDATE}"\n  resolution: { rule: BILL-99 }\n`);
+    put(dir, 'docs/domain/gone/shadow-specs.yaml', '[]\n');
+    expect(await runCommand(dir, '--json')).toBe(0);
+    expect(twelve().findings.map((f: any) => [f.severity, f.message])).toEqual([
+      ['warning', 'resolution names unknown rule BILL-99'],
+      ['warning', 'docs/domain/gone/shadow-specs.yaml belongs to no context'],
+    ]);
+  });
+
+  it('a syntax error in shadow-specs.yaml exits 1', async () => {
+    const dir = await project();
+    put(dir, LENDING_SPECS, '- fingerprint: [\n');
+    expect(await runCommand(dir)).toBe(1);
+    const text = stderr.join('\n');
+    expect(text).toContain('✗ 12 Shadow-spec resolutions');
+    expect(text).toMatch(/ {4}error docs\/domain\/lending\/shadow-specs\.yaml:\d+ \S/);
+    stdout.length = 0;
+    expect(await runCommand(dir, '--json')).toBe(1);
+    const problem = twelve().findings[0];
+    expect([problem.severity, problem.file, typeof problem.line, problem.message.startsWith(LENDING_SPECS)]).toEqual(['error', LENDING_SPECS, 'number', false]);
+  });
+
+  it('uses the current shadow-specs.yaml, not artifacts', async () => {
+    const dir = await project();
+    // Stored candidates from an older run: the stale fingerprint was a candidate then, the billing rule was not.
+    put(
+      dir,
+      '.ctxo/index/domain/shadow-candidates.json',
+      JSON.stringify({
+        ctxoArtifact: 'domain-shadow-candidates',
+        version: 1,
+        registryHash: 'sha256:old',
+        cardsHash: 'sha256:old',
+        candidates: [
+          { fingerprint: STALE, kind: 'literal-comparison', context: 'billing', file: 'src/Billing/Invoice.ts', line: 1, text: 'amount > 100', source: 'text' },
+        ],
+      }),
+    );
+    put(dir, BILLING_SPECS, `- fingerprint: "${BILLING_CANDIDATE}"\n  resolution: { notARule: "x" }\n`);
+    expect(await runCommand(dir, '--json')).toBe(0);
+    expect(twelve().status).toBe('pass');
+    stdout.length = 0;
+    put(dir, BILLING_SPECS, `- fingerprint: "${STALE}"\n  resolution: { notARule: "x" }\n`);
+    expect(await runCommand(dir, '--json')).toBe(0);
+    expect(twelve().findings.map((f: any) => f.message)).toEqual([`stale resolution "${STALE}" matches no candidate of billing`]);
+  });
+
+  it('candidates that cannot be built give one check 12 warning, and the exit code stays 0', async () => {
+    const dir = await project();
+    put(dir, BILLING_SPECS, `- fingerprint: "${STALE}"\n  resolution: { notARule: "gone" }\n`);
+    const host = createModuleHost({ projectRoot: dir, mode: 'cli' });
+    // An index entry whose facts cannot be read: the graph builds, the candidates do not.
+    const brokenFacts = (indices: any[]): any[] =>
+      indices.map((index) =>
+        index.file === 'src/Billing/Invoice.ts'
+          ? Object.defineProperty({ ...index }, 'facts', {
+              get() {
+                throw new Error('facts unreadable');
+              },
+            })
+          : index,
+      );
+    const failing = { ...host, services: { ...host.services, readIndex: (root: string) => brokenFacts(host.services.readIndex(root)) } };
+    const code = await verifyDomainCommand(failing).run(['--json'], { projectRoot: dir, ctxoRoot: host.ctxoRoot, readStdin: async () => '' });
+    expect(code).toBe(0);
+    expect(twelve().findings).toEqual([
+      {
+        check: '12',
+        severity: 'warning',
+        message: 'stale resolutions were not checked: The shadow-spec candidates could not be built: facts unreadable.',
+      },
+    ]);
+  });
+
+  it('exits 2 when git cannot list the tracked files', async () => {
+    const dir = await project();
+    const host = createModuleHost({ projectRoot: dir, mode: 'cli' });
+    const failing = {
+      ...host,
+      services: {
+        ...host.services,
+        createGit: (root: string) => {
+          const real = host.services.createGit(root);
+          return Object.assign(Object.create(Object.getPrototypeOf(real)), real, {
+            listTrackedFiles: async () => {
+              throw new Error('git ls-files failed');
+            },
+          });
+        },
+      },
+    };
+    const code = await verifyDomainCommand(failing).run([], { projectRoot: dir, ctxoRoot: host.ctxoRoot, readStdin: async () => '' });
+    expect(code).toBe(2);
+    expect(stderr.join('\n')).toContain('[ctxo] verify-domain failed: git ls-files failed');
+  });
+
+  it('a registry with problems still runs check 1 and skips checks 2 to 12', async () => {
+    const dir = await project({ registry: 'version: 2\ncontexts: []\n' });
+    expect(await runCommand(dir, '--json')).toBe(1);
+    expect(json().checks.map((c: any) => c.status)).toEqual(['fail', ...Array(12).fill('skipped')]);
   });
 });

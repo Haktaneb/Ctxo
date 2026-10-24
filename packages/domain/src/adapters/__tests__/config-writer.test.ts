@@ -20,12 +20,33 @@ function block(mode: string): string {
     '    trackerPrefixes: []',
     '  tests:',
     '    ruleTraitKeys: [Rule]',
+    '    characterization:',
+    '      annotations: ["Trait:Kind=Characterization", "Tag:characterization"]',
+    '      paths: ["**/Characterization/**"]',
+    '      names: ["[characterization]"]',
+    '    contract:',
+    '      annotations: ["Trait:Kind=Contract", "Tag:contract"]',
+    '      paths: ["**/Contract/**", "**/Contracts.Tests/**"]',
+    '      names: ["[contract]"]',
+    '  rungs:',
+    '    pinnedCoverage: 0.8',
     '  guard:',
     '    enabled: true',
     '    subagents: false',
     '',
   ].join('\n');
 }
+
+const CHARACTERIZATION = {
+  annotations: ['Trait:Kind=Characterization', 'Tag:characterization'],
+  paths: ['**/Characterization/**'],
+  names: ['[characterization]'],
+};
+const CONTRACT = {
+  annotations: ['Trait:Kind=Contract', 'Tag:contract'],
+  paths: ['**/Contract/**', '**/Contracts.Tests/**'],
+  names: ['[contract]'],
+};
 
 const CONFIG = `# ctxo project configuration
 version: "1.0"
@@ -70,7 +91,12 @@ describe('mergeDomainDefaults', () => {
     expect(domain.guard).toEqual({ subagents: true, enabled: true });
     expect(domain.coverage).toEqual({ unowned: 'warn' });
     expect(domain.rules).toEqual({ idPattern: '^[A-Z][A-Z0-9]*-\\d+$', trackerPrefixes: [] });
-    expect(domain.tests).toEqual({ ruleTraitKeys: ['Rule'] });
+    expect(domain.tests).toEqual({
+      ruleTraitKeys: ['Rule'],
+      characterization: CHARACTERIZATION,
+      contract: CONTRACT,
+    });
+    expect(domain.rungs).toEqual({ pinnedCoverage: 0.8 });
 
     // A complete section is left exactly as it is.
     expect(mergeDomainDefaults(merged.text, 'by-rung')).toEqual({ text: merged.text, changed: false });
@@ -108,6 +134,39 @@ domain:
     expect(parse(merged.text.slice(1)).domain.registry).toBe('x.yaml');
   });
 
+  it('mergeDomainDefaults writes the K13a and rungs defaults and no fact lists', () => {
+    for (const text of [CONFIG, 'domain:\n', `${CONFIG}domain:\n  registry: x.yaml\n`]) {
+      const domain = parse(mergeDomainDefaults(text, 'by-rung').text).domain;
+      expect(domain.tests).toEqual({ ruleTraitKeys: ['Rule'], characterization: CHARACTERIZATION, contract: CONTRACT });
+      expect(domain.rungs).toEqual({ pinnedCoverage: 0.8 });
+      expect(domain.facts).toBeUndefined();
+    }
+  });
+
+  it('adds the new keys to an existing domain section without changing values', () => {
+    const text = `${CONFIG}domain:
+  tests:
+    ruleTraitKeys: [Req]
+    contract:
+      paths: ["api/**"]   # ours
+  rungs:
+    pinnedCoverage: 0.6
+`;
+
+    const merged = mergeDomainDefaults(text, 'by-rung');
+
+    expect(merged.changed).toBe(true);
+    expect(merged.text).toContain('# ours');
+    const domain = parse(merged.text).domain;
+    expect(domain.tests).toEqual({
+      ruleTraitKeys: ['Req'],
+      contract: { paths: ['api/**'], annotations: CONTRACT.annotations, names: CONTRACT.names },
+      characterization: CHARACTERIZATION,
+    });
+    expect(domain.rungs).toEqual({ pinnedCoverage: 0.6 });
+    expect(domain.facts).toBeUndefined();
+  });
+
   it('fills an empty domain: key and rejects a section that is not a mapping', () => {
     const merged = mergeDomainDefaults('domain:\n', 'report');
     expect(parse(merged.text).domain.boundaries.enforce).toBe('report');
@@ -117,7 +176,32 @@ domain:
 });
 
 describe('mergeDiscoveryProposal', () => {
-  const proposal = { trackerPrefixes: ['LEND', 'OPS'], ruleTraitKeys: ['Rule', 'Req'], indexTests: ['qa/**'] };
+  const proposal = {
+    trackerPrefixes: ['LEND', 'OPS'],
+    ruleTraitKeys: ['Rule', 'Req'],
+    indexTests: ['qa/**'],
+    characterizationPaths: [],
+    contractPaths: [],
+  };
+
+  it('mergeDiscoveryProposal unions characterization and contract paths', () => {
+    const text = 'domain:\n  tests:\n    contract:\n      paths: ["api/**"]   # ours\n';
+    const out = mergeDiscoveryProposal(text, {
+      ...proposal,
+      characterizationPaths: ['tests/Golden/**'],
+      contractPaths: ['api/**', 'tests/Contracts/**'],
+    });
+
+    expect(out.changed).toBe(true);
+    expect(out.text).toContain('# ours');
+    const doc = parse(out.text);
+    expect(doc.domain.tests.contract.paths).toEqual(['api/**', 'tests/Contracts/**']);
+    // An absent list starts from the defaults, so the proposal adds to them instead of replacing them.
+    expect(doc.domain.tests.characterization.paths).toEqual([...CHARACTERIZATION.paths, 'tests/Golden/**']);
+
+    const again = mergeDiscoveryProposal(out.text, { ...proposal, characterizationPaths: ['tests/Golden/**'], contractPaths: ['tests/Contracts/**'] });
+    expect(parse(again.text).domain.tests.contract.paths).toEqual(['api/**', 'tests/Contracts/**']);
+  });
 
   it('mergeDiscoveryProposal adds values without dropping existing ones', () => {
     const text = [

@@ -163,6 +163,21 @@ describe('ctxo domain-guard-hook (built CLI)', () => {
     expect(bad).toMatchObject({ status: 0, stdout: '' });
   });
 
+  it('the hook route reads an invalid config once: register does not load it', () => {
+    const dir = createProject(true);
+    write(dir, '.ctxo/config.yaml', 'domain: [\n');
+    const count = (text: string): number => text.split('Invalid YAML').length - 1;
+
+    const start = hook(dir, { session_id: 'e2e-4', hook_event_name: 'SessionStart', source: 'startup' });
+    const stop = hook(dir, { session_id: 'e2e-4', hook_event_name: 'Stop', stop_hook_active: false });
+
+    expect(start.status).toBe(0);
+    expect(stop.status).toBe(0);
+    // The guard command's own config read may warn once; the module's registration adds no second warning.
+    expect(count(start.stderr)).toBeLessThanOrEqual(1);
+    expect(count(stop.stderr)).toBeLessThanOrEqual(1);
+  });
+
   it('the hook route never loads the MCP SDK or the CLI router', () => {
     const dir = createProject(true);
     const importLog = join(tempDir('ctxo-domain-guard-imports-'), 'imports.log');

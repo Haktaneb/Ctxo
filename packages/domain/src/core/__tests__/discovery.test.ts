@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { FileIndex } from '@ctxo/cli/internal';
+import { parse as parseYaml } from 'yaml';
+import { createModuleHost, type FileIndex } from '@ctxo/cli/internal';
 import { parseCard } from '../card-parser.js';
 import { discoverConventions, formatDiscovery, proposalAddsSomething, type DiscoveryInput } from '../discovery.js';
 import { DEFAULT_DOMAIN_CONFIG } from '../domain-config.js';
@@ -20,6 +21,8 @@ const BILL_CARD = `# Billing
 ### BILL-01 Invoices are immutable
 Untested: manual
 `;
+
+const host = createModuleHost({ cliVersion: '0.0.0', mode: 'cli', projectRoot: process.cwd() });
 
 function index(file: string, annotations: { name: string; args?: string[] }[] = []): FileIndex {
   return {
@@ -53,6 +56,7 @@ function input(overrides: Partial<DiscoveryInput> = {}): DiscoveryInput {
     config: DEFAULT_DOMAIN_CONFIG,
     indexTests: [],
     testFrameworkAnnotations: ['Fact', 'Theory', 'Test', 'TestMethod'],
+    makeGlobMatcher: host.services.makeGlobMatcher,
     ...overrides,
   };
 }
@@ -209,6 +213,38 @@ describe('discoverConventions', () => {
       { folder: 'src/Lending/Contracts', files: 1 },
     ]);
   });
+
+  it('proposes a Contracts folder the default contract paths miss', () => {
+    const { proposal } = discoverConventions(input({ trackedFiles: ['tests/Contracts/ChargeTests.cs'] }));
+    expect(proposal.contractPaths).toEqual(['tests/Contracts/**']);
+    expect(proposal.characterizationPaths).toEqual([]);
+    expect(proposalAddsSomething(proposal, DEFAULT_DOMAIN_CONFIG, [])).toBe(true);
+  });
+
+  it('covered folders propose nothing', () => {
+    const { proposal } = discoverConventions(
+      input({ trackedFiles: ['tests/Billing.Tests/Contract/X.cs', 'tests/Lending/Characterization/Y.cs'] }),
+    );
+    expect(proposal.contractPaths).toEqual([]);
+    expect(proposal.characterizationPaths).toEqual([]);
+    expect(proposalAddsSomething(proposal, DEFAULT_DOMAIN_CONFIG, [])).toBe(false);
+  });
+
+  it('checks the configured globs, not the defaults', () => {
+    const config = {
+      ...DEFAULT_DOMAIN_CONFIG,
+      tests: {
+        ...DEFAULT_DOMAIN_CONFIG.tests,
+        characterization: { ...DEFAULT_DOMAIN_CONFIG.tests.characterization, paths: ['golden/**'] },
+        contract: { ...DEFAULT_DOMAIN_CONFIG.tests.contract, paths: ['tests/Contracts/**'] },
+      },
+    };
+    const { proposal } = discoverConventions(
+      input({ config, trackedFiles: ['tests/Contracts/A.cs', 'src/Characterization/B.cs'] }),
+    );
+    expect(proposal.contractPaths).toEqual([]);
+    expect(proposal.characterizationPaths).toEqual(['src/Characterization/**']);
+  });
 });
 
 describe('formatDiscovery', () => {
@@ -221,7 +257,7 @@ describe('formatDiscovery', () => {
         trackedFiles: ['docs/adr/a.md'],
       }),
     );
-    const text = formatDiscovery(evidence, proposal);
+    const text = formatDiscovery(evidence, proposal, DEFAULT_DOMAIN_CONFIG);
     for (const label of ['Rule IDs', 'card prefixes:', 'tracker-like keys:', 'Test tagging', 'Test folders', 'Provenance folders', 'Proposed config']) {
       expect(text).toContain(label);
     }
@@ -233,6 +269,64 @@ describe('formatDiscovery', () => {
     expect(text).toContain('docs/adr (1)');
     expect(text).not.toContain(String.fromCharCode(0x2014));
   });
+
+  it('prints uncovered Characterization and Contract folders under the test folders line', () => {
+    const { evidence, proposal } = discoverConventions(
+      input({ trackedFiles: ['tests/Contracts/ChargeTests.cs', 'src/Golden/Characterization/A.cs'] }),
+    );
+    const lines = formatDiscovery(evidence, proposal, DEFAULT_DOMAIN_CONFIG).split('\n');
+    const at = lines.findIndex((line) => line.startsWith('Test folders'));
+    expect(lines[at + 1]).toBe(`${' '.repeat(22)}tests/Contracts/**   <- not covered by domain.tests.contract.paths`);
+    expect(lines.some((line) => line.includes('<- not covered by domain.tests.characterization.paths'))).toBe(false);
+    expect(lines).toContain('      contract:');
+    // The configured globs plus the new ones: the list --write writes, so a hand-pasted block keeps the defaults.
+    expect(lines).toContain('        paths: ["**/Contract/**", "**/Contracts.Tests/**", "tests/Contracts/**"]');
+    expect(lines.some((line) => line.trim() === 'characterization:')).toBe(false);
+  });
+
+  it('prints the configured characterization globs with the new ones, in the order --write keeps', () => {
+    const config = {
+      ...DEFAULT_DOMAIN_CONFIG,
+      tests: {
+        ...DEFAULT_DOMAIN_CONFIG.tests,
+        characterization: { ...DEFAULT_DOMAIN_CONFIG.tests.characterization, paths: ['zz/**', 'golden/**'] },
+      },
+    };
+    const { evidence, proposal } = discoverConventions(input({ config, trackedFiles: ['src/Characterization/B.cs'] }));
+    const lines = formatDiscovery(evidence, proposal, config).split('\n');
+    expect(lines).toContain('        paths: ["zz/**", "golden/**", "src/Characterization/**"]');
+  });
+
+  it('prints a proposed config block that parses as YAML to the proposal (D-I2)', () => {
+    const config = {
+      ...DEFAULT_DOMAIN_CONFIG,
+      tests: {
+        ...DEFAULT_DOMAIN_CONFIG.tests,
+        characterization: { ...DEFAULT_DOMAIN_CONFIG.tests.characterization, paths: ['**/Golden/**'] },
+      },
+    };
+    const { evidence, proposal } = discoverConventions(
+      input({
+        config,
+        commitSubjects: [...subjects('LEND', 6)],
+        indices: [index('qa/Lending.Specs/A.cs', [{ name: 'Fact' }, { name: 'Trait', args: ['Req', 'LEND-03'] }])],
+        trackedFiles: ['src/Characterization/A.cs', 'tests/Contracts/B.cs'],
+      }),
+    );
+    expect(proposal.characterizationPaths.length).toBeGreaterThan(0);
+    expect(proposal.contractPaths.length).toBeGreaterThan(0);
+    const text = formatDiscovery(evidence, proposal, config);
+    const block = text.slice(text.indexOf('Proposed config (.ctxo/config.yaml)\n') + 'Proposed config (.ctxo/config.yaml)\n'.length);
+    const parsed = parseYaml(block) as {
+      domain: { rules: { trackerPrefixes: string[] }; tests: { ruleTraitKeys: string[]; characterization: { paths: string[] }; contract: { paths: string[] } } };
+      index: { tests: string[] };
+    };
+    expect(parsed.domain.rules.trackerPrefixes).toEqual(proposal.trackerPrefixes);
+    expect(parsed.domain.tests.ruleTraitKeys).toEqual(proposal.ruleTraitKeys);
+    expect(parsed.domain.tests.characterization.paths).toEqual([...config.tests.characterization.paths, ...proposal.characterizationPaths]);
+    expect(parsed.domain.tests.contract.paths).toEqual([...DEFAULT_DOMAIN_CONFIG.tests.contract.paths, ...proposal.contractPaths]);
+    expect(parsed.index.tests).toEqual(proposal.indexTests);
+  });
 });
 
 describe('proposalAddsSomething', () => {
@@ -242,7 +336,7 @@ describe('proposalAddsSomething', () => {
   });
 
   it('is true for a new prefix, trait key or test glob', () => {
-    const base = { trackerPrefixes: [], ruleTraitKeys: ['Rule'], indexTests: [] };
+    const base = { trackerPrefixes: [], ruleTraitKeys: ['Rule'], indexTests: [], characterizationPaths: [], contractPaths: [] };
     expect(proposalAddsSomething({ ...base, trackerPrefixes: ['LEND'] }, DEFAULT_DOMAIN_CONFIG, [])).toBe(true);
     expect(proposalAddsSomething({ ...base, ruleTraitKeys: ['Rule', 'Req'] }, DEFAULT_DOMAIN_CONFIG, [])).toBe(true);
     expect(proposalAddsSomething({ ...base, indexTests: ['qa/**'] }, DEFAULT_DOMAIN_CONFIG, [])).toBe(true);

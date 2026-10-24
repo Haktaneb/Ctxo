@@ -1,5 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createLogger } from '../logger.js';
+import { encodeFactOptions } from '../facts/fact-options.js';
+import type { FactEvidence, FactOptions } from '../facts/fact-types.js';
 
 const log = createLogger('ctxo:roslyn');
 
@@ -9,6 +11,8 @@ export interface RoslynFileResult {
   symbols: RoslynSymbol[];
   edges: RoslynEdge[];
   complexity: RoslynComplexity[];
+  /** Fact evidence (`--facts=` only); absent when the file has none. */
+  factEvidence?: FactEvidence[];
 }
 
 export interface RoslynSymbol {
@@ -58,6 +62,8 @@ export interface RoslynSqlStats {
 export interface RoslynRunOptions {
   /** Emit reads, writes and executes edges for SQL text at known call sites (`--sql-call-sites`). */
   readonly sqlCallSites?: boolean;
+  /** Report fact evidence with these options (`--facts=<base64>`, after the SQL flag); absent: no evidence. */
+  readonly facts?: FactOptions;
   /** Batch: kill the run after this many ms (default 120_000). Keep-alive: shut down after this much inactivity (default 300_000). */
   readonly timeoutMs?: number;
 }
@@ -76,13 +82,18 @@ export interface RoslynBatchResult {
 }
 
 const SQL_CALL_SITES_FLAG = '--sql-call-sites';
+const FACTS_FLAG = '--facts=';
 
-/** `dotnet run` arguments for the helper; the SQL flag comes last and only when enabled. */
+/**
+ * `dotnet run` arguments for the helper: the mode, then the SQL flag only when enabled, then the
+ * facts flag only when fact options are given. The solution stays the first argument without `--`.
+ */
 function helperArgs(projectDir: string, solutionPath: string, mode: readonly string[], options: RoslynRunOptions): string[] {
   return [
     'run', '--project', projectDir, '--', solutionPath,
     ...mode,
     ...(options.sqlCallSites === true ? [SQL_CALL_SITES_FLAG] : []),
+    ...(options.facts ? [`${FACTS_FLAG}${encodeFactOptions(options.facts)}`] : []),
   ];
 }
 
@@ -251,6 +262,7 @@ export class RoslynKeepAlive {
   private solutionPath: string;
   private timeoutMs: number;
   private sqlCallSites: boolean;
+  private facts: FactOptions | undefined;
   private inactivityTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(projectDir: string, solutionPath: string, options: RoslynRunOptions = {}) {
@@ -258,6 +270,7 @@ export class RoslynKeepAlive {
     this.solutionPath = solutionPath;
     this.timeoutMs = options.timeoutMs ?? 300_000;
     this.sqlCallSites = options.sqlCallSites === true;
+    this.facts = options.facts;
   }
 
   /**
@@ -274,7 +287,10 @@ export class RoslynKeepAlive {
         resolve(started);
       };
 
-      const args = helperArgs(this.projectDir, this.solutionPath, ['--keep-alive'], { sqlCallSites: this.sqlCallSites });
+      const args = helperArgs(this.projectDir, this.solutionPath, ['--keep-alive'], {
+        sqlCallSites: this.sqlCallSites,
+        ...(this.facts ? { facts: this.facts } : {}),
+      });
       try {
         this.proc = spawn('dotnet', args, {
           stdio: ['pipe', 'pipe', 'pipe'],

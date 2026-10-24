@@ -49,11 +49,16 @@ var keepAlive = cliArgs.Contains("--keep-alive");
 // edges; the host sets the flag only when a SQL plugin is loaded.
 var sqlCallSites = cliArgs.Contains("--sql-call-sites");
 var sqlStats = new SqlStats();
+// Fact evidence (PR 4): `--facts=<base64 of {"normalizationMethods":[...]}>`. Without the flag, or
+// with a value that does not decode, the output has no factEvidence and is as before.
+const string FactsFlag = "--facts=";
+var factsArg = cliArgs.FirstOrDefault(a => a.StartsWith(FactsFlag, StringComparison.Ordinal));
+var factOptions = factsArg == null ? null : FactOptions.Decode(factsArg[FactsFlag.Length..]);
 var solutionPath = cliArgs.FirstOrDefault(a => !a.StartsWith("--"));
 
 if (string.IsNullOrEmpty(solutionPath))
 {
-    WriteError("Usage: dotnet run -- <solution.sln|project.csproj> [--keep-alive] [--sql-call-sites]");
+    WriteError("Usage: dotnet run -- <solution.sln|project.csproj> [--keep-alive] [--sql-call-sites] [--facts=<base64>]");
     return 1;
 }
 
@@ -252,6 +257,7 @@ async Task<FileResult> AnalyzeDocument(Document document, Compilation compilatio
     var symbols = ExtractSymbols(syntaxRoot, semanticModel, relativePath);
     var edges = ExtractEdges(syntaxRoot, semanticModel, compilation, relativePath);
     var complexity = ExtractComplexity(syntaxRoot, semanticModel, relativePath);
+    var factEvidence = CollectFactEvidence(syntaxRoot, semanticModel, relativePath);
 
     return new FileResult
     {
@@ -260,7 +266,25 @@ async Task<FileResult> AnalyzeDocument(Document document, Compilation compilatio
         Symbols = symbols,
         Edges = edges,
         Complexity = complexity,
+        FactEvidence = factEvidence,
     };
+}
+
+// Fact evidence only with --facts=; null (no key) when there is none. Optional, so a failure
+// costs the file its evidence, never its symbols or edges.
+List<CtxoFactEvidence>? CollectFactEvidence(SyntaxNode root, SemanticModel model, string relativePath)
+{
+    if (factOptions == null) return null;
+    try
+    {
+        var evidence = Facts.Collect(root, model, relativePath, factOptions);
+        return evidence.Count > 0 ? evidence : null;
+    }
+    catch (Exception ex)
+    {
+        WriteError($"Fact evidence skipped in {relativePath}: {ex.Message}");
+        return null;
+    }
 }
 
 // ── Symbol Extraction ────────────────────────────────────────────────
@@ -593,53 +617,10 @@ IEnumerable<IOperation> EnumerateOperations(IOperation root)
     }
 }
 
-string? MapSymbolKind(ISymbol symbol) => symbol switch
-{
-    INamedTypeSymbol t => t.TypeKind switch
-    {
-        TypeKind.Class => "class",
-        TypeKind.Struct => "class",
-        TypeKind.Interface => "interface",
-        TypeKind.Enum => "type",
-        TypeKind.Delegate => "type",
-        _ => null,
-    },
-    IMethodSymbol => "method",
-    IPropertySymbol => "variable",
-    IFieldSymbol => "variable",
-    IEventSymbol => "variable",
-    _ => null,
-};
+string? MapSymbolKind(ISymbol symbol) => SymbolNames.Kind(symbol);
 
-// BUG 3 FIX: Use containing type name for constructors
-string GetQualifiedName(ISymbol symbol)
-{
-    var parts = new List<string>();
-    var current = symbol;
-
-    // For constructors, replace .ctor with the type name (e.g., BaseSyncJob.BaseSyncJob)
-    if (current is IMethodSymbol ms && ms.MethodKind == MethodKind.Constructor && ms.ContainingType != null)
-    {
-        parts.Add(ms.ContainingType.Name);
-        current = current.ContainingSymbol; // skip to containing type
-    }
-
-    while (current != null && current is not INamespaceSymbol { IsGlobalNamespace: true })
-    {
-        if (current is INamespaceSymbol ns)
-        {
-            if (!ns.IsGlobalNamespace)
-                parts.Add(ns.Name);
-        }
-        else
-        {
-            parts.Add(current.Name);
-        }
-        current = current.ContainingSymbol;
-    }
-    parts.Reverse();
-    return string.Join(".", parts);
-}
+// BUG 3 FIX: Use containing type name for constructors (see SymbolNames.Qualified)
+string GetQualifiedName(ISymbol symbol) => SymbolNames.Qualified(symbol);
 
 // BUG 6 FIX: Consistent SymbolToId for all symbol types
 string? SymbolToId(ISymbol symbol)
@@ -801,6 +782,7 @@ record FileResult
     [JsonPropertyName("symbols")] public List<CtxoSymbol>? Symbols { get; init; }
     [JsonPropertyName("edges")] public List<CtxoEdge>? Edges { get; init; }
     [JsonPropertyName("complexity")] public List<CtxoComplexity>? Complexity { get; init; }
+    [JsonPropertyName("factEvidence")] public List<CtxoFactEvidence>? FactEvidence { get; init; }
 }
 
 record CtxoSymbol

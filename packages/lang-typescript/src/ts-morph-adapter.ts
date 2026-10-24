@@ -14,10 +14,16 @@ import {
   type ComplexityMetrics,
   type SymbolKind,
   type ILanguageAdapter,
+  type CodeFact,
   SYMBOL_KINDS,
 } from '@ctxo/plugin-api';
 
 import { classAnnotations, methodAnnotations } from './decorators.js';
+import { annotationRouteEvidence } from './facts/annotation-endpoints.js';
+import type { FactOptions } from './facts/fact-types.js';
+import { finishFacts } from './facts/finish-facts.js';
+import { collectTsEvidence } from './facts/ts-evidence.js';
+import { decodeTypescriptStringLiteral } from './facts/typescript-string-literal.js';
 import { createLogger } from './logger.js';
 import { findTestBlocks, testBlockSymbol } from './test-blocks.js';
 import { ModuleResolver } from './sql/module-resolver.js';
@@ -33,6 +39,8 @@ export interface TsMorphAdapterOptions {
   readonly sqlCallSites?: boolean;
   /** Absolute project root; relative modules missing from the in-memory project are read from disk under it. */
   readonly projectRoot?: string;
+  /** Fact detector options: set when the host requests facts (`capabilities.facts`); without them `extractFacts` returns `[]`. */
+  readonly facts?: FactOptions;
 }
 
 /** Source ranges `[start, end]`, sorted by start, none inside another. */
@@ -74,6 +82,9 @@ export class TsMorphAdapter implements ILanguageAdapter {
   /** The `sqlCallSites` option as constructed. */
   readonly sqlCallSites: boolean;
 
+  /** The `facts` option as constructed. */
+  readonly facts: FactOptions | undefined;
+
   private readonly project: Project;
   private readonly projectRoot: string | undefined;
   private readonly sqlStats: SqlStats = { constant: 0, nonConstant: 0 };
@@ -82,6 +93,7 @@ export class TsMorphAdapter implements ILanguageAdapter {
 
   constructor(options: TsMorphAdapterOptions = {}) {
     this.sqlCallSites = options.sqlCallSites === true;
+    this.facts = options.facts;
     this.projectRoot = options.projectRoot;
     this.project = new Project({
       compilerOptions: {
@@ -136,16 +148,7 @@ export class TsMorphAdapter implements ILanguageAdapter {
     if (!sourceFile) return [];
 
     try {
-      const symbols: SymbolNode[] = [];
-
-      this.extractFunctions(sourceFile, filePath, symbols);
-      this.extractClasses(sourceFile, filePath, symbols);
-      this.extractInterfaces(sourceFile, filePath, symbols);
-      this.extractTypeAliases(sourceFile, filePath, symbols);
-      this.extractVariables(sourceFile, filePath, symbols);
-      symbols.push(...findTestBlocks(sourceFile, filePath).map(testBlockSymbol));
-
-      return symbols;
+      return this.collectSymbols(sourceFile, filePath);
     } catch (err) {
       console.error(`[ctxo:ts-morph] Symbol extraction failed for ${filePath}: ${(err as Error).message}`);
       return [];
@@ -177,6 +180,35 @@ export class TsMorphAdapter implements ILanguageAdapter {
       return [];
     } finally {
       resolver?.release();
+      if (!this.projectPreloaded) {
+        this.cleanupSourceFile(filePath);
+      }
+    }
+  }
+
+  /**
+   * Code facts (protocol v2, only with the `facts` option): ts-morph evidence plus Nest decorator routes,
+   * finished by the shared rules. Route receivers resolve like SQL call sites (preloaded files, else disk
+   * reads under `projectRoot`, released before returning). A failure is logged as a warning and gives `[]`
+   * (warn-and-continue, as in the other plugins).
+   */
+  async extractFacts(filePath: string, source: string): Promise<CodeFact[]> {
+    const options = this.facts;
+    if (!options) return [];
+    const sourceFile = this.parseSource(filePath, source);
+    if (!sourceFile) return [];
+    const resolver = new ModuleResolver(this.project, this.projectRoot);
+
+    try {
+      const symbols = this.collectSymbols(sourceFile, filePath);
+      const evidence = [...collectTsEvidence(sourceFile, filePath, resolver, options), ...annotationRouteEvidence(symbols)];
+      // Every record carries its G8 owner or none (the module symbol), so no attribution by line is needed.
+      return finishFacts(filePath, evidence, [], options, decodeTypescriptStringLiteral);
+    } catch (err) {
+      log.warn(`Fact extraction failed for ${filePath}: ${(err as Error).message}`);
+      return [];
+    } finally {
+      resolver.release();
       if (!this.projectPreloaded) {
         this.cleanupSourceFile(filePath);
       }
@@ -219,6 +251,19 @@ export class TsMorphAdapter implements ILanguageAdapter {
   }
 
   // ── Symbol Extraction ───────────────────────────────────────
+
+  private collectSymbols(sourceFile: SourceFile, filePath: string): SymbolNode[] {
+    const symbols: SymbolNode[] = [];
+
+    this.extractFunctions(sourceFile, filePath, symbols);
+    this.extractClasses(sourceFile, filePath, symbols);
+    this.extractInterfaces(sourceFile, filePath, symbols);
+    this.extractTypeAliases(sourceFile, filePath, symbols);
+    this.extractVariables(sourceFile, filePath, symbols);
+    symbols.push(...findTestBlocks(sourceFile, filePath).map(testBlockSymbol));
+
+    return symbols;
+  }
 
   private extractFunctions(
     sourceFile: SourceFile,

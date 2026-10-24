@@ -33,6 +33,8 @@ export type {
   CtxoHostServices,
   CtxoHost,
   CtxoModuleRegister,
+  TrivialLiteral,
+  FactDetectorOptions,
 } from './ports/i-ctxo-module.js';
 
 // Core types
@@ -50,6 +52,8 @@ export type {
   GitRange,
   GitRefs,
   CoChangeEntry,
+  CodeFact,
+  FactKind,
   SearchDocument,
   SearchResponse,
   SearchResult,

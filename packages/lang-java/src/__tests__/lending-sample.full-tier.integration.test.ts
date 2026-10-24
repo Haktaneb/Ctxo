@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { CAN_RUN_JDT, LENDING_FIXTURE, testAnalyzerJar } from './helpers/analyzer-jar.js';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { JavaCompositeAdapter } from '../composite-adapter.js';
+import { DEFAULT_FACT_OPTIONS } from '../facts/fact-options.js';
 
 const TEST_FILE = 'src/test/java/lending/LoanPolicyTest.java';
 const LOAN_FILE = 'src/main/java/lending/domain/Loan.java';
@@ -55,6 +58,69 @@ describe.skipIf(!CAN_RUN_JDT)('lending sample (JDT full tier, real jar)', () => 
       { name: 'Unknown', args: ['x'], named: { level: '2' } },
     ]);
     expect(byId.get(`${LOAN_FILE}::memberId::method`)).not.toHaveProperty('annotations');
+  }, 130_000);
+});
+
+const FACTS = 'src/main/java/lending/facts';
+
+/** The 0-based line of the only line of a fixture file that holds `needle`. */
+function lineOf(file: string, needle: string): number {
+  const lines = readFileSync(resolve(LENDING_FIXTURE, file), 'utf-8').split(/\r?\n/);
+  const hits = lines.flatMap((line, i) => (line.includes(needle) ? [i] : []));
+  expect(hits, needle).toHaveLength(1);
+  return hits[0]!;
+}
+
+describe.skipIf(!CAN_RUN_JDT)('lending sample facts (JDT full tier, real jar)', () => {
+  const withFacts = new JavaCompositeAdapter({ facts: DEFAULT_FACT_OPTIONS });
+  const withoutFacts = new JavaCompositeAdapter();
+
+  beforeAll(async () => {
+    vi.stubEnv('CTXO_JDT_ANALYZER_JAR', testAnalyzerJar()!);
+    await withFacts.initialize(LENDING_FIXTURE);
+    await withoutFacts.initialize(LENDING_FIXTURE);
+  }, 130_000);
+
+  afterAll(async () => {
+    await withFacts.dispose();
+    await withoutFacts.dispose();
+    vi.unstubAllEnvs();
+  });
+
+  it('the facts fixture gives the expected facts in the JDT tier', async () => {
+    expect(withFacts.getTier()).toBe('full');
+    const rules = `${FACTS}/LoanRules.java`;
+    const controller = `${FACTS}/LoanController.java`;
+    const resource = `${FACTS}/HoldResource.java`;
+    const facts: string[] = [];
+    for (const file of [rules, controller, resource]) {
+      for (const f of await withFacts.extractFacts(file, '')) {
+        facts.push(`${f.symbolId.slice(file.length + 2)} ${f.line} ${f.kind} ${f.text} ${JSON.stringify(f.detail)}`);
+      }
+    }
+    const method = (file: string, needle: string): number => lineOf(file, needle) - 1;
+    expect(facts).toEqual([
+      `MAX_RETRIES::variable ${lineOf(rules, 'MAX_RETRIES')} retry-timeout MAX_RETRIES = 3 {"name":"MAX_RETRIES","value":"3"}`,
+      `HOLD_TIMEOUT::variable ${lineOf(rules, 'HOLD_TIMEOUT')} retry-timeout HOLD_TIMEOUT = 90min {"name":"HOLD_TIMEOUT","value":"90min"}`,
+      `canBorrow::method ${lineOf(rules, 'openLoans >= 5')} literal-comparison openLoans >= 5 {"operator":">=","literal":"5"}`,
+      `fee::method ${lineOf(rules, 'case "gold"')} literal-comparison tier case "gold" {"operator":"case","literal":"\\"gold\\""}`,
+      `key::method ${lineOf(rules, 'email.trim()')} normalization email.trim() {"method":"trim"}`,
+      `key::method ${lineOf(rules, 'email.trim()')} normalization email.trim().toLowerCase() {"method":"toLowerCase"}`,
+      `same::method ${lineOf(rules, 'equalsIgnoreCase')} normalization a.equalsIgnoreCase(b) {"method":"equalsIgnoreCase"}`,
+      `label::method ${lineOf(rules, 'days > 14')} literal-comparison days > 14 {"operator":">","literal":"14"}`,
+      `get::method ${method(controller, 'get(long id)')} endpoint GET /api/loans/{id} {"verb":"GET","route":"/api/loans/{id}"}`,
+      `borrow::method ${method(controller, 'borrow()')} endpoint POST /api/loans {"verb":"POST","route":"/api/loans"}`,
+      `renew::method ${method(controller, 'renew()')} endpoint POST /api/loans/renew {"verb":"POST","route":"/api/loans/renew"}`,
+      `get::method ${lineOf(resource, '@GET')} endpoint GET /holds/{id} {"verb":"GET","route":"/holds/{id}"}`,
+    ]);
+  }, 130_000);
+
+  it('without facts extractFacts gives nothing and symbols and edges are the same', async () => {
+    const file = `${FACTS}/LoanRules.java`;
+    expect(withoutFacts.facts).toBeUndefined();
+    expect(await withoutFacts.extractFacts(file, '')).toEqual([]);
+    expect(await withFacts.extractSymbols(file, '')).toEqual(await withoutFacts.extractSymbols(file, ''));
+    expect(await withFacts.extractEdges(file, '')).toEqual(await withoutFacts.extractEdges(file, ''));
   }, 130_000);
 });
 

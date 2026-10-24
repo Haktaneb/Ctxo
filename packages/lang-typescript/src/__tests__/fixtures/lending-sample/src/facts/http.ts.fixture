@@ -1,0 +1,12 @@
+import express from 'express';
+import axios from 'axios';
+
+export const router = express.Router();
+router.get('/holds/:id', (_req, res) => res.end());
+
+const cache = new Map<string, string>();
+cache.get('/holds');
+
+export async function load() {
+  return axios.get('/api/loans');
+}

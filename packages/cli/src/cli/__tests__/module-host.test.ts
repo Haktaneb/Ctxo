@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join, parse } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -280,6 +280,41 @@ describe('host services', () => {
 
     expect(await services.readCoChangeWindow(notARepo, {})).toBeUndefined();
     expect(await services.readCoChangeWindow(missing, {})).toBeUndefined();
+  });
+
+  it('readCoChangeEntries returns the entries of co-changes.json once per pair and undefined for a missing or invalid file', () => {
+    const warn = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { services, ctxoRoot } = createModuleHost({ projectRoot: tempDir(), mode: 'cli' });
+      const matrixFile = join(ctxoRoot, 'index', 'co-changes.json');
+      const writeMatrix = (content: string, minute: number) => {
+        writeFileSync(matrixFile, content, 'utf-8');
+        // A fixed mtime per write, so two writes in one timer tick still look different to the reader.
+        const when = new Date(Date.UTC(2026, 0, 1, 0, minute));
+        utimesSync(matrixFile, when, when);
+      };
+
+      // No matrix yet.
+      expect(services.readCoChangeEntries(ctxoRoot)).toBeUndefined();
+
+      // One pair gives exactly one entry; flattening readCoChangeMap() would give it twice.
+      const pair = { file1: 'src/Lending/Loan.cs', file2: 'src/Members/Member.cs', sharedCommits: 3, frequency: 0.6 };
+      mkdirSync(join(ctxoRoot, 'index'), { recursive: true });
+      writeMatrix(JSON.stringify({ version: 1, timestamp: 1, entries: [pair] }), 1);
+      expect(services.readCoChangeEntries(ctxoRoot)).toEqual([pair]);
+
+      // Invalid content: undefined, never a throw.
+      writeMatrix('{ not json', 2);
+      expect(services.readCoChangeEntries(ctxoRoot)).toBeUndefined();
+      writeMatrix(JSON.stringify({ version: 2, timestamp: 1, entries: [pair] }), 3);
+      expect(services.readCoChangeEntries(ctxoRoot)).toBeUndefined();
+
+      // Gone again.
+      rmSync(matrixFile);
+      expect(services.readCoChangeEntries(ctxoRoot)).toBeUndefined();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('findGitRoot walks up to the repository root', () => {

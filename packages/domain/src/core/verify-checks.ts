@@ -8,9 +8,10 @@ import type { DomainContext, DomainRegistry, LoadedRegistry } from './registry.j
 import type { UnresolvedRef } from './domain-graph.js';
 import type { RuleLinks, RuleRef } from './rule-id-scan.js';
 import { cardRefFile } from './rule-test-links.js';
+import type { ParsedShadowSpecs, ResolutionEntry } from './shadow-specs-file.js';
 import type { TouchedReport } from './touched.js';
 
-export const VERIFY_CHECKS = ['1', '2', '3', '4a', '4b', '5', '6', '7', '8', '9', '10', '11'] as const;
+export const VERIFY_CHECKS = ['1', '2', '3', '4a', '4b', '5', '6', '7', '8', '9', '10', '11', '12'] as const;
 export type VerifyCheckId = (typeof VERIFY_CHECKS)[number];
 
 export interface Finding {
@@ -53,6 +54,25 @@ export interface VerifyInput {
   readonly boundaries: BoundaryResult;
   /** Only with --since. */
   readonly touched?: TouchedReport;
+  /** Check 12 (H6, W15): each context's `shadow-specs.yaml` with its resolutions applied; defaults to none. */
+  readonly shadowSpecs?: readonly ShadowSpecsCheckInput[];
+  /** Check 12: `shadow-specs.yaml` files whose folder names no context; defaults to none. */
+  readonly orphanShadowSpecs?: readonly string[];
+  /** Check 12: why the candidates could not be built, so staleness is unknown; absent when they were built. */
+  readonly candidatesUnavailable?: string;
+}
+
+/** One context's resolution file for check 12. */
+export interface ShadowSpecsCheckInput {
+  readonly context: string;
+  /** Repo-relative, posix. */
+  readonly path: string;
+  /** Absent: there is no file. */
+  readonly parsed?: ParsedShadowSpecs;
+  /** Entries matching no candidate of the context (`applyResolutions(...).stale`). */
+  readonly stale: readonly ResolutionEntry[];
+  /** Entries naming an unknown rule (`applyResolutions(...).unknownRules`). */
+  readonly unknownRules: readonly ResolutionEntry[];
 }
 
 const TITLES: Record<VerifyCheckId, string> = {
@@ -68,6 +88,7 @@ const TITLES: Record<VerifyCheckId, string> = {
   '9': 'Context map rungs',
   '10': 'Boundaries',
   '11': 'Fold since ref',
+  '12': 'Shadow-spec resolutions',
 };
 
 const UNOWNED_LIST_LIMIT = 20;
@@ -439,7 +460,42 @@ function check11(touched: TouchedReport | undefined): CheckOutcome {
   return outcomeOf('11', findings);
 }
 
-/** Runs the eleven verify-domain checks (spec 10.5). Pure: every I/O result arrives in the input. */
+/**
+ * H6: each parse problem at its severity, each stale entry and each unknown rule a warning (an entry can be both:
+ * two findings, never summed), one warning when the candidates could not be built and a file has entries, each
+ * orphan file a warning. Day one, with no file, passes.
+ */
+function check12(input: VerifyInput): CheckOutcome {
+  const findings: Finding[] = [];
+  for (const spec of input.shadowSpecs ?? []) {
+    const extra = { context: spec.context };
+    for (const problem of spec.parsed?.problems ?? []) {
+      // Located like the other file findings: the human line prints `<path>:<line> <message>`.
+      const at = { file: spec.path, line: problem.line, ...extra };
+      findings.push(problem.severity === 'error' ? error('12', problem.message, at) : warning('12', problem.message, at));
+    }
+    for (const entry of spec.stale) {
+      findings.push(
+        warning('12', `stale resolution "${entry.fingerprint}" matches no candidate of ${spec.context}`, { file: spec.path, line: entry.line, ...extra }),
+      );
+    }
+    for (const entry of spec.unknownRules) {
+      if (!('rule' in entry.resolution)) continue;
+      findings.push(warning('12', `resolution names unknown rule ${entry.resolution.rule}`, { file: spec.path, line: entry.line, ...extra }));
+    }
+  }
+  // Without candidates no entry is called stale; one warning says the check did not run (only when there are entries).
+  const hasEntries = (input.shadowSpecs ?? []).some((spec) => (spec.parsed?.entries.length ?? 0) > 0);
+  if (input.candidatesUnavailable !== undefined && hasEntries) {
+    findings.push(warning('12', `stale resolutions were not checked: ${input.candidatesUnavailable}`));
+  }
+  for (const path of [...(input.orphanShadowSpecs ?? [])].sort(compare)) {
+    findings.push(warning('12', `${path} belongs to no context`));
+  }
+  return outcomeOf('12', findings);
+}
+
+/** Runs the twelve verify-domain checks (spec 10.5). Pure: every I/O result arrives in the input. */
 export function runVerifyChecks(input: VerifyInput): CheckOutcome[] {
   const first = check1(input);
   const registry = input.registry.registry;
@@ -461,5 +517,6 @@ export function runVerifyChecks(input: VerifyInput): CheckOutcome[] {
     check9(registry, input),
     check10(input.boundaries),
     check11(input.touched),
+    check12(input),
   ];
 }

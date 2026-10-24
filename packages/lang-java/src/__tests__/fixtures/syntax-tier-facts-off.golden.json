@@ -1,0 +1,1844 @@
+{
+  "lending/src/main/java/lending/data/LoanJpaRepository.java": {
+    "symbols": [
+      {
+        "symbolId": "src/main/java/lending/data/LoanJpaRepository.java::LoanJpaRepository::interface",
+        "name": "LoanJpaRepository",
+        "kind": "interface",
+        "startLine": 6,
+        "endLine": 12,
+        "startOffset": 129,
+        "endOffset": 389
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanJpaRepository.java::findOverdue::method",
+        "name": "findOverdue",
+        "kind": "method",
+        "startLine": 7,
+        "endLine": 8,
+        "startOffset": 168,
+        "endOffset": 289,
+        "annotations": [
+          {
+            "name": "Query",
+            "args": [
+              "SELECT * FROM dbo.Loans WHERE DueAt < CURRENT_TIMESTAMP"
+            ]
+          }
+        ]
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanJpaRepository.java::findByMember::method",
+        "name": "findByMember",
+        "kind": "method",
+        "startLine": 10,
+        "endLine": 11,
+        "startOffset": 293,
+        "endOffset": 387,
+        "annotations": [
+          {
+            "name": "Query",
+            "args": [
+              "SELECT l FROM Loan l WHERE l.memberId = ?1"
+            ]
+          }
+        ]
+      }
+    ],
+    "edges": [
+      {
+        "from": "src/main/java/lending/data/LoanJpaRepository.java::LoanJpaRepository::interface",
+        "to": "java.util.List::List::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/main/java/lending/data/LoanJpaRepository.java::LoanJpaRepository::interface",
+        "to": "lending.domain.Loan::Loan::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/main/java/lending/data/LoanJpaRepository.java::LoanJpaRepository::interface",
+        "to": "org.springframework.data.jpa.repository.Query::Query::class",
+        "kind": "imports"
+      }
+    ],
+    "complexity": [
+      {
+        "symbolId": "src/main/java/lending/data/LoanJpaRepository.java::findOverdue::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanJpaRepository.java::findByMember::method",
+        "cyclomatic": 1
+      }
+    ]
+  },
+  "lending/src/main/java/lending/data/LoanMapper.java": {
+    "symbols": [
+      {
+        "symbolId": "src/main/java/lending/data/LoanMapper.java::LoanMapper::interface",
+        "name": "LoanMapper",
+        "kind": "interface",
+        "startLine": 9,
+        "endLine": 21,
+        "startOffset": 255,
+        "endOffset": 655
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanMapper.java::active::method",
+        "name": "active",
+        "kind": "method",
+        "startLine": 10,
+        "endLine": 11,
+        "startOffset": 287,
+        "endOffset": 372,
+        "annotations": [
+          {
+            "name": "Select",
+            "args": [
+              "SELECT * FROM dbo.Loans",
+              "WHERE ClosedAt IS NULL"
+            ]
+          }
+        ]
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanMapper.java::add::method",
+        "name": "add",
+        "kind": "method",
+        "startLine": 13,
+        "endLine": 14,
+        "startOffset": 376,
+        "endOffset": 473,
+        "annotations": [
+          {
+            "name": "Insert",
+            "args": [
+              "INSERT INTO dbo.Loans (Id, MemberId) VALUES (#{id}, #{memberId})"
+            ]
+          }
+        ]
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanMapper.java::renew::method",
+        "name": "renew",
+        "kind": "method",
+        "startLine": 16,
+        "endLine": 17,
+        "startOffset": 477,
+        "endOffset": 577,
+        "annotations": [
+          {
+            "name": "Update",
+            "args": [
+              "UPDATE dbo.Loans SET RenewedAt = CURRENT_TIMESTAMP WHERE Id = #{id}"
+            ]
+          }
+        ]
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanMapper.java::remove::method",
+        "name": "remove",
+        "kind": "method",
+        "startLine": 19,
+        "endLine": 20,
+        "startOffset": 581,
+        "endOffset": 653,
+        "annotations": [
+          {
+            "name": "Delete",
+            "args": [
+              "DELETE FROM dbo.Loans WHERE Id = #{id}"
+            ]
+          }
+        ]
+      }
+    ],
+    "edges": [
+      {
+        "from": "src/main/java/lending/data/LoanMapper.java::LoanMapper::interface",
+        "to": "java.util.List::List::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/main/java/lending/data/LoanMapper.java::LoanMapper::interface",
+        "to": "lending.domain.Loan::Loan::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/main/java/lending/data/LoanMapper.java::LoanMapper::interface",
+        "to": "org.apache.ibatis.annotations.Delete::Delete::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/main/java/lending/data/LoanMapper.java::LoanMapper::interface",
+        "to": "org.apache.ibatis.annotations.Insert::Insert::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/main/java/lending/data/LoanMapper.java::LoanMapper::interface",
+        "to": "org.apache.ibatis.annotations.Select::Select::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/main/java/lending/data/LoanMapper.java::LoanMapper::interface",
+        "to": "org.apache.ibatis.annotations.Update::Update::class",
+        "kind": "imports"
+      }
+    ],
+    "complexity": [
+      {
+        "symbolId": "src/main/java/lending/data/LoanMapper.java::active::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanMapper.java::add::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanMapper.java::renew::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanMapper.java::remove::method",
+        "cyclomatic": 1
+      }
+    ]
+  },
+  "lending/src/main/java/lending/data/LoanRepository.java": {
+    "symbols": [
+      {
+        "symbolId": "src/main/java/lending/data/LoanRepository.java::LoanRepository::class",
+        "name": "LoanRepository",
+        "kind": "class",
+        "startLine": 15,
+        "endLine": 73,
+        "startOffset": 468,
+        "endOffset": 2395
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanRepository.java::ACTIVE_SQL::variable",
+        "name": "ACTIVE_SQL",
+        "kind": "variable",
+        "startLine": 16,
+        "endLine": 16,
+        "startOffset": 500,
+        "endOffset": 613
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanRepository.java::jdbc::variable",
+        "name": "jdbc",
+        "kind": "variable",
+        "startLine": 18,
+        "endLine": 18,
+        "startOffset": 617,
+        "endOffset": 649
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanRepository.java::named::variable",
+        "name": "named",
+        "kind": "variable",
+        "startLine": 19,
+        "endLine": 19,
+        "startOffset": 652,
+        "endOffset": 699
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanRepository.java::connection::variable",
+        "name": "connection",
+        "kind": "variable",
+        "startLine": 20,
+        "endLine": 20,
+        "startOffset": 702,
+        "endOffset": 738
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanRepository.java::statement::variable",
+        "name": "statement",
+        "kind": "variable",
+        "startLine": 21,
+        "endLine": 21,
+        "startOffset": 741,
+        "endOffset": 775
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanRepository.java::entityManager::variable",
+        "name": "entityManager",
+        "kind": "variable",
+        "startLine": 22,
+        "endLine": 22,
+        "startOffset": 778,
+        "endOffset": 820
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanRepository.java::mapper::variable",
+        "name": "mapper",
+        "kind": "variable",
+        "startLine": 23,
+        "endLine": 23,
+        "startOffset": 823,
+        "endOffset": 860
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanRepository.java::LoanRepository::method",
+        "name": "LoanRepository",
+        "kind": "method",
+        "startLine": 25,
+        "endLine": 33,
+        "startOffset": 864,
+        "endOffset": 1225
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanRepository.java::findActive::method",
+        "name": "findActive",
+        "kind": "method",
+        "startLine": 35,
+        "endLine": 37,
+        "startOffset": 1229,
+        "endOffset": 1308
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanRepository.java::close::method",
+        "name": "close",
+        "kind": "method",
+        "startLine": 39,
+        "endLine": 41,
+        "startOffset": 1312,
+        "endOffset": 1436
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanRepository.java::archive::method",
+        "name": "archive",
+        "kind": "method",
+        "startLine": 43,
+        "endLine": 46,
+        "startOffset": 1440,
+        "endOffset": 1623
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanRepository.java::holdsFor::method",
+        "name": "holdsFor",
+        "kind": "method",
+        "startLine": 48,
+        "endLine": 51,
+        "startOffset": 1627,
+        "endOffset": 1797
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanRepository.java::purge::method",
+        "name": "purge",
+        "kind": "method",
+        "startLine": 53,
+        "endLine": 56,
+        "startOffset": 1801,
+        "endOffset": 1955
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanRepository.java::flagAll::method",
+        "name": "flagAll",
+        "kind": "method",
+        "startLine": 58,
+        "endLine": 60,
+        "startOffset": 1959,
+        "endOffset": 2084
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanRepository.java::later::method",
+        "name": "later",
+        "kind": "method",
+        "startLine": 62,
+        "endLine": 64,
+        "startOffset": 2088,
+        "endOffset": 2180
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanRepository.java::dynamic::method",
+        "name": "dynamic",
+        "kind": "method",
+        "startLine": 66,
+        "endLine": 68,
+        "startOffset": 2184,
+        "endOffset": 2286
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanRepository.java::prepared::method",
+        "name": "prepared",
+        "kind": "method",
+        "startLine": 70,
+        "endLine": 72,
+        "startOffset": 2290,
+        "endOffset": 2393
+      }
+    ],
+    "edges": [
+      {
+        "from": "src/main/java/lending/data/LoanRepository.java::LoanRepository::class",
+        "to": "jakarta.persistence.EntityManager::EntityManager::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/main/java/lending/data/LoanRepository.java::LoanRepository::class",
+        "to": "java.sql.CallableStatement::CallableStatement::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/main/java/lending/data/LoanRepository.java::LoanRepository::class",
+        "to": "java.sql.Connection::Connection::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/main/java/lending/data/LoanRepository.java::LoanRepository::class",
+        "to": "java.sql.PreparedStatement::PreparedStatement::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/main/java/lending/data/LoanRepository.java::LoanRepository::class",
+        "to": "java.sql.ResultSet::ResultSet::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/main/java/lending/data/LoanRepository.java::LoanRepository::class",
+        "to": "java.sql.SQLException::SQLException::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/main/java/lending/data/LoanRepository.java::LoanRepository::class",
+        "to": "java.sql.Statement::Statement::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/main/java/lending/data/LoanRepository.java::LoanRepository::class",
+        "to": "java.util.List::List::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/main/java/lending/data/LoanRepository.java::LoanRepository::class",
+        "to": "java.util.Map::Map::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/main/java/lending/data/LoanRepository.java::LoanRepository::class",
+        "to": "org.springframework.jdbc.core.JdbcTemplate::JdbcTemplate::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/main/java/lending/data/LoanRepository.java::LoanRepository::class",
+        "to": "org.springframework.jdbc.core.RowMapper::RowMapper::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/main/java/lending/data/LoanRepository.java::LoanRepository::class",
+        "to": "org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate::NamedParameterJdbcTemplate::class",
+        "kind": "imports"
+      }
+    ],
+    "complexity": [
+      {
+        "symbolId": "src/main/java/lending/data/LoanRepository.java::LoanRepository::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanRepository.java::findActive::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanRepository.java::close::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanRepository.java::archive::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanRepository.java::holdsFor::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanRepository.java::purge::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanRepository.java::flagAll::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanRepository.java::later::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanRepository.java::dynamic::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "src/main/java/lending/data/LoanRepository.java::prepared::method",
+        "cyclomatic": 1
+      }
+    ]
+  },
+  "lending/src/main/java/lending/domain/Limits.java": {
+    "symbols": [
+      {
+        "symbolId": "src/main/java/lending/domain/Limits.java::Limits::class",
+        "name": "Limits",
+        "kind": "class",
+        "startLine": 2,
+        "endLine": 8,
+        "startOffset": 25,
+        "endOffset": 175
+      },
+      {
+        "symbolId": "src/main/java/lending/domain/Limits.java::MAX_RETRIES::variable",
+        "name": "MAX_RETRIES",
+        "kind": "variable",
+        "startLine": 3,
+        "endLine": 3,
+        "startOffset": 55,
+        "endOffset": 95
+      },
+      {
+        "symbolId": "src/main/java/lending/domain/Limits.java::MAX_LOANS_PER_MEMBER::variable",
+        "name": "MAX_LOANS_PER_MEMBER",
+        "kind": "variable",
+        "startLine": 4,
+        "endLine": 4,
+        "startOffset": 98,
+        "endOffset": 147
+      },
+      {
+        "symbolId": "src/main/java/lending/domain/Limits.java::Limits::method",
+        "name": "Limits",
+        "kind": "method",
+        "startLine": 6,
+        "endLine": 7,
+        "startOffset": 151,
+        "endOffset": 173
+      }
+    ],
+    "edges": [],
+    "complexity": [
+      {
+        "symbolId": "src/main/java/lending/domain/Limits.java::Limits::method",
+        "cyclomatic": 1
+      }
+    ]
+  },
+  "lending/src/main/java/lending/domain/Loan.java": {
+    "symbols": [
+      {
+        "symbolId": "src/main/java/lending/domain/Loan.java::Loan::class",
+        "name": "Loan",
+        "kind": "class",
+        "startLine": 7,
+        "endLine": 29,
+        "startOffset": 168,
+        "endOffset": 656,
+        "annotations": [
+          {
+            "name": "Entity"
+          },
+          {
+            "name": "Table",
+            "named": {
+              "name": "Loans"
+            }
+          }
+        ]
+      },
+      {
+        "symbolId": "src/main/java/lending/domain/Loan.java::memberId::variable",
+        "name": "memberId",
+        "kind": "variable",
+        "startLine": 10,
+        "endLine": 11,
+        "startOffset": 221,
+        "endOffset": 291,
+        "annotations": [
+          {
+            "name": "Column",
+            "named": {
+              "name": "member_id"
+            }
+          }
+        ]
+      },
+      {
+        "symbolId": "src/main/java/lending/domain/Loan.java::renew::method",
+        "name": "renew",
+        "kind": "method",
+        "startLine": 13,
+        "endLine": 15,
+        "startOffset": 295,
+        "endOffset": 435,
+        "annotations": [
+          {
+            "name": "Retry",
+            "args": [
+              "renewal"
+            ]
+          }
+        ]
+      },
+      {
+        "symbolId": "src/main/java/lending/domain/Loan.java::legacy::method",
+        "name": "legacy",
+        "kind": "method",
+        "startLine": 17,
+        "endLine": 20,
+        "startOffset": 439,
+        "endOffset": 535,
+        "annotations": [
+          {
+            "name": "SuppressWarnings",
+            "args": [
+              "unchecked",
+              "rawtypes"
+            ]
+          },
+          {
+            "name": "Notes"
+          }
+        ]
+      },
+      {
+        "symbolId": "src/main/java/lending/domain/Loan.java::audited::method",
+        "name": "audited",
+        "kind": "method",
+        "startLine": 22,
+        "endLine": 24,
+        "startOffset": 539,
+        "endOffset": 601,
+        "annotations": [
+          {
+            "name": "Unknown",
+            "args": [
+              "x"
+            ]
+          }
+        ]
+      },
+      {
+        "symbolId": "src/main/java/lending/domain/Loan.java::memberId::method",
+        "name": "memberId",
+        "kind": "method",
+        "startLine": 26,
+        "endLine": 28,
+        "startOffset": 605,
+        "endOffset": 654
+      }
+    ],
+    "edges": [
+      {
+        "from": "src/main/java/lending/domain/Loan.java::Loan::class",
+        "to": "jakarta.persistence.Column::Column::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/main/java/lending/domain/Loan.java::Loan::class",
+        "to": "jakarta.persistence.Entity::Entity::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/main/java/lending/domain/Loan.java::Loan::class",
+        "to": "jakarta.persistence.Table::Table::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/main/java/lending/domain/Loan.java::Loan::class",
+        "to": "java.util.concurrent.TimeUnit::TimeUnit::class",
+        "kind": "imports"
+      }
+    ],
+    "complexity": [
+      {
+        "symbolId": "src/main/java/lending/domain/Loan.java::renew::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "src/main/java/lending/domain/Loan.java::legacy::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "src/main/java/lending/domain/Loan.java::audited::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "src/main/java/lending/domain/Loan.java::memberId::method",
+        "cyclomatic": 1
+      }
+    ]
+  },
+  "lending/src/main/java/lending/domain/Note.java": {
+    "symbols": [
+      {
+        "symbolId": "src/main/java/lending/domain/Note.java::Note::interface",
+        "name": "Note",
+        "kind": "interface",
+        "startLine": 2,
+        "endLine": 4,
+        "startOffset": 25,
+        "endOffset": 69
+      }
+    ],
+    "edges": [],
+    "complexity": []
+  },
+  "lending/src/main/java/lending/domain/Notes.java": {
+    "symbols": [
+      {
+        "symbolId": "src/main/java/lending/domain/Notes.java::Notes::interface",
+        "name": "Notes",
+        "kind": "interface",
+        "startLine": 2,
+        "endLine": 4,
+        "startOffset": 25,
+        "endOffset": 70
+      }
+    ],
+    "edges": [],
+    "complexity": []
+  },
+  "lending/src/main/java/lending/domain/Retry.java": {
+    "symbols": [
+      {
+        "symbolId": "src/main/java/lending/domain/Retry.java::Retry::interface",
+        "name": "Retry",
+        "kind": "interface",
+        "startLine": 4,
+        "endLine": 12,
+        "startOffset": 64,
+        "endOffset": 252
+      }
+    ],
+    "edges": [
+      {
+        "from": "src/main/java/lending/domain/Retry.java::Retry::interface",
+        "to": "java.util.concurrent.TimeUnit::TimeUnit::class",
+        "kind": "imports"
+      }
+    ],
+    "complexity": []
+  },
+  "lending/src/main/java/lending/facts/HoldResource.java": {
+    "symbols": [
+      {
+        "symbolId": "src/main/java/lending/facts/HoldResource.java::HoldResource::class",
+        "name": "HoldResource",
+        "kind": "class",
+        "startLine": 5,
+        "endLine": 12,
+        "startOffset": 78,
+        "endOffset": 200,
+        "annotations": [
+          {
+            "name": "Path",
+            "args": [
+              "/holds"
+            ]
+          }
+        ]
+      },
+      {
+        "symbolId": "src/main/java/lending/facts/HoldResource.java::get::method",
+        "name": "get",
+        "kind": "method",
+        "startLine": 7,
+        "endLine": 11,
+        "startOffset": 124,
+        "endOffset": 198,
+        "annotations": [
+          {
+            "name": "GET"
+          },
+          {
+            "name": "Path",
+            "args": [
+              "{id}"
+            ]
+          }
+        ]
+      }
+    ],
+    "edges": [
+      {
+        "from": "src/main/java/lending/facts/HoldResource.java::HoldResource::class",
+        "to": "jakarta.ws.rs.GET::GET::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/main/java/lending/facts/HoldResource.java::HoldResource::class",
+        "to": "jakarta.ws.rs.Path::Path::class",
+        "kind": "imports"
+      }
+    ],
+    "complexity": [
+      {
+        "symbolId": "src/main/java/lending/facts/HoldResource.java::get::method",
+        "cyclomatic": 1
+      }
+    ]
+  },
+  "lending/src/main/java/lending/facts/LoanController.java": {
+    "symbols": [
+      {
+        "symbolId": "src/main/java/lending/facts/LoanController.java::LoanController::class",
+        "name": "LoanController",
+        "kind": "class",
+        "startLine": 8,
+        "endLine": 25,
+        "startOffset": 332,
+        "endOffset": 674,
+        "annotations": [
+          {
+            "name": "RestController"
+          },
+          {
+            "name": "RequestMapping",
+            "args": [
+              "/api/loans"
+            ]
+          }
+        ]
+      },
+      {
+        "symbolId": "src/main/java/lending/facts/LoanController.java::get::method",
+        "name": "get",
+        "kind": "method",
+        "startLine": 11,
+        "endLine": 14,
+        "startOffset": 410,
+        "endOffset": 484,
+        "annotations": [
+          {
+            "name": "GetMapping",
+            "args": [
+              "/{id}"
+            ]
+          }
+        ]
+      },
+      {
+        "symbolId": "src/main/java/lending/facts/LoanController.java::borrow::method",
+        "name": "borrow",
+        "kind": "method",
+        "startLine": 16,
+        "endLine": 19,
+        "startOffset": 488,
+        "endOffset": 554,
+        "annotations": [
+          {
+            "name": "PostMapping"
+          }
+        ]
+      },
+      {
+        "symbolId": "src/main/java/lending/facts/LoanController.java::renew::method",
+        "name": "renew",
+        "kind": "method",
+        "startLine": 21,
+        "endLine": 24,
+        "startOffset": 558,
+        "endOffset": 672,
+        "annotations": [
+          {
+            "name": "RequestMapping",
+            "args": [
+              "/renew"
+            ]
+          }
+        ]
+      }
+    ],
+    "edges": [
+      {
+        "from": "src/main/java/lending/facts/LoanController.java::LoanController::class",
+        "to": "org.springframework.web.bind.annotation.GetMapping::GetMapping::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/main/java/lending/facts/LoanController.java::LoanController::class",
+        "to": "org.springframework.web.bind.annotation.PostMapping::PostMapping::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/main/java/lending/facts/LoanController.java::LoanController::class",
+        "to": "org.springframework.web.bind.annotation.RequestMapping::RequestMapping::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/main/java/lending/facts/LoanController.java::LoanController::class",
+        "to": "org.springframework.web.bind.annotation.RequestMethod::RequestMethod::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/main/java/lending/facts/LoanController.java::LoanController::class",
+        "to": "org.springframework.web.bind.annotation.RestController::RestController::class",
+        "kind": "imports"
+      }
+    ],
+    "complexity": [
+      {
+        "symbolId": "src/main/java/lending/facts/LoanController.java::get::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "src/main/java/lending/facts/LoanController.java::borrow::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "src/main/java/lending/facts/LoanController.java::renew::method",
+        "cyclomatic": 1
+      }
+    ]
+  },
+  "lending/src/main/java/lending/facts/LoanRules.java": {
+    "symbols": [
+      {
+        "symbolId": "src/main/java/lending/facts/LoanRules.java::LoanRules::class",
+        "name": "LoanRules",
+        "kind": "class",
+        "startLine": 2,
+        "endLine": 36,
+        "startOffset": 24,
+        "endOffset": 858
+      },
+      {
+        "symbolId": "src/main/java/lending/facts/LoanRules.java::MAX_RETRIES::variable",
+        "name": "MAX_RETRIES",
+        "kind": "variable",
+        "startLine": 3,
+        "endLine": 3,
+        "startOffset": 51,
+        "endOffset": 91
+      },
+      {
+        "symbolId": "src/main/java/lending/facts/LoanRules.java::HOLD_TIMEOUT::variable",
+        "name": "HOLD_TIMEOUT",
+        "kind": "variable",
+        "startLine": 4,
+        "endLine": 4,
+        "startOffset": 94,
+        "endOffset": 174
+      },
+      {
+        "symbolId": "src/main/java/lending/facts/LoanRules.java::SETTLEMENT_DAYS::variable",
+        "name": "SETTLEMENT_DAYS",
+        "kind": "variable",
+        "startLine": 5,
+        "endLine": 5,
+        "startOffset": 177,
+        "endOffset": 222
+      },
+      {
+        "symbolId": "src/main/java/lending/facts/LoanRules.java::canBorrow::method",
+        "name": "canBorrow",
+        "kind": "method",
+        "startLine": 7,
+        "endLine": 11,
+        "startOffset": 226,
+        "endOffset": 400
+      },
+      {
+        "symbolId": "src/main/java/lending/facts/LoanRules.java::fee::method",
+        "name": "fee",
+        "kind": "method",
+        "startLine": 13,
+        "endLine": 19,
+        "startOffset": 404,
+        "endOffset": 547
+      },
+      {
+        "symbolId": "src/main/java/lending/facts/LoanRules.java::key::method",
+        "name": "key",
+        "kind": "method",
+        "startLine": 21,
+        "endLine": 23,
+        "startOffset": 551,
+        "endOffset": 627
+      },
+      {
+        "symbolId": "src/main/java/lending/facts/LoanRules.java::same::method",
+        "name": "same",
+        "kind": "method",
+        "startLine": 25,
+        "endLine": 27,
+        "startOffset": 631,
+        "endOffset": 710
+      },
+      {
+        "symbolId": "src/main/java/lending/facts/LoanRules.java::label::method",
+        "name": "label",
+        "kind": "method",
+        "startLine": 29,
+        "endLine": 31,
+        "startOffset": 714,
+        "endOffset": 787
+      },
+      {
+        "symbolId": "src/main/java/lending/facts/LoanRules.java::note::method",
+        "name": "note",
+        "kind": "method",
+        "startLine": 33,
+        "endLine": 35,
+        "startOffset": 791,
+        "endOffset": 856
+      }
+    ],
+    "edges": [],
+    "complexity": [
+      {
+        "symbolId": "src/main/java/lending/facts/LoanRules.java::canBorrow::method",
+        "cyclomatic": 4
+      },
+      {
+        "symbolId": "src/main/java/lending/facts/LoanRules.java::fee::method",
+        "cyclomatic": 4
+      },
+      {
+        "symbolId": "src/main/java/lending/facts/LoanRules.java::key::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "src/main/java/lending/facts/LoanRules.java::same::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "src/main/java/lending/facts/LoanRules.java::label::method",
+        "cyclomatic": 2
+      },
+      {
+        "symbolId": "src/main/java/lending/facts/LoanRules.java::note::method",
+        "cyclomatic": 1
+      }
+    ]
+  },
+  "lending/src/stubs/java/jakarta/persistence/Column.java": {
+    "symbols": [
+      {
+        "symbolId": "src/stubs/java/jakarta/persistence/Column.java::Column::interface",
+        "name": "Column",
+        "kind": "interface",
+        "startLine": 3,
+        "endLine": 7,
+        "startOffset": 116,
+        "endOffset": 208
+      }
+    ],
+    "edges": [],
+    "complexity": []
+  },
+  "lending/src/stubs/java/jakarta/persistence/Entity.java": {
+    "symbols": [
+      {
+        "symbolId": "src/stubs/java/jakarta/persistence/Entity.java::Entity::interface",
+        "name": "Entity",
+        "kind": "interface",
+        "startLine": 3,
+        "endLine": 5,
+        "startOffset": 116,
+        "endOffset": 172
+      }
+    ],
+    "edges": [],
+    "complexity": []
+  },
+  "lending/src/stubs/java/jakarta/persistence/EntityManager.java": {
+    "symbols": [
+      {
+        "symbolId": "src/stubs/java/jakarta/persistence/EntityManager.java::EntityManager::interface",
+        "name": "EntityManager",
+        "kind": "interface",
+        "startLine": 3,
+        "endLine": 7,
+        "startOffset": 116,
+        "endOffset": 234
+      },
+      {
+        "symbolId": "src/stubs/java/jakarta/persistence/EntityManager.java::createNativeQuery::method",
+        "name": "createNativeQuery",
+        "kind": "method",
+        "startLine": 4,
+        "endLine": 4,
+        "startOffset": 151,
+        "endOffset": 193
+      },
+      {
+        "symbolId": "src/stubs/java/jakarta/persistence/EntityManager.java::createQuery::method",
+        "name": "createQuery",
+        "kind": "method",
+        "startLine": 6,
+        "endLine": 6,
+        "startOffset": 197,
+        "endOffset": 232
+      }
+    ],
+    "edges": [],
+    "complexity": [
+      {
+        "symbolId": "src/stubs/java/jakarta/persistence/EntityManager.java::createNativeQuery::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "src/stubs/java/jakarta/persistence/EntityManager.java::createQuery::method",
+        "cyclomatic": 1
+      }
+    ]
+  },
+  "lending/src/stubs/java/jakarta/persistence/Query.java": {
+    "symbols": [
+      {
+        "symbolId": "src/stubs/java/jakarta/persistence/Query.java::Query::interface",
+        "name": "Query",
+        "kind": "interface",
+        "startLine": 3,
+        "endLine": 5,
+        "startOffset": 116,
+        "endOffset": 165
+      },
+      {
+        "symbolId": "src/stubs/java/jakarta/persistence/Query.java::executeUpdate::method",
+        "name": "executeUpdate",
+        "kind": "method",
+        "startLine": 4,
+        "endLine": 4,
+        "startOffset": 143,
+        "endOffset": 163
+      }
+    ],
+    "edges": [],
+    "complexity": [
+      {
+        "symbolId": "src/stubs/java/jakarta/persistence/Query.java::executeUpdate::method",
+        "cyclomatic": 1
+      }
+    ]
+  },
+  "lending/src/stubs/java/jakarta/persistence/Table.java": {
+    "symbols": [
+      {
+        "symbolId": "src/stubs/java/jakarta/persistence/Table.java::Table::interface",
+        "name": "Table",
+        "kind": "interface",
+        "startLine": 3,
+        "endLine": 7,
+        "startOffset": 116,
+        "endOffset": 202
+      }
+    ],
+    "edges": [],
+    "complexity": []
+  },
+  "lending/src/stubs/java/jakarta/ws/rs/GET.java": {
+    "symbols": [
+      {
+        "symbolId": "src/stubs/java/jakarta/ws/rs/GET.java::GET::interface",
+        "name": "GET",
+        "kind": "interface",
+        "startLine": 3,
+        "endLine": 4,
+        "startOffset": 103,
+        "endOffset": 128
+      }
+    ],
+    "edges": [],
+    "complexity": []
+  },
+  "lending/src/stubs/java/jakarta/ws/rs/Path.java": {
+    "symbols": [
+      {
+        "symbolId": "src/stubs/java/jakarta/ws/rs/Path.java::Path::interface",
+        "name": "Path",
+        "kind": "interface",
+        "startLine": 3,
+        "endLine": 5,
+        "startOffset": 103,
+        "endOffset": 147
+      }
+    ],
+    "edges": [],
+    "complexity": []
+  },
+  "lending/src/stubs/java/org/apache/ibatis/annotations/Delete.java": {
+    "symbols": [
+      {
+        "symbolId": "src/stubs/java/org/apache/ibatis/annotations/Delete.java::Delete::interface",
+        "name": "Delete",
+        "kind": "interface",
+        "startLine": 3,
+        "endLine": 7,
+        "startOffset": 114,
+        "endOffset": 197
+      }
+    ],
+    "edges": [],
+    "complexity": []
+  },
+  "lending/src/stubs/java/org/apache/ibatis/annotations/Insert.java": {
+    "symbols": [
+      {
+        "symbolId": "src/stubs/java/org/apache/ibatis/annotations/Insert.java::Insert::interface",
+        "name": "Insert",
+        "kind": "interface",
+        "startLine": 3,
+        "endLine": 7,
+        "startOffset": 114,
+        "endOffset": 197
+      }
+    ],
+    "edges": [],
+    "complexity": []
+  },
+  "lending/src/stubs/java/org/apache/ibatis/annotations/Select.java": {
+    "symbols": [
+      {
+        "symbolId": "src/stubs/java/org/apache/ibatis/annotations/Select.java::Select::interface",
+        "name": "Select",
+        "kind": "interface",
+        "startLine": 3,
+        "endLine": 7,
+        "startOffset": 114,
+        "endOffset": 197
+      }
+    ],
+    "edges": [],
+    "complexity": []
+  },
+  "lending/src/stubs/java/org/apache/ibatis/annotations/Update.java": {
+    "symbols": [
+      {
+        "symbolId": "src/stubs/java/org/apache/ibatis/annotations/Update.java::Update::interface",
+        "name": "Update",
+        "kind": "interface",
+        "startLine": 3,
+        "endLine": 7,
+        "startOffset": 114,
+        "endOffset": 197
+      }
+    ],
+    "edges": [],
+    "complexity": []
+  },
+  "lending/src/stubs/java/org/junit/jupiter/api/DisplayName.java": {
+    "symbols": [
+      {
+        "symbolId": "src/stubs/java/org/junit/jupiter/api/DisplayName.java::DisplayName::interface",
+        "name": "DisplayName",
+        "kind": "interface",
+        "startLine": 3,
+        "endLine": 5,
+        "startOffset": 106,
+        "endOffset": 157
+      }
+    ],
+    "edges": [],
+    "complexity": []
+  },
+  "lending/src/stubs/java/org/junit/jupiter/api/Tag.java": {
+    "symbols": [
+      {
+        "symbolId": "src/stubs/java/org/junit/jupiter/api/Tag.java::Tag::interface",
+        "name": "Tag",
+        "kind": "interface",
+        "startLine": 3,
+        "endLine": 5,
+        "startOffset": 106,
+        "endOffset": 149
+      }
+    ],
+    "edges": [],
+    "complexity": []
+  },
+  "lending/src/stubs/java/org/junit/jupiter/api/Test.java": {
+    "symbols": [
+      {
+        "symbolId": "src/stubs/java/org/junit/jupiter/api/Test.java::Test::interface",
+        "name": "Test",
+        "kind": "interface",
+        "startLine": 3,
+        "endLine": 4,
+        "startOffset": 106,
+        "endOffset": 132
+      }
+    ],
+    "edges": [],
+    "complexity": []
+  },
+  "lending/src/stubs/java/org/springframework/data/jpa/repository/Query.java": {
+    "symbols": [
+      {
+        "symbolId": "src/stubs/java/org/springframework/data/jpa/repository/Query.java::Query::interface",
+        "name": "Query",
+        "kind": "interface",
+        "startLine": 3,
+        "endLine": 11,
+        "startOffset": 132,
+        "endOffset": 292
+      }
+    ],
+    "edges": [],
+    "complexity": []
+  },
+  "lending/src/stubs/java/org/springframework/jdbc/core/JdbcTemplate.java": {
+    "symbols": [
+      {
+        "symbolId": "src/stubs/java/org/springframework/jdbc/core/JdbcTemplate.java::JdbcTemplate::class",
+        "name": "JdbcTemplate",
+        "kind": "class",
+        "startLine": 6,
+        "endLine": 25,
+        "startOffset": 164,
+        "endOffset": 555
+      },
+      {
+        "symbolId": "src/stubs/java/org/springframework/jdbc/core/JdbcTemplate.java::query::method",
+        "name": "query",
+        "kind": "method",
+        "startLine": 7,
+        "endLine": 9,
+        "startOffset": 194,
+        "endOffset": 277
+      },
+      {
+        "symbolId": "src/stubs/java/org/springframework/jdbc/core/JdbcTemplate.java::queryForList::method",
+        "name": "queryForList",
+        "kind": "method",
+        "startLine": 11,
+        "endLine": 13,
+        "startOffset": 281,
+        "endOffset": 377
+      },
+      {
+        "symbolId": "src/stubs/java/org/springframework/jdbc/core/JdbcTemplate.java::update::method",
+        "name": "update",
+        "kind": "method",
+        "startLine": 15,
+        "endLine": 17,
+        "startOffset": 381,
+        "endOffset": 446
+      },
+      {
+        "symbolId": "src/stubs/java/org/springframework/jdbc/core/JdbcTemplate.java::batchUpdate::method",
+        "name": "batchUpdate",
+        "kind": "method",
+        "startLine": 19,
+        "endLine": 21,
+        "startOffset": 450,
+        "endOffset": 512
+      },
+      {
+        "symbolId": "src/stubs/java/org/springframework/jdbc/core/JdbcTemplate.java::execute::method",
+        "name": "execute",
+        "kind": "method",
+        "startLine": 23,
+        "endLine": 24,
+        "startOffset": 516,
+        "endOffset": 553
+      }
+    ],
+    "edges": [
+      {
+        "from": "src/stubs/java/org/springframework/jdbc/core/JdbcTemplate.java::JdbcTemplate::class",
+        "to": "java.util.List::List::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/stubs/java/org/springframework/jdbc/core/JdbcTemplate.java::JdbcTemplate::class",
+        "to": "java.util.Map::Map::class",
+        "kind": "imports"
+      }
+    ],
+    "complexity": [
+      {
+        "symbolId": "src/stubs/java/org/springframework/jdbc/core/JdbcTemplate.java::query::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "src/stubs/java/org/springframework/jdbc/core/JdbcTemplate.java::queryForList::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "src/stubs/java/org/springframework/jdbc/core/JdbcTemplate.java::update::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "src/stubs/java/org/springframework/jdbc/core/JdbcTemplate.java::batchUpdate::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "src/stubs/java/org/springframework/jdbc/core/JdbcTemplate.java::execute::method",
+        "cyclomatic": 1
+      }
+    ]
+  },
+  "lending/src/stubs/java/org/springframework/jdbc/core/RowMapper.java": {
+    "symbols": [
+      {
+        "symbolId": "src/stubs/java/org/springframework/jdbc/core/RowMapper.java::RowMapper::interface",
+        "name": "RowMapper",
+        "kind": "interface",
+        "startLine": 6,
+        "endLine": 9,
+        "startOffset": 176,
+        "endOffset": 288,
+        "annotations": [
+          {
+            "name": "FunctionalInterface"
+          }
+        ]
+      },
+      {
+        "symbolId": "src/stubs/java/org/springframework/jdbc/core/RowMapper.java::mapRow::method",
+        "name": "mapRow",
+        "kind": "method",
+        "startLine": 8,
+        "endLine": 8,
+        "startOffset": 231,
+        "endOffset": 286
+      }
+    ],
+    "edges": [
+      {
+        "from": "src/stubs/java/org/springframework/jdbc/core/RowMapper.java::RowMapper::interface",
+        "to": "java.sql.ResultSet::ResultSet::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/stubs/java/org/springframework/jdbc/core/RowMapper.java::RowMapper::interface",
+        "to": "java.sql.SQLException::SQLException::class",
+        "kind": "imports"
+      }
+    ],
+    "complexity": [
+      {
+        "symbolId": "src/stubs/java/org/springframework/jdbc/core/RowMapper.java::mapRow::method",
+        "cyclomatic": 1
+      }
+    ]
+  },
+  "lending/src/stubs/java/org/springframework/jdbc/core/namedparam/NamedParameterJdbcTemplate.java": {
+    "symbols": [
+      {
+        "symbolId": "src/stubs/java/org/springframework/jdbc/core/namedparam/NamedParameterJdbcTemplate.java::NamedParameterJdbcTemplate::class",
+        "name": "NamedParameterJdbcTemplate",
+        "kind": "class",
+        "startLine": 6,
+        "endLine": 14,
+        "startOffset": 175,
+        "endOffset": 404
+      },
+      {
+        "symbolId": "src/stubs/java/org/springframework/jdbc/core/namedparam/NamedParameterJdbcTemplate.java::queryForList::method",
+        "name": "queryForList",
+        "kind": "method",
+        "startLine": 7,
+        "endLine": 9,
+        "startOffset": 219,
+        "endOffset": 324
+      },
+      {
+        "symbolId": "src/stubs/java/org/springframework/jdbc/core/namedparam/NamedParameterJdbcTemplate.java::update::method",
+        "name": "update",
+        "kind": "method",
+        "startLine": 11,
+        "endLine": 13,
+        "startOffset": 328,
+        "endOffset": 402
+      }
+    ],
+    "edges": [
+      {
+        "from": "src/stubs/java/org/springframework/jdbc/core/namedparam/NamedParameterJdbcTemplate.java::NamedParameterJdbcTemplate::class",
+        "to": "java.util.List::List::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/stubs/java/org/springframework/jdbc/core/namedparam/NamedParameterJdbcTemplate.java::NamedParameterJdbcTemplate::class",
+        "to": "java.util.Map::Map::class",
+        "kind": "imports"
+      }
+    ],
+    "complexity": [
+      {
+        "symbolId": "src/stubs/java/org/springframework/jdbc/core/namedparam/NamedParameterJdbcTemplate.java::queryForList::method",
+        "cyclomatic": 1
+      },
+      {
+        "symbolId": "src/stubs/java/org/springframework/jdbc/core/namedparam/NamedParameterJdbcTemplate.java::update::method",
+        "cyclomatic": 1
+      }
+    ]
+  },
+  "lending/src/stubs/java/org/springframework/web/bind/annotation/GetMapping.java": {
+    "symbols": [
+      {
+        "symbolId": "src/stubs/java/org/springframework/web/bind/annotation/GetMapping.java::GetMapping::interface",
+        "name": "GetMapping",
+        "kind": "interface",
+        "startLine": 3,
+        "endLine": 7,
+        "startOffset": 123,
+        "endOffset": 217
+      }
+    ],
+    "edges": [],
+    "complexity": []
+  },
+  "lending/src/stubs/java/org/springframework/web/bind/annotation/PostMapping.java": {
+    "symbols": [
+      {
+        "symbolId": "src/stubs/java/org/springframework/web/bind/annotation/PostMapping.java::PostMapping::interface",
+        "name": "PostMapping",
+        "kind": "interface",
+        "startLine": 3,
+        "endLine": 7,
+        "startOffset": 123,
+        "endOffset": 218
+      }
+    ],
+    "edges": [],
+    "complexity": []
+  },
+  "lending/src/stubs/java/org/springframework/web/bind/annotation/RequestMapping.java": {
+    "symbols": [
+      {
+        "symbolId": "src/stubs/java/org/springframework/web/bind/annotation/RequestMapping.java::RequestMapping::interface",
+        "name": "RequestMapping",
+        "kind": "interface",
+        "startLine": 3,
+        "endLine": 9,
+        "startOffset": 123,
+        "endOffset": 261
+      }
+    ],
+    "edges": [],
+    "complexity": []
+  },
+  "lending/src/stubs/java/org/springframework/web/bind/annotation/RequestMethod.java": {
+    "symbols": [
+      {
+        "symbolId": "src/stubs/java/org/springframework/web/bind/annotation/RequestMethod.java::RequestMethod::type",
+        "name": "RequestMethod",
+        "kind": "type",
+        "startLine": 3,
+        "endLine": 5,
+        "startOffset": 123,
+        "endOffset": 206
+      }
+    ],
+    "edges": [],
+    "complexity": []
+  },
+  "lending/src/stubs/java/org/springframework/web/bind/annotation/RestController.java": {
+    "symbols": [
+      {
+        "symbolId": "src/stubs/java/org/springframework/web/bind/annotation/RestController.java::RestController::interface",
+        "name": "RestController",
+        "kind": "interface",
+        "startLine": 3,
+        "endLine": 5,
+        "startOffset": 123,
+        "endOffset": 188
+      }
+    ],
+    "edges": [],
+    "complexity": []
+  },
+  "lending/src/test/java/lending/LoanPolicyTest.java": {
+    "symbols": [
+      {
+        "symbolId": "src/test/java/lending/LoanPolicyTest.java::LoanPolicyTest::class",
+        "name": "LoanPolicyTest",
+        "kind": "class",
+        "startLine": 8,
+        "endLine": 19,
+        "startOffset": 188,
+        "endOffset": 477
+      },
+      {
+        "symbolId": "src/test/java/lending/LoanPolicyTest.java::memberHoldsAtMostFiveLoans::method",
+        "name": "memberHoldsAtMostFiveLoans",
+        "kind": "method",
+        "startLine": 9,
+        "endLine": 18,
+        "startOffset": 213,
+        "endOffset": 475,
+        "annotations": [
+          {
+            "name": "Test"
+          },
+          {
+            "name": "Tag",
+            "args": [
+              "LEND-03"
+            ]
+          },
+          {
+            "name": "DisplayName",
+            "args": [
+              "a member holds at most five loans"
+            ]
+          }
+        ]
+      }
+    ],
+    "edges": [
+      {
+        "from": "src/test/java/lending/LoanPolicyTest.java::LoanPolicyTest::class",
+        "to": "lending.domain.Limits::Limits::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/test/java/lending/LoanPolicyTest.java::LoanPolicyTest::class",
+        "to": "lending.domain.Loan::Loan::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/test/java/lending/LoanPolicyTest.java::LoanPolicyTest::class",
+        "to": "org.junit.jupiter.api.DisplayName::DisplayName::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/test/java/lending/LoanPolicyTest.java::LoanPolicyTest::class",
+        "to": "org.junit.jupiter.api.Tag::Tag::class",
+        "kind": "imports"
+      },
+      {
+        "from": "src/test/java/lending/LoanPolicyTest.java::LoanPolicyTest::class",
+        "to": "org.junit.jupiter.api.Test::Test::class",
+        "kind": "imports"
+      }
+    ],
+    "complexity": [
+      {
+        "symbolId": "src/test/java/lending/LoanPolicyTest.java::memberHoldsAtMostFiveLoans::method",
+        "cyclomatic": 2
+      }
+    ]
+  },
+  "fixture/Bar.java": {
+    "symbols": [
+      {
+        "symbolId": "Bar.java::Bar::class",
+        "name": "Bar",
+        "kind": "class",
+        "startLine": 2,
+        "endLine": 4,
+        "startOffset": 18,
+        "endOffset": 83
+      },
+      {
+        "symbolId": "Bar.java::helper::method",
+        "name": "helper",
+        "kind": "method",
+        "startLine": 3,
+        "endLine": 3,
+        "startOffset": 39,
+        "endOffset": 81
+      }
+    ],
+    "edges": [],
+    "complexity": [
+      {
+        "symbolId": "Bar.java::helper::method",
+        "cyclomatic": 1
+      }
+    ]
+  },
+  "fixture/Foo.java": {
+    "symbols": [
+      {
+        "symbolId": "Foo.java::Foo::class",
+        "name": "Foo",
+        "kind": "class",
+        "startLine": 2,
+        "endLine": 7,
+        "startOffset": 18,
+        "endOffset": 134
+      },
+      {
+        "symbolId": "Foo.java::count::variable",
+        "name": "count",
+        "kind": "variable",
+        "startLine": 3,
+        "endLine": 3,
+        "startOffset": 51,
+        "endOffset": 69
+      },
+      {
+        "symbolId": "Foo.java::add::method",
+        "name": "add",
+        "kind": "method",
+        "startLine": 4,
+        "endLine": 6,
+        "startOffset": 72,
+        "endOffset": 132
+      }
+    ],
+    "edges": [
+      {
+        "from": "Foo.java::Foo::class",
+        "to": "Bar::class",
+        "kind": "extends"
+      }
+    ],
+    "complexity": [
+      {
+        "symbolId": "Foo.java::add::method",
+        "cyclomatic": 1
+      }
+    ]
+  },
+  "fixture/Shapes.java": {
+    "symbols": [
+      {
+        "symbolId": "Shapes.java::Shapes::class",
+        "name": "Shapes",
+        "kind": "class",
+        "startLine": 4,
+        "endLine": 10,
+        "startOffset": 42,
+        "endOffset": 195
+      },
+      {
+        "symbolId": "Shapes.java::Shapes::method",
+        "name": "Shapes",
+        "kind": "method",
+        "startLine": 5,
+        "endLine": 5,
+        "startOffset": 66,
+        "endOffset": 84
+      },
+      {
+        "symbolId": "Shapes.java::bars::variable",
+        "name": "bars",
+        "kind": "variable",
+        "startLine": 9,
+        "endLine": 9,
+        "startOffset": 170,
+        "endOffset": 193
+      },
+      {
+        "symbolId": "Shapes.java::Kind::type",
+        "name": "Kind",
+        "kind": "type",
+        "startLine": 6,
+        "endLine": 6,
+        "startOffset": 87,
+        "endOffset": 115
+      },
+      {
+        "symbolId": "Shapes.java::Point::class",
+        "name": "Point",
+        "kind": "class",
+        "startLine": 7,
+        "endLine": 7,
+        "startOffset": 118,
+        "endOffset": 147
+      },
+      {
+        "symbolId": "Shapes.java::Tag::interface",
+        "name": "Tag",
+        "kind": "interface",
+        "startLine": 8,
+        "endLine": 8,
+        "startOffset": 150,
+        "endOffset": 167
+      }
+    ],
+    "edges": [
+      {
+        "from": "Shapes.java::Shapes::class",
+        "to": "java.util.List::List::class",
+        "kind": "imports"
+      }
+    ],
+    "complexity": [
+      {
+        "symbolId": "Shapes.java::Shapes::method",
+        "cyclomatic": 1
+      }
+    ]
+  },
+  "fixture/StaticImp.java": {
+    "symbols": [
+      {
+        "symbolId": "StaticImp.java::StaticImp::class",
+        "name": "StaticImp",
+        "kind": "class",
+        "startLine": 6,
+        "endLine": 10,
+        "startOffset": 115,
+        "endOffset": 204
+      },
+      {
+        "symbolId": "StaticImp.java::compute::method",
+        "name": "compute",
+        "kind": "method",
+        "startLine": 7,
+        "endLine": 9,
+        "startOffset": 142,
+        "endOffset": 202
+      }
+    ],
+    "edges": [
+      {
+        "from": "StaticImp.java::StaticImp::class",
+        "to": "java.lang.Math.max::max::class",
+        "kind": "imports"
+      },
+      {
+        "from": "StaticImp.java::StaticImp::class",
+        "to": "java.util.Collections::Collections::class",
+        "kind": "imports"
+      },
+      {
+        "from": "StaticImp.java::StaticImp::class",
+        "to": "java.util.List::List::class",
+        "kind": "imports"
+      }
+    ],
+    "complexity": [
+      {
+        "symbolId": "StaticImp.java::compute::method",
+        "cyclomatic": 1
+      }
+    ]
+  },
+  "fixture/Uses.java": {
+    "symbols": [
+      {
+        "symbolId": "Uses.java::Uses::class",
+        "name": "Uses",
+        "kind": "class",
+        "startLine": 2,
+        "endLine": 5,
+        "startOffset": 18,
+        "endOffset": 105
+      },
+      {
+        "symbolId": "Uses.java::bar::variable",
+        "name": "bar",
+        "kind": "variable",
+        "startLine": 3,
+        "endLine": 3,
+        "startOffset": 40,
+        "endOffset": 56
+      },
+      {
+        "symbolId": "Uses.java::make::method",
+        "name": "make",
+        "kind": "method",
+        "startLine": 4,
+        "endLine": 4,
+        "startOffset": 59,
+        "endOffset": 103
+      }
+    ],
+    "edges": [],
+    "complexity": [
+      {
+        "symbolId": "Uses.java::make::method",
+        "cyclomatic": 1
+      }
+    ]
+  }
+}

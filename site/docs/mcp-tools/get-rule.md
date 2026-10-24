@@ -11,8 +11,8 @@ an agent about to change the rule's code knows which tests must stay green and w
 
 ::: info Needs @ctxo/domain
 This tool is registered only when the opt-in [`@ctxo/domain`](/concepts/domain-knowledge) package is installed
-(`ctxo install domain`). Ctxo has 14 core tools, plus [`get_domain_context`](/mcp-tools/get-domain-context) and
-`get_rule` with the package. It reads the domain graph `ctxo index` writes (`.ctxo/index/domain/graph.json`).
+(`ctxo install domain`). Ctxo has 14 core tools; 18 with the package ([`get_domain_context`](/mcp-tools/get-domain-context),
+`get_rule`, [`find_shadow_specs`](/mcp-tools/find-shadow-specs) and [`get_context_map`](/mcp-tools/get-context-map)). It reads the domain graph `ctxo index` writes (`.ctxo/index/domain/graph.json`).
 :::
 
 ## Parameters
