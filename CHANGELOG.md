@@ -6,6 +6,31 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (ten packages today). Per-pack
 
 ## [Unreleased]
 
+**`ctxo domain discover` that agents find, with tracker kinds and test-kind markers beyond folders (#191).**
+
+### Added (discovery)
+
+- Agents adopting the domain layer did not find `ctxo domain discover` and reverse-engineered the config instead.
+  The `ctxo-domain-fold` skill (now v0.17) tells them to run it first, dry run then hand edits or `--write`, when
+  adopting or tuning the domain config; `get_context_map` and `ctxo domain map` add a hint naming the command while
+  `domain.rules.trackerPrefixes`, `domain.tests.ruleTraitKeys`, `domain.tests.characterization` and
+  `domain.tests.contract` are all at their defaults, and the `get_context_map` description says so. Core tools are
+  unchanged.
+- External IDs: keys of a well-known external family (`EXTERNAL_ID_FAMILIES`: ADR, BIP, CAPEC, CVE, CWE, EIP, GHSA,
+  IEC, ISO, JSR, KEP, OWASP, PEP, RFC) are no longer tracker keys. Discovery reports them as "external IDs, kept from
+  linking" (`evidence.externalIds`) and proposes them for `domain.rules.trackerPrefixes` from the first occurrence,
+  the key whose safeguard keeps a plain mention from linking as a rule ID (`proposal.externalIdPrefixes`).
+- GitHub issues: `#N` references in commit subjects, `(#N)` squash suffixes and `type/N-slug` branches are reported
+  as `GitHub issues (#N): <n> subjects, <n> branches` (`evidence.githubIssues`); evidence only.
+- Other identifiers: lowercase `name-NN` branch families in at least 3 branches (`evidence.otherIdentifiers`);
+  evidence only, never proposed.
+- Test-kind markers beyond folders (`evidence.testKindMarkers`): `Trait`, `Category`, `TestCategory` and `Tag` values
+  naming characterization or contract, proposed as `Trait:<Key>=<Value>` or `<Name>:<Value>` for
+  `domain.tests.<kind>.annotations`; custom test attributes such as `StorageContractFact`, proposed as annotation
+  names; file names ending in `ContractTests` or `CharacterizationTests`, proposed as `paths` globs such as
+  `**/*ContractTests.cs` (a `names` marker matches test case names only). `--write` merges the annotations too and
+  still adds values and removes none.
+
 **Fact detectors, the Deletion Test loop and the context map: `find_shadow_specs`, `get_context_map` (#156 Phase 4, PR 4).**
 
 ### Added (agentic loop)

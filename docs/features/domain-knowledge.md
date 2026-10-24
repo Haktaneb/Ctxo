@@ -697,21 +697,46 @@ Teams arrive with their own conventions: tracker keys shaped like rule IDs (`LEN
 ctxo domain discover [--json] [--write]
 ```
 
-It prints evidence and a proposed config, and writes only with `--write` (a merge into `.ctxo/config.yaml` that adds values and removes none). The printed config quotes every list value as a JSON string (`paths: ["**/Contract/**", "**/Contracts.Tests/**"]`), so the block is valid YAML to paste even with `**` globs.
+It prints evidence and a proposed config, and writes only with `--write` (a merge into `.ctxo/config.yaml` that adds values and removes none). The printed config quotes every list value as a JSON string (`paths: ["**/Contract/**", "**/Contracts.Tests/**"]`), so the block is valid YAML to paste even with `**` globs. Run it first when you adopt the domain layer or tune its config: the `ctxo-domain-fold` skill says so, and `get_context_map` (and `ctxo domain map`) adds a hint naming the command while `domain.rules.trackerPrefixes`, `domain.tests.ruleTraitKeys`, `domain.tests.characterization` and `domain.tests.contract` are all at their defaults.
 
 - **Rule IDs:** prefixes found in card headings; tracker-like keys (`\b[A-Z][A-Z0-9]{1,9}-\d+\b`) in commit subjects of the co-change window and in branch names (local and remote-tracking names count once). A prefix seen in at least 5 commits or branches is proposed as a tracker prefix, marked when it overlaps a rule prefix.
+- **External IDs:** keys of a well-known external family (`ADR`, `BIP`, `CAPEC`, `CVE`, `CWE`, `EIP`, `GHSA`, `IEC`, `ISO`, `JSR`, `KEP`, `OWASP`, `PEP`, `RFC`) are not tracker keys. They are reported as "external IDs, kept from linking" (`externalIds` in the JSON) and proposed for `domain.rules.trackerPrefixes` from the first occurrence on, because that key holds the safeguard: a plain mention of a tracker prefix never links as a rule ID, and in a card decision it is an external reference. `proposal.externalIdPrefixes` lists them.
+- **GitHub issues (#N):** subjects that hold a `#N` reference (`squashSuffixes` counts those ending in `(#N)`) and `type/N-slug` branches, reported as the tracker when present. Evidence only: no config key.
+- **Other identifiers:** lowercase `name-NN` branch families seen in at least 3 branches (such as customer finding numbers), reported so they are not mistaken for missed tracker keys. Never proposed.
 - **Test tagging:** annotation keys used on test methods whose values look like IDs (proposed for `domain.tests.ruleTraitKeys`).
 - **Test folders** that hold annotated tests but match no default glob (proposed for `index.tests`), Characterization and Contract folders, and ADR and spec folders.
+- **Test kind markers** beyond folders, per kind (`testKindMarkers` in the JSON): `Trait`, `Category`, `TestCategory` and `Tag` values in test files that contain `characterization` or `contract` (ASCII case ignored), proposed as `Trait:<Key>=<Value>` or `<Name>:<Value>` matchers for `annotations`; custom test attributes whose name names the kind and ends like a test attribute (`StorageContractFact`, `StorageContractTheory`, `FeeCharacterizationTest`), proposed as annotation names; and file names ending in `ContractTests`, `ContractTest`, `CharacterizationTests` or `CharacterizationTest`, proposed as `paths` globs such as `**/*ContractTests.cs`. File-name patterns go to `paths`, not `names`, because a `names` marker matches test case names and declared titles only, never file or class names. A value a configured matcher or glob already covers is not proposed.
 
 ```text
 $ ctxo domain discover
 Rule IDs
-  card prefixes:      LEND (5 rules), BILL (3 rules)
+  card prefixes:      LEND (5 rules)
   tracker-like keys:  LEND in 183 commit subjects/branches   <- overlaps a rule prefix
                       OPS  in 12 commit subjects/branches
-Test tagging          xUnit Trait keys in use: Category (41), Rule (3)
+  external IDs:       CWE in 7 commit subjects/branches   <- external IDs, kept from linking
+                      ADR in 2 commit subjects/branches   <- external IDs, kept from linking
+  GitHub issues (#N): 40 subjects, 2 branches
+  other identifiers:  acme-NN in 3 branches   <- not a tracker key; not proposed
+Test tagging          xUnit Trait keys in use: Category (3), Rule (1)
 Test folders          no Characterization folders; no Contract folders
-Provenance folders    docs/adr (7), docs/specs (12)
+Test kind markers     contract: values Trait:Category=StorageContract (2); attributes StorageContractFact (2), StorageContractTheory (1); file names **/*ContractTests.cs (2)
+                      StorageContractFact   <- not covered by domain.tests.contract.annotations
+                      StorageContractTheory   <- not covered by domain.tests.contract.annotations
+                      Trait:Category=StorageContract   <- not covered by domain.tests.contract.annotations
+                      **/*ContractTests.cs   <- not covered by domain.tests.contract.paths
+Provenance folders    docs/adr (1)
+
+Proposed config (.ctxo/config.yaml)
+  domain:
+    rules:
+      trackerPrefixes: ["ADR", "CWE", "LEND", "OPS"]
+    tests:
+      ruleTraitKeys: ["Rule"]
+      contract:
+        annotations: ["Trait:Kind=Contract", "Tag:contract", "StorageContractFact", "StorageContractTheory", "Trait:Category=StorageContract"]
+        paths: ["**/Contract/**", "**/Contracts.Tests/**", "**/*ContractTests.cs"]
+  index:
+    tests: []
 ```
 
 `ctxo doctor` re-runs discovery later and only warns, for example when a new tracker prefix overlaps a rule prefix. It never edits config.
