@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createModuleHost, type CoChangeWindowCommits, type CtxoHost, type FileIndex, type IndexPassContext } from '@ctxo/cli/internal';
 import type { DomainGraph } from '../../core/domain-graph.js';
+import { createDomainState } from '../../mcp/domain-state.js';
+import { createLoopState, NO_LOOP_DATA_HINT } from '../../mcp/loop-state.js';
 import { domainIndexPass } from '../domain-index-pass.js';
 
 const REGISTRY = `version: 1
@@ -773,13 +775,13 @@ contexts:
       expect(read('maturity.json')).toBe(maturity);
     });
 
-    // The rule both tests pin: the two loop files are written together or not at all. A failure after the graph keeps
-    // both byte-identical to the last good run (so they always share registryHash and cardsHash), while graph.json
-    // moves on to the new cardsHash, which is how the loop tools see the pair as stale.
-    async function expectLoopPairKept(failingRun: () => Promise<void>, warning: string): Promise<void> {
+    // The rule both tests pin: the two loop files are written together or removed together (C-I2). A failure after
+    // the graph removes both marked files, so the loop tools answer no-artifacts ("run ctxo index") instead of serving
+    // the previous run's candidates as current, while graph.json moves on to the new cardsHash.
+    async function expectLoopPairRemoved(failingRun: () => Promise<void>, warning: string): Promise<void> {
       await runPass();
-      const candidates = read('shadow-candidates.json');
-      const maturity = read('maturity.json');
+      expect(existsSync(candidatesFile())).toBe(true);
+      expect(existsSync(maturityFile())).toBe(true);
       const oldCardsHash = (JSON.parse(read('graph.json')) as DomainGraph).cardsHash;
 
       writeRepo('docs/domain/lending/domain.md', CARD.replace('Free text written by people.', 'Edited.'));
@@ -789,32 +791,47 @@ contexts:
       expect(logs.some((l) => l.includes('WARN') && l.includes(warning))).toBe(true);
       const graph = JSON.parse(read('graph.json')) as DomainGraph;
       expect(graph.cardsHash).not.toBe(oldCardsHash);
-      expect(read('shadow-candidates.json')).toBe(candidates);
-      expect(read('maturity.json')).toBe(maturity);
-      const pair = [JSON.parse(candidates), JSON.parse(maturity)].map((a: { registryHash: string; cardsHash: string }) => [a.registryHash, a.cardsHash]);
-      expect(pair[0]).toEqual(pair[1]);
-      expect(pair[0]).toEqual([graph.registryHash, oldCardsHash]);
+      expect(existsSync(candidatesFile())).toBe(false);
+      expect(existsSync(maturityFile())).toBe(false);
       // The log line has no candidate segment for a run that wrote no candidates.
       expect(logs.some((l) => l.includes('Domain: ') && !l.includes('shadow-spec candidates') && l.includes(`${graph.links.length} links, `))).toBe(true);
+      // The loop tools see no loop data and point at ctxo index.
+      const host = createModuleHost({ cliVersion: '0.0.0', mode: 'cli', projectRoot: root });
+      expect(createLoopState(host, createDomainState(host)).load()).toEqual({ ok: false, reason: 'no-artifacts', hint: NO_LOOP_DATA_HINT });
+      // A later good run writes both again.
+      await runPass();
+      expect(existsSync(candidatesFile())).toBe(true);
+      expect(existsSync(maturityFile())).toBe(true);
     }
 
-    it('a maturity failure is a warning, writes graph.json and keeps both loop files as they were', async () => {
-      await expectLoopPairKept(
-        () =>
-          runPass(undefined, (host) => ({
-            ...host,
-            services: {
-              ...host.services,
-              readCoChangeEntries: () => {
-                throw new Error('matrix unreadable');
-              },
-            },
-          })),
-        'The maturity facts could not be built: matrix unreadable; shadow-candidates.json and maturity.json not updated.',
+    const maturityFailure = (host: CtxoHost): CtxoHost => ({
+      ...host,
+      services: {
+        ...host.services,
+        readCoChangeEntries: () => {
+          throw new Error('matrix unreadable');
+        },
+      },
+    });
+
+    it('a maturity failure is a warning, writes graph.json and removes both loop files', async () => {
+      await expectLoopPairRemoved(
+        () => runPass(undefined, maturityFailure),
+        'The maturity facts could not be built: matrix unreadable; shadow-candidates.json and maturity.json removed.',
       );
     });
 
-    it('a candidate failure is a warning, writes graph.json and keeps both loop files as they were', async () => {
+    it('a failure removes only marked loop files, never hand-written files of the same names (C-I2)', async () => {
+      await runPass();
+      writeFileSync(candidatesFile(), '{"hand": "written"}\n', 'utf-8');
+      writeFileSync(maturityFile(), 'not json at all\n', 'utf-8');
+      vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      await runPass(undefined, maturityFailure);
+      expect(readFileSync(candidatesFile(), 'utf-8')).toBe('{"hand": "written"}\n');
+      expect(readFileSync(maturityFile(), 'utf-8')).toBe('not json at all\n');
+    });
+
+    it('a candidate failure is a warning, writes graph.json and removes both loop files', async () => {
       // The text scan targets read each index's `facts` key; the graph and the boundaries never do.
       const throwingFacts = (ctx: IndexPassContext): IndexPassContext => {
         const indices = ctx.indices.map((index) =>
@@ -828,7 +845,11 @@ contexts:
         );
         return { ...ctx, indices, graph: () => createModuleHost({ cliVersion: '0.0.0', mode: 'cli', projectRoot: root }).services.buildGraph(indices) };
       };
-      await expectLoopPairKept(() => runPass(undefined, (h) => h, throwingFacts), 'The shadow-spec candidates could not be built: facts unreadable.');
+      await expectLoopPairRemoved(
+        () => runPass(undefined, (h) => h, throwingFacts),
+        'The shadow-spec candidates could not be built: facts unreadable.',
+      );
+      expect(logs.some((l) => l.includes('shadow-candidates.json and maturity.json removed'))).toBe(true);
     });
 
     it('the JSON index reader skips both artifacts', async () => {

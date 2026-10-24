@@ -25,6 +25,8 @@ const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
  * - No registry: the artifacts are removed. Registry problems: a warning, and nothing is written or removed.
  * - The graph, the test texts and the candidates come from `composeLoopInputs` (W10, shared with verify-domain).
  *   When the graph cannot be built, `graph.json`, `shadow-candidates.json` and `maturity.json` stay as they are.
+ *   When the graph builds but the candidates or the maturity facts fail, both marked loop files are removed (C-I2),
+ *   so the loop tools answer that there is no loop data instead of serving the previous run's as current.
  * - Moved files come from the window's renames; without a change log they are kept from the existing
  *   `contexts.json`, re-judged against the current registry.
  */
@@ -152,6 +154,8 @@ export function domainIndexPass(host: CtxoHost): (ctx: IndexPassContext) => Prom
     if (loop !== undefined) {
       store.writeIfChanged('shadow-candidates.json', loop.candidates);
       store.writeIfChanged('maturity.json', loop.maturity);
+    } else if (inputs !== undefined) {
+      store.removeLoopArtifacts();
     }
     if (ctx.history !== undefined) {
       store.writeHistory(
@@ -183,7 +187,7 @@ export function domainIndexPass(host: CtxoHost): (ctx: IndexPassContext) => Prom
  * The loop artifacts of a built graph: the candidates as composed, and the maturity facts over the test texts the
  * composition read (`scanTestTitles`, `classifyTests`), the reach graph of the symbol graph, the effective facts and
  * the co-change entries. Undefined, with a warning, when the candidates are missing or the maturity facts fail:
- * both files then stay as they are.
+ * the pass then removes both files.
  */
 function loopArtifacts(
   host: CtxoHost,
@@ -193,7 +197,10 @@ function loopArtifacts(
   warn: (message: string) => void,
 ): { candidates: ShadowCandidatesArtifact; maturity: MaturityArtifact } | undefined {
   const composed = inputs.candidates;
-  if (composed === undefined) return undefined;
+  if (composed === undefined) {
+    warn('The shadow-spec candidates are missing; shadow-candidates.json and maturity.json removed. Fix the cause and run "ctxo index".');
+    return undefined;
+  }
   try {
     const { registry, config, ownership } = input;
     const titles = inputs.testTexts.flatMap((test) => scanTestTitles(test.file, test.text));
@@ -222,7 +229,7 @@ function loopArtifacts(
       maturity: { ctxoArtifact: 'domain-maturity', version: 1, ...hashes, contexts },
     };
   } catch (err) {
-    warn(`The maturity facts could not be built: ${(err as Error).message}; shadow-candidates.json and maturity.json not updated.`);
+    warn(`The maturity facts could not be built: ${(err as Error).message}; shadow-candidates.json and maturity.json removed.`);
     return undefined;
   }
 }

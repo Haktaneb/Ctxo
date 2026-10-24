@@ -312,6 +312,18 @@ export class DomainArtifactStore {
     }
   }
 
+  /**
+   * Deletes `shadow-candidates.json` and `maturity.json`, each only when it carries its `ctxoArtifact` marker: the
+   * index pass calls it when it cannot rebuild them, so the two loop files are written together or removed together.
+   */
+  removeLoopArtifacts(): void {
+    for (const [name, marker] of MARKED_ARTIFACTS) {
+      if (name !== 'shadow-candidates.json' && name !== 'maturity.json') continue;
+      const path = join(this.dir, name);
+      if (this.isMarked(path, marker)) rmSync(path, { force: true });
+    }
+  }
+
   /** True when the file parses as JSON and carries this `ctxoArtifact` marker. */
   private isMarked(path: string, marker: string): boolean {
     const value = this.readJson(path);
