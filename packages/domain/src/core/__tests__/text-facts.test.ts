@@ -240,6 +240,40 @@ describe('scanTextFacts scale (every per-line rule is linear in the line length)
     expect(facts.filter((f) => f.line === 0)).toHaveLength(1);
     expect(ms).toBeLessThan(2000);
   });
+
+  it('1 MiB of route calls nested inside methods lists', () => {
+    const { ms, facts } = timed(PY, lines("@a.route('',methods=['G',".repeat(769), 52));
+    // Each list ends at the nested call; every call on a line gives the one fact `G /`.
+    expect(facts.map((f) => [f.line, f.text])).toEqual(Array.from({ length: 52 }, (_, i) => [i, 'G /']));
+    expect(ms).toBeLessThan(2000);
+  });
+
+  it('2 MiB of nested comparisons: collection stops once the finished lines hold 500 facts', () => {
+    const { ms, facts } = timed(LEND, lines(`if ${'('.repeat(4990)}x${')>2'.repeat(4990)}`, 104));
+    expect(facts).toHaveLength(500);
+    expect(facts[499]!.line).toBeLessThan(5);
+    expect(ms).toBeLessThan(1000);
+  });
+});
+
+describe('the 500-fact file cap (FC-10)', () => {
+  it('the kept facts are the first 500 in FC-10 order, whole lines first', () => {
+    const text = Array.from({ length: 260 }, (_, i) => `if n == ${i + 2} then retries = ${i + 2}`).join('\n');
+    const facts = scanTextFacts(LEND, text, [], OPTIONS);
+    expect(facts).toHaveLength(500);
+    expect(facts.slice(-2).map((f) => [f.line, f.kind])).toEqual([[249, 'literal-comparison'], [249, 'retry-timeout']]);
+    expect(facts.slice(0, 2).map((f) => f.text)).toEqual(['n == 2', 'retries = 2']);
+  });
+
+  it('a line whose evidence repeats keeps one fact per distinct fact, and later lines fill the cap', () => {
+    const repeated = `if n == 5 then x ${'if n == 5 then x '.repeat(50)}`;
+    const text = [repeated, ...Array.from({ length: 600 }, (_, i) => `retries = ${i + 2}`)].join('\n');
+    const facts = scanTextFacts(LEND, text, [], OPTIONS);
+    expect(facts).toHaveLength(500);
+    expect(facts[0]!.text).toBe('n == 5');
+    expect(facts[1]!.text).toBe('retries = 2');
+    expect(facts[499]!.line).toBe(499);
+  });
 });
 
 describe('scanTextFacts output kept from the first version (N5)', () => {
@@ -263,6 +297,14 @@ describe('route methods lists', () => {
     expect(scan(PY, '@app.route("/x") @app.route("/y", methods=["GET", "get", "POST"])')).toEqual(['endpoint|ANY /x', 'endpoint|GET /y', 'endpoint|POST /y']);
     const twenty = Array.from({ length: 20 }, (_, i) => `"V${String(i).padStart(2, '0')}"`).join(', ');
     expect(scan(PY, `@app.route("/z", methods=[${twenty}])`)).toHaveLength(16);
+  });
+
+  it('a list takes only its own strings: bracket groups inside it are skipped, an unclosed one ends it', () => {
+    expect(scan(PY, '@app.route("/y", methods=["GET", "POST"], strict=True)')).toEqual(['endpoint|GET /y', 'endpoint|POST /y']);
+    expect(scan(PY, '@app.route("/y", methods=["GET", verb, "POST"])')).toEqual(['endpoint|GET /y', 'endpoint|POST /y']);
+    expect(scan(PY, '@app.route("/y", methods=["GET", f("PUT"), "POST"])')).toEqual(['endpoint|GET /y', 'endpoint|POST /y']);
+    expect(scan(PY, '@app.route("/y", methods=["GET", f("PUT", "POST"')).toEqual(['endpoint|GET /y']);
+    expect(scan(PY, '@app.route("/y", methods=[])')).toEqual(['endpoint|ANY /y']);
   });
 });
 

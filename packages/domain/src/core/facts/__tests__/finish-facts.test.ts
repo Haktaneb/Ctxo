@@ -210,3 +210,52 @@ describe('finishFacts', () => {
     }
   });
 });
+
+describe('finishFacts attribution at scale', () => {
+  /** A deterministic set of overlapping symbols: nested, sibling, equal-start and equal-span ones. */
+  function symbolsFor(count: number, lines: number): SymbolNode[] {
+    let seed = 99;
+    const next = (n: number): number => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed % n;
+    };
+    return Array.from({ length: count }, (_, i) => {
+      const startLine = next(lines);
+      const endLine = startLine + next(i % 3 === 0 ? 2000 : 40);
+      return { symbolId: `${FILE}::S${i}::method`, name: `S${i}`, kind: 'method' as const, startLine, endLine };
+    });
+  }
+
+  /** The innermost-symbol rule, written out: the later start, then the smaller span, then index order. */
+  function reference(line: number, symbols: readonly SymbolNode[]): string {
+    let best: SymbolNode | undefined;
+    for (const s of symbols) {
+      if (line < s.startLine || line > s.endLine) continue;
+      if (!best || s.startLine > best.startLine || (s.startLine === best.startLine && s.endLine - s.startLine < best.endLine - best.startLine)) best = s;
+    }
+    return best ? best.symbolId : moduleSymbolId(FILE);
+  }
+
+  const routes = (count: number, lines: number): FactEvidence[] =>
+    Array.from({ length: count }, (_, i) => ({ kind: 'route', line: (i * 7919) % lines, verb: 'GET', route: `r${i}` }));
+
+  it('every fact goes to the symbol the innermost rule picks', () => {
+    const symbols = symbolsFor(500, 3000);
+    // Duplicate symbols (same start and span) keep the first in index order.
+    const withTwins = [...symbols, ...symbols.slice(0, 50).map((s) => ({ ...s, symbolId: `${s.symbolId}2` }))];
+    const facts = finishFacts(FILE, routes(450, 3000), withTwins, DEFAULT_FACT_OPTIONS);
+    expect(facts).toHaveLength(450);
+    for (const fact of facts) expect(fact.symbolId, `line ${fact.line}`).toBe(reference(fact.line, withTwins));
+  });
+
+  it('5000 symbols and 50 000 evidence records finish well under a second', () => {
+    const symbols = symbolsFor(5000, 60_000);
+    const evidence = routes(50_000, 60_000);
+    const started = performance.now();
+    const facts = finishFacts(FILE, evidence, symbols, DEFAULT_FACT_OPTIONS);
+    const ms = performance.now() - started;
+    expect(facts).toHaveLength(500);
+    for (const fact of facts.slice(0, 50)) expect(fact.symbolId).toBe(reference(fact.line, symbols));
+    expect(ms).toBeLessThan(500);
+  });
+});

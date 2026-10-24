@@ -53,9 +53,23 @@ function codePointAt(text: string, i: number): string {
  */
 export function lexSource(text: string, style: CommentStyle): TextToken[] {
   const tokens: TextToken[] = [];
+  lexSourceUntil(text, style, (token) => {
+    tokens.push(token);
+    return true;
+  });
+  return tokens;
+}
+
+/**
+ * `lexSource` that hands each token to `onToken` as it is made, in order, and stops lexing when `onToken` returns
+ * false (the text scan stops once a file's facts are complete).
+ */
+export function lexSourceUntil(text: string, style: CommentStyle, onToken: (token: TextToken) => boolean): void {
   const n = text.length;
   let i = 0;
   let line = 0;
+  let prev: TextToken | undefined;
+  let stopped = false;
 
   /** Moves from `from` to `to`, counting the line breaks passed (CRLF counts once). */
   const advance = (from: number, to: number): void => {
@@ -66,10 +80,11 @@ export function lexSource(text: string, style: CommentStyle): TextToken[] {
     }
   };
   const push = (kind: TextToken['kind'], start: number, end: number): void => {
-    const startLine = line;
-    tokens.push({ kind, text: text.slice(start, end), line: startLine, start, end });
+    const token: TextToken = { kind, text: text.slice(start, end), line, start, end };
+    prev = token;
     advance(start, end);
     i = end;
+    if (!onToken(token)) stopped = true;
   };
   const isLineEnd = (k: number): boolean => text[k] === '\n' || text[k] === '\r';
   /** Index of the line end at or after `k` (or n). */
@@ -133,9 +148,9 @@ export function lexSource(text: string, style: CommentStyle): TextToken[] {
     i = to;
   };
 
-  while (i < n) {
+  while (i < n && !stopped) {
     const ch = text[i]!;
-    if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\f' || ch === '\v' || ch === ' ' || ch === '﻿') {
+    if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\f' || ch === '\v' || ch === '\u00a0' || ch === '\ufeff') {
       skip(i + 1);
       continue;
     }
@@ -192,7 +207,6 @@ export function lexSource(text: string, style: CommentStyle): TextToken[] {
     }
 
     // Numbers (a leading `.` only when it does not follow a word, a number or a closing bracket).
-    const prev = tokens[tokens.length - 1];
     const afterOperand = prev !== undefined && prev.end === i && (prev.kind === 'word' || prev.kind === 'number' || /[)\]}]/.test(prev.text));
     if (DIGIT.test(ch) || (ch === '.' && DIGIT.test(text[i + 1] ?? '') && !afterOperand)) {
       const match = NUMBER_FORM.exec(text.slice(i, i + 256));
@@ -236,7 +250,6 @@ export function lexSource(text: string, style: CommentStyle): TextToken[] {
     }
     push('punct', i, i + point.length);
   }
-  return tokens;
 }
 
 /** The body between `open` and `close` delimiters, or undefined when the literal is not closed. */

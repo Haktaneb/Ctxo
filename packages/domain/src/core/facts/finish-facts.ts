@@ -74,20 +74,79 @@ function draft(evidence: FactEvidence, options: FactOptions, decodeStringLiteral
   }
 }
 
-/** The innermost symbol holding the line: the later start, then the smaller span, then index order. */
-function attribute(line: number, symbols: readonly SymbolNode[], fallback: string): string {
-  let best: SymbolNode | undefined;
-  for (const symbol of symbols) {
-    if (line < symbol.startLine || line > symbol.endLine) continue;
-    if (
-      !best
-      || symbol.startLine > best.startLine
-      || (symbol.startLine === best.startLine && symbol.endLine - symbol.startLine < best.endLine - best.startLine)
-    ) {
-      best = symbol;
-    }
+interface Candidate {
+  readonly symbol: SymbolNode;
+  readonly index: number;
+}
+
+/** True when `a` is the better owner of a line both hold: the later start, then the smaller span, then index order. */
+function inner(a: Candidate, b: Candidate): boolean {
+  if (a.symbol.startLine !== b.symbol.startLine) return a.symbol.startLine > b.symbol.startLine;
+  const spanA = a.symbol.endLine - a.symbol.startLine;
+  const spanB = b.symbol.endLine - b.symbol.startLine;
+  return spanA !== spanB ? spanA < spanB : a.index < b.index;
+}
+
+/**
+ * The innermost symbol holding each line (the later start, then the smaller span, then index order); lines outside
+ * every symbol are absent. One sweep over the sorted lines: O((lines + symbols) log symbols).
+ */
+export function innermostSymbolIds(lines: Iterable<number>, symbols: readonly SymbolNode[]): Map<number, string> {
+  const out = new Map<number, string>();
+  if (symbols.length === 0) return out;
+  const ownerOf = innermostSymbolCursor(symbols);
+  for (const line of [...new Set(lines)].sort((a, b) => a - b)) {
+    const owner = ownerOf(line);
+    if (owner !== undefined) out.set(line, owner);
   }
-  return best ? best.symbolId : fallback;
+  return out;
+}
+
+/**
+ * The innermost symbol holding a line, for lines asked in nondecreasing order (undefined outside every symbol). A
+ * heap holds the symbols started so far; its top is dropped while it ends before the line, since later lines cannot
+ * be inside it either. Each symbol is pushed and popped once: O(symbols log symbols) over all calls.
+ */
+export function innermostSymbolCursor(symbols: readonly SymbolNode[]): (line: number) => string | undefined {
+  const order = symbols.map((symbol, index) => ({ symbol, index })).sort((a, b) => a.symbol.startLine - b.symbol.startLine || a.index - b.index);
+  const heap: Candidate[] = [];
+  const swap = (i: number, j: number): void => {
+    const t = heap[i]!;
+    heap[i] = heap[j]!;
+    heap[j] = t;
+  };
+  const push = (c: Candidate): void => {
+    heap.push(c);
+    let i = heap.length - 1;
+    while (i > 0) {
+      const parent = (i - 1) >> 1;
+      if (!inner(heap[i]!, heap[parent]!)) break;
+      swap(i, parent);
+      i = parent;
+    }
+  };
+  const pop = (): void => {
+    const last = heap.pop()!;
+    if (heap.length === 0) return;
+    heap[0] = last;
+    let i = 0;
+    for (;;) {
+      const left = 2 * i + 1;
+      const right = left + 1;
+      let best = i;
+      if (left < heap.length && inner(heap[left]!, heap[best]!)) best = left;
+      if (right < heap.length && inner(heap[right]!, heap[best]!)) best = right;
+      if (best === i) return;
+      swap(i, best);
+      i = best;
+    }
+  };
+  let next = 0;
+  return (line) => {
+    while (next < order.length && order[next]!.symbol.startLine <= line) push(order[next++]!);
+    while (heap.length > 0 && heap[0]!.symbol.endLine < line) pop();
+    return heap.length > 0 ? heap[0]!.symbol.symbolId : undefined;
+  };
 }
 
 /**
@@ -105,13 +164,17 @@ export function finishFacts(
   decodeStringLiteral?: StringLiteralDecoder,
 ): CodeFact[] {
   const moduleId = moduleSymbolId(file);
-  const keyed: { readonly fact: CodeFact; readonly detailKey: string }[] = [];
+  const drafts: DraftFact[] = [];
   for (const item of evidence) {
     const fact = draft(item, options, decodeStringLiteral);
-    if (!fact) continue;
+    if (fact) drafts.push(fact);
+  }
+  const owners = innermostSymbolIds(drafts.filter(fact => fact.symbolId === undefined).map(fact => fact.line), symbols);
+  const keyed: { readonly fact: CodeFact; readonly detailKey: string }[] = [];
+  for (const fact of drafts) {
     const finished: CodeFact = {
       kind: fact.kind,
-      symbolId: fact.symbolId ?? attribute(fact.line, symbols, moduleId),
+      symbolId: fact.symbolId ?? owners.get(fact.line) ?? moduleId,
       line: fact.line,
       text: normalizeFactText(fact.text),
       detail: fact.detail,

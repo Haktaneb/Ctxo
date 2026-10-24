@@ -5,9 +5,9 @@
 // computed once per line, and lookups use Maps, so names such as `constructor` or `hasOwnProperty` are ordinary.
 import type { CodeFact, SymbolNode } from '@ctxo/cli/internal';
 import type { DurationUnit, FactEvidence, FactOptions, LiteralKind } from './facts/fact-types.js';
-import { MAX_FACT_TEXT, hasRetryTimeoutFragment, matchesNormalizationPattern } from './facts/fact-rules.js';
-import { finishFacts } from './facts/finish-facts.js';
-import { commentStyleFor, lexSource, stringDecoderFor } from './text-lexer.js';
+import { MAX_FACTS_PER_FILE, MAX_FACT_TEXT, hasRetryTimeoutFragment, matchesNormalizationPattern } from './facts/fact-rules.js';
+import { finishFacts, innermostSymbolCursor, moduleSymbolId } from './facts/finish-facts.js';
+import { commentStyleFor, lexSourceUntil, stringDecoderFor } from './text-lexer.js';
 import type { CommentStyle, TextToken } from './text-lexer.js';
 
 const COMPARISON_OPS = new Set(['==', '!=', '===', '!==', '<', '<=', '>', '>=']);
@@ -509,6 +509,13 @@ function methodsList(line: Line, open: number): readonly string[] {
   const close = line.pairs[at + 2]!;
   const verbs: string[] = [];
   for (let k = at + 3; k < (close < 0 ? tokens.length : close) && verbs.length < MAX_ROUTE_VERBS; k++) {
+    // Only the list's own tokens: a bracket group inside it is skipped, an unclosed one ends the list. So each list
+    // reads only its own depth, and route calls nested in lists stay linear.
+    if (isOpener(tokens[k])) {
+      if (line.pairs[k]! < 0) break;
+      k = line.pairs[k]!;
+      continue;
+    }
     const value = stringValue(line, tokens[k])?.toUpperCase();
     if (value !== undefined && value !== '' && !verbs.includes(value)) verbs.push(value);
   }
@@ -585,9 +592,9 @@ function routes(line: Line, lineNo: number, out: FactEvidence[]): void {
 /**
  * The facts of one file from its text: comparisons, case labels, normalization calls, retry and timeout bindings,
  * durations and routes, each found on a single line, then finished like the plugins' facts (FC-2 to FC-10) with the
- * style's string decoder (W5). A line longer than MAX_TEXT_SCAN_LINE gives no facts (W29). Never throws: a line
- * whose rules fail loses its evidence, and a file whose facts cannot be finished gives none and is passed to
- * `onError` (warn-and-continue; the caller logs it and keeps the other files).
+ * style's string decoder (W5). A line longer than MAX_TEXT_SCAN_LINE gives no facts (W29). Never throws: a rule
+ * that fails stops that line's rules (the evidence pushed before is kept), and a file whose facts cannot be finished
+ * gives none and is passed to `onError` (warn-and-continue; the caller logs it and keeps the other files).
  */
 export function scanTextFacts(
   file: string,
@@ -600,15 +607,15 @@ export function scanTextFacts(
     const style = commentStyleFor(file);
     const decode = stringDecoderFor(style);
     const tooLong = longLines(text);
-    const byLine = new Map<number, TextToken[]>();
-    for (const token of lexSource(text, style)) {
-      if (tooLong.has(token.line)) continue;
-      const list = byLine.get(token.line);
-      if (list) list.push(token);
-      else byLine.set(token.line, [token]);
-    }
-    const evidence: FactEvidence[] = [];
-    for (const [lineNo, tokens] of byLine) {
+    // Attribution (FC-9): the innermost symbol of each line, asked in increasing line order, else the module symbol.
+    const ownerOf = innermostSymbolCursor(symbols);
+    const moduleId = moduleSymbolId(file);
+    // Lines are finished one at a time, in increasing order (the lexer emits tokens in order). FC-10 sorts by line
+    // first and drops only duplicates on the same line, so the file's facts are the per-line facts in line order, cut
+    // at 500. Once 500 are kept no later line can change them, so lexing and collection stop there (Note A).
+    const facts: CodeFact[] = [];
+    const finishLine = (lineNo: number, tokens: readonly TextToken[]): void => {
+      const evidence: FactEvidence[] = [];
       try {
         const line = buildLine(tokens, style, decode);
         comparisons(line, lineNo, evidence);
@@ -617,10 +624,29 @@ export function scanTextFacts(
         bindingsAndDurations(line, lineNo, evidence);
         routes(line, lineNo, evidence);
       } catch {
-        // A heuristic that trips on odd input loses this line's evidence only.
+        // A heuristic that trips on odd input stops this line's rules; the evidence they pushed before is kept.
       }
-    }
-    return finishFacts(file, evidence, symbols, options, decode);
+      if (evidence.length === 0) return;
+      const symbolId = ownerOf(lineNo) ?? moduleId;
+      const owned = evidence.map((item) => (item.symbolId === undefined ? { ...item, symbolId } : item));
+      // Symbols are already attributed, so the finisher gets none to search.
+      for (const fact of finishFacts(file, owned, [], options, decode)) facts.push(fact);
+    };
+    let current: TextToken[] = [];
+    let currentLine = -1;
+    lexSourceUntil(text, style, (token) => {
+      if (tooLong.has(token.line)) return true;
+      if (token.line !== currentLine) {
+        if (current.length > 0) finishLine(currentLine, current);
+        if (facts.length >= MAX_FACTS_PER_FILE) return false;
+        current = [];
+        currentLine = token.line;
+      }
+      current.push(token);
+      return true;
+    });
+    if (current.length > 0 && facts.length < MAX_FACTS_PER_FILE) finishLine(currentLine, current);
+    return facts.slice(0, MAX_FACTS_PER_FILE);
   } catch (error) {
     try {
       onError?.(file, error);
