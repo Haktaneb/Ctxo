@@ -157,9 +157,9 @@ Every miss is `{ "found": false, "hint": "..." }`. An unexpected failure (an unr
 
 | Situation | Hint |
 | --- | --- |
-| No registry | `No domain registry at docs/domain/contexts.yaml. Create one with "ctxo init --domain".` |
+| No registry | `No domain registry at docs/domain/contexts.yaml. Create one with "ctxo init --domain". To propose the domain config from this repository, run "ctxo domain discover".` |
 | The registry has problems | `The domain registry at <path> has problems; run "ctxo verify-domain".` |
-| No graph yet | `No domain graph yet; run "ctxo index".` |
+| No graph yet | `No domain graph yet; run "ctxo index". To propose the domain config from this repository, run "ctxo domain discover".` |
 | The registry changed since the last index | `The domain registry changed since the last "ctxo index"; run it to rebuild the domain graph.` |
 | No context owns the file | `No named context owns src/main.ts.` |
 | Two contexts own the file | `<path> belongs to 2 contexts (a, b); fix the registry, see "ctxo verify-domain".` |

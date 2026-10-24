@@ -137,8 +137,8 @@ When only blocked files exist, `--check` prints that advice and not the "run --w
 ## ctxo domain discover
 
 Proposes the conventions it finds in the repository: tracker prefixes (a prefix seen in 5 or more commit
-subjects or branch names, and external ID families such as CWE), `Trait` keys that carry rule-like IDs, test folders
-no default glob covers and test-kind markers.
+subjects or branch names), `Trait` keys that carry rule-like IDs, test folders no default glob covers and test-kind
+markers. Run it first when you adopt the domain layer or tune its config.
 
 ```shell
 ctxo domain discover [--json] [--write]
@@ -149,34 +149,48 @@ It also proposes Characterization and Contract paths: folders named `Characteriz
 `<folder>/**`, listed after the configured globs.
 
 Beyond folders, it proposes test-kind markers for `domain.tests.characterization` and `domain.tests.contract`:
-`Trait`, `Category`, `TestCategory` and `Tag` values in test files that contain `characterization` or `contract`
-(as `Trait:<Key>=<Value>` or `<Name>:<Value>` annotation matchers), custom test attributes such as
-`StorageContractFact` or `StorageContractTheory` (as annotation names), and file names ending in `ContractTests` or
-`CharacterizationTests` (as `paths` globs such as `**/*ContractTests.cs`; a `names` marker matches test case names
-only, never file names). Values a configured matcher or glob already covers are not proposed.
 
-Tracker-like keys of a well-known external family (`ADR`, `BIP`, `CAPEC`, `CVE`, `CWE`, `EIP`, `GHSA`, `IEC`, `ISO`,
-`JSR`, `KEP`, `OWASP`, `PEP`, `RFC`) are reported as "external IDs, kept from linking" and proposed for
-`domain.rules.trackerPrefixes` from the first occurrence on, so a plain `CWE-22` never links as a rule ID. GitHub
-`#N` references (subjects, `(#N)` squash suffixes, `type/N-slug` branches) are reported as the tracker, and lowercase
-`name-NN` branch families seen in at least 3 branches as other identifiers; neither is proposed.
+- `Trait`, `Category`, `TestCategory` and `Tag` values in test files that equal the kind or end with it, optionally
+  followed by `Test` or `Tests` (`Contract`, `StorageContract`, `ContractTests`; not `ContractRenewal`), as
+  `Trait:<Key>=<Value>` or `<Name>:<Value>` annotation matchers. Qualified names (`NUnit.Framework.Category`) count.
+- Custom test attributes with the kind directly before a test attribute ending, such as `StorageContractFact` or
+  `StorageContractTheory` (not `DataContract`), as annotation names.
+- Test source files named `*ContractTests`, `*CharacterizationTests` (and `Test`), `*.contract.test.ts`,
+  `*.contract.spec.ts` or `*_contract_test.go`, as `paths` globs such as `**/*ContractTests.cs`. A `names` marker
+  matches test case names only, never file names. A file named after a non-test class of the index
+  (`LoanContractTests.cs` next to `LoanContract`) tests an entity, so its glob is not proposed.
+
+Values a configured matcher or glob already covers are not proposed.
+
+The rest is evidence only, with no config key:
+
+- **External IDs.** Keys of a well-known external family (`ADR`, `BIP`, `CAPEC`, `CVE`, `CWE`, `EIP`, `GHSA`, `IEC`,
+  `ISO`, `JSR`, `KEP`, `OWASP`, `PEP`, `RFC`) are references, not rule IDs: a plain mention never links as a rule ID,
+  because only IDs that exist in a card link. They are counted, never proposed, and flagged when a family equals a
+  card rule prefix. They no longer appear among the tracker-like keys.
+- **GitHub issues.** Subjects with an issue reference (`#N` at the start, `(#N)`, or after fixes, closes, refs and
+  similar words; not `step #1`), with their share and the `(#N)` squash suffixes, and `N-slug` or `type/N-slug`
+  branches. When they outnumber every tracker-key family, the line names GitHub as the issue tracker.
+- **Lowercase identifiers.** `name-NN` branch families seen in at least 3 branches, runtime names such as `node`
+  left out; a family whose upper case is a known prefix is marked as a possible tracker key.
 
 ```text
-  external IDs:       CWE in 7 commit subjects/branches   <- external IDs, kept from linking
-  GitHub issues (#N): 40 subjects, 2 branches
-  other identifiers:  acme-NN in 3 branches   <- not a tracker key; not proposed
+  external IDs:       CWE (7), ISO (1)   <- references, not rule IDs; no config needed
+  GitHub issues (#N): 40 of 72 subjects (56%), 40 with a (#N) suffix; 2 branches   <- the issue tracker (GitHub); no config key needed
+  other identifiers:  acme-NN in 3 branches   <- lowercase identifiers; not proposed
 Test kind markers     contract: values Trait:Category=StorageContract (2); attributes StorageContractFact (2); file names **/*ContractTests.cs (2)
 ```
 
 It prints the evidence and a proposed config, and writes only with `--write`, which merges the proposal into
-`.ctxo/config.yaml` (it adds values and removes none). The printed config quotes every list value as a JSON string
+`.ctxo/config.yaml` (it adds values and removes none; remove a wrong value by hand, and expect discovery to propose it
+again until the evidence changes). The printed config quotes every list value as a JSON string
 (`paths: ["**/Contract/**", "**/Contracts.Tests/**"]`), so the block is valid YAML to paste. `--json` prints the
 evidence and the proposal; the new evidence fields are `externalIds`, `githubIssues`, `otherIdentifiers` and
-`testKindMarkers`, the new proposal fields `externalIdPrefixes`, `characterizationAnnotations` and
-`contractAnnotations`.
+`testKindMarkers`, the new proposal fields `characterizationAnnotations` and `contractAnnotations`.
 
-Run it first when you adopt the domain layer or tune its config. While the conventions are all at their defaults,
-`ctxo domain map` and `get_context_map` add a hint that names this command.
+While the conventions are all at their defaults and the last `ctxo index` found that discovery would add something,
+`ctxo domain map` and `get_context_map` add a hint that names this command; so do the "no registry" and "no domain
+graph" answers of the domain tools.
 
 ## ctxo domain map
 

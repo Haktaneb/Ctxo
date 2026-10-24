@@ -75,7 +75,7 @@ ctxo init --domain --boundaries by-rung|report   # boundary mode without the pro
 ctxo contexts-touched --since origin/main [--committed | --staged] [--json] [--check]   # named contexts a change touched
 ctxo verify-domain --since origin/main [--boundaries by-rung|report] [--json]            # CI gate, 12 checks, exit 0/1/2
 ctxo domain rules --write|--check   # generated path-scoped loader rules (.claude/rules, .cursor/rules)
-ctxo domain discover [--json] [--write]   # propose tracker prefixes, rule trait keys and test folders (also Characterization and Contract paths)
+ctxo domain discover [--json] [--write]   # run first when adopting: tracker prefixes, rule trait keys, test folders and test-kind markers (external IDs, GitHub #N, lowercase ids: evidence only)
 ctxo domain map [--json]            # context map: metrics, rung, suggested rung and criteria per context
 ctxo domain shadow-specs <context> [--kinds <k,...>] [--all] [--json]   # shadow-spec candidates with fingerprints and resolutions
 

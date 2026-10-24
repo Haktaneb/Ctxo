@@ -697,26 +697,31 @@ Teams arrive with their own conventions: tracker keys shaped like rule IDs (`LEN
 ctxo domain discover [--json] [--write]
 ```
 
-It prints evidence and a proposed config, and writes only with `--write` (a merge into `.ctxo/config.yaml` that adds values and removes none). The printed config quotes every list value as a JSON string (`paths: ["**/Contract/**", "**/Contracts.Tests/**"]`), so the block is valid YAML to paste even with `**` globs. Run it first when you adopt the domain layer or tune its config: the `ctxo-domain-fold` skill says so, and `get_context_map` (and `ctxo domain map`) adds a hint naming the command while `domain.rules.trackerPrefixes`, `domain.tests.ruleTraitKeys`, `domain.tests.characterization` and `domain.tests.contract` are all at their defaults.
+It prints evidence and a proposed config, and writes only with `--write` (a merge into `.ctxo/config.yaml` that adds values and removes none). The printed config quotes every list value as a JSON string (`paths: ["**/Contract/**", "**/Contracts.Tests/**"]`), so the block is valid YAML to paste even with `**` globs. A wrong value, once written, stays until you remove it by hand, and discovery (and `ctxo doctor`) proposes it again until the evidence changes, so review before `--write`.
+
+Run it first when you adopt the domain layer or tune its config. The `ctxo-domain-fold` skill says so, the `get_context_map` description names it, the `found: false` hints for no registry and no domain graph name it, and `get_context_map` (and `ctxo domain map`) adds a hint while `domain.rules.trackerPrefixes`, `domain.tests.ruleTraitKeys`, `domain.tests.characterization` and `domain.tests.contract` are all at their defaults and the last `ctxo index` found that discovery would add something. The index pass records that in `maturity.json` (`discovery: { addsSomething }`) from its own index and change log; a run without a change log (`--skip-history`) keeps the last result.
 
 - **Rule IDs:** prefixes found in card headings; tracker-like keys (`\b[A-Z][A-Z0-9]{1,9}-\d+\b`) in commit subjects of the co-change window and in branch names (local and remote-tracking names count once). A prefix seen in at least 5 commits or branches is proposed as a tracker prefix, marked when it overlaps a rule prefix.
-- **External IDs:** keys of a well-known external family (`ADR`, `BIP`, `CAPEC`, `CVE`, `CWE`, `EIP`, `GHSA`, `IEC`, `ISO`, `JSR`, `KEP`, `OWASP`, `PEP`, `RFC`) are not tracker keys. They are reported as "external IDs, kept from linking" (`externalIds` in the JSON) and proposed for `domain.rules.trackerPrefixes` from the first occurrence on, because that key holds the safeguard: a plain mention of a tracker prefix never links as a rule ID, and in a card decision it is an external reference. `proposal.externalIdPrefixes` lists them.
-- **GitHub issues (#N):** subjects that hold a `#N` reference (`squashSuffixes` counts those ending in `(#N)`) and `type/N-slug` branches, reported as the tracker when present. Evidence only: no config key.
-- **Other identifiers:** lowercase `name-NN` branch families seen in at least 3 branches (such as customer finding numbers), reported so they are not mistaken for missed tracker keys. Never proposed.
+- **External IDs:** keys of a well-known external family (`ADR`, `BIP`, `CAPEC`, `CVE`, `CWE`, `EIP`, `GHSA`, `IEC`, `ISO`, `JSR`, `KEP`, `OWASP`, `PEP`, `RFC`) are references, not rule IDs: they are reported with their counts (`externalIds` in the JSON) and never proposed. They need no config: a plain mention never links as a rule ID, because only IDs that exist in a card link. (Listing a prefix in `trackerPrefixes` only turns such a key in a card decision into an external provenance reference.) A family that equals a card rule prefix is flagged (`overlapsRulePrefix`). Since 0.17 these families no longer appear in `trackerKeys`.
+- **GitHub issues (#N):** subjects with an issue reference (`#N` at the start, a `(#N)` suffix or group, or `#N` after fixes, closes, resolves, refs, see, issue or pull request; a bare `step #1` does not count), with their share of all subjects and the count of `(#N)` squash suffixes, and branches named `N-slug` or `type/N-slug`. When they outnumber every tracker-key family, the line says "the issue tracker (GitHub); no config key needed". Evidence only.
+- **Other identifiers:** lowercase `name-NN` branch families seen in at least 3 branches (runtime names such as `node`, `python` or `dotnet` left out), reported as "lowercase identifiers; not proposed". A family whose upper case is a card rule prefix, a tracker key in the evidence or a configured tracker prefix is marked "possible tracker key, lowercase" (Linear branches such as `user/eng-123-title` are lowercase). Never proposed.
 - **Test tagging:** annotation keys used on test methods whose values look like IDs (proposed for `domain.tests.ruleTraitKeys`).
 - **Test folders** that hold annotated tests but match no default glob (proposed for `index.tests`), Characterization and Contract folders, and ADR and spec folders.
-- **Test kind markers** beyond folders, per kind (`testKindMarkers` in the JSON): `Trait`, `Category`, `TestCategory` and `Tag` values in test files that contain `characterization` or `contract` (ASCII case ignored), proposed as `Trait:<Key>=<Value>` or `<Name>:<Value>` matchers for `annotations`; custom test attributes whose name names the kind and ends like a test attribute (`StorageContractFact`, `StorageContractTheory`, `FeeCharacterizationTest`), proposed as annotation names; and file names ending in `ContractTests`, `ContractTest`, `CharacterizationTests` or `CharacterizationTest`, proposed as `paths` globs such as `**/*ContractTests.cs`. File-name patterns go to `paths`, not `names`, because a `names` marker matches test case names and declared titles only, never file or class names. A value a configured matcher or glob already covers is not proposed.
+- **Test kind markers** beyond folders, per kind (`testKindMarkers` in the JSON):
+  - `Trait`, `Category`, `TestCategory` and `Tag` values in test files (qualified names such as `NUnit.Framework.Category` too) that equal the kind or end with it, optionally followed by `Test` or `Tests` (`Contract`, `StorageContract`, `ContractTests`; not `ContractRenewal`), proposed as `Trait:<Key>=<Value>` or `<Name>:<Value>` matchers for `annotations`. A matcher that would not match its own annotation (a value with `=`) is left out.
+  - Custom test attributes with the kind directly before a test attribute ending (`StorageContractFact`, `StorageContractTheory`, `FeeCharacterizationTest`; not `DataContract` or `ContractTestBase`), proposed as annotation names.
+  - Test source files named `*ContractTests`, `*ContractTest`, `*CharacterizationTests` or `*CharacterizationTest`, or in the dotted and snake-case forms (`*.contract.test.ts`, `*.contract.spec.ts`, `*_contract_test.go`), proposed as `paths` globs such as `**/*ContractTests.cs`. File-name patterns go to `paths`, not `names`, because a `names` marker matches test case names and declared titles only, never file or class names. A file named after a non-test class, interface or type of the index (`LoanContractTests.cs` next to a `LoanContract` class) tests an entity, so its glob is evidence only.
+
+  A value a configured matcher or glob already covers is not proposed.
 
 ```text
 $ ctxo domain discover
 Rule IDs
   card prefixes:      LEND (5 rules)
-  tracker-like keys:  LEND in 183 commit subjects/branches   <- overlaps a rule prefix
-                      OPS  in 12 commit subjects/branches
-  external IDs:       CWE in 7 commit subjects/branches   <- external IDs, kept from linking
-                      ADR in 2 commit subjects/branches   <- external IDs, kept from linking
-  GitHub issues (#N): 40 subjects, 2 branches
-  other identifiers:  acme-NN in 3 branches   <- not a tracker key; not proposed
+  tracker-like keys:  OPS in 12 commit subjects/branches
+  external IDs:       CWE (7), ISO (1)   <- references, not rule IDs; no config needed
+  GitHub issues (#N): 40 of 72 subjects (56%), 40 with a (#N) suffix; 2 branches   <- the issue tracker (GitHub); no config key needed
+  other identifiers:  acme-NN in 3 branches   <- lowercase identifiers; not proposed
 Test tagging          xUnit Trait keys in use: Category (3), Rule (1)
 Test folders          no Characterization folders; no Contract folders
 Test kind markers     contract: values Trait:Category=StorageContract (2); attributes StorageContractFact (2), StorageContractTheory (1); file names **/*ContractTests.cs (2)
@@ -729,7 +734,7 @@ Provenance folders    docs/adr (1)
 Proposed config (.ctxo/config.yaml)
   domain:
     rules:
-      trackerPrefixes: ["ADR", "CWE", "LEND", "OPS"]
+      trackerPrefixes: ["OPS"]
     tests:
       ruleTraitKeys: ["Rule"]
       contract:

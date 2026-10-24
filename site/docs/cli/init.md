@@ -137,7 +137,8 @@ name it: `--only domain`, `--only rules,domain`. `--skip domain` removes it agai
 3. The registry skeleton `docs/domain/contexts.yaml` (`version: 1`, no contexts, no cards) when there is no
    file.
 4. Convention discovery: init shows what `ctxo domain discover` proposes (tracker prefixes, rule trait keys,
-   test folders) and asks before merging it into the config; `--yes` accepts.
+   test folders and characterization and contract markers) and asks before merging it into the config; `--yes`
+   accepts. External IDs, GitHub issues and lowercase identifiers are shown as evidence and never written.
 5. The generated loader rules, when a context has a card.
 6. For Claude Code, the fold guard hooks `SessionStart`, `Stop` and `TaskCompleted`
    (`ctxo domain-guard-hook`) in `.claude/settings.json`, and the `ctxo-domain-fold` skill for Claude Code
