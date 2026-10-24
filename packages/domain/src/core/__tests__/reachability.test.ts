@@ -255,16 +255,18 @@ describe('containerOf sweep', () => {
     }
   });
 
-  // The pairwise rule took about 480 ms here and the sweep about 7 ms; 150 ms separates them with headroom.
-  it('one file with 10,000 nested and sibling symbols is swept well under a second', () => {
+  // D-M3: 40,000 symbols in one file. The pairwise rule is quadratic (about 480 ms at 10,000 symbols, so seconds
+  // here); the sweep takes tens of milliseconds. The 1,000 ms bound keeps a loaded CI runner or coverage
+  // instrumentation far from flaking while the pairwise rule still fails it by a wide margin.
+  it('one file with 40,000 nested and sibling symbols is swept well under a second', () => {
     const file = 'src/Generated/Big.cs';
-    const symbols: SymbolNode[] = [sym(file, 'Ns', 'class', 0, 30000)];
-    for (let c = 0; c < 1111; c++) {
+    const symbols: SymbolNode[] = [sym(file, 'Ns', 'class', 0, 120000)];
+    for (let c = 0; c < 4444; c++) {
       const base = c * 25 + 1;
       symbols.push(sym(file, `Ns.C${c}`, 'class', base, base + 23));
       for (let m = 0; m < 8; m++) symbols.push(sym(file, `Ns.C${c}.M${m}`, 'method', base + 1 + m * 2, base + 2 + m * 2));
     }
-    expect(symbols.length).toBe(10000);
+    expect(symbols.length).toBe(39997);
     const index = fileIndex(file, symbols);
     const started = performance.now();
     const graph = buildReachGraph(host.services.buildGraph([]), [index]);
@@ -272,7 +274,7 @@ describe('containerOf sweep', () => {
     expect(graph.containerOf.get(`${file}::Ns.C7.M3::method`)).toBe(`${file}::Ns.C7::class`);
     expect(graph.containerOf.get(`${file}::Ns.C7::class`)).toBe(`${file}::Ns::class`);
     expect(graph.containerOf.has(`${file}::Ns::class`)).toBe(false);
-    expect(graph.containerOf.size).toBe(9999);
-    expect(elapsed).toBeLessThan(150);
+    expect(graph.containerOf.size).toBe(39996);
+    expect(elapsed).toBeLessThan(1000);
   });
 });
