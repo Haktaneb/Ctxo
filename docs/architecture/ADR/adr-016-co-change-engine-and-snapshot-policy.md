@@ -106,14 +106,14 @@ The canonical rename map walks the log newest first and relies on git's default 
 
 ## Evidence
 
-Validated against a private production repository (826 indexed source files plus 44 script files brought in through `cochange.include`, 1643 non-merge commits on the main line), with the dev build of this branch. The oracle is an independent script with the same filter rules, run on the same set of 553 files. Aggregate numbers only.
+Validated against a private production repository (826 indexed source files plus 44 script files brought in through `cochange.include`, 1643 non-merge commits on the main line), with the dev build of this branch. The oracle is an independent script with the same filter rules, run on the same set of files. Aggregate numbers only.
 
 ### Co-change matrix against the oracle
 
 | | Ctxo | Oracle |
 |---|---|---|
-| Commits scanned | 1643 (whole history from HEAD) | 1077 (pathspec-limited log) |
-| Commits used | 976 | 970 |
+| Commits scanned | 1643 (whole history from HEAD) | fewer (pathspec-limited log) |
+| Commits used | 976 | fewer (the 7 commits below) |
 | Mass commits skipped (more than 30 files) | 4 | 3 |
 | File pairs | 1431 | 1431 (same set) |
 | Unit pairs (the oracle's grouping) | 948 | 948 (same set) |
@@ -222,7 +222,7 @@ Validated on a private production repository (826 indexed files, 318 of them tes
 | Measure | Value |
 |---|---|
 | Candidates | 12 (sizes 67 down to 4) |
-| `coverage.ratio` | 510 / 515 = 0.990 (0.922 over the oracle's whole universe of 553 files, which includes 37 script files that are not nodes) |
+| `coverage.ratio` | 510 / 515 = 0.990 (lower over the oracle's whole universe, which includes script files that are not nodes) |
 | Hubs | 17 (7 fan-in plus god node, 10 god node only), all assigned to a candidate; damping 0.154 to 0.387 |
 | Unclustered | 5 (each has no edge at all) |
 | Collisions | 5 (minimum Jaccard 0 to 0.111, each across 2 candidates) |
@@ -231,7 +231,7 @@ Validated on a private production repository (826 indexed files, 318 of them tes
 | Contexts-view step in `ctxo index` | about 0.85 s of a 31 s warm index (76 s cold); the file-graph build is over 95% of the step |
 
 - **Hub case.** Before, in the symbol-level communities of the same run, the largest community (621 symbols, 124 files) held the shared factory interface and spanned all four areas. After, that interface is a hub (88 dependents, damping 0.154). The four areas' majorities land in 3 distinct candidates. Cutting the hub completely, or turning damping off, leaves the placement of all 83 area files unchanged: the remaining co-location of two areas (13 and 7 files) comes from 35 direct file pairs (co-change weight 12.3 against dependency weight 0.24).
-- **Against the oracle's 81 units** (folders or single endpoint files, 553 files): 53 units sit in one candidate and 25 are split; 0.794 of the covered files sit in their unit's majority candidate (homogeneity 0.541, completeness 0.794, V-measure 0.644). Most splits are shared or platform units scattered by design (12) and large features split along an internal seam (7); 3 are split by cross-cutting co-change through a shared base and 3 lose one file to its only dependency partner. Eleven of 12 candidates merge two or more units (6.75 on average), which is expected because the oracle's unit is small.
+- **Against the oracle's units** (folders or single endpoint files): 53 units sit in one candidate and 25 are split; 0.794 of the covered files sit in their unit's majority candidate (homogeneity 0.541, completeness 0.794, V-measure 0.644). Most splits are shared or platform units scattered by design (12) and large features split along an internal seam (7); 3 are split by cross-cutting co-change through a shared base and 3 lose one file to its only dependency partner. Eleven of 12 candidates merge two or more units (6.75 on average), which is expected because the oracle's unit is small.
 - **Labels.** 9 of 12 labels were the project's source root: the longest common directory of a nested single project is that project folder, and the PageRank fallback only applied at the repo root. K34's refinement pass handles this case.
 - **Tuning** (one setting at a time, about 30 trials): coverage stayed at 0.977 or higher and collisions at 4 to 6 in every trial. Only `resolution` 2.5 or higher gives four distinct majorities, and only by a majority flip with 30 split units and 0.716 agreement. Lowering `weights.coChange` makes the hub case worse. Resolution 1.25, `weights.coChange` 0.5 and `weights.dependency` 2 each reach 0.822 to 0.825 agreement with the same hub outcome. No default changed.
 
