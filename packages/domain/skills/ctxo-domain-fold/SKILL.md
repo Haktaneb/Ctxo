@@ -7,9 +7,10 @@ description: Use BEFORE changing code under a named domain context, BEFORE finis
 
 ## When adopting or tuning the domain config
 
-1. Run `ctxo domain discover` first (a dry run: it writes nothing). It reads the commit subjects, branches, index and tracked files and proposes `domain.rules.trackerPrefixes`, `domain.tests.ruleTraitKeys`, `index.tests` and the characterization and contract test markers (folders, file-name globs, Trait or Category values and custom test attributes). External ID families such as CWE and ADR are proposed as tracker prefixes so they never link as rule IDs; GitHub `#N` issues and other identifiers are evidence only.
+1. Run `ctxo domain discover` first (a dry run: it writes nothing). It reads the commit subjects, branches, index and tracked files and proposes `domain.rules.trackerPrefixes`, `domain.tests.ruleTraitKeys`, `index.tests` and the characterization and contract test markers (folders, file-name globs, Trait or Category values and custom test attributes). External IDs such as CWE or ISO keys, GitHub `#N` issues and lowercase branch identifiers are evidence only: they need no config.
 2. Review the evidence, then either edit `.ctxo/config.yaml` by hand or run `ctxo domain discover --write`, which adds the proposed values and removes none. `--json` prints the same evidence and proposal for a script.
-3. Do not reverse-engineer the config keys from ctxo's installed files: the discovery report names each key it proposes.
+3. A wrong value, once written, stays until you remove it by hand, and discovery (and `ctxo doctor`) proposes it again until the evidence changes. Review before `--write`.
+4. Do not reverse-engineer the config keys from ctxo's installed files: the discovery report names each key it proposes.
 
 ## Before changing a context's code
 

@@ -338,7 +338,6 @@ describe('proposalAddsSomething', () => {
   it('is true for a new prefix, trait key or test glob', () => {
     const base = {
       trackerPrefixes: [],
-      externalIdPrefixes: [],
       ruleTraitKeys: ['Rule'],
       indexTests: [],
       characterizationPaths: [],

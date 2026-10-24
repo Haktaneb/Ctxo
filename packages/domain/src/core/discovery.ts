@@ -12,10 +12,10 @@ export const TRACKER_PREFIX_MIN = 5;
 
 /**
  * Well-known external identifier families (#191): security weaknesses and advisories (CWE, CVE, GHSA, OWASP,
- * CAPEC), decision and standard documents (ADR, RFC, ISO, IEC, PEP, JSR, KEP, BIP, EIP). A key such as `CWE-22` is
- * never a team's tracker key nor a rule ID: discovery reports these families as external IDs and proposes them
- * under `domain.rules.trackerPrefixes`, whose safeguard keeps a plain mention from linking as a rule ID, from the
- * first occurrence on. In codepoint order.
+ * CAPEC), decision and standard documents (ADR, RFC, ISO, IEC, PEP, JSR, KEP, BIP, EIP). A key such as `CWE-22` is a
+ * reference, not a team's tracker key nor a rule ID. Discovery reports these families as evidence only and never
+ * proposes them: a plain mention never links as a rule ID anyway (only IDs that exist in a card link). A family that
+ * equals a card rule prefix is flagged. In codepoint order.
  */
 export const EXTERNAL_ID_FAMILIES: readonly string[] = [
   'ADR',
@@ -33,10 +33,12 @@ export const EXTERNAL_ID_FAMILIES: readonly string[] = [
   'PEP',
   'RFC',
 ];
-/** The label of an external ID family, in the printed evidence and in the JSON. */
-export const EXTERNAL_ID_NOTE = 'external IDs, kept from linking';
+/** The label of the external ID families, in the printed evidence and in the JSON. */
+export const EXTERNAL_ID_NOTE = 'references, not rule IDs; no config needed';
 /** Branches a lowercase `name-NN` family must appear in before it is reported as other identifiers. */
 export const OTHER_IDENTIFIER_MIN = 3;
+/** Runtime and language names that version branches carry (`chore/node-20`); never reported as identifiers. */
+export const OTHER_IDENTIFIER_STOPLIST: readonly string[] = ['dotnet', 'go', 'java', 'net', 'node', 'php', 'python', 'ruby'];
 
 export interface FolderCount {
   readonly folder: string;
@@ -49,20 +51,43 @@ export interface TestKindMarkers {
   readonly annotationValues: readonly { matcher: string; count: number }[];
   /** Custom test attributes naming the kind (`StorageContractFact`), with the annotations found. */
   readonly attributes: readonly { name: string; count: number }[];
-  /** File names ending in `<Kind>Tests` or `<Kind>Test`, as `**\/*<suffix><ext>` globs, with the tracked files. */
-  readonly fileNames: readonly { glob: string; files: number }[];
+  /**
+   * Test file names ending in `<Kind>Tests` or `<Kind>Test` (`BlobStoreContractTests.cs`), or in the dotted and
+   * snake-case forms (`loan.contract.test.ts`, `loan_contract_test.go`), as `**\/*<suffix>` globs, with the test files.
+   * `entityTests` counts the files named after a non-test class, interface or type of the index
+   * (`LoanContractTests.cs` next to a `LoanContract` class: unit tests of an entity); a glob with any of them is
+   * evidence only.
+   */
+  readonly fileNames: readonly { glob: string; files: number; entityTests: number }[];
 }
 
 export interface DiscoveryEvidence {
   readonly cardPrefixes: readonly { prefix: string; rules: number }[];
   /** Tracker-like prefixes; the external ID families are reported in `externalIds` instead. */
   readonly trackerKeys: readonly { prefix: string; occurrences: number; overlapsRulePrefix: boolean }[];
-  /** Tracker-like keys of a well-known external family (`EXTERNAL_ID_FAMILIES`), most frequent first. */
-  readonly externalIds: readonly { prefix: string; occurrences: number; note: string }[];
-  /** GitHub-style `#N` references: subjects holding one, the subjects ending in `(#N)`, and `type/N-slug` branches. */
-  readonly githubIssues: { readonly subjects: number; readonly squashSuffixes: number; readonly branches: number };
-  /** Lowercase `name-NN` branch families in at least `OTHER_IDENTIFIER_MIN` branches; evidence only, never proposed. */
-  readonly otherIdentifiers: readonly { prefix: string; branches: number }[];
+  /**
+   * Tracker-like keys of a well-known external family (`EXTERNAL_ID_FAMILIES`), most frequent first. Evidence only,
+   * never proposed; `overlapsRulePrefix` flags a family that is also a card rule prefix.
+   */
+  readonly externalIds: readonly { prefix: string; occurrences: number; overlapsRulePrefix: boolean; note: string }[];
+  /**
+   * GitHub-style issue references: subjects with one (at the start, as `(#N)`, or after fixes, closes, resolves,
+   * refs, see, issue or pull request), the subjects ending in `(#N)`, all subjects, the `N-slug` branches, and
+   * whether they are the largest identifier family. Evidence only.
+   */
+  readonly githubIssues: {
+    readonly subjects: number;
+    readonly squashSuffixes: number;
+    readonly totalSubjects: number;
+    readonly branches: number;
+    readonly largestFamily: boolean;
+  };
+  /**
+   * Lowercase `name-NN` branch families in at least `OTHER_IDENTIFIER_MIN` branches, runtime names left out
+   * (`OTHER_IDENTIFIER_STOPLIST`). `possibleTrackerKey` marks a family whose upper case is a card rule prefix, a
+   * tracker key of the evidence or a configured tracker prefix. Evidence only, never proposed.
+   */
+  readonly otherIdentifiers: readonly { prefix: string; branches: number; possibleTrackerKey: boolean }[];
   readonly traitKeys: readonly { key: string; count: number; idLikeValues: number }[];
   readonly uncoveredTestFolders: readonly FolderCount[];
   readonly characterizationFolders: readonly FolderCount[];
@@ -73,8 +98,6 @@ export interface DiscoveryEvidence {
 
 export interface DiscoveryProposal {
   readonly trackerPrefixes: readonly string[];
-  /** The external ID families found in subjects and branches, all of them also in `trackerPrefixes`; codepoint order. */
-  readonly externalIdPrefixes: readonly string[];
   readonly ruleTraitKeys: readonly string[];
   readonly indexTests: readonly string[];
   /**
@@ -184,44 +207,60 @@ function trackerKeys(
     tracker: sorted
       .filter(([prefix]) => !EXTERNAL_FAMILIES.has(prefix))
       .map(([prefix, occurrences]) => ({ prefix, occurrences, overlapsRulePrefix: rulePrefixes.has(prefix) })),
-    external: sorted.filter(([prefix]) => EXTERNAL_FAMILIES.has(prefix)).map(([prefix, occurrences]) => ({ prefix, occurrences, note: EXTERNAL_ID_NOTE })),
+    external: sorted
+      .filter(([prefix]) => EXTERNAL_FAMILIES.has(prefix))
+      .map(([prefix, occurrences]) => ({ prefix, occurrences, overlapsRulePrefix: rulePrefixes.has(prefix), note: EXTERNAL_ID_NOTE })),
   };
 }
 
-/** `#N` not preceded by a word character or `&` (an HTML entity such as `&#35;`). */
-const GITHUB_REF = /(?<![\w&])#\d+\b/;
+/**
+ * An issue reference in a subject: `#N` at the start, a `(#N)` suffix or group, or `#N` after fixes, closes,
+ * resolves, refs, see, issue or pull request. A bare `#N` elsewhere (`step #1 of the plan`) is not one.
+ */
+const ISSUE_REFS: readonly RegExp[] = [
+  /^\s*#\d+\b/,
+  /\(#\d+\)/,
+  /\b(?:fix(?:e[sd])?|close[sd]?|resolve[sd]?|refs?|see|issue|pull request)\s*:?\s+#\d+\b/i,
+];
 const SQUASH_SUFFIX = /\(#\d+\)\s*$/;
-/** `type/N-slug`: a segment after a slash that is digits, a dash and a slug starting with a letter. */
-const ISSUE_BRANCH = /\/\d+-[A-Za-z][^/]*$/;
+/** `N-slug`, alone or after `type/`: a last segment of digits, a dash and a slug starting with a letter. */
+const ISSUE_BRANCH = /(?:^|\/)\d+-[A-Za-z][^/]*$/;
 
-function githubIssues(subjects: readonly string[], branches: readonly string[]): DiscoveryEvidence['githubIssues'] {
+function githubIssues(subjects: readonly string[], branches: readonly string[], tracker: DiscoveryEvidence['trackerKeys']): DiscoveryEvidence['githubIssues'] {
+  const withRef = subjects.filter((s) => ISSUE_REFS.some((re) => re.test(s))).length;
+  const issueBranches = branches.filter((b) => ISSUE_BRANCH.test(b)).length;
+  const total = withRef + issueBranches;
+  const largestTracker = Math.max(0, ...tracker.map((t) => t.occurrences));
   return {
-    subjects: subjects.filter((s) => GITHUB_REF.test(s)).length,
+    subjects: withRef,
     squashSuffixes: subjects.filter((s) => SQUASH_SUFFIX.test(s)).length,
-    branches: branches.filter((b) => ISSUE_BRANCH.test(b)).length,
+    totalSubjects: subjects.length,
+    branches: issueBranches,
+    largestFamily: total > 0 && total > largestTracker,
   };
 }
 
 /** A lowercase `name-NN` key; a following dot or alphanumeric (a version such as `lib-1.2.3`) is not one. */
 const LOWER_KEY = /(?<![A-Za-z0-9])([a-z][a-z0-9]*)-\d+(?![A-Za-z0-9.])/g;
+const STOPLIST: ReadonlySet<string> = new Set(OTHER_IDENTIFIER_STOPLIST);
 
-function otherIdentifiers(branches: readonly string[]): DiscoveryEvidence['otherIdentifiers'] {
+function otherIdentifiers(branches: readonly string[], knownPrefixes: ReadonlySet<string>): DiscoveryEvidence['otherIdentifiers'] {
   const counts = new Map<string, number>();
   for (const branch of branches) {
     const seen = new Set<string>();
-    for (const match of branch.matchAll(LOWER_KEY)) seen.add(match[1]!);
+    for (const match of branch.matchAll(LOWER_KEY)) if (!STOPLIST.has(match[1]!)) seen.add(match[1]!);
     for (const prefix of seen) counts.set(prefix, (counts.get(prefix) ?? 0) + 1);
   }
   return [...counts.entries()]
     .filter(([, n]) => n >= OTHER_IDENTIFIER_MIN)
-    .map(([prefix, n]) => ({ prefix, branches: n }))
+    .map(([prefix, n]) => ({ prefix, branches: n, possibleTrackerKey: knownPrefixes.has(prefix.toUpperCase()) }))
     .sort((a, b) => b.branches - a.branches || compare(a.prefix, b.prefix));
 }
 
 type TestKind = 'characterization' | 'contract';
 type Annotation = NonNullable<FileIndex['symbols'][number]['annotations']>[number];
 
-/** The kind a word names: `characterization` before `contract`, ASCII case ignored. */
+/** The kind a word names: `characterization` before `contract`, ASCII case ignored. Used on attribute names. */
 function kindOf(text: string): TestKind | undefined {
   const lower = text.toLowerCase();
   if (lower.includes('characterization')) return 'characterization';
@@ -229,12 +268,32 @@ function kindOf(text: string): TestKind | undefined {
   return undefined;
 }
 
-/** Annotations whose value names the kind: `Trait(key, value)` and the one-value category annotations. */
+/**
+ * The kind a test tag value names: the value equals the kind or ends with it, optionally followed by `Test` or
+ * `Tests` (`StorageContract`, `Contract`, `Contracts`, `ContractTests`). A value that merely contains it
+ * (`ContractRenewal`) names a business entity, not a test kind.
+ */
+function valueKindOf(value: string): TestKind | undefined {
+  const lower = value.toLowerCase();
+  const base = lower.replace(/tests?$/, '');
+  if (base.endsWith('characterization')) return 'characterization';
+  if (base.endsWith('contract') || lower.endsWith('contracts')) return 'contract';
+  return undefined;
+}
+
+/** Annotations whose value names the kind: `Trait(key, value)` and the one-value category annotations, by last name segment. */
 const VALUE_ANNOTATIONS: ReadonlySet<string> = new Set(['Category', 'TestCategory', 'Tag']);
-/** A custom test attribute: a name that names a kind and ends like a test attribute (`StorageContractFact`). */
-const KIND_ATTRIBUTE = /(?:Characterization|Contract)[A-Za-z0-9_]*?(?:Fact|Theory|Test|TestMethod|TestCase)(?:Attribute)?$/i;
-/** A file named after a kind's test class: `BlobStoreContractTests.cs`. */
-const KIND_FILE = /(Characterization|Contract)(Tests?)(\.[A-Za-z0-9]+)$/;
+/** A custom test attribute: the kind directly before a test attribute ending (`StorageContractFact`, not `ContractTestBase`). */
+const KIND_ATTRIBUTE = /(?:Characterization|Contract)(?:Fact|Theory|Test|TestMethod|TestCase)(?:Attribute)?$/i;
+/** Test file names of a kind: `BlobStoreContractTests.cs`, `loan.contract.test.ts`, `loan_contract_test.go`. */
+const KIND_FILE_CAMEL = /(Characterization|Contract)(Tests?)(\.[A-Za-z0-9]+)$/i;
+const KIND_FILE_DOTTED = /\.(characterization|contract)\.(test|spec)(\.[A-Za-z0-9]+)$/i;
+const KIND_FILE_SNAKE = /_(characterization|contract)_test(\.[A-Za-z0-9]+)$/i;
+/** Source extensions a test file-name pattern is taken from; `docs/ContractTests.md` is not a test. */
+const SOURCE_EXTENSIONS: ReadonlySet<string> = new Set([
+  '.cjs', '.cs', '.fs', '.go', '.groovy', '.java', '.js', '.jsx', '.kt', '.mjs', '.php', '.py', '.rb', '.scala', '.swift', '.ts', '.tsx', '.vb',
+]);
+const ENTITY_KINDS: ReadonlySet<string> = new Set(['class', 'interface', 'type']);
 
 function lastSegment(name: string): string {
   const dot = name.lastIndexOf('.');
@@ -245,22 +304,48 @@ function isKindAttribute(name: string): boolean {
   return KIND_ATTRIBUTE.test(lastSegment(name));
 }
 
-/** The `annotations` matcher an annotation's kind value gives, with the kind; undefined for any other annotation. */
+/**
+ * The `annotations` matcher an annotation's kind value gives, with the kind; undefined for any other annotation and
+ * for a matcher that would not match the annotation it came from (a value with `=`, for example).
+ */
 function valueMatcher(annotation: Annotation): { readonly kind: TestKind; readonly matcher: string } | undefined {
   const args = annotation.args ?? [];
+  const short = lastSegment(annotation.name);
   let spec: string | undefined;
   let value: string | undefined;
-  if (annotation.name === 'Trait' && args[0] !== undefined && args[1] !== undefined) {
+  if (short === 'Trait' && args[0] !== undefined && args[1] !== undefined) {
     value = args[1].trim();
-    spec = `Trait:${args[0].trim()}=${value}`;
-  } else if (VALUE_ANNOTATIONS.has(annotation.name) && args[0] !== undefined) {
+    spec = `${annotation.name}:${args[0].trim()}=${value}`;
+  } else if (VALUE_ANNOTATIONS.has(short) && args[0] !== undefined) {
     value = args[0].trim();
     spec = `${annotation.name}:${value}`;
   }
   if (spec === undefined || value === undefined) return undefined;
-  const kind = kindOf(value);
-  if (kind === undefined || parseAnnotationMatcher(spec) === undefined) return undefined;
+  const kind = valueKindOf(value);
+  const parsed = parseAnnotationMatcher(spec);
+  if (kind === undefined || parsed === undefined || !annotationMatches(parsed, annotation)) return undefined;
   return { kind, matcher: spec };
+}
+
+/** The glob, kind and (CamelCase form only) entity stem a test file name gives; undefined for any other file. */
+function fileFamily(base: string): { readonly kind: TestKind; readonly glob: string; readonly stem?: string } | undefined {
+  const camel = KIND_FILE_CAMEL.exec(base);
+  if (camel !== null) {
+    return {
+      kind: camel[1]!.toLowerCase() === 'characterization' ? 'characterization' : 'contract',
+      glob: `**/*${camel[1]}${camel[2]}${camel[3]}`,
+      stem: base.slice(0, base.length - camel[2]!.length - camel[3]!.length),
+    };
+  }
+  const dotted = KIND_FILE_DOTTED.exec(base);
+  if (dotted !== null) {
+    return { kind: dotted[1]!.toLowerCase() === 'characterization' ? 'characterization' : 'contract', glob: `**/*.${dotted[1]}.${dotted[2]}${dotted[3]}` };
+  }
+  const snake = KIND_FILE_SNAKE.exec(base);
+  if (snake !== null) {
+    return { kind: snake[1]!.toLowerCase() === 'characterization' ? 'characterization' : 'contract', glob: `**/*_${snake[1]}_test${snake[2]}` };
+  }
+  return undefined;
 }
 
 function bump(map: Map<string, number>, key: string): void {
@@ -270,10 +355,10 @@ function bump(map: Map<string, number>, key: string): void {
 interface KindCounts {
   readonly values: Map<string, number>;
   readonly attributes: Map<string, number>;
-  readonly files: Map<string, string[]>;
+  readonly files: Map<string, { files: string[]; entityTests: number }>;
 }
 
-/** Test-kind markers beyond folders: annotation values and custom attributes in the index, file names in the tracked files. */
+/** Test-kind markers beyond folders: annotation values and custom attributes in the index, file names of the test files. */
 function testKindMarkers(
   input: DiscoveryInput,
   tracked: readonly string[],
@@ -283,12 +368,18 @@ function testKindMarkers(
     characterization: { values: new Map(), attributes: new Map(), files: new Map() },
     contract: { values: new Map(), attributes: new Map(), files: new Map() },
   };
+  const testIndexed = new Set<string>();
+  const entities = new Set<string>();
   for (const index of input.indices) {
     const all = index.symbols.flatMap((symbol) => symbol.annotations ?? []);
     const custom = all.filter((a) => isKindAttribute(a.name));
     for (const annotation of custom) bump(counts[kindOf(lastSegment(annotation.name))!].attributes, annotation.name);
     // Values count in test files only; a custom test attribute makes a file a test file too.
-    if (!input.isPathTestFile(index.file) && !hasTestAnnotation(index, annotated) && custom.length === 0) continue;
+    if (!input.isPathTestFile(index.file) && !hasTestAnnotation(index, annotated) && custom.length === 0) {
+      for (const symbol of index.symbols) if (ENTITY_KINDS.has(symbol.kind)) entities.add(lastSegment(symbol.name));
+      continue;
+    }
+    testIndexed.add(norm(index.file));
     for (const annotation of all) {
       const found = valueMatcher(annotation);
       if (found !== undefined) bump(counts[found.kind].values, found.matcher);
@@ -297,22 +388,29 @@ function testKindMarkers(
   for (const raw of tracked) {
     const file = norm(raw);
     const base = file.slice(file.lastIndexOf('/') + 1);
-    const match = KIND_FILE.exec(base);
-    if (match === null) continue;
-    const kind: TestKind = match[1] === 'Characterization' ? 'characterization' : 'contract';
-    const glob = `**/*${match[1]}${match[2]}${match[3]}`;
-    const list = counts[kind].files.get(glob);
-    if (list === undefined) counts[kind].files.set(glob, [file]);
-    else list.push(file);
+    const dot = base.lastIndexOf('.');
+    if (dot < 0 || !SOURCE_EXTENSIONS.has(base.slice(dot).toLowerCase())) continue;
+    if (!input.isPathTestFile(file) && !testIndexed.has(file)) continue;
+    const family = fileFamily(base);
+    if (family === undefined) continue;
+    const entry = counts[family.kind].files.get(family.glob) ?? { files: [], entityTests: 0 };
+    entry.files.push(file);
+    if (family.stem !== undefined && entities.has(family.stem)) entry.entityTests++;
+    counts[family.kind].files.set(family.glob, entry);
   }
   const view = (c: KindCounts): TestKindMarkers => ({
     annotationValues: [...c.values.entries()].map(([matcher, count]) => ({ matcher, count })).sort((a, b) => compare(a.matcher, b.matcher)),
     attributes: [...c.attributes.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => compare(a.name, b.name)),
-    fileNames: [...c.files.entries()].map(([glob, files]) => ({ glob, files: files.length })).sort((a, b) => compare(a.glob, b.glob)),
+    fileNames: [...c.files.entries()]
+      .map(([glob, entry]) => ({ glob, files: entry.files.length, entityTests: entry.entityTests }))
+      .sort((a, b) => compare(a.glob, b.glob)),
   });
+  // Only families without entity tests are proposed.
+  const proposable = (c: KindCounts): Map<string, readonly string[]> =>
+    new Map([...c.files.entries()].filter(([, entry]) => entry.entityTests === 0).map(([glob, entry]) => [glob, entry.files]));
   return {
     markers: { characterization: view(counts.characterization), contract: view(counts.contract) },
-    files: { characterization: counts.characterization.files, contract: counts.contract.files },
+    files: { characterization: proposable(counts.characterization), contract: proposable(counts.contract) },
   };
 }
 
@@ -425,12 +523,13 @@ export function discoverConventions(input: DiscoveryInput): { readonly evidence:
   const kinds = testKindMarkers(input, tracked, annotated);
   const tests = input.config.tests;
 
+  const knownPrefixes = new Set([...rulePrefixes, ...tracker.map((t) => t.prefix), ...input.config.rules.trackerPrefixes]);
   const evidence: DiscoveryEvidence = {
     cardPrefixes: cards,
     trackerKeys: tracker,
     externalIds: external,
-    githubIssues: githubIssues(input.commitSubjects, branches),
-    otherIdentifiers: otherIdentifiers(branches),
+    githubIssues: githubIssues(input.commitSubjects, branches, tracker),
+    otherIdentifiers: otherIdentifiers(branches, knownPrefixes),
     traitKeys: traits,
     uncoveredTestFolders: uncovered,
     characterizationFolders: folderCounts(tracked, CHARACTERIZATION_NAMES, false, () => true),
@@ -438,14 +537,12 @@ export function discoverConventions(input: DiscoveryInput): { readonly evidence:
     provenanceFolders: folderCounts(tracked, PROVENANCE_NAMES, true, (file) => MARKDOWN_FILE.test(file)),
     testKindMarkers: kinds.markers,
   };
-  const externalIdPrefixes = sortedUnion(external.map((e) => e.prefix));
+  // External ID families are evidence only: never proposed (#191).
   const proposal: DiscoveryProposal = {
     trackerPrefixes: sortedUnion(
       input.config.rules.trackerPrefixes,
       tracker.filter((t) => t.occurrences >= TRACKER_PREFIX_MIN).map((t) => t.prefix),
-      externalIdPrefixes,
     ),
-    externalIdPrefixes,
     ruleTraitKeys: sortedUnion(
       input.config.tests.ruleTraitKeys,
       traits.filter((t) => t.idLikeValues >= 1).map((t) => t.key),
@@ -495,18 +592,25 @@ export function formatDiscovery(evidence: DiscoveryEvidence, proposal: Discovery
     });
   }
   if (evidence.externalIds.length > 0) {
-    const width = Math.max(...evidence.externalIds.map((t) => t.prefix.length));
-    evidence.externalIds.forEach((t, i) => {
-      lines.push(row(i === 0 ? '  external IDs:' : '', `${t.prefix.padEnd(width)} in ${t.occurrences} commit subjects/branches   <- ${t.note}`));
-    });
+    const text = evidence.externalIds.map((t) => `${t.prefix} (${t.occurrences})`).join(', ');
+    lines.push(row('  external IDs:', `${text}   <- ${EXTERNAL_ID_NOTE}`));
+    for (const t of evidence.externalIds.filter((e) => e.overlapsRulePrefix)) {
+      lines.push(row('', `${t.prefix}   <- also a card rule prefix; never proposed`));
+    }
   }
   const github = evidence.githubIssues;
   if (github.subjects > 0 || github.branches > 0) {
-    lines.push(row('  GitHub issues (#N):', `${github.subjects} subjects, ${github.branches} branches`));
+    const share = github.totalSubjects > 0 ? Math.round((github.subjects / github.totalSubjects) * 100) : 0;
+    const text =
+      `${github.subjects} of ${github.totalSubjects} subjects (${share}%), ${github.squashSuffixes} with a (#N) suffix; ` +
+      `${github.branches} branches${github.largestFamily ? '   <- the issue tracker (GitHub); no config key needed' : ''}`;
+    lines.push(row('  GitHub issues (#N):', text));
   }
   if (evidence.otherIdentifiers.length > 0) {
-    const text = evidence.otherIdentifiers.map((o) => `${o.prefix}-NN in ${o.branches} branches`).join(', ');
-    lines.push(row('  other identifiers:', `${text}   <- not a tracker key; not proposed`));
+    const text = evidence.otherIdentifiers
+      .map((o) => `${o.prefix}-NN in ${o.branches} branches${o.possibleTrackerKey ? ' (possible tracker key, lowercase)' : ''}`)
+      .join(', ');
+    lines.push(row('  other identifiers:', `${text}   <- lowercase identifiers; not proposed`));
   }
 
   lines.push(
@@ -540,7 +644,12 @@ export function formatDiscovery(evidence: DiscoveryEvidence, proposal: Discovery
     const parts: string[] = [];
     if (m.annotationValues.length > 0) parts.push(`values ${m.annotationValues.map((v) => `${v.matcher} (${v.count})`).join(', ')}`);
     if (m.attributes.length > 0) parts.push(`attributes ${m.attributes.map((a) => `${a.name} (${a.count})`).join(', ')}`);
-    if (m.fileNames.length > 0) parts.push(`file names ${m.fileNames.map((f) => `${f.glob} (${f.files})`).join(', ')}`);
+    if (m.fileNames.length > 0) {
+      const files = m.fileNames.map(
+        (f) => `${f.glob} (${f.files}${f.entityTests > 0 ? `, ${f.entityTests} named after a non-test class, so not proposed` : ''})`,
+      );
+      parts.push(`file names ${files.join(', ')}`);
+    }
     return parts.length > 0 ? `${kind}: ${parts.join('; ')}` : undefined;
   };
   const markerParts = [markerText('characterization', markers.characterization), markerText('contract', markers.contract)].filter(

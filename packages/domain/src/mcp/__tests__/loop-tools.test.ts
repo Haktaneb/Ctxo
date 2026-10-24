@@ -64,7 +64,7 @@ const FIND_DESCRIPTION =
   'Find shadow-spec candidates in a named context: business-looking logic that no card rule pins yet. Candidates are literal comparisons in conditions, string normalization, retry and timeout values and public endpoints in the context\'s code, the SQL tables, views and procedures it owns, and its rules without tests. Each has its file, line, symbol, a line-independent fingerprint, its source (native analysis, text scan, the index or the card) and its resolution: linked to a rule, marked Untested in the card, or resolved in the context\'s shadow-specs.yaml (the response names the file) with { rule: <ID> } or { notARule: "<reason>" }. Use this for the Deletion Test: for each open candidate, find or write the rule that pins it, or record why it is not a rule. Resolved candidates are hidden unless includeResolved is true. Copy each fingerprint verbatim into shadow-specs.yaml as a YAML single-quoted scalar (fingerprint: \'...\', with a \' inside written as \'\'); %7C and %25 in the symbol part are an encoded | and %. Under ctxo watch, candidates refresh only on the next "ctxo index". Large results are truncated with _meta.hint.';
 
 const MAP_DESCRIPTION =
-  "Get the map of named contexts: for each context its card, rule count and share of rules with tests, characterization and contract test counts, cross-context edges in and out, co-change with other contexts, drift, boundary violations and open shadow-spec candidates, plus the owner's rung from the registry, a suggested rung and the status of each criterion (pinned, named, bounded, boring). Use this to see how mature each context is and what blocks its next rung. The suggestion never changes the registry. Under ctxo watch, the map refreshes only on the next \"ctxo index\". Large results are truncated with _meta.hint; run \"ctxo domain map\" for the full map. Needs a domain registry (docs/domain/contexts.yaml). While the domain conventions are at their defaults, the hint says to run \"ctxo domain discover\", which proposes tracker prefixes, rule trait keys and test-kind markers from the repository.";
+  "Get the map of named contexts: for each context its card, rule count and share of rules with tests, characterization and contract test counts, cross-context edges in and out, co-change with other contexts, drift, boundary violations and open shadow-spec candidates, plus the owner's rung from the registry, a suggested rung and the status of each criterion (pinned, named, bounded, boring). Use this to see how mature each context is and what blocks its next rung. The suggestion never changes the registry. Under ctxo watch, the map refreshes only on the next \"ctxo index\". Large results are truncated with _meta.hint; run \"ctxo domain map\" for the full map. Needs a domain registry (docs/domain/contexts.yaml). While the domain conventions are at their defaults and discovery has something to propose, the hint says to run \"ctxo domain discover\", which proposes tracker prefixes, rule trait keys and test-kind markers from the repository.";
 
 describe('loop tools', () => {
   it('names the two tools with their descriptions', () => {
@@ -184,7 +184,7 @@ describe('loop tools', () => {
 
   it('no registry gives found false, never an error', async () => {
     const all = tools();
-    const hint = 'No domain registry at docs/domain/contexts.yaml. Create one with "ctxo init --domain".';
+    const hint = 'No domain registry at docs/domain/contexts.yaml. Create one with "ctxo init --domain". To propose the domain config from this repository, run "ctxo domain discover".';
 
     expect(await call(all.get(FIND_SHADOW_SPECS), { context: 'lending' })).toEqual({ found: false, hint });
     expect(await call(all.get(GET_CONTEXT_MAP))).toEqual({ found: false, hint });
@@ -269,13 +269,26 @@ describe('loop tools', () => {
     );
   });
 
-  it('conventions still at their defaults add the discover hint and change nothing else (#191)', async () => {
+  /** Records the index pass's discovery result in maturity.json, as `ctxo index` does with a change log. */
+  function recordDiscovery(addsSomething: boolean | undefined): void {
+    const path = join(project.ctxoRoot, 'index', 'domain', 'maturity.json');
+    const { discovery: _old, ...value } = JSON.parse(readFileSync(path, 'utf-8')) as Obj;
+    writeFileSync(path, `${JSON.stringify(addsSomething === undefined ? value : { ...value, discovery: { addsSomething } }, null, 2)}\n`, 'utf-8');
+    project.age('.ctxo/index/domain/maturity.json', 5);
+  }
+
+  function useDefaults(): void {
+    project.write('.ctxo/config.yaml', 'version: "1.0"\n');
+    project.age('.ctxo/config.yaml');
+  }
+
+  it('defaults and a discovery that adds something give the discover hint and change nothing else (#191)', async () => {
     await project.index();
+    recordDiscovery(true);
     const tuned = await call(tools().get(GET_CONTEXT_MAP));
     expect(tuned['hint']).toBeUndefined();
 
-    project.write('.ctxo/config.yaml', 'version: "1.0"\n');
-    project.age('.ctxo/config.yaml');
+    useDefaults();
     const defaults = await call(tools().get(GET_CONTEXT_MAP));
     expect(defaults['hint']).toBe(DEFAULT_CONVENTIONS_HINT);
     expect(DEFAULT_CONVENTIONS_HINT).toBe(
@@ -289,8 +302,18 @@ describe('loop tools', () => {
     expect((await call(tools().get(GET_CONTEXT_MAP)))['hint']).toBe(`${NO_BOUNDARIES_HINT} ${DEFAULT_CONVENTIONS_HINT}`);
   });
 
+  it('defaults with a discovery that adds nothing, or with no recorded discovery, give no hint', async () => {
+    await project.index();
+    useDefaults();
+    recordDiscovery(false);
+    expect((await call(tools().get(GET_CONTEXT_MAP)))['hint']).toBeUndefined();
+    recordDiscovery(undefined);
+    expect((await call(tools().get(GET_CONTEXT_MAP)))['hint']).toBeUndefined();
+  });
+
   it('any one convention off its default drops the hint', async () => {
     await project.index();
+    recordDiscovery(true);
     for (const yaml of [
       'domain:\n  tests:\n    ruleTraitKeys: [Rule, Req]\n',
       'domain:\n  tests:\n    characterization:\n      paths: ["golden/**"]\n',

@@ -237,7 +237,7 @@ describe.each(VARIANTS)('PR 2B acceptance, %s sample', (variant) => {
     session = await ws.connect();
     try {
       expect(await session.listTools()).toHaveLength(18);
-      const hint = 'No domain registry at docs/domain/contexts.yaml. Create one with "ctxo init --domain".';
+      const hint = 'No domain registry at docs/domain/contexts.yaml. Create one with "ctxo init --domain". To propose the domain config from this repository, run "ctxo domain discover".';
       for (const [name, args] of [
         ['get_rule', { ruleId: 'LEND-03' }],
         ['get_domain_context', {}],
@@ -326,7 +326,7 @@ describe.each(VARIANTS)('PR 2B acceptance, %s sample', (variant) => {
       ] as const) {
         const response = await session.call(name, args);
         expect(response['error'], name).toBeUndefined();
-        expect(response, name).toMatchObject({ found: false, hint: 'No domain registry at docs/domain/contexts.yaml. Create one with "ctxo init --domain".' });
+        expect(response, name).toMatchObject({ found: false, hint: 'No domain registry at docs/domain/contexts.yaml. Create one with "ctxo init --domain". To propose the domain config from this repository, run "ctxo domain discover".' });
       }
     } finally {
       await session.close();

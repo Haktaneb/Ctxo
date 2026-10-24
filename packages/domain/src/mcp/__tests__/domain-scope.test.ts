@@ -229,7 +229,7 @@ describe('domain scope of get_ranked_context', () => {
   it('no registry gives the graceful hint', async () => {
     expect(await search(scopeOf(), 'loan')).toEqual({
       found: false,
-      hint: 'No domain registry at docs/domain/contexts.yaml. Create one with "ctxo init --domain".',
+      hint: 'No domain registry at docs/domain/contexts.yaml. Create one with "ctxo init --domain". To propose the domain config from this repository, run "ctxo domain discover".',
     });
   });
 

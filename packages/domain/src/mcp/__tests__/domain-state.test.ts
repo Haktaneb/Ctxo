@@ -112,7 +112,7 @@ describe('createDomainState', () => {
 
     expect(failure(state.load())).toEqual({
       reason: 'no-registry',
-      hint: 'No domain registry at docs/domain/contexts.yaml. Create one with "ctxo init --domain".',
+      hint: 'No domain registry at docs/domain/contexts.yaml. Create one with "ctxo init --domain". To propose the domain config from this repository, run "ctxo domain discover".',
     });
 
     write('docs/domain/contexts.yaml', REGISTRY.replace('rung: bounded', 'rung: unknown'));
@@ -123,7 +123,7 @@ describe('createDomainState', () => {
 
     setUp();
     touch(join(root, 'docs/domain/contexts.yaml'));
-    expect(failure(state.load())).toEqual({ reason: 'no-graph', hint: 'No domain graph yet; run "ctxo index".' });
+    expect(failure(state.load())).toEqual({ reason: 'no-graph', hint: 'No domain graph yet; run "ctxo index". To propose the domain config from this repository, run "ctxo domain discover".' });
 
     await runPass();
     const ok = state.load();

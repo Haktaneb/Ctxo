@@ -8,17 +8,25 @@ import type { DomainConfig } from '../core/domain-config.js';
 import { readRegistry } from './registry-reader.js';
 import { readCardText } from './repo-files.js';
 
+/** Inputs a caller already holds (the index pass): read from them instead of from disk and git. */
+export interface PreloadedDiscoverySources {
+  readonly indices?: readonly FileIndex[];
+  readonly commitSubjects?: readonly string[];
+}
+
 /**
  * Gathers what `discoverConventions` reads: the cards, the co-change window's commit subjects, the branch
  * names, the index and the tracked files. Every git source is optional; without git history the evidence
- * from commits and branches is simply empty (warn-and-continue).
+ * from commits and branches is simply empty (warn-and-continue). `preloaded` replaces the index read and the
+ * co-change window read.
  */
 export async function gatherDiscoveryInput(
   host: CtxoHost,
   projectRoot: string,
   ctxoRoot: string,
-  loaded: LoadedConfig,
+  loaded: Pick<LoadedConfig, 'config'>,
   config: DomainConfig,
+  preloaded: PreloadedDiscoverySources = {},
 ): Promise<DiscoveryInput> {
   const services = host.services;
   const registryFile = readRegistry(projectRoot, config.registry);
@@ -34,11 +42,14 @@ export async function gatherDiscoveryInput(
     if (text !== undefined) cards.push(parseCard(text));
   }
 
-  let indices: FileIndex[] = [];
-  try {
-    indices = services.readIndex(ctxoRoot);
-  } catch {
-    indices = [];
+  let indices: readonly FileIndex[] = [];
+  if (preloaded.indices !== undefined) indices = preloaded.indices;
+  else {
+    try {
+      indices = services.readIndex(ctxoRoot);
+    } catch {
+      indices = [];
+    }
   }
 
   let git: IGitPort | undefined;
@@ -48,12 +59,15 @@ export async function gatherDiscoveryInput(
     git = undefined;
   }
 
-  let commitSubjects: string[] = [];
-  try {
-    const window = await services.readCoChangeWindow(projectRoot, loaded.config);
-    commitSubjects = (window?.commits ?? []).map((commit) => commit.message);
-  } catch {
-    commitSubjects = [];
+  let commitSubjects: readonly string[] = [];
+  if (preloaded.commitSubjects !== undefined) commitSubjects = preloaded.commitSubjects;
+  else {
+    try {
+      const window = await services.readCoChangeWindow(projectRoot, loaded.config);
+      commitSubjects = (window?.commits ?? []).map((commit) => commit.message);
+    } catch {
+      commitSubjects = [];
+    }
   }
 
   let localBranches: readonly string[] = [];

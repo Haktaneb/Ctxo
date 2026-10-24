@@ -24,7 +24,7 @@ const USAGE = [
   '',
   '  rules --write  Generate the path-scoped loader rules (.claude/rules, and .cursor/rules when .cursor/ exists)',
   '  rules --check  Exit 1 when a generated rule is missing, outdated or stale, or when a hand-written file blocks an expected path',
-  '  discover       Propose the domain config from the repository: tracker prefixes (external ID families such as CWE and ADR, kept from linking), rule trait keys, test folders and test-kind markers (Trait or Category values, custom attributes, *ContractTests file names); also reports GitHub #N issues and other identifiers. Run it first when adopting or tuning the domain config; --json prints the evidence and proposal, --write merges the proposal into .ctxo/config.yaml (adds values, removes none)',
+  '  discover       Propose the domain config from the repository: tracker prefixes, rule trait keys, test folders and test-kind markers (Trait or Category values, custom test attributes, *ContractTests file names); also reports external IDs (CWE, ISO, ...), GitHub #N issues and lowercase identifiers as evidence only. Run it first when adopting or tuning the domain config; --json prints the evidence and proposal, --write merges the proposal into .ctxo/config.yaml (adds values, removes none; remove a wrong value by hand)',
   '  map            The context map from the last "ctxo index": per context its rung, the suggested rung, rules with tests, open shadow-spec candidates and the rung criteria; --json prints the get_context_map body',
   `  shadow-specs   The shadow-spec candidates of one context with fingerprints and resolutions; --kinds <k,...> keeps these kinds (${CANDIDATE_KINDS.join(', ')}), --all adds resolved ones, --json prints the find_shadow_specs body`,
   '',

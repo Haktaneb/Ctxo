@@ -297,11 +297,14 @@ describe('ctxo domain discover', () => {
       proposal: Record<string, unknown>;
     };
     expect(out.evidence.trackerKeys).toEqual([{ prefix: 'LEND', occurrences: 5, overlapsRulePrefix: false }]);
-    expect(out.evidence['externalIds']).toEqual([{ prefix: 'CWE', occurrences: 2, note: 'external IDs, kept from linking' }]);
-    expect(out.evidence['githubIssues']).toEqual({ subjects: 3, squashSuffixes: 3, branches: 1 });
-    expect(out.evidence['otherIdentifiers']).toEqual([{ prefix: 'acme', branches: 3 }]);
-    expect(out.proposal['trackerPrefixes']).toEqual(['CWE', 'LEND']);
-    expect(out.proposal['externalIdPrefixes']).toEqual(['CWE']);
+    expect(out.evidence['externalIds']).toEqual([
+      { prefix: 'CWE', occurrences: 2, overlapsRulePrefix: false, note: 'references, not rule IDs; no config needed' },
+    ]);
+    expect(out.evidence['githubIssues']).toEqual({ subjects: 3, squashSuffixes: 3, totalSubjects: 9, branches: 1, largestFamily: false });
+    expect(out.evidence['otherIdentifiers']).toEqual([{ prefix: 'acme', branches: 3, possibleTrackerKey: false }]);
+    // External IDs are evidence only.
+    expect(out.proposal['trackerPrefixes']).toEqual(['LEND']);
+    expect(out.proposal).not.toHaveProperty('externalIdPrefixes');
     expect(out.proposal['contractAnnotations']).toEqual(['StorageContractFact', 'Trait:Category=StorageContract']);
     expect(out.proposal['contractPaths']).toEqual(['**/*ContractTests.cs']);
     // The existing fields stay.
