@@ -52,9 +52,10 @@ export function textScanTargets(input: {
 }
 
 /**
- * The text-scan facts of each target, read through `readRepoTexts` (files over 1 MiB, binary, missing or outside the
- * project are skipped). Files without facts are absent; the map is in codepoint order of path. A file whose scan
- * fails gives no facts and is passed to `onError` (the caller wires it to the `ctxo:domain` logger).
+ * The text-scan facts of each target, read through `readRepoTexts` (files over 1 MiB, binary, missing, outside the
+ * project or reached through a link that leaves the repository are skipped). Files without facts are absent; the map
+ * is in codepoint order of path. A file whose scan fails gives no facts and is passed to `onError` (the caller wires
+ * it to the `ctxo:domain` logger).
  */
 export function readTextFacts(
   projectRoot: string,

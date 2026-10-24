@@ -243,16 +243,12 @@ export function readCardText(projectRoot: string, repoPath: string, warn?: (mess
   return undefined;
 }
 
-/** One file's text, or undefined when it is not a regular file, too large, binary or unreadable. */
-function readSourceText(absolute: string, maxBytes: number): string | undefined {
-  const read = readFileText(absolute, maxBytes);
-  return 'text' in read ? read.text : undefined;
-}
-
 /**
- * The UTF-8 texts (BOM stripped) of repo-relative files, in codepoint order of path, each path once. Missing files,
- * directories, paths outside the project, files over `maxBytes` and files with a NUL byte in their first 8 KiB
- * are skipped.
+ * The UTF-8 texts (BOM stripped) of repo-relative files, in codepoint order of path, each path once. Each file is read
+ * like a card (`readCheckedRepoText`): only when its real path lies inside the real path of the repository, so a
+ * tracked symlink or junction that leaves the repository is skipped and one that stays inside is followed, opened
+ * without following a final symlink and checked to be the file the path resolved to. Missing files, directories,
+ * paths outside the project, files over `maxBytes` and files with a NUL byte in their first 8 KiB are skipped too.
  */
 export function readRepoTexts(
   projectRoot: string,
@@ -261,10 +257,9 @@ export function readRepoTexts(
 ): { readonly file: string; readonly text: string }[] {
   const out: { readonly file: string; readonly text: string }[] = [];
   for (const file of [...new Set(files)].sort(compare)) {
-    const absolute = inside(projectRoot, file);
-    if (absolute === undefined) continue;
-    const text = readSourceText(absolute, maxBytes);
-    if (text !== undefined) out.push({ file, text });
+    if (inside(projectRoot, file) === undefined) continue;
+    const read = readCheckedRepoText(projectRoot, file, maxBytes);
+    if ('text' in read) out.push({ file, text: read.text });
   }
   return out;
 }

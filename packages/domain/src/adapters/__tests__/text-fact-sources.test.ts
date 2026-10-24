@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -99,6 +99,36 @@ describe('readTextFacts', () => {
     mkdirSync(dirname(join(root, file)), { recursive: true });
     writeFileSync(join(root, file), content);
   };
+
+  it('readTextFacts never reads a file through a junction or symlink that leaves the repository (C-I1)', (ctx) => {
+    const outside = mkdtempSync(join(tmpdir(), 'ctxo-domain-text-facts-outside-'));
+    try {
+      writeFileSync(join(outside, 'gradle.kt'), 'val MAX_RETRIES = 7\n');
+      put('src/Billing/fees.py', 'MAX_RETRIES = 3\n');
+      let linked = 0;
+      try {
+        symlinkSync(outside, join(root, 'src', 'Billing', 'linked'), 'junction');
+        linked++;
+      } catch {
+        // no directory links here
+      }
+      try {
+        symlinkSync(join(outside, 'gradle.kt'), join(root, 'src', 'Billing', 'Config.kt'), 'file');
+        linked++;
+      } catch {
+        // no file symlinks here (Windows without developer mode)
+      }
+      if (linked === 0) ctx.skip('links cannot be made here');
+      const facts = readTextFacts(root, [
+        { file: 'src/Billing/linked/gradle.kt', symbols: [] },
+        { file: 'src/Billing/Config.kt', symbols: [] },
+        { file: 'src/Billing/fees.py', symbols: [] },
+      ], OPTIONS);
+      expect([...facts.keys()]).toEqual(['src/Billing/fees.py']);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
 
   it('readTextFacts skips oversized and binary files', () => {
     put('src/Billing/fees.py', 'MAX_RETRIES = 3\n');
