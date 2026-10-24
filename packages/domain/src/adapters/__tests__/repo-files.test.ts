@@ -6,6 +6,7 @@ import {
   invalidUtf8Line,
   leavesProject,
   readCheckedRepoText,
+  readFileText,
   readRepoText,
   readRepoTexts,
   repoFileExists,
@@ -83,6 +84,37 @@ describe('readRepoTexts', () => {
     writeFileSync(join(root, 'src', 'dir', 'Inner.kt'), 'inner', 'utf-8');
     expect(readRepoTexts(root, ['src/dir-link/Inner.kt'])).toEqual([{ file: 'src/dir-link/Inner.kt', text: 'inner' }]);
   });
+
+  it('readRepoTexts over 2,000 small files stays within a small factor of a plain read (Minor 1)', () => {
+    // Before the fix each file cost two JS realpath walks of the root and the file plus a third in the descriptor
+    // check: about 16x a plain read on Windows (1,264 ms against 77 ms), and about 4.4x (345 ms) after it. The bound
+    // is relative to a plain read on the same machine, so a slow runner does not fail it.
+    const files: string[] = [];
+    for (let i = 0; i < 2000; i++) {
+      const file = `src/area${i % 20}/feature${i % 7}/deep/f${String(i).padStart(4, '0')}.ts`;
+      mkdirSync(join(root, file, '..'), { recursive: true });
+      writeFileSync(join(root, file), `export const v${i} = ${i};\n`, 'utf-8');
+      files.push(file);
+    }
+    const best = (run: () => void): number => {
+      let min = Number.POSITIVE_INFINITY;
+      for (let round = 0; round < 3; round++) {
+        const start = performance.now();
+        run();
+        min = Math.min(min, performance.now() - start);
+      }
+      return min;
+    };
+    const plain = best(() => {
+      for (const file of files) readFileText(join(root, file), SOURCE_SCAN_MAX_BYTES);
+    });
+    let count = 0;
+    const checked = best(() => {
+      count = readRepoTexts(root, files).length;
+    });
+    expect(count).toBe(2000);
+    expect(checked, `checked ${checked.toFixed(0)} ms, plain ${plain.toFixed(0)} ms`).toBeLessThanOrEqual(plain * 8 + 50);
+  }, 60_000);
 
   it('repoIsFile is true for a file and false for a directory, a missing path or an escape', () => {
     expect(repoIsFile(root, 'src/a.ts')).toBe(true);

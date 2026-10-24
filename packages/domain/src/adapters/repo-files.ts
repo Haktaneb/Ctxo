@@ -143,32 +143,55 @@ export function readFileText(absolute: string, maxBytes: number, options: ReadFi
 /** A repo-relative path resolved to its real path, or why there is none (`skip` undefined: it does not exist). */
 export type LocatedRepoPath = { readonly real: string; readonly root: string } | { readonly skip: string | undefined };
 
-/** The real path of a repo-relative path when it lies inside the real path of the repository. Never throws. */
-export function locateRepoPath(projectRoot: string, repoPath: string): LocatedRepoPath {
-  if (repoPath === '' || isAbsolute(repoPath)) return { skip: 'not a repo-relative path' };
+/**
+ * The OS realpath (`realpathSync.native`): one system call per path instead of an `lstat` per path component. Every
+ * real path in this module comes from it, so a root and the paths under it are always compared in the same form.
+ */
+const realPath = (path: string): string => realpathSync.native(path);
+
+function locateSkip(err: unknown): LocatedRepoPath {
+  const code = errorCode(err);
+  return code === 'ENOENT' || code === 'ENOTDIR' ? { skip: undefined } : { skip: `unreadable (${code})` };
+}
+
+/** The real path of the project root, or the skip every path under it gets when the root cannot be resolved. */
+function resolveRepoRoot(projectRoot: string): { readonly root: string } | { readonly skip: LocatedRepoPath } {
   try {
-    const root = realpathSync(resolve(projectRoot));
-    const real = realpathSync(resolve(root, repoPath));
-    const rel = relative(root, real);
-    return rel === '' || leavesProject(rel) ? { skip: 'outside the repository' } : { real, root };
+    return { root: realPath(resolve(projectRoot)) };
   } catch (err) {
-    const code = errorCode(err);
-    return code === 'ENOENT' || code === 'ENOTDIR' ? { skip: undefined } : { skip: `unreadable (${code})` };
+    return { skip: locateSkip(err) };
   }
 }
 
+/** `locateRepoPath` against a root that is already a real path. */
+function locateUnderRoot(root: string, repoPath: string): LocatedRepoPath {
+  if (repoPath === '' || isAbsolute(repoPath)) return { skip: 'not a repo-relative path' };
+  try {
+    const real = realPath(resolve(root, repoPath));
+    const rel = relative(root, real);
+    return rel === '' || leavesProject(rel) ? { skip: 'outside the repository' } : { real, root };
+  } catch (err) {
+    return locateSkip(err);
+  }
+}
+
+/** The real path of a repo-relative path when it lies inside the real path of the repository. Never throws. */
+export function locateRepoPath(projectRoot: string, repoPath: string): LocatedRepoPath {
+  if (repoPath === '' || isAbsolute(repoPath)) return { skip: 'not a repo-relative path' };
+  const resolved = resolveRepoRoot(projectRoot);
+  return 'root' in resolved ? locateUnderRoot(resolved.root, repoPath) : resolved.skip;
+}
+
 /**
- * True when the open descriptor is the file at `real` and `real` still resolves to itself inside the repository: a
- * symlink or another file swapped in between the check and the open fails this.
+ * True when the open descriptor is the file at `real` and `real` still resolves to itself: a symlink or another file
+ * swapped in between the check and the open fails this. `real` was checked to lie inside the root when it was
+ * located, so a path that still resolves to the same string is still inside; that check is not repeated.
  */
-function sameFile(root: string, real: string, fd: number): boolean {
+function sameFile(real: string, fd: number): boolean {
   try {
     const opened = fstatSync(fd);
-    const again = realpathSync(real);
-    if (again !== real) return false;
-    const rel = relative(root, again);
-    if (rel === '' || leavesProject(rel)) return false;
-    const current = statSync(again);
+    if (realPath(real) !== real) return false;
+    const current = statSync(real);
     return current.dev === opened.dev && current.ino === opened.ino;
   } catch {
     return false;
@@ -214,14 +237,20 @@ export function readCheckedRepoText(
   repoPath: string,
   maxBytes: number,
   options: CheckedReadOptions = {},
-): { readonly text: string } | { readonly skip: string | undefined; readonly line?: number } {
-  const located = locateRepoPath(projectRoot, repoPath);
+): CheckedText {
+  return readCheckedText(locateRepoPath(projectRoot, repoPath), maxBytes, options);
+}
+
+type CheckedText = { readonly text: string } | { readonly skip: string | undefined; readonly line?: number };
+
+/** `readCheckedRepoText` of a path that is already located. */
+function readCheckedText(located: LocatedRepoPath, maxBytes: number, options: CheckedReadOptions = {}): CheckedText {
   if (!('real' in located)) return { skip: located.skip };
   options.afterCheck?.(located.real);
   const read = readFileText(located.real, maxBytes, {
     noFollow: true,
     strictUtf8: options.strictUtf8 ?? false,
-    verify: (fd) => sameFile(located.root, located.real, fd),
+    verify: (fd) => sameFile(located.real, fd),
   });
   if ('text' in read) return { text: read.text };
   const skip = skipText(read.skip, maxBytes);
@@ -256,9 +285,12 @@ export function readRepoTexts(
   maxBytes: number = SOURCE_SCAN_MAX_BYTES,
 ): { readonly file: string; readonly text: string }[] {
   const out: { readonly file: string; readonly text: string }[] = [];
+  // The root is resolved once per call; when it cannot be resolved every file is skipped, as each read would be.
+  const resolved = resolveRepoRoot(projectRoot);
+  if (!('root' in resolved)) return out;
   for (const file of [...new Set(files)].sort(compare)) {
     if (inside(projectRoot, file) === undefined) continue;
-    const read = readCheckedRepoText(projectRoot, file, maxBytes);
+    const read = readCheckedText(locateUnderRoot(resolved.root, file), maxBytes);
     if ('text' in read) out.push({ file, text: read.text });
   }
   return out;
