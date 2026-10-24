@@ -20,6 +20,9 @@ export interface ResolutionEntry {
   readonly line: number;
 }
 
+/** A resolution entry that names a rule: what `applyResolutions` reports as an unknown rule. */
+export type UnknownRuleEntry = ResolutionEntry & { readonly resolution: { readonly rule: string } };
+
 export interface ShadowSpecsProblem {
   /** 1-based. */
   readonly line: number;
@@ -174,7 +177,7 @@ export interface AppliedResolutions {
   /** Entries whose fingerprint matches no candidate (automatically resolved ones count as matches), in entry order. */
   readonly stale: readonly ResolutionEntry[];
   /** Entries naming a rule that `canonicalRule` does not know, in entry order; they resolve nothing. */
-  readonly unknownRules: readonly ResolutionEntry[];
+  readonly unknownRules: readonly UnknownRuleEntry[];
 }
 
 /**
@@ -189,7 +192,7 @@ export function applyResolutions(
   canonicalRule: (raw: string) => string | undefined,
 ): AppliedResolutions {
   const keyed = entries.map((entry) => ({ entry, key: normalizeFingerprint(entry.fingerprint) ?? entry.fingerprint }));
-  const unknownRules: ResolutionEntry[] = [];
+  const unknownRules: UnknownRuleEntry[] = [];
   const effective = new Map<string, NonNullable<ShadowCandidate['resolution']>>();
   for (const { entry, key } of keyed) {
     if (effective.has(key)) continue;
@@ -197,7 +200,7 @@ export function applyResolutions(
     if ('rule' in resolution) {
       const rule = canonicalRule(resolution.rule);
       if (rule === undefined) {
-        unknownRules.push(entry);
+        unknownRules.push({ ...entry, resolution });
         continue;
       }
       effective.set(key, { by: 'shadow-specs', rule });

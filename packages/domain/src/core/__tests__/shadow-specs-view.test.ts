@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { contextNodeId, type ContextNode } from '../domain-graph.js';
 import { compareCandidates, type CandidateKind, type ShadowCandidate } from '../shadow-candidates.js';
-import type { ResolutionEntry, ShadowSpecsProblem } from '../shadow-specs-file.js';
-import { isRuleEntry, SHADOW_VIEW_LIST_CAP, shadowSpecsView, type ShadowSpecsViewInput, type UnknownRuleEntry } from '../shadow-specs-view.js';
+import type { ResolutionEntry, ShadowSpecsProblem, UnknownRuleEntry } from '../shadow-specs-file.js';
+import { SHADOW_VIEW_LIST_CAP, shadowSpecsView, type ShadowSpecsViewInput } from '../shadow-specs-view.js';
 
 const CONTEXT: ContextNode = { id: contextNodeId('lending'), context: 'lending', name: 'Lending', rung: 'named', card: 'docs/domain/lending/domain.md' };
 const RESOLUTION_FILE = 'docs/domain/lending/shadow-specs.yaml';
@@ -171,10 +171,5 @@ describe('shadowSpecsView', () => {
     expect(candidates).toEqual(CANDIDATES);
     expect(stale.map((s) => s.line)).toEqual([9, 4]);
     expect(shadowSpecsView(inputOf({ candidates, stale, includeResolved: true }))).toEqual(first);
-  });
-
-  it('isRuleEntry keeps the entries that name a rule', () => {
-    const entries = [entry('endpoint | A.B | x', 1, 'NOPE-01'), entry('endpoint | A.B | y', 2)];
-    expect(entries.filter(isRuleEntry)).toEqual([ruleEntry('endpoint | A.B | x', 1, 'NOPE-01')]);
   });
 });

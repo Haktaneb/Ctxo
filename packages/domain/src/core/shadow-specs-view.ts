@@ -6,7 +6,7 @@
 
 import type { ContextNode } from './domain-graph.js';
 import { CANDIDATE_KINDS, candidatesOf, compareCandidates, type CandidateKind, type ShadowCandidate } from './shadow-candidates.js';
-import type { ResolutionEntry, ShadowSpecsProblem } from './shadow-specs-file.js';
+import type { ResolutionEntry, ShadowSpecsProblem, UnknownRuleEntry } from './shadow-specs-file.js';
 
 /** The most stale entries, unknown rules or file problems one view lists (W28). */
 export const SHADOW_VIEW_LIST_CAP = 50;
@@ -25,13 +25,6 @@ export interface ShadowSpecsViewInput {
   readonly problems: readonly ShadowSpecsProblem[];
 }
 
-/** A resolution entry that names a rule. */
-export type UnknownRuleEntry = ResolutionEntry & { readonly resolution: { readonly rule: string } };
-
-/** Narrows `applyResolutions(...).unknownRules` (typed `ResolutionEntry[]`) to the input of the view. */
-export function isRuleEntry(entry: ResolutionEntry): entry is UnknownRuleEntry {
-  return 'rule' in entry.resolution;
-}
 
 const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
