@@ -7,10 +7,9 @@ import type { Ownership } from '../core/ownership.js';
 import type { DomainRegistry } from '../core/registry.js';
 import { buildScanOptions, resolveRuleRefs, scanRuleComments, scanTestFiles, type RuleLinks } from '../core/rule-id-scan.js';
 import { buildShadowCandidates, type ShadowCandidate } from '../core/shadow-candidates.js';
-import { scanTextFacts } from '../core/text-facts.js';
 import { readCardText, readRepoTexts, repoFileExists, repoIsFile, SOURCE_SCAN_MAX_BYTES } from './repo-files.js';
 import { readTestFiles, type TestFileText } from './test-file-source.js';
-import { textScanTargets } from './text-fact-sources.js';
+import { scanTargetTexts, textScanTargets } from './text-fact-sources.js';
 
 /** What `composeLoopInputs` reads from: a valid registry over the current index. */
 export interface LoopInputsRequest {
@@ -147,20 +146,14 @@ export async function composeLoopInputs(host: CtxoHost, request: LoopInputsReque
     });
     const options = { trivialLiterals: config.facts.trivialLiterals, normalizationMethods: config.facts.normalizationMethods };
     // The scan reuses the production texts read for the `rule:` comments (same reader, same 1 MiB cap); only the
-    // unindexed targets are read here, so no file is read twice. Same behaviour as `readTextFacts`.
-    const texts = new Map(productionTexts.map(({ file, text }) => [file, text] as const));
+    // unindexed targets are read here, so no file is read twice. Same scan as `readTextFacts` (`scanTargetTexts`).
+    const scanTexts = new Map(productionTexts.map(({ file, text }) => [file, text] as const));
     const attempted = new Set(production);
     const unread = targets.filter((target) => !attempted.has(target.file)).map((target) => target.file);
-    for (const { file, text } of readRepoTexts(projectRoot, unread, SOURCE_SCAN_MAX_BYTES)) texts.set(file, text);
-    const textFacts = new Map<string, CodeFact[]>();
-    for (const target of targets) {
-      const text = texts.get(target.file);
-      if (text === undefined) continue;
-      const facts = scanTextFacts(target.file, text, target.symbols, options, (file, error) =>
-        warn(`The text scan of ${file} failed: ${error instanceof Error ? error.message : String(error)}; the file gives no facts.`),
-      );
-      if (facts.length > 0) textFacts.set(target.file, facts);
-    }
+    for (const { file, text } of readRepoTexts(projectRoot, unread, SOURCE_SCAN_MAX_BYTES)) scanTexts.set(file, text);
+    const textFacts = scanTargetTexts(targets, (file) => scanTexts.get(file), options, (file, error) =>
+      warn(`The text scan of ${file} failed: ${error instanceof Error ? error.message : String(error)}; the file gives no facts.`),
+    );
     const candidates = buildShadowCandidates({
       registry,
       ownership: request.ownership,

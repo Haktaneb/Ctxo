@@ -62,10 +62,29 @@ export function readTextFacts(
   options: FactOptions,
   onError?: (file: string, error: unknown) => void,
 ): Map<string, CodeFact[]> {
+  const files = [...new Set(targets.map((target) => norm(target.file)))];
+  const texts = new Map(readRepoTexts(projectRoot, files, SOURCE_SCAN_MAX_BYTES).map(({ file, text }) => [file, text] as const));
+  return scanTargetTexts(targets, (file) => texts.get(file), options, onError);
+}
+
+/**
+ * The text-scan facts of each target whose text `textOf` gives (undefined: not read, so no facts), each path once, in
+ * codepoint order of path; a repeated target keeps its last symbols. Files without facts are absent. A file whose
+ * scan fails gives no facts and is passed to `onError`. `readTextFacts` reads the texts itself; the W10 composition
+ * hands in the texts it has already read.
+ */
+export function scanTargetTexts(
+  targets: readonly TextScanTarget[],
+  textOf: (file: string) => string | undefined,
+  options: FactOptions,
+  onError?: (file: string, error: unknown) => void,
+): Map<string, CodeFact[]> {
   const symbolsOf = new Map<string, readonly SymbolNode[]>();
   for (const target of targets) symbolsOf.set(norm(target.file), target.symbols);
   const out = new Map<string, CodeFact[]>();
-  for (const { file, text } of readRepoTexts(projectRoot, [...symbolsOf.keys()], SOURCE_SCAN_MAX_BYTES)) {
+  for (const file of [...symbolsOf.keys()].sort(compare)) {
+    const text = textOf(file);
+    if (text === undefined) continue;
     const facts = scanTextFacts(file, text, symbolsOf.get(file) ?? [], options, onError);
     if (facts.length > 0) out.set(file, facts);
   }

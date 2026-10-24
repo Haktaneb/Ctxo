@@ -9,7 +9,7 @@ import { parseRegistry } from '../../core/registry.js';
 import { DEFAULT_DOMAIN_CONFIG } from '../../core/domain-config.js';
 import type { FactOptions } from '../../core/facts/fact-types.js';
 import { SOURCE_SCAN_MAX_BYTES } from '../repo-files.js';
-import { readTextFacts, textScanTargets } from '../text-fact-sources.js';
+import { readTextFacts, scanTargetTexts, textScanTargets } from '../text-fact-sources.js';
 
 const REGISTRY = `version: 1
 contexts:
@@ -146,6 +146,34 @@ describe('readTextFacts', () => {
     );
     expect(seen).toEqual(['src/Billing/a.py: TypeError']);
     expect(facts.get('src/Billing/b.py')?.map((f) => f.text)).toEqual(['MAX_RETRIES = 3']);
+  });
+
+  it('scanTargetTexts scans the given texts once per path in codepoint order and skips files without a text', () => {
+    const texts = new Map([
+      ['src/Billing/b.py', 'MAX_RETRIES = 3\n'],
+      ['src/Billing/a.py', 'if days > 14:\n'],
+      ['src/Billing/plain.py', 'print("hello")\n'],
+    ]);
+    const asked: string[] = [];
+    const symbol: SymbolNode = { symbolId: 'src/Billing/a.py::check::function', name: 'check', kind: 'function', startLine: 0, endLine: 0 };
+    const facts = scanTargetTexts(
+      [
+        { file: 'src/Billing/b.py', symbols: [] },
+        { file: 'src\\Billing\\a.py', symbols: [] },
+        { file: 'src/Billing/a.py', symbols: [symbol] },
+        { file: 'src/Billing/plain.py', symbols: [] },
+        { file: 'src/Billing/unread.py', symbols: [] },
+      ],
+      (file) => {
+        asked.push(file);
+        return texts.get(file);
+      },
+      OPTIONS,
+    );
+    expect(asked).toEqual(['src/Billing/a.py', 'src/Billing/b.py', 'src/Billing/plain.py', 'src/Billing/unread.py']);
+    expect([...facts.keys()]).toEqual(['src/Billing/a.py', 'src/Billing/b.py']);
+    // A repeated target keeps its last symbols.
+    expect(facts.get('src/Billing/a.py')?.map((f) => f.symbolId)).toEqual([symbol.symbolId]);
   });
 
   it('facts attach to the target symbols', () => {
