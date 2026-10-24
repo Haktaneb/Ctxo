@@ -27,6 +27,24 @@ vi.mock('../../core/text-facts.js', async (importOriginal) => {
   };
 });
 
+/** Every repo path the composition reads, once per read (cards and the glossary, test, production and scan texts). */
+const reads: string[] = [];
+
+vi.mock('../repo-files.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../repo-files.js')>();
+  return {
+    ...original,
+    readCardText: (...args: Parameters<typeof original.readCardText>) => {
+      reads.push(args[1]);
+      return original.readCardText(...args);
+    },
+    readRepoTexts: (...args: Parameters<typeof original.readRepoTexts>) => {
+      reads.push(...new Set(args[1]));
+      return original.readRepoTexts(...args);
+    },
+  };
+});
+
 const REGISTRY = `version: 1
 contexts:
   - id: lending
@@ -42,6 +60,8 @@ const CARD = ['# Lending', '', '## Rules and invariants', '### LEND-01 A loan la
 const NATIVE = 'src/Lending/Renewal.cs';
 const TEXT = 'src/Lending/DueDates.cs';
 const TESTS = 'tests/Lending.Tests/DueDateTests.cs';
+/** Tracked, not indexed, with a listed extension: a text-scan target only. */
+const PY = 'src/Lending/fees.py';
 
 const index = (file: string, name: string, facts?: CodeFact[]): FileIndex => ({
   file,
@@ -70,10 +90,19 @@ beforeEach(() => {
   write('docs/domain/contexts.yaml', REGISTRY);
   write('docs/domain/lending/domain.md', CARD);
   write(NATIVE, 'class Renewal\n{\n    bool Ok(int renewals)\n    {\n        if (renewals > 2) return false;\n        return true;\n    }\n}\n');
-  write(TEXT, 'class DueDates\n{\n    bool Late(int days)\n    {\n        if (days > 14) return true;\n        return false;\n    }\n}\n');
-  write(TESTS, 'class DueDateTests\n{\n    [Fact]\n    public void LateAfterTwoWeeks() { }\n}\n');
+  write(TEXT, 'class DueDates\n{\n    bool Late(int days)\n    {\n        if (days > 14) return true; // rule: LEND-99\n        return false;\n    }\n}\n');
+  write(TESTS, 'class DueDateTests\n{\n    // rule: LEND-88\n    [Fact]\n    public void LateAfterTwoWeeks() { }\n}\n');
+  write(PY, 'def late(days):\n    if days > 30:\n        return True\n    return False\n');
   failingFile = undefined;
+  reads.length = 0;
 });
+
+/** A host whose git lists every file of the fixture as tracked, the unindexed `fees.py` included. */
+function trackedHost(): CtxoHost {
+  const host = createModuleHost({ cliVersion: '0.0.0', mode: 'cli', projectRoot: root });
+  const tracked = ['docs/domain/contexts.yaml', 'docs/domain/lending/domain.md', NATIVE, PY, TEXT, TESTS];
+  return { ...host, services: { ...host.services, createGit: () => ({ listTrackedFiles: async () => tracked }) as never } };
+}
 
 afterEach(() => {
   rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
@@ -113,6 +142,39 @@ describe('composeLoopInputs', () => {
     expect([...inputs.candidates!.textFacts.keys()]).toEqual([TEXT]);
     expect([...inputs.candidates!.facts.keys()].sort()).toEqual([TEXT, NATIVE].sort());
     expect(warnings).toEqual([]);
+  });
+
+  it('returns the parsed cards and the rule references verify-domain needs (W10)', async () => {
+    const host = trackedHost();
+    const inputs = await composeLoopInputs(host, request(host, []));
+
+    expect(inputs.cards.map((c) => [c.context.id, c.path, c.card?.rules.map((r) => r.id)])).toEqual([
+      ['lending', 'docs/domain/lending/domain.md', ['LEND-01']],
+    ]);
+    expect([...inputs.parsedCards.keys()]).toEqual(['docs/domain/lending/domain.md']);
+    expect(inputs.parsedCards.get('docs/domain/lending/domain.md')).toBe(inputs.cards[0]!.card);
+    expect(inputs.testRefs.links.size).toBe(0);
+    expect(inputs.testRefs.unknown.map((r) => [r.file, r.id, r.kind])).toEqual([[TESTS, 'LEND-88', 'rule-comment']]);
+    expect(inputs.codeRefs.links.size).toBe(0);
+    expect(inputs.codeRefs.unknown.map((r) => [r.file, r.id, r.kind])).toEqual([[TEXT, 'LEND-99', 'rule-comment']]);
+  });
+
+  it('reads each card, test file and production file once per call', async () => {
+    const host = trackedHost();
+    const inputs = await composeLoopInputs(host, request(host, []));
+    // The unindexed fees.py and the facts-less DueDates.cs are scanned; Renewal.cs keeps its native facts.
+    expect([...inputs.candidates!.textFacts.keys()]).toEqual([TEXT, PY]);
+
+    const counts = new Map<string, number>();
+    for (const path of reads) counts.set(path, (counts.get(path) ?? 0) + 1);
+    expect([...counts].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))).toEqual([
+      ['docs/domain/glossary.md', 1],
+      ['docs/domain/lending/domain.md', 1],
+      [TEXT, 1],
+      [NATIVE, 1],
+      [PY, 1],
+      [TESTS, 1],
+    ]);
   });
 
   it('a text scan error is a warning and that file gives no facts', async () => {

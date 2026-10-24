@@ -5,11 +5,12 @@ import { buildDomainGraph, cardsHash, type CardInput, type DomainGraph } from '.
 import { indexGraph } from '../core/domain-graph-query.js';
 import type { Ownership } from '../core/ownership.js';
 import type { DomainRegistry } from '../core/registry.js';
-import { buildScanOptions, resolveRuleRefs, scanRuleComments, scanTestFiles } from '../core/rule-id-scan.js';
+import { buildScanOptions, resolveRuleRefs, scanRuleComments, scanTestFiles, type RuleLinks } from '../core/rule-id-scan.js';
 import { buildShadowCandidates, type ShadowCandidate } from '../core/shadow-candidates.js';
-import { readCardText, readRepoTexts, repoFileExists, repoIsFile } from './repo-files.js';
+import { scanTextFacts } from '../core/text-facts.js';
+import { readCardText, readRepoTexts, repoFileExists, repoIsFile, SOURCE_SCAN_MAX_BYTES } from './repo-files.js';
 import { readTestFiles, type TestFileText } from './test-file-source.js';
-import { readTextFacts, textScanTargets } from './text-fact-sources.js';
+import { textScanTargets } from './text-fact-sources.js';
 
 /** What `composeLoopInputs` reads from: a valid registry over the current index. */
 export interface LoopInputsRequest {
@@ -38,8 +39,16 @@ export interface CandidateInputs {
 
 export interface LoopInputs {
   readonly graph: DomainGraph;
+  /** The registry's cards in registry order (contexts without a card left out), as `buildDomainGraph` got them. */
+  readonly cards: readonly CardInput[];
+  /** Each card path the registry names, parsed once; undefined for a card that is missing or was skipped (I2). */
+  readonly parsedCards: ReadonlyMap<string, ParsedCard | undefined>;
   /** The tracked test files' texts, read once; `scanTestTitles` reads these, never the files again. */
   readonly testTexts: readonly TestFileText[];
+  /** The resolved rule references of the test files (K6: annotations, `rule:` comments, titles, mentions). */
+  readonly testRefs: RuleLinks;
+  /** The resolved `rule:` comments of the indexed production files; `codeRefs.unknown` holds the unknown IDs. */
+  readonly codeRefs: RuleLinks;
   /** Undefined when the candidates could not be built (a warning was logged); the graph is still good. */
   readonly candidates?: CandidateInputs;
 }
@@ -54,6 +63,9 @@ const norm = (path: string): string => path.replace(/\\/g, '/');
  *   the production `rule:` comments are composed by `buildDomainGraph`. External provenance is never fetched.
  * - Tracked files come from `listTrackedFiles`, else the indexed paths; they feed both the test-file read and the
  *   text scan targets.
+ * - Every card, test file and production file is read once per call: the text scan reuses the production texts of
+ *   the `rule:` comment scan, and the result carries the cards and both rule-reference sets, so verify-domain needs
+ *   no read of its own.
  * - A failure building the graph throws. A failure after it (text scan, candidates) is a warning, and the result
  *   carries the graph without `candidates`. A text scan error in one file is a warning; that file gives no facts.
  */
@@ -99,9 +111,8 @@ export async function composeLoopInputs(host: CtxoHost, request: LoopInputsReque
   // Code refs: the `rule:` comments of the indexed production files.
   const byFile = new Map(indices.map((index) => [norm(index.file), index]));
   const production = request.files.filter((file) => !isTestFile(file));
-  const commentRefs = readRepoTexts(projectRoot, production).flatMap(({ file, text }) =>
-    scanRuleComments(file, text, byFile.get(file), scanOptions),
-  );
+  const productionTexts = readRepoTexts(projectRoot, production);
+  const commentRefs = productionTexts.flatMap(({ file, text }) => scanRuleComments(file, text, byFile.get(file), scanOptions));
   const codeRefs = resolveRuleRefs(commentRefs, scanOptions);
 
   const dataResourceKinds = host.services.dataResourceKinds;
@@ -125,6 +136,7 @@ export async function composeLoopInputs(host: CtxoHost, request: LoopInputsReque
     warn,
   });
 
+  const composed = { graph, cards, parsedCards: parsed, testTexts, testRefs, codeRefs };
   try {
     const targets = textScanTargets({
       indices,
@@ -134,9 +146,21 @@ export async function composeLoopInputs(host: CtxoHost, request: LoopInputsReque
       extensions: config.facts.textScanExtensions,
     });
     const options = { trivialLiterals: config.facts.trivialLiterals, normalizationMethods: config.facts.normalizationMethods };
-    const textFacts = readTextFacts(projectRoot, targets, options, (file, error) =>
-      warn(`The text scan of ${file} failed: ${error instanceof Error ? error.message : String(error)}; the file gives no facts.`),
-    );
+    // The scan reuses the production texts read for the `rule:` comments (same reader, same 1 MiB cap); only the
+    // unindexed targets are read here, so no file is read twice. Same behaviour as `readTextFacts`.
+    const texts = new Map(productionTexts.map(({ file, text }) => [file, text] as const));
+    const attempted = new Set(production);
+    const unread = targets.filter((target) => !attempted.has(target.file)).map((target) => target.file);
+    for (const { file, text } of readRepoTexts(projectRoot, unread, SOURCE_SCAN_MAX_BYTES)) texts.set(file, text);
+    const textFacts = new Map<string, CodeFact[]>();
+    for (const target of targets) {
+      const text = texts.get(target.file);
+      if (text === undefined) continue;
+      const facts = scanTextFacts(target.file, text, target.symbols, options, (file, error) =>
+        warn(`The text scan of ${file} failed: ${error instanceof Error ? error.message : String(error)}; the file gives no facts.`),
+      );
+      if (facts.length > 0) textFacts.set(target.file, facts);
+    }
     const candidates = buildShadowCandidates({
       registry,
       ownership: request.ownership,
@@ -146,10 +170,10 @@ export async function composeLoopInputs(host: CtxoHost, request: LoopInputsReque
       graph: indexGraph(graph),
       dataResourceKinds,
     });
-    return { graph, testTexts, candidates: { textFacts, facts: effectiveFacts(indices, textFacts), candidates } };
+    return { ...composed, candidates: { textFacts, facts: effectiveFacts(indices, textFacts), candidates } };
   } catch (err) {
     warn(`The shadow-spec candidates could not be built: ${(err as Error).message}.`);
-    return { graph, testTexts };
+    return composed;
   }
 }
 
