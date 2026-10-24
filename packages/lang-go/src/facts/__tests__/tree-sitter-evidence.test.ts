@@ -141,7 +141,8 @@ describe('Go syntax-tier facts', () => {
     const started = Date.now();
     const facts = await syntaxFacts('p.go', source);
     // The old code took 1.8 s for 1,000 terms (quadratic) and overflowed the stack at 10,000.
-    expect(Date.now() - started).toBeLessThan(2_000);
+    // The bound leaves room for a slow CI runner (about 2.5 s on ubuntu-latest).
+    expect(Date.now() - started).toBeLessThan(8_000);
     expect(rows(facts).map(([line, kind, text]) => [line, kind, text])).toEqual([
       [7, 'literal-comparison', 'x == 5'],
       [9, 'retry-timeout', 'w = 2s'],

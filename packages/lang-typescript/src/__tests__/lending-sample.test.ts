@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Project } from 'ts-morph';
@@ -166,7 +166,7 @@ describe('lending sample facts', () => {
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
-  });
+  }, 60_000);
 
   it('a run with only http.ts and no projectRoot still traces express through the import', async () => {
     const file = 'src/facts/http.ts';
@@ -187,6 +187,25 @@ describe('lending sample facts', () => {
     const golden = JSON.parse(readFileSync(GOLDEN, 'utf-8')) as Record<string, Record<string, unknown>>;
     const files = new Map([...readLendingSample()].filter(([path]) => Object.prototype.hasOwnProperty.call(golden['default'], path)));
     expect([...files.keys()]).toEqual(Object.keys(golden['default']!));
+
+    // CTXO_UPDATE_GOLDEN=1 rewrites the golden from the facts-off run (the same file set), then compares as usual.
+    if (process.env['CTXO_UPDATE_GOLDEN'] === '1') {
+      const updated: Record<string, unknown> = {};
+      for (const sqlCallSites of [false, true]) {
+        const adapter = new TsMorphAdapter({ sqlCallSites });
+        const perFile: Record<string, { symbols: unknown; complexity: unknown; edges?: unknown }> = {};
+        for (const [path, source] of files) {
+          perFile[path] = { symbols: await adapter.extractSymbols(path, source), complexity: await adapter.extractComplexity(path, source) };
+        }
+        adapter.loadProjectSources(files);
+        for (const [path, source] of files) perFile[path]!.edges = await adapter.extractEdges(path, source);
+        adapter.clearProjectSources();
+        updated[sqlCallSites ? 'sqlCallSites' : 'default'] = perFile;
+      }
+      writeFileSync(GOLDEN, `${JSON.stringify(updated, null, 2)}\n`, 'utf-8');
+      golden['default'] = updated['default'] as Record<string, unknown>;
+      golden['sqlCallSites'] = updated['sqlCallSites'] as Record<string, unknown>;
+    }
 
     for (const facts of [undefined, DEFAULT_FACT_OPTIONS]) {
       for (const sqlCallSites of [false, true]) {

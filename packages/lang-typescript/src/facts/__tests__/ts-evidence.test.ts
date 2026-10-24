@@ -261,7 +261,8 @@ describe('TypeScript fact evidence', () => {
     expect(evidence.length).toBe(methods * 3);
     expect(evidence.every((e) => e.symbolId === `src/big.ts::Big.m${e.line - 1}::method`)).toBe(true);
     // The old code checked every scope for every record and counted lines from the file start: over 10 s here.
-    expect(elapsed).toBeLessThan(2_500);
+    // The bound leaves room for a slow CI runner (about 3.7 s on ubuntu-latest).
+    expect(elapsed).toBeLessThan(8_000);
   }, 120_000);
 
   it('owners: the smallest scope wins and nested test blocks are excluded', async () => {

@@ -8,8 +8,8 @@
           "kind": "function",
           "startLine": 3,
           "endLine": 16,
-          "startOffset": 118,
-          "endOffset": 549,
+          "startOffset": 115,
+          "endOffset": 533,
           "annotations": [
             {
               "name": "test"
@@ -22,8 +22,8 @@
           "kind": "function",
           "startLine": 4,
           "endLine": 8,
-          "startOffset": 152,
-          "endOffset": 322,
+          "startOffset": 148,
+          "endOffset": 314,
           "annotations": [
             {
               "name": "test"
@@ -36,8 +36,8 @@
           "kind": "function",
           "startLine": 10,
           "endLine": 15,
-          "startOffset": 329,
-          "endOffset": 544,
+          "startOffset": 319,
+          "endOffset": 529,
           "annotations": [
             {
               "name": "test"
@@ -50,8 +50,8 @@
           "kind": "function",
           "startLine": 11,
           "endLine": 14,
-          "startOffset": 362,
-          "endOffset": 537,
+          "startOffset": 351,
+          "endOffset": 523,
           "annotations": [
             {
               "name": "test"
@@ -111,8 +111,8 @@
           "kind": "variable",
           "startLine": 1,
           "endLine": 1,
-          "startOffset": 41,
-          "endOffset": 58
+          "startOffset": 40,
+          "endOffset": 57
         }
       ],
       "complexity": [],
@@ -126,8 +126,8 @@
           "kind": "function",
           "startLine": 3,
           "endLine": 5,
-          "startOffset": 63,
-          "endOffset": 158
+          "startOffset": 60,
+          "endOffset": 153
         },
         {
           "symbolId": "src/loan-policy.ts::renewalDue::function",
@@ -135,8 +135,8 @@
           "kind": "function",
           "startLine": 7,
           "endLine": 11,
-          "startOffset": 162,
-          "endOffset": 331
+          "startOffset": 155,
+          "endOffset": 320
         },
         {
           "symbolId": "src/loan-policy.ts::MAX_LOANS::variable",
@@ -153,8 +153,8 @@
           "kind": "variable",
           "startLine": 1,
           "endLine": 1,
-          "startOffset": 42,
-          "endOffset": 58
+          "startOffset": 41,
+          "endOffset": 57
         }
       ],
       "complexity": [
@@ -177,8 +177,8 @@
           "kind": "class",
           "startLine": 3,
           "endLine": 12,
-          "startOffset": 123,
-          "endOffset": 355,
+          "startOffset": 120,
+          "endOffset": 343,
           "annotations": [
             {
               "name": "Controller",
@@ -194,8 +194,8 @@
           "kind": "method",
           "startLine": 7,
           "endLine": 11,
-          "startOffset": 238,
-          "endOffset": 352,
+          "startOffset": 231,
+          "endOffset": 341,
           "annotations": [
             {
               "name": "Get",
@@ -236,8 +236,8 @@
           "kind": "class",
           "startLine": 2,
           "endLine": 11,
-          "startOffset": 69,
-          "endOffset": 258,
+          "startOffset": 67,
+          "endOffset": 247,
           "annotations": [
             {
               "name": "Entity",
@@ -272,8 +272,8 @@
           "kind": "class",
           "startLine": 4,
           "endLine": 22,
-          "startOffset": 105,
-          "endOffset": 621
+          "startOffset": 101,
+          "endOffset": 599
         },
         {
           "symbolId": "src/loan.repository.ts::LoanRepository.active::method",
@@ -281,8 +281,8 @@
           "kind": "method",
           "startLine": 5,
           "endLine": 7,
-          "startOffset": 138,
-          "endOffset": 201
+          "startOffset": 133,
+          "endOffset": 194
         },
         {
           "symbolId": "src/loan.repository.ts::LoanRepository.archive::method",
@@ -290,8 +290,8 @@
           "kind": "method",
           "startLine": 9,
           "endLine": 11,
-          "startOffset": 207,
-          "endOffset": 341
+          "startOffset": 198,
+          "endOffset": 330
         },
         {
           "symbolId": "src/loan.repository.ts::LoanRepository.close::method",
@@ -299,8 +299,8 @@
           "kind": "method",
           "startLine": 13,
           "endLine": 17,
-          "startOffset": 347,
-          "endOffset": 493
+          "startOffset": 334,
+          "endOffset": 476
         },
         {
           "symbolId": "src/loan.repository.ts::LoanRepository.byMember::method",
@@ -308,8 +308,8 @@
           "kind": "method",
           "startLine": 19,
           "endLine": 21,
-          "startOffset": 499,
-          "endOffset": 618
+          "startOffset": 480,
+          "endOffset": 597
         }
       ],
       "complexity": [
@@ -378,8 +378,8 @@
           "kind": "function",
           "startLine": 3,
           "endLine": 16,
-          "startOffset": 118,
-          "endOffset": 549,
+          "startOffset": 115,
+          "endOffset": 533,
           "annotations": [
             {
               "name": "test"
@@ -392,8 +392,8 @@
           "kind": "function",
           "startLine": 4,
           "endLine": 8,
-          "startOffset": 152,
-          "endOffset": 322,
+          "startOffset": 148,
+          "endOffset": 314,
           "annotations": [
             {
               "name": "test"
@@ -406,8 +406,8 @@
           "kind": "function",
           "startLine": 10,
           "endLine": 15,
-          "startOffset": 329,
-          "endOffset": 544,
+          "startOffset": 319,
+          "endOffset": 529,
           "annotations": [
             {
               "name": "test"
@@ -420,8 +420,8 @@
           "kind": "function",
           "startLine": 11,
           "endLine": 14,
-          "startOffset": 362,
-          "endOffset": 537,
+          "startOffset": 351,
+          "endOffset": 523,
           "annotations": [
             {
               "name": "test"
@@ -481,8 +481,8 @@
           "kind": "variable",
           "startLine": 1,
           "endLine": 1,
-          "startOffset": 41,
-          "endOffset": 58
+          "startOffset": 40,
+          "endOffset": 57
         }
       ],
       "complexity": [],
@@ -496,8 +496,8 @@
           "kind": "function",
           "startLine": 3,
           "endLine": 5,
-          "startOffset": 63,
-          "endOffset": 158
+          "startOffset": 60,
+          "endOffset": 153
         },
         {
           "symbolId": "src/loan-policy.ts::renewalDue::function",
@@ -505,8 +505,8 @@
           "kind": "function",
           "startLine": 7,
           "endLine": 11,
-          "startOffset": 162,
-          "endOffset": 331
+          "startOffset": 155,
+          "endOffset": 320
         },
         {
           "symbolId": "src/loan-policy.ts::MAX_LOANS::variable",
@@ -523,8 +523,8 @@
           "kind": "variable",
           "startLine": 1,
           "endLine": 1,
-          "startOffset": 42,
-          "endOffset": 58
+          "startOffset": 41,
+          "endOffset": 57
         }
       ],
       "complexity": [
@@ -547,8 +547,8 @@
           "kind": "class",
           "startLine": 3,
           "endLine": 12,
-          "startOffset": 123,
-          "endOffset": 355,
+          "startOffset": 120,
+          "endOffset": 343,
           "annotations": [
             {
               "name": "Controller",
@@ -564,8 +564,8 @@
           "kind": "method",
           "startLine": 7,
           "endLine": 11,
-          "startOffset": 238,
-          "endOffset": 352,
+          "startOffset": 231,
+          "endOffset": 341,
           "annotations": [
             {
               "name": "Get",
@@ -606,8 +606,8 @@
           "kind": "class",
           "startLine": 2,
           "endLine": 11,
-          "startOffset": 69,
-          "endOffset": 258,
+          "startOffset": 67,
+          "endOffset": 247,
           "annotations": [
             {
               "name": "Entity",
@@ -642,8 +642,8 @@
           "kind": "class",
           "startLine": 4,
           "endLine": 22,
-          "startOffset": 105,
-          "endOffset": 621
+          "startOffset": 101,
+          "endOffset": 599
         },
         {
           "symbolId": "src/loan.repository.ts::LoanRepository.active::method",
@@ -651,8 +651,8 @@
           "kind": "method",
           "startLine": 5,
           "endLine": 7,
-          "startOffset": 138,
-          "endOffset": 201
+          "startOffset": 133,
+          "endOffset": 194
         },
         {
           "symbolId": "src/loan.repository.ts::LoanRepository.archive::method",
@@ -660,8 +660,8 @@
           "kind": "method",
           "startLine": 9,
           "endLine": 11,
-          "startOffset": 207,
-          "endOffset": 341
+          "startOffset": 198,
+          "endOffset": 330
         },
         {
           "symbolId": "src/loan.repository.ts::LoanRepository.close::method",
@@ -669,8 +669,8 @@
           "kind": "method",
           "startLine": 13,
           "endLine": 17,
-          "startOffset": 347,
-          "endOffset": 493
+          "startOffset": 334,
+          "endOffset": 476
         },
         {
           "symbolId": "src/loan.repository.ts::LoanRepository.byMember::method",
@@ -678,8 +678,8 @@
           "kind": "method",
           "startLine": 19,
           "endLine": 21,
-          "startOffset": 499,
-          "endOffset": 618
+          "startOffset": 480,
+          "endOffset": 597
         }
       ],
       "complexity": [
