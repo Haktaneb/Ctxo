@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { JavaAdapter } from '../java-adapter.js';
+import { DEFAULT_FACT_OPTIONS } from '../facts/fact-options.js';
 
 const FILE = 'src/main/java/com/example/Foo.java';
 
@@ -233,5 +234,25 @@ describe('JavaAdapter annotations (syntax tier)', () => {
     const d = await annotationsOf(source, 'd::method');
     expect(d![0]!.args![0]).toHaveLength(200);
     expect(d![1]!.named!.note).toHaveLength(200);
+  });
+});
+
+describe('JavaAdapter.extractFacts failure (B-M1)', () => {
+  it('an internal failure is warned on stderr and gives [] (warn-and-continue)', async () => {
+    const adapter = new JavaAdapter({ facts: DEFAULT_FACT_OPTIONS });
+    vi.spyOn(adapter as unknown as { parse(source: string): unknown }, 'parse').mockImplementation(() => {
+      throw new RangeError('Maximum call stack size exceeded');
+    });
+    const writes: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: string | Uint8Array) => {
+      writes.push(String(chunk));
+      return true;
+    });
+    try {
+      expect(await adapter.extractFacts('src/A.java', 'class A {}')).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(writes.join('')).toContain('[ctxo:lang-java] fact extraction failed for src/A.java: Maximum call stack size exceeded');
   });
 });

@@ -80,7 +80,9 @@ export class JavaAdapter extends TreeSitterAdapter {
   /**
    * Code facts of the syntax tier: the CST evidence of `collectTreeSitterEvidence` (the JDT tier's
    * rules, from the literals alone) and the annotation routes, finished by the shared rules with the
-   * Java string decoder. `[]` without the `facts` option.
+   * Java string decoder. `[]` without the `facts` option. An internal failure (for example a stack
+   * overflow on a very deep expression) is warn-and-continue: one stderr line, written directly because
+   * the package logger is DEBUG-gated, and `[]` (B-M1, the same as the Go plugin).
    */
   async extractFacts(filePath: string, source: string): Promise<CodeFact[]> {
     if (!this.facts) return [];
@@ -90,7 +92,7 @@ export class JavaAdapter extends TreeSitterAdapter {
       const evidence = collectTreeSitterEvidence(root, filePath, symbols, this.facts);
       return finishFacts(filePath, evidence, symbols, this.facts, decodeJavaStringLiteral);
     } catch (err) {
-      log.error(`Fact extraction failed for ${filePath}: ${(err as Error).message}`);
+      process.stderr.write(`[ctxo:lang-java] fact extraction failed for ${filePath}: ${(err as Error).message}\n`);
       return [];
     }
   }

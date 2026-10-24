@@ -107,17 +107,21 @@ export class JdtAnalyzerAdapter implements ILanguageAdapter {
   /**
    * Code facts (protocol v2, only with the `facts` option): the analyzer's evidence for the file plus
    * Spring and JAX-RS annotation routes, finished by the shared rules with the Java string literal
-   * decoder. Reads the same cache as `extractSymbols`, which a keep-alive reindex refreshes.
+   * decoder. Reads the same cache as `extractSymbols`, which a keep-alive reindex refreshes. While the
+   * keep-alive runs and the cache holds the file (the `ctxo watch` path: `reindexFileRaw` first), no batch
+   * runs: a batch would start a second JVM over the whole project and, when it fails, clear the keep-alive's
+   * result (B-I2).
    */
   async extractFacts(filePath: string, _source: string): Promise<CodeFact[]> {
     const options = this.facts;
     if (!options || !this.isReady()) return [];
-    await this.ensureBatch();
-    const file = this.cache.get(this.norm(filePath));
+    const path = this.norm(filePath);
+    if (!(this.keepAlive?.isAlive() && this.cache.has(path))) await this.ensureBatch();
+    const file = this.cache.get(path);
     if (!file) return [];
     const symbols = file.symbols.filter((s) => FULL_SYMBOL_ID.test(s.symbolId)).map(toSymbolNode);
     const evidence = [...(file.factEvidence ?? []), ...annotationRouteEvidence(symbols)];
-    return finishFacts(this.norm(filePath), evidence, symbols, options, decodeJavaStringLiteral);
+    return finishFacts(path, evidence, symbols, options, decodeJavaStringLiteral);
   }
 
   async startKeepAlive(): Promise<boolean> {

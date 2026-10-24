@@ -171,6 +171,27 @@ describe('JdtAnalyzerAdapter facts', () => {
     expect((await adapter.extractFacts(FILE, '')).map((f) => f.text)).toEqual(['MAX_RETRIES = 7']);
   });
 
+  it('in watch order (keep-alive first) extractFacts reads the keep-alive result and never runs a batch (B-I2)', async () => {
+    // A batch would fail (no files), which used to clear the cache and give facts: [] for the saved file.
+    mockedRun.mockResolvedValue({ files: [], totalFiles: 0, elapsed: '1ms' });
+    const adapter = readyAdapter({ facts: DEFAULT_FACT_OPTIONS });
+
+    expect(await adapter.startKeepAlive()).toBe(true);
+    keepAlive.results.push(rules('7', 4));
+    expect(await adapter.reindexFileRaw(FILE)).not.toBeNull();
+
+    expect(await adapter.extractFacts(FILE, '')).toEqual([
+      { kind: 'retry-timeout', symbolId: `${FILE}::MAX_RETRIES::variable`, line: 4, text: 'MAX_RETRIES = 7', detail: { name: 'MAX_RETRIES', value: '7' } },
+    ]);
+    expect(mockedRun).not.toHaveBeenCalled();
+
+    // A second save is served the same way.
+    keepAlive.results.push(rules('9', 5));
+    await adapter.reindexFileRaw(FILE);
+    expect((await adapter.extractFacts(FILE, '')).map((f) => f.text)).toEqual(['MAX_RETRIES = 9']);
+    expect(mockedRun).not.toHaveBeenCalled();
+  });
+
   it('without facts extractFacts returns [] and the analyzer gets no fact options', async () => {
     mockedRun.mockResolvedValue({ files: [rules('3', 3), controller], totalFiles: 2, elapsed: '1ms' });
     const adapter = readyAdapter({});
