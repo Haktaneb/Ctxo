@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { contextNodeId, type ContextNode } from '../domain-graph.js';
 import { compareCandidates, type CandidateKind, type ShadowCandidate } from '../shadow-candidates.js';
 import type { ResolutionEntry, ShadowSpecsProblem } from '../shadow-specs-file.js';
-import { SHADOW_VIEW_LIST_CAP, shadowSpecsView, type ShadowSpecsViewInput } from '../shadow-specs-view.js';
+import { isRuleEntry, SHADOW_VIEW_LIST_CAP, shadowSpecsView, type ShadowSpecsViewInput, type UnknownRuleEntry } from '../shadow-specs-view.js';
 
 const CONTEXT: ContextNode = { id: contextNodeId('lending'), context: 'lending', name: 'Lending', rung: 'named', card: 'docs/domain/lending/domain.md' };
 const RESOLUTION_FILE = 'docs/domain/lending/shadow-specs.yaml';
@@ -32,6 +32,16 @@ function entry(fingerprint: string, line: number, rule?: string): ResolutionEntr
   return { fingerprint, resolution: rule === undefined ? { notARule: 'reason' } : { rule }, line };
 }
 
+function ruleEntry(fingerprint: string, line: number, rule: string): UnknownRuleEntry {
+  return { fingerprint, resolution: { rule }, line };
+}
+
+/** A view item: the candidate without its `context`. */
+function item(candidate: ShadowCandidate): Omit<ShadowCandidate, 'context'> {
+  const { context: _context, ...rest } = candidate;
+  return rest;
+}
+
 function inputOf(over: Partial<ShadowSpecsViewInput> = {}): ShadowSpecsViewInput {
   return {
     context: CONTEXT,
@@ -49,7 +59,7 @@ describe('shadowSpecsView', () => {
   it('open candidates only unless includeResolved', () => {
     const open = shadowSpecsView(inputOf());
     expect(open['context']).toEqual({ id: 'lending', name: 'Lending', rung: 'named' });
-    expect(open['shadowSpecs']).toEqual([OPEN_ENDPOINT, OPEN_LIMIT]);
+    expect(open['shadowSpecs']).toEqual([OPEN_ENDPOINT, OPEN_LIMIT].map(item));
     expect(open['counts']).toEqual({
       open: 2,
       resolved: 2,
@@ -59,14 +69,15 @@ describe('shadowSpecsView', () => {
 
     const all = shadowSpecsView(inputOf({ includeResolved: true }));
     const expected = [OPEN_ENDPOINT, OPEN_LIMIT, RESOLVED_LIMIT, RESOLVED_RETRY].sort(compareCandidates);
-    expect(all['shadowSpecs']).toEqual(expected);
-    expect(all['shadowSpecs']).toEqual([OPEN_ENDPOINT, OPEN_LIMIT, RESOLVED_LIMIT, RESOLVED_RETRY]);
+    expect(all['shadowSpecs']).toEqual(expected.map(item));
+    expect(all['shadowSpecs']).toEqual([OPEN_ENDPOINT, OPEN_LIMIT, RESOLVED_LIMIT, RESOLVED_RETRY].map(item));
+    for (const spec of all['shadowSpecs'] as Record<string, unknown>[]) expect(Object.keys(spec)).not.toContain('context');
     expect(all['counts']).toEqual(open['counts']);
   });
 
   it('counts cover the kinds filter', () => {
     const view = shadowSpecsView(inputOf({ kinds: ['literal-comparison', 'procedure'], includeResolved: true }));
-    expect(view['shadowSpecs']).toEqual([OPEN_LIMIT, RESOLVED_LIMIT]);
+    expect(view['shadowSpecs']).toEqual([OPEN_LIMIT, RESOLVED_LIMIT].map(item));
     expect(view['counts']).toEqual({ open: 1, resolved: 1, byKind: { 'literal-comparison': { open: 1, resolved: 1 } } });
   });
 
@@ -78,7 +89,7 @@ describe('shadowSpecsView', () => {
     const twin = { ...OPEN_LIMIT, line: 40 };
     const view = shadowSpecsView(inputOf({ candidates: [OPEN_LIMIT, twin] }));
     expect(view['counts']).toEqual({ open: 2, resolved: 0, byKind: { 'literal-comparison': { open: 2, resolved: 0 } } });
-    expect(view['shadowSpecs']).toEqual([OPEN_LIMIT, twin]);
+    expect(view['shadowSpecs']).toEqual([OPEN_LIMIT, twin].map(item));
   });
 
   it('reports stale entries, unknown rules and problems in line order', () => {
@@ -91,7 +102,7 @@ describe('shadowSpecsView', () => {
     const view = shadowSpecsView(
       inputOf({
         stale: [entry(fpB, 7), entry(fpA, 3, 'NOPE-01')],
-        unknownRules: [entry(fpA, 3, 'NOPE-01')],
+        unknownRules: [ruleEntry(fpA, 3, 'NOPE-01')],
         problems,
       }),
     );
@@ -107,7 +118,7 @@ describe('shadowSpecsView', () => {
     expect(Object.keys(view)).not.toContain('resolutionProblemsTotal');
   });
 
-  it('lists sit at the top level so the envelope can truncate shadowSpecs, staleResolutions, unknownRules and resolutionProblems', () => {
+  it('the payload keys come in a fixed order and the four lists are top-level arrays (only shadowSpecs is left to the envelope, W28)', () => {
     const view = shadowSpecsView(inputOf());
     expect(Object.keys(view)).toEqual(['context', 'counts', 'shadowSpecs', 'resolutionFile', 'staleResolutions', 'unknownRules', 'resolutionProblems']);
     for (const key of ['shadowSpecs', 'staleResolutions', 'unknownRules', 'resolutionProblems']) expect(Array.isArray(view[key])).toBe(true);
@@ -126,7 +137,7 @@ describe('shadowSpecsView', () => {
   });
 
   it('caps unknownRules at 50 in line order and adds unknownRulesTotal', () => {
-    const unknownRules = Array.from({ length: 51 }, (_, i) => entry(`endpoint | Old.Get | GET /old/${i}`, 100 - i, `NOPE-${i}`));
+    const unknownRules = Array.from({ length: 51 }, (_, i) => ruleEntry(`endpoint | Old.Get | GET /old/${i}`, 100 - i, `NOPE-${i}`));
     const view = shadowSpecsView(inputOf({ unknownRules }));
     const list = view['unknownRules'] as { rule: string; line: number }[];
     expect(list).toHaveLength(50);
@@ -153,12 +164,17 @@ describe('shadowSpecsView', () => {
     expect(Object.keys(view)).not.toContain('staleResolutionsTotal');
   });
 
-  it('does not change its inputs and gives deep-equal views for the same input', () => {
+  it('does not change its inputs and two calls on the same input give deep-equal views', () => {
     const candidates = [...CANDIDATES];
     const stale = [entry('endpoint | Old.Get | GET /b', 9), entry('endpoint | Old.Get | GET /a', 4)];
     const first = shadowSpecsView(inputOf({ candidates, stale, includeResolved: true }));
     expect(candidates).toEqual(CANDIDATES);
     expect(stale.map((s) => s.line)).toEqual([9, 4]);
     expect(shadowSpecsView(inputOf({ candidates, stale, includeResolved: true }))).toEqual(first);
+  });
+
+  it('isRuleEntry keeps the entries that name a rule', () => {
+    const entries = [entry('endpoint | A.B | x', 1, 'NOPE-01'), entry('endpoint | A.B | y', 2)];
+    expect(entries.filter(isRuleEntry)).toEqual([ruleEntry('endpoint | A.B | x', 1, 'NOPE-01')]);
   });
 });

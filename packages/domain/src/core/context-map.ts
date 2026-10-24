@@ -21,7 +21,7 @@ export interface PinnedStatus {
   readonly met: boolean;
   readonly mainPaths: number;
   readonly reached: number;
-  /** `reached / mainPaths` rounded to 3 decimals; null without main paths. */
+  /** `reached / mainPaths` rounded to 3 decimals for display; null without main paths. `met` compares the exact ratio. */
   readonly coverage: number | null;
   readonly threshold: number;
   readonly characterizationTests: number;
@@ -71,6 +71,11 @@ export interface ContextMapEntry {
   readonly boundaryViolations: { readonly total: number; readonly errors: number; readonly warnings: number };
   readonly shadowSpecs: { readonly open: number; readonly resolved: number };
   readonly criteria: { readonly pinned: PinnedStatus; readonly named: NamedStatus; readonly bounded: BoundedStatus; readonly boring: BoringStatus };
+  /**
+   * False when no boundaries artifact was given: the cross-edge and violation counts are 0 and unknown, and
+   * `bounded` (so also `boring`) is not met.
+   */
+  readonly boundariesKnown: boolean;
 }
 
 export interface RungCriteriaMet {
@@ -88,7 +93,7 @@ export interface ContextMapBoundaries {
 
 export interface ContextMapInput {
   readonly snapshot: DomainSnapshot;
-  /** Absent when no boundaries artifact exists: no cross edges and no violations. */
+  /** Absent when no boundaries artifact exists: counts stay 0, `boundariesKnown` is false and `bounded` is not met. */
   readonly boundaries?: ContextMapBoundaries;
   readonly history: readonly ContextHistoryEntry[];
   readonly movedFiles: readonly MovedFile[];
@@ -135,7 +140,7 @@ function pinnedStatus(facts: ContextMaturityFacts, threshold: number): PinnedSta
   const coverage = total === 0 ? null : round3(reached / total);
   const characterizationTests = facts.tests.characterization;
   return {
-    met: coverage === null ? characterizationTests >= 1 : coverage >= threshold,
+    met: total === 0 ? characterizationTests >= 1 : reached / total >= threshold,
     mainPaths: total,
     reached,
     coverage,
@@ -162,9 +167,9 @@ function namedStatus(context: DomainContext, snapshot: DomainSnapshot, cardExist
   };
 }
 
-function boundedStatus(facts: ContextMaturityFacts, violations: number): BoundedStatus {
+function boundedStatus(facts: ContextMaturityFacts, violations: number, known: boolean): BoundedStatus {
   const { total, reached, unreached } = facts.contractSymbols;
-  return { met: reached >= total && violations === 0, contractSymbols: total, reached, unreached: [...unreached], boundaryViolations: violations };
+  return { met: known && reached >= total && violations === 0, contractSymbols: total, reached, unreached: [...unreached], boundaryViolations: violations };
 }
 
 const sumKinds = (byKind: Readonly<Record<string, number>>): number => Object.values(byKind).reduce((sum, n) => sum + n, 0);
@@ -205,7 +210,8 @@ function entryOf(context: DomainContext, input: ContextMapInput, facts: ContextM
 
   const pinned = pinnedStatus(facts, snapshot.config.rungs.pinnedCoverage);
   const named = namedStatus(context, snapshot, input.cardExists);
-  const bounded = boundedStatus(facts, violations);
+  const boundariesKnown = input.boundaries !== undefined;
+  const bounded = boundedStatus(facts, violations, boundariesKnown);
   const boring: BoringStatus = { met: withoutTests === 0 && open === 0, rules: rules.length, rulesWithoutTests: withoutTests, openCandidates: open };
 
   return {
@@ -225,6 +231,7 @@ function entryOf(context: DomainContext, input: ContextMapInput, facts: ContextM
     boundaryViolations: { total: violations, errors, warnings },
     shadowSpecs: { open, resolved },
     criteria: { pinned, named, bounded, boring },
+    boundariesKnown,
   };
 }
 

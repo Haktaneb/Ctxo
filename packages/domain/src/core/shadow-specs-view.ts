@@ -20,18 +20,33 @@ export interface ShadowSpecsViewInput {
   readonly includeResolved: boolean;
   readonly resolutionFile: string;
   readonly stale: readonly ResolutionEntry[];
-  readonly unknownRules: readonly ResolutionEntry[];
+  /** Entries with a `rule` resolution whose rule is unknown (`applyResolutions` never reports another kind). */
+  readonly unknownRules: readonly UnknownRuleEntry[];
   readonly problems: readonly ShadowSpecsProblem[];
+}
+
+/** A resolution entry that names a rule. */
+export type UnknownRuleEntry = ResolutionEntry & { readonly resolution: { readonly rule: string } };
+
+/** Narrows `applyResolutions(...).unknownRules` (typed `ResolutionEntry[]`) to the input of the view. */
+export function isRuleEntry(entry: ResolutionEntry): entry is UnknownRuleEntry {
+  return 'rule' in entry.resolution;
 }
 
 const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
-function byEntryLine(a: ResolutionEntry, b: ResolutionEntry): number {
+function byEntryLine(a: { readonly line: number; readonly fingerprint: string }, b: { readonly line: number; readonly fingerprint: string }): number {
   return a.line - b.line || compare(a.fingerprint, b.fingerprint);
 }
 
 function byProblemLine(a: ShadowSpecsProblem, b: ShadowSpecsProblem): number {
   return a.line - b.line || compare(a.severity, b.severity) || compare(a.message, b.message);
+}
+
+/** A candidate without its `context`: the view names the context once, at the top level. */
+function withoutContext(candidate: ShadowCandidate): Omit<ShadowCandidate, 'context'> {
+  const { context: _context, ...rest } = candidate;
+  return rest;
 }
 
 /** Sorted, capped at SHADOW_VIEW_LIST_CAP; `<name>Total` follows the list only when it was cut. */
@@ -44,7 +59,7 @@ function putCapped<T>(out: Record<string, unknown>, name: string, items: readonl
  * `{ context, counts, shadowSpecs, resolutionFile, staleResolutions, unknownRules, resolutionProblems }`. Counts are
  * per candidate (several may share a fingerprint) and cover the kinds filter; `byKind` lists the kinds that have
  * candidates, in `CANDIDATE_KINDS` order. `shadowSpecs` holds the open candidates, plus the resolved ones with
- * `includeResolved`, in `compareCandidates` order. An entry can be both stale and an unknown rule: the two lists are
+ * `includeResolved`, in `compareCandidates` order, each without its `context`. An entry can be both stale and an unknown rule: the two lists are
  * reported as they are and never summed.
  */
 export function shadowSpecsView(input: ShadowSpecsViewInput): Record<string, unknown> {
@@ -70,7 +85,7 @@ export function shadowSpecsView(input: ShadowSpecsViewInput): Record<string, unk
   const out: Record<string, unknown> = {
     context: { id: context.context, name: context.name, rung: context.rung },
     counts: { open, resolved: scoped.length - open, byKind },
-    shadowSpecs: input.includeResolved ? scoped : scoped.filter((c) => c.resolution === undefined),
+    shadowSpecs: (input.includeResolved ? scoped : scoped.filter((c) => c.resolution === undefined)).map(withoutContext),
     resolutionFile: input.resolutionFile,
   };
   putCapped(
@@ -83,7 +98,7 @@ export function shadowSpecsView(input: ShadowSpecsViewInput): Record<string, unk
     'unknownRules',
     [...input.unknownRules]
       .sort(byEntryLine)
-      .map((e) => ({ fingerprint: e.fingerprint, rule: 'rule' in e.resolution ? e.resolution.rule : '', line: e.line })),
+      .map((e) => ({ fingerprint: e.fingerprint, rule: e.resolution.rule, line: e.line })),
   );
   putCapped(
     out,

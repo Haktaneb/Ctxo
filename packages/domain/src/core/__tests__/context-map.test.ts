@@ -168,6 +168,8 @@ function inputOf(over: Partial<ContextMapInput> & Pick<ContextMapInput, 'snapsho
     maturity: maturityOf([]),
     candidates: [],
     cardExists: ALWAYS,
+    // Known and empty unless a test passes others or `boundaries: undefined`.
+    boundaries: { crossEdges: [], violations: [] },
     ...over,
   };
 }
@@ -239,6 +241,37 @@ describe('buildContextMap criteria', () => {
     });
     expect(entryOf(view, 'd').criteria.pinned).toMatchObject({ met: true, coverage: null, characterizationTests: 1 });
     expect(view.settings).toEqual({ pinnedCoverage: 0.8 });
+  });
+
+  it('pinned compares the exact ratio, not the rounded coverage', () => {
+    const contexts = [ctx('a'), ctx('b'), ctx('c')];
+    const view = buildContextMap(
+      inputOf({
+        snapshot: snapshotOf(registryOf(contexts)),
+        maturity: maturityOf([facts('a', { mainPaths: [2000, 1599] }), facts('b', { mainPaths: [5000, 3998] }), facts('c', { mainPaths: [2000, 1600] })]),
+      }),
+    );
+    expect(entryOf(view, 'a').criteria.pinned).toMatchObject({ met: false, coverage: 0.8 });
+    expect(entryOf(view, 'b').criteria.pinned).toMatchObject({ met: false, coverage: 0.8 });
+    expect(entryOf(view, 'c').criteria.pinned).toMatchObject({ met: true, coverage: 0.8 });
+  });
+
+  it('without boundaries bounded is not met and the entry says the boundaries are unknown', () => {
+    const { snapshotParts, maturity } = singleContext();
+    const base = { snapshot: snapshotOf(registryOf([LENDING]), snapshotParts), maturity: maturityOf([maturity]) };
+    const absent = entryOf(buildContextMap(inputOf({ ...base, boundaries: undefined })), 'lending');
+    expect(absent.boundariesKnown).toBe(false);
+    expect(absent.criteria.bounded).toEqual({ met: false, contractSymbols: 2, reached: 2, unreached: [], boundaryViolations: 0 });
+    expect(absent.crossContextEdges).toEqual({ in: 0, out: 0 });
+    expect(absent.boundaryViolations).toEqual({ total: 0, errors: 0, warnings: 0 });
+    // The ladder is cumulative: boring is met on its own but not suggested.
+    expect(absent.criteria.boring.met).toBe(true);
+    expect(absent.suggestedRung).toBe('named');
+
+    const present = entryOf(buildContextMap(inputOf({ ...base, boundaries: { crossEdges: [], violations: [] } })), 'lending');
+    expect(present.boundariesKnown).toBe(true);
+    expect(present.criteria.bounded.met).toBe(true);
+    expect(present.suggestedRung).toBe('boring');
   });
 
   it('pinned reads the configured threshold and rounds coverage to 3 decimals', () => {
@@ -473,8 +506,9 @@ describe('buildContextMap metrics', () => {
   });
 
   it('a context missing from the maturity artifact and the boundaries counts zero', () => {
-    const view = buildContextMap(inputOf({ snapshot: snapshotOf(registryOf([AUDIT])) }));
+    const view = buildContextMap(inputOf({ snapshot: snapshotOf(registryOf([AUDIT])), boundaries: undefined }));
     const audit = entryOf(view, 'audit');
+    expect(audit.boundariesKnown).toBe(false);
     expect(audit.tests).toEqual({ characterization: 0, contract: 0 });
     expect(audit.crossContextEdges).toEqual({ in: 0, out: 0 });
     expect(audit.boundaryViolations).toEqual({ total: 0, errors: 0, warnings: 0 });
@@ -493,7 +527,7 @@ describe('buildContextMap metrics', () => {
     expect(entryOf(view, 'lending').criteria.boring.openCandidates).toBe(2);
   });
 
-  it('the same input gives deep-equal views', () => {
+  it('two builds from the same input construction give deep-equal views', () => {
     const first = buildContextMap(fullInput());
     const second = buildContextMap(fullInput());
     expect(second).toEqual(first);
