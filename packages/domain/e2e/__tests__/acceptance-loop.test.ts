@@ -65,6 +65,7 @@ interface ContextMapEntry {
   id: string;
   rung: string;
   suggestedRung: string;
+  tests: { characterization: number; contract: number };
   crossContextEdges: { in: number; out: number };
   criteria: {
     pinned: { met: boolean; mainPaths: number; reached: number; coverage: number | null; characterizationTests: number };
@@ -138,7 +139,7 @@ function trimCandidate(list: readonly Candidate[], variant: Variant): Candidate 
 }
 
 function renewalCandidate(list: readonly Candidate[], variant: Variant): Candidate {
-  return findCandidate(list, 'renewal comparison', (c) => c.kind === 'literal-comparison' && c.file === RENEWAL_POLICY[variant] && c.text.includes('renewals > 2'));
+  return findCandidate(list, 'renewal comparison', (c) => c.kind === 'literal-comparison' && c.file === RENEWAL_POLICY[variant] && c.text === 'loanPeriods >= 2');
 }
 
 function endpointCandidate(list: readonly Candidate[], variant: Variant, name: RegExp): Candidate {
@@ -240,6 +241,12 @@ describe.each(VARIANTS)('PR 4 acceptance, %s sample', (variant) => {
     expect(billing.criteria.bounded.reached).toBe(billing.criteria.bounded.contractSymbols);
     expect(billing.suggestedRung).toBe('bounded');
     expect(map.summary).toMatchObject({ contexts: 3, agree: 3 });
+    // W17: the C# Billing tests sit outside billing's paths and count for billing through the main path they reach.
+    expect(lending.tests).toEqual({ characterization: 1, contract: 0 });
+    expect(billing.tests).toEqual({ characterization: 1, contract: 1 });
+    expect(catalog.tests).toEqual({ characterization: 0, contract: 0 });
+    expect(lending.criteria.pinned.characterizationTests).toBe(1);
+    expect(billing.criteria.pinned.characterizationTests).toBe(1);
   });
 
   it('ctxo domain map --json and ctxo domain shadow-specs lending --json print the tool bodies', async () => {
@@ -323,8 +330,8 @@ describe.each(VARIANTS)('PR 4 acceptance, %s sample', (variant) => {
 
   it.skipIf(variant !== 'csharp')('candidate text passes the masking pipeline', async () => {
     const ws = SampleWorkspace.create(variant);
-    ws.replace(RENEWAL_POLICY[variant], '        if (renewals > 2) return false;', '        if (renewals > 2) return false;\n        if (apiKey == "AKIAIOSFODNN7EXAMPLE") return false;');
-    ws.replace(RENEWAL_POLICY[variant], 'CanRenew(int renewals)', 'CanRenew(int renewals, string apiKey = "")');
+    ws.replace(RENEWAL_POLICY[variant], '        if (loanPeriods >= 2) return false;', '        if (loanPeriods >= 2) return false;\n        if (apiKey == "AKIAIOSFODNN7EXAMPLE") return false;');
+    ws.replace(RENEWAL_POLICY[variant], 'CanRenew(int loanPeriods)', 'CanRenew(int loanPeriods, string apiKey = "")');
     ws.commit('feat: a key in a renewal check');
     ws.index();
     expect(ws.read(CANDIDATES_ARTIFACT)).toContain('AKIAIOSFODNN7EXAMPLE');

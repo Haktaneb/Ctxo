@@ -25,7 +25,7 @@ Code: `src/lending/loan-limit.ts::canBorrow::function`
 Untested: the unpaid-fine check has no test yet
 
 ### LEND-05 A loan can be renewed once
-Untested: renewals are not built yet
+Untested: no test covers it yet
 
 ## Boundary contracts
 

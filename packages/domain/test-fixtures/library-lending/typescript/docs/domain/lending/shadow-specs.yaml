@@ -1,6 +1,6 @@
 # Shadow-spec resolutions for Lending: each entry names a candidate by its fingerprint, copied verbatim from
 # "ctxo domain shadow-specs lending" or find_shadow_specs, and says which rule states it or why it is no rule.
-- fingerprint: "literal-comparison | renewal-policy.canRenew | renewals > 2"
+- fingerprint: "literal-comparison | renewal-policy.canRenew | loanPeriods >= 2"
   resolution: { rule: LEND-05 }
 - fingerprint: "normalization | member-directory.memberKey | email.trim()"
   resolution: { notARule: "input cleanup, not a business rule" }
