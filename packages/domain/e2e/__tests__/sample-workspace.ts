@@ -76,6 +76,24 @@ export function childEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv 
   return { ...env, ...extra };
 }
 
+export const TIER_MESSAGE = 'C# tier differs between the two indexes';
+
+/**
+ * E-M5 (W20): two indexes of the same input are compared only when both ran C# on the same tier. A cold Roslyn start
+ * can fall back to the syntax tier, whose symbol IDs differ, which is no nondeterminism: the comparison is skipped
+ * with the reason. Under `CTXO_REQUIRE_DOTNET=1` (the CI job that sets up .NET) a tier flip is a failure.
+ */
+export function requireSameTier(
+  a: { readonly resolvesEdges: boolean },
+  b: { readonly resolvesEdges: boolean },
+  skip: (note: string) => void,
+): void {
+  if (a.resolvesEdges === b.resolvesEdges) return;
+  const detail = `${TIER_MESSAGE} (${a.resolvesEdges ? 'full' : 'syntax'} tier, then ${b.resolvesEdges ? 'full' : 'syntax'} tier)`;
+  if (process.env['CTXO_REQUIRE_DOTNET'] === '1') throw new Error(`${detail}; CTXO_REQUIRE_DOTNET=1 needs the Roslyn tier on every index`);
+  skip(detail);
+}
+
 export function assertBuilt(): void {
   if (!existsSync(CLI_BIN)) throw new Error(`Build @ctxo/cli first: ${CLI_BIN} is missing`);
   if (!existsSync(join(DOMAIN_DIR, 'dist', 'index.js'))) throw new Error('Build @ctxo/domain first: dist/index.js is missing');

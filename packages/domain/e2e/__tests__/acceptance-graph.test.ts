@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { assertBuilt, cleanupWorkspaces, type McpSession, SampleWorkspace, type Variant } from './sample-workspace.js';
+import { assertBuilt, cleanupWorkspaces, type McpSession, requireSameTier, SampleWorkspace, type Variant } from './sample-workspace.js';
 
 /**
  * The PR 3 acceptance tests (spec 11.5, 13.1, Review Focus 1 to 5): the domain graph of the synthetic
@@ -245,10 +245,11 @@ describe.each(VARIANTS)('PR 3 acceptance, %s sample', (variant) => {
     }
   });
 
-  it('the same input twice gives a byte-identical graph.json and identical get_rule responses', async () => {
+  it('the same input twice gives a byte-identical graph.json and identical get_rule responses', async (context) => {
     const other = prepared(variant);
-    // W20: a cold Roslyn start can fall back to the syntax tier, whose symbol IDs differ; that is no nondeterminism.
-    expect(other.resolvesEdges, 'C# tier differs between the two indexes').toBe(shared.ws.resolvesEdges);
+    // W20, E-M5: a cold Roslyn start can fall back to the syntax tier, whose symbol IDs differ; that is no
+    // nondeterminism, so the comparison is skipped (and fails under CTXO_REQUIRE_DOTNET=1).
+    requireSameTier(shared.ws, other, (note) => context.skip(note));
     expect(other.read(GRAPH)).toBe(shared.ws.read(GRAPH));
     const session = await other.connect();
     try {

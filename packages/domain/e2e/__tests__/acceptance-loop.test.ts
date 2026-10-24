@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { assertBuilt, cleanupWorkspaces, type McpSession, SampleWorkspace, type Variant } from './sample-workspace.js';
+import { assertBuilt, cleanupWorkspaces, type McpSession, requireSameTier, SampleWorkspace, type Variant } from './sample-workspace.js';
 
 /**
  * The PR 4 acceptance tests (spec 12.4, 13.1, 13.2, Review Focus 5): the Deletion Test loop of the synthetic
@@ -17,7 +17,6 @@ type Payload = Record<string, unknown>;
 const SHADOW_SPECS = 'docs/domain/lending/shadow-specs.yaml';
 const CANDIDATES_ARTIFACT = '.ctxo/index/domain/shadow-candidates.json';
 const MATURITY_ARTIFACT = '.ctxo/index/domain/maturity.json';
-const TIER_MESSAGE = 'C# tier differs between the two indexes';
 const NOT_A_RULE = 'input cleanup, not a business rule';
 
 const MEMBER_DIRECTORY: Record<Variant, string> = {
@@ -263,10 +262,11 @@ describe.each(VARIANTS)('PR 4 acceptance, %s sample', (variant) => {
     expect(JSON.parse(all.stdout)).toEqual(withoutMeta((await shadowSpecs(shared.session, { includeResolved: true })) as unknown as Payload));
   });
 
-  it('the same input twice gives byte-identical shadow-candidates.json and maturity.json and identical tool payloads', async () => {
+  it('the same input twice gives byte-identical shadow-candidates.json and maturity.json and identical tool payloads', async (context) => {
     const other = prepared(variant);
-    // W20: a cold Roslyn start can fall back to the syntax tier, whose symbol IDs differ; that is no nondeterminism.
-    expect(other.resolvesEdges, TIER_MESSAGE).toBe(shared.ws.resolvesEdges);
+    // W20, E-M5: a cold Roslyn start can fall back to the syntax tier, whose symbol IDs differ; that is no
+    // nondeterminism, so the comparison is skipped (and fails under CTXO_REQUIRE_DOTNET=1).
+    requireSameTier(shared.ws, other, (note) => context.skip(note));
     expect(other.read(CANDIDATES_ARTIFACT)).toBe(shared.ws.read(CANDIDATES_ARTIFACT));
     expect(other.read(MATURITY_ARTIFACT)).toBe(shared.ws.read(MATURITY_ARTIFACT));
     const session = await other.connect();
