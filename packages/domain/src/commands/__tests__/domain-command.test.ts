@@ -342,6 +342,42 @@ describe('ctxo domain map and ctxo domain shadow-specs', () => {
     expect(stdout.join('')).toBe('');
   });
 
+  it('a graph built from another registry prints the stale-registry hint and exits 2', async () => {
+    // domain-state.ts STALE_REGISTRY_HINT (not exported).
+    const STALE_REGISTRY_HINT = 'The domain registry changed since the last "ctxo index"; run it to rebuild the domain graph.';
+    await loop.index();
+    loop.write('docs/domain/contexts.yaml', `${readFileSync(join(loop.root, 'docs/domain/contexts.yaml'), 'utf-8')}# edited\n`);
+    loop.age('docs/domain/contexts.yaml');
+    stderr.length = 0;
+    expect(await runLoop('map')).toBe(2);
+    expect(stderr).toEqual([`[ctxo] ${STALE_REGISTRY_HINT}`]);
+    stderr.length = 0;
+    expect(await runLoop('shadow-specs', 'lending', '--json')).toBe(2);
+    expect(stderr).toEqual([`[ctxo] ${STALE_REGISTRY_HINT}`]);
+    expect(stdout.join('')).toBe('');
+  });
+
+  it('an unexpected failure prints an internal-error line and exits 2, never 1', async () => {
+    await loop.index();
+    const host = createModuleHost({ projectRoot: loop.root, mode: 'cli' });
+    const failing = {
+      ...host,
+      services: {
+        ...host.services,
+        loadConfig: () => {
+          throw new Error('config exploded');
+        },
+      },
+    };
+    const ctx = { projectRoot: loop.root, ctxoRoot: host.ctxoRoot, readStdin: async () => '' };
+    stderr.length = 0;
+    expect(await domainCommand(failing).run(['map'], ctx)).toBe(2);
+    expect(stderr).toContain('[ctxo] domain map failed: config exploded');
+    expect(await domainCommand(failing).run(['shadow-specs', 'lending', '--json'], ctx)).toBe(2);
+    expect(stderr).toContain('[ctxo] domain shadow-specs failed: config exploded');
+    expect(stdout.join('')).toBe('');
+  });
+
   it('no registry exits 0 with the hint; registry problems exit 2', async () => {
     const empty = project(null);
     expect(await run(empty, 'map')).toBe(0);
@@ -401,6 +437,17 @@ describe('ctxo domain map and ctxo domain shadow-specs', () => {
     expect(await runLoop('shadow-specs', 'lending', '--kinds', '', '--json')).toBe(0);
     expect(printed()).toEqual(await toolBody(FIND_SHADOW_SPECS, { context: 'lending' }));
 
+    // A repeated --kinds adds to the list (union, deduplicated, in CANDIDATE_KINDS order).
+    stdout.length = 0;
+    expect(await runLoop('shadow-specs', 'lending', '--kinds', 'rule-without-tests', '--kinds', 'literal-comparison,literal-comparison', '--json')).toBe(0);
+    expect(printed()).toEqual(await toolBody(FIND_SHADOW_SPECS, { context: 'lending', kinds: ['literal-comparison', 'rule-without-tests'] }));
+    expect((printed()['shadowSpecs'] as unknown[]).length).toBe(2);
+    stdout.length = 0;
+    expect(await runLoop('shadow-specs', 'lending', '--kinds', 'endpoint', '--kinds', '', '--json')).toBe(0);
+    expect((printed()['counts'] as { open: number }).open).toBe(0);
+
+    stdout.length = 0;
+    expect(await runLoop('shadow-specs', 'lending', '--kinds', 'endpoint', '--kinds', 'bogus')).toBe(1);
     stdout.length = 0;
     expect(await runLoop('shadow-specs', 'lending', '--kinds', 'endpoint,bogus')).toBe(1);
     expect(stderr.join('\n')).toContain(

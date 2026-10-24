@@ -9,7 +9,7 @@ import { resolveDomainConfig } from '../core/domain-config.js';
 import { diffLoaderRules, renderLoaderRules } from '../core/loader-rules.js';
 import type { ContextMapView } from '../core/context-map.js';
 import { CANDIDATE_KINDS, type CandidateKind, type CandidateResolution } from '../core/shadow-candidates.js';
-import { createDomainState } from '../mcp/domain-state.js';
+import { createDomainState, type DomainState } from '../mcp/domain-state.js';
 import { createLoopState, type LoopSnapshot, type LoopStateFailure } from '../mcp/loop-state.js';
 import { contextMapAnswer, shadowSpecsAnswer } from '../mcp/loop-tools.js';
 
@@ -27,7 +27,7 @@ const USAGE = [
   '  map            The context map from the last "ctxo index": per context its rung, the suggested rung, rules with tests, open shadow-spec candidates and the rung criteria; --json prints the get_context_map body',
   `  shadow-specs   The shadow-spec candidates of one context with fingerprints and resolutions; --kinds <k,...> keeps these kinds (${CANDIDATE_KINDS.join(', ')}), --all adds resolved ones, --json prints the find_shadow_specs body`,
   '',
-  'Exit codes (map, shadow-specs): 0 done or no registry, 1 bad arguments or an unknown context, 2 registry problems or no index data (run "ctxo index").',
+  'Exit codes (map, shadow-specs): 0 done or no registry, 1 bad arguments or an unknown context, 2 registry problems, no or stale index data (run "ctxo index") or an internal error.',
 ];
 
 const HELP_LINES = [
@@ -153,14 +153,31 @@ function printUsage(): void {
 const FAILURE_EXIT: Readonly<Record<LoopStateFailure, number>> = { 'no-registry': 0, 'registry-problems': 2, 'no-artifacts': 2 };
 
 /**
- * The loop snapshot the MCP tools answer from (C26: same state, same bodies), or the exit code after the hint. A
- * missing or stale index prints `noData`; the other failures print the state's own hint.
+ * The loop snapshot the MCP tools answer from (C26: same state, same bodies), or the exit code after the hint.
+ * Missing data prints `noData`; a graph built from another registry prints the state's stale-registry hint; the
+ * other failures print the state's own hint.
  */
 function loadLoop(host: CtxoHost, noData: string): LoopSnapshot | number {
-  const loaded = createLoopState(host, createDomainState(host)).load();
+  const state: DomainState = createDomainState(host);
+  const loaded = createLoopState(host, state).load();
   if (loaded.ok) return loaded.snapshot;
-  console.error(loaded.reason === 'no-artifacts' ? noData : `[ctxo] ${loaded.hint}`);
+  if (loaded.reason !== 'no-artifacts') console.error(`[ctxo] ${loaded.hint}`);
+  else {
+    // The domain state is cached, so this reads nothing again; its reason tells a stale graph from missing data.
+    const domain = state.load();
+    console.error(!domain.ok && domain.reason === 'stale-registry' ? `[ctxo] ${domain.hint}` : noData);
+  }
   return FAILURE_EXIT[loaded.reason];
+}
+
+/** Like `discover`: an unexpected failure is an internal error (2), never bad arguments (1). */
+async function guarded(name: string, body: () => Promise<number>): Promise<number> {
+  try {
+    return await body();
+  } catch (err) {
+    console.error(`[ctxo] domain ${name} failed: ${(err as Error).message}`);
+    return 2;
+  }
 }
 
 const mark = (met: boolean): string => (met ? '✓' : '✗');
@@ -170,6 +187,10 @@ function printHint(body: Record<string, unknown>): void {
 }
 
 async function map(args: readonly string[], host: CtxoHost): Promise<number> {
+  return guarded('map', () => mapBody(args, host));
+}
+
+async function mapBody(args: readonly string[], host: CtxoHost): Promise<number> {
   const unknown = args.find((arg) => arg !== '--json');
   if (unknown !== undefined) {
     console.error(`[ctxo] Unknown domain map argument: ${unknown}`);
@@ -206,7 +227,7 @@ interface ShadowSpecsArgs {
 /** The arguments, or the exit code after the message (1). */
 function parseShadowSpecsArgs(args: readonly string[]): ShadowSpecsArgs | number {
   let context: string | undefined;
-  let kinds: CandidateKind[] = [];
+  const kinds = new Set<string>();
   let all = false;
   let json = false;
   for (let i = 0; i < args.length; i++) {
@@ -221,14 +242,14 @@ function parseShadowSpecsArgs(args: readonly string[]): ShadowSpecsArgs | number
         return 1;
       }
       i++;
-      // An empty list means every kind, as on the MCP tool.
+      // Repeated --kinds add up; an empty list adds nothing, so no kind at all means every kind, as on the MCP tool.
       const listed = value.split(',').map((kind) => kind.trim()).filter((kind) => kind !== '');
       const bad = listed.find((kind) => !KIND_SET.has(kind));
       if (bad !== undefined) {
         console.error(`[ctxo] Unknown kind "${bad}"; use one of: ${CANDIDATE_KINDS.join(', ')}`);
         return 1;
       }
-      kinds = listed as CandidateKind[];
+      for (const kind of listed) kinds.add(kind);
     } else if (arg.startsWith('-') || context !== undefined) {
       console.error(`[ctxo] Unknown domain shadow-specs argument: ${arg}`);
       printUsage();
@@ -239,7 +260,7 @@ function parseShadowSpecsArgs(args: readonly string[]): ShadowSpecsArgs | number
     printUsage();
     return 1;
   }
-  return { context: context.trim(), kinds, all, json };
+  return { context: context.trim(), kinds: CANDIDATE_KINDS.filter((kind) => kinds.has(kind)), all, json };
 }
 
 function resolutionText(resolution: CandidateResolution | undefined): string {
@@ -272,6 +293,10 @@ interface ShadowSpecsBody {
 }
 
 async function shadowSpecs(args: readonly string[], host: CtxoHost): Promise<number> {
+  return guarded('shadow-specs', () => shadowSpecsBody(args, host));
+}
+
+async function shadowSpecsBody(args: readonly string[], host: CtxoHost): Promise<number> {
   const parsed = parseShadowSpecsArgs(args);
   if (typeof parsed === 'number') return parsed;
   const snapshot = loadLoop(host, NO_SHADOW_DATA_HINT);

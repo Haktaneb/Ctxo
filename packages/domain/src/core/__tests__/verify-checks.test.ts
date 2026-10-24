@@ -435,7 +435,7 @@ describe('check 12: shadow-spec resolutions', () => {
     );
     expect(out.status).toBe('warn');
     expect(out.findings).toEqual([
-      { check: '12', severity: 'warning', message: `${FILE}:7 repeated fingerprint; the first entry wins`, context: 'lending' },
+      { check: '12', severity: 'warning', message: 'repeated fingerprint; the first entry wins', file: FILE, line: 7, context: 'lending' },
       {
         check: '12',
         severity: 'warning',
@@ -469,7 +469,21 @@ describe('check 12: shadow-spec resolutions', () => {
       '12',
     );
     expect(out.status).toBe('fail');
-    expect(out.findings).toEqual([{ check: '12', severity: 'error', message: `${FILE}:3 ${message}`, context: 'lending' }]);
+    expect(out.findings).toEqual([{ check: '12', severity: 'error', message, file: FILE, line: 3, context: 'lending' }]);
+  });
+
+  it('candidates that could not be built give one warning when a file has entries', () => {
+    const REASON = 'The shadow-spec candidates could not be built: lexer tripped.';
+    const entry = { fingerprint: UNKNOWN, resolution: { notARule: 'x' }, line: 1 } as const;
+    const withEntry = { context: 'lending', path: FILE, parsed: { entries: [entry], problems: [] }, stale: [], unknownRules: [] };
+    const out = outcome(base({ shadowSpecs: [withEntry], candidatesUnavailable: REASON }), '12');
+    expect(out.status).toBe('warn');
+    expect(out.findings).toEqual([
+      { check: '12', severity: 'warning', message: `stale resolutions were not checked: ${REASON}` },
+    ]);
+    // Nothing to check without entries: no finding.
+    const empty = { ...withEntry, parsed: { entries: [], problems: [] } };
+    expect(outcome(base({ shadowSpecs: [empty], candidatesUnavailable: REASON }), '12').status).toBe('pass');
   });
 
   it('registry problems skip check 12', () => {

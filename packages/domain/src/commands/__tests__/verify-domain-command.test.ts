@@ -380,7 +380,11 @@ describe('ctxo verify-domain check 12', () => {
     expect(await runCommand(dir)).toBe(1);
     const text = stderr.join('\n');
     expect(text).toContain('✗ 12 Shadow-spec resolutions');
-    expect(text).toMatch(/ {4}error docs\/domain\/lending\/shadow-specs\.yaml:\d+ /);
+    expect(text).toMatch(/ {4}error docs\/domain\/lending\/shadow-specs\.yaml:\d+ \S/);
+    stdout.length = 0;
+    expect(await runCommand(dir, '--json')).toBe(1);
+    const problem = twelve().findings[0];
+    expect([problem.severity, problem.file, typeof problem.line, problem.message.startsWith(LENDING_SPECS)]).toEqual(['error', LENDING_SPECS, 'number', false]);
   });
 
   it('uses the current shadow-specs.yaml, not artifacts', async () => {
@@ -406,6 +410,33 @@ describe('ctxo verify-domain check 12', () => {
     put(dir, BILLING_SPECS, `- fingerprint: "${STALE}"\n  resolution: { notARule: "x" }\n`);
     expect(await runCommand(dir, '--json')).toBe(0);
     expect(twelve().findings.map((f: any) => f.message)).toEqual([`stale resolution "${STALE}" matches no candidate of billing`]);
+  });
+
+  it('candidates that cannot be built give one check 12 warning, and the exit code stays 0', async () => {
+    const dir = await project();
+    put(dir, BILLING_SPECS, `- fingerprint: "${STALE}"\n  resolution: { notARule: "gone" }\n`);
+    const host = createModuleHost({ projectRoot: dir, mode: 'cli' });
+    // An index entry whose facts cannot be read: the graph builds, the candidates do not.
+    const brokenFacts = (indices: any[]): any[] =>
+      indices.map((index) =>
+        index.file === 'src/Billing/Invoice.ts'
+          ? Object.defineProperty({ ...index }, 'facts', {
+              get() {
+                throw new Error('facts unreadable');
+              },
+            })
+          : index,
+      );
+    const failing = { ...host, services: { ...host.services, readIndex: (root: string) => brokenFacts(host.services.readIndex(root)) } };
+    const code = await verifyDomainCommand(failing).run(['--json'], { projectRoot: dir, ctxoRoot: host.ctxoRoot, readStdin: async () => '' });
+    expect(code).toBe(0);
+    expect(twelve().findings).toEqual([
+      {
+        check: '12',
+        severity: 'warning',
+        message: 'stale resolutions were not checked: The shadow-spec candidates could not be built: facts unreadable.',
+      },
+    ]);
   });
 
   it('exits 2 when git cannot list the tracked files', async () => {

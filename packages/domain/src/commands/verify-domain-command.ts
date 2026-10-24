@@ -156,7 +156,10 @@ async function verify(host: CtxoHost, ctx: ModuleCommandContext, options: Option
   let codeRuleRefs: readonly RuleRef[] = [];
   let shadowSpecs: ShadowSpecsCheckInput[] = [];
   let orphanShadowSpecs: string[] = [];
+  let candidatesUnavailable: string | undefined;
   if (registry !== undefined) {
+    // The composition logs the candidate failure last, right before it returns without candidates.
+    let lastWarning: string | undefined;
     // W10, E5: the index pass's composition over the current index and repo; every card, test file and production
     // file is read once, and the stored graph and candidates are never read.
     const loop = await composeLoopInputs(host, {
@@ -169,7 +172,10 @@ async function verify(host: CtxoHost, ctx: ModuleCommandContext, options: Option
       ownership: createOwnership(registry, services.makeGlobMatcher),
       files: indexedFiles,
       tracked,
-      warn,
+      warn: (message) => {
+        lastWarning = message;
+        warn(message);
+      },
     });
     cards = loop.parsedCards;
     ruleLinks = loop.testRefs;
@@ -181,6 +187,7 @@ async function verify(host: CtxoHost, ctx: ModuleCommandContext, options: Option
     const contextIds = registry.contexts.map((context) => context.id);
     const graphIndex = indexGraph(loop.graph);
     const candidates = loop.candidates?.candidates;
+    if (candidates === undefined) candidatesUnavailable = lastWarning ?? 'the shadow-spec candidates could not be built.';
     shadowSpecs = readShadowSpecs(projectRoot, registryFile.path, contextIds).map((spec) => {
       const applied = applyResolutions(candidatesOf(candidates ?? [], spec.context), spec.parsed?.entries ?? [], (raw) =>
         canonicalRuleId(graphIndex, raw),
@@ -265,6 +272,7 @@ async function verify(host: CtxoHost, ctx: ModuleCommandContext, options: Option
     codeRuleRefs,
     shadowSpecs,
     orphanShadowSpecs,
+    ...(candidatesUnavailable !== undefined ? { candidatesUnavailable } : {}),
     loaderDiff,
     ...(contextMapText !== undefined ? { contextMapText } : {}),
     boundaries,

@@ -58,6 +58,8 @@ export interface VerifyInput {
   readonly shadowSpecs?: readonly ShadowSpecsCheckInput[];
   /** Check 12: `shadow-specs.yaml` files whose folder names no context; defaults to none. */
   readonly orphanShadowSpecs?: readonly string[];
+  /** Check 12: why the candidates could not be built, so staleness is unknown; absent when they were built. */
+  readonly candidatesUnavailable?: string;
 }
 
 /** One context's resolution file for check 12. */
@@ -460,15 +462,17 @@ function check11(touched: TouchedReport | undefined): CheckOutcome {
 
 /**
  * H6: each parse problem at its severity, each stale entry and each unknown rule a warning (an entry can be both:
- * two findings, never summed), each orphan file a warning. Day one, with no file, passes.
+ * two findings, never summed), one warning when the candidates could not be built and a file has entries, each
+ * orphan file a warning. Day one, with no file, passes.
  */
 function check12(input: VerifyInput): CheckOutcome {
   const findings: Finding[] = [];
   for (const spec of input.shadowSpecs ?? []) {
     const extra = { context: spec.context };
     for (const problem of spec.parsed?.problems ?? []) {
-      const message = `${spec.path}:${problem.line} ${problem.message}`;
-      findings.push(problem.severity === 'error' ? error('12', message, extra) : warning('12', message, extra));
+      // Located like the other file findings: the human line prints `<path>:<line> <message>`.
+      const at = { file: spec.path, line: problem.line, ...extra };
+      findings.push(problem.severity === 'error' ? error('12', problem.message, at) : warning('12', problem.message, at));
     }
     for (const entry of spec.stale) {
       findings.push(
@@ -479,6 +483,11 @@ function check12(input: VerifyInput): CheckOutcome {
       if (!('rule' in entry.resolution)) continue;
       findings.push(warning('12', `resolution names unknown rule ${entry.resolution.rule}`, { file: spec.path, line: entry.line, ...extra }));
     }
+  }
+  // Without candidates no entry is called stale; one warning says the check did not run (only when there are entries).
+  const hasEntries = (input.shadowSpecs ?? []).some((spec) => (spec.parsed?.entries.length ?? 0) > 0);
+  if (input.candidatesUnavailable !== undefined && hasEntries) {
+    findings.push(warning('12', `stale resolutions were not checked: ${input.candidatesUnavailable}`));
   }
   for (const path of [...(input.orphanShadowSpecs ?? [])].sort(compare)) {
     findings.push(warning('12', `${path} belongs to no context`));
