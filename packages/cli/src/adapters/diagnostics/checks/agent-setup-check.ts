@@ -1,5 +1,5 @@
 import type { IHealthCheck, CheckContext, CheckResult } from '../../../core/diagnostics/types.js';
-import { RULES_TEMPLATE_VERSION, classifyRulesBlock, type BlockStatus } from '../../../core/agent-rules/rules-block.js';
+import { RULES_TEMPLATE_VERSION, classifyRulesBlock, type BlockStatus, type RulesVariant } from '../../../core/agent-rules/rules-block.js';
 import {
   PLATFORMS,
   SKILL_PLATFORMS,
@@ -68,6 +68,12 @@ function platformName(platformId: string): string {
 export class AiRulesCheck implements IHealthCheck {
   readonly id = 'ai_rules';
   readonly title = 'AI rules';
+  private readonly variant: RulesVariant;
+
+  /** `domain`: the `@ctxo/domain` module is installed, so a current block carries the domain line (#191). */
+  constructor(options: { readonly domain?: boolean } = {}) {
+    this.variant = { domain: options.domain === true };
+  }
 
   async run(ctx: CheckContext): Promise<CheckResult> {
     try {
@@ -82,8 +88,8 @@ export class AiRulesCheck implements IHealthCheck {
     const summary: string[] = [];
     for (const state of readRulesStates(projectRoot)) {
       const first = state.scan.blocks[0];
-      const status = first ? classifyRulesBlock(first) : undefined;
-      problems.push(...fileProblems(projectRoot, state, status).map((p) => ({ ...p, text: `${state.file}: ${p.text}` })));
+      const status = first ? classifyRulesBlock(first, this.variant) : undefined;
+      problems.push(...fileProblems(projectRoot, state, status, this.variant).map((p) => ({ ...p, text: `${state.file}: ${p.text}` })));
       if (status?.state === 'current') summary.push(`${state.file} v${RULES_TEMPLATE_VERSION} ${status.tier}`);
       if (status?.state === 'newer') summary.push(`${state.file} v${status.version} from a newer ctxo`);
     }
@@ -105,16 +111,29 @@ export class AiRulesCheck implements IHealthCheck {
  * The problems in one rules file; `status` classifies its first block. A tier that cannot be resolved
  * (the bundled skills cannot be read) is a problem of this file only, so the other files keep theirs.
  */
-function fileProblems(projectRoot: string, state: PlatformRulesState, status: BlockStatus | undefined): RulesProblem[] {
+function fileProblems(
+  projectRoot: string,
+  state: PlatformRulesState,
+  status: BlockStatus | undefined,
+  variant: RulesVariant,
+): RulesProblem[] {
   const problems: RulesProblem[] = [];
   const blocks = state.scan.blocks;
-  const newer = blocks.length > 1 ? blocks.map(classifyRulesBlock).find((s) => s.state === 'newer') : undefined;
+  const newer = blocks.length > 1 ? blocks.map((b) => classifyRulesBlock(b, variant)).find((s) => s.state === 'newer') : undefined;
 
   if (newer?.state === 'newer') {
     // This ctxo leaves the whole file alone, so it reports the blocks once, with a step that clears them.
     problems.push({
       text: `${blocks.length} ctxo rules blocks, one from a newer ctxo (v${newer.version}); this ctxo leaves the file unchanged`,
       fix: NEWER_BLOCKS_FIX,
+    });
+  } else if (status?.state === 'outdated' && status.reason === 'domain-line') {
+    problems.push({
+      text:
+        variant.domain === true
+          ? 'rules block lacks the "ctxo domain discover" line (@ctxo/domain is installed)'
+          : 'rules block has the "ctxo domain discover" line (@ctxo/domain is not installed)',
+      fix: RULES_FIX,
     });
   } else if (status?.state === 'outdated') {
     const found = status.reason === 'older' ? `v${blocks[0]?.version ?? ''}` : status.reason;

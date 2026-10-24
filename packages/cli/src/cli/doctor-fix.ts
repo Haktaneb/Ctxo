@@ -36,6 +36,8 @@ export interface FixOptions {
   readonly ctxoRoot: string;
   readonly yes?: boolean;
   readonly dryRun?: boolean;
+  /** The `@ctxo/domain` module is installed: re-rendered rules blocks carry the domain line (#191). */
+  readonly domain?: boolean;
 }
 
 export interface FixAttempt {
@@ -152,7 +154,7 @@ export async function applyFixes(report: DoctorReport, options: FixOptions): Pro
       await run(
         'AI rules',
         're-render ctxo rules blocks',
-        () => fixAiRules(options.projectRoot),
+        () => fixAiRules(options.projectRoot, options.domain === true),
         options,
       ),
     );
@@ -345,7 +347,7 @@ async function fixClaudeGuardHook(projectRoot: string): Promise<void | FixSkippe
  * rendered, otherwise as a warning line under the success line. A held file still reports a damaged
  * block (from a dry run, which writes nothing).
  */
-async function fixAiRules(projectRoot: string): Promise<void | FixSkipped | FixWarned> {
+async function fixAiRules(projectRoot: string, domain: boolean): Promise<void | FixSkipped | FixWarned> {
   const warnings: string[] = [];
   const holds: string[] = [];
   let rendered = 0;
@@ -362,7 +364,7 @@ async function fixAiRules(projectRoot: string): Promise<void | FixSkipped | FixW
       continue;
     }
     rendered += 1;
-    const result = installRules(projectRoot, state.platformId, { tier: resolveRulesTier(projectRoot, state.platformId) });
+    const result = installRules(projectRoot, state.platformId, { tier: resolveRulesTier(projectRoot, state.platformId), domain });
     if (result.warning) warnings.push(result.warning);
   }
   if (warnings.length > 0) throw new Error([...warnings, ...holds].join('; '));

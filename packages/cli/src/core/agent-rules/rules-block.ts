@@ -147,8 +147,32 @@ const FULL_RULE_BODY = `## ctxo MCP Tool Usage (MANDATORY)
 - NEVER grep source files to find symbols when \`search_symbols\` exists
 - NEVER manually trace imports when \`find_importers\` gives the full reverse dependency graph`;
 
-/** The rules body for a tier, without markers and without a trailing newline. */
-export function ruleBody(options: { readonly tier: RulesTier }): string {
+/**
+ * The domain line (#191): written only when the `@ctxo/domain` module is installed, so a block without the
+ * module is byte-identical to the template without it, under the same RULES_TEMPLATE_VERSION. The compact tier
+ * gets it as a last line (7 non-blank lines with the markers, within the cap of 8), the full tier as the last
+ * bullet of "Orientation in Unfamiliar Areas".
+ */
+export const COMPACT_DOMAIN_LINE =
+  'Adopting or tuning the domain layer? Run `ctxo domain discover` first (`--json` for the evidence, `--write` to merge the proposal).';
+export const FULL_DOMAIN_LINE =
+  '- Adopting or tuning the domain layer? Run `ctxo domain discover` first (`--json` for the evidence, `--write` to merge the proposal)';
+const FULL_DOMAIN_ANCHOR = '- Call `get_symbol_importance` to identify critical symbols';
+
+/** What a rules block depends on beyond its tier: `domain` is true when the `@ctxo/domain` module is installed. */
+export interface RulesVariant {
+  readonly domain?: boolean;
+}
+
+function domainBody(tier: RulesTier): string {
+  return tier === 'compact'
+    ? `${COMPACT_RULE_BODY}\n${COMPACT_DOMAIN_LINE}`
+    : FULL_RULE_BODY.replace(FULL_DOMAIN_ANCHOR, `${FULL_DOMAIN_ANCHOR}\n${FULL_DOMAIN_LINE}`);
+}
+
+/** The rules body for a tier (and the domain line when `domain`), without markers and without a trailing newline. */
+export function ruleBody(options: { readonly tier: RulesTier } & RulesVariant): string {
+  if (options.domain === true) return domainBody(options.tier);
   return options.tier === 'compact' ? COMPACT_RULE_BODY : FULL_RULE_BODY;
 }
 
@@ -156,8 +180,8 @@ export function ruleBody(options: { readonly tier: RulesTier }): string {
  * The body between a versioned start marker and the end marker, joined by '\n', no trailing newline.
  * A blank line separates each marker from the body, as Prettier prints it.
  */
-export function renderRulesBlock(tier: RulesTier): string {
-  return [`<!-- ctxo-rules-start v${RULES_TEMPLATE_VERSION} -->`, '', ruleBody({ tier }), '', END_MARKER].join('\n');
+export function renderRulesBlock(tier: RulesTier, variant: RulesVariant = {}): string {
+  return [`<!-- ctxo-rules-start v${RULES_TEMPLATE_VERSION} -->`, '', ruleBody({ tier, ...variant }), '', END_MARKER].join('\n');
 }
 
 /* ------------------------------------------------------------------ */
@@ -474,29 +498,42 @@ export function blockTier(body: string): RulesTier | 'unknown' {
   return 'unknown';
 }
 
-/** Each tier's body in the `comparableMarkdown` form. */
-const COMPARABLE_BODIES: Readonly<Record<RulesTier, string>> = {
-  compact: comparableMarkdown(COMPACT_RULE_BODY),
-  full: comparableMarkdown(FULL_RULE_BODY),
+/** Each tier's body in the `comparableMarkdown` form, without and with the domain line. */
+const COMPARABLE_BODIES: Readonly<Record<'plain' | 'domain', Readonly<Record<RulesTier, string>>>> = {
+  plain: { compact: comparableMarkdown(COMPACT_RULE_BODY), full: comparableMarkdown(FULL_RULE_BODY) },
+  domain: { compact: comparableMarkdown(domainBody('compact')), full: comparableMarkdown(domainBody('full')) },
 };
 
 export type BlockStatus =
   | { readonly state: 'current'; readonly tier: RulesTier }
-  | { readonly state: 'outdated'; readonly reason: 'unversioned' | 'older' | 'edited'; readonly tier: RulesTier | 'unknown' }
+  | {
+      readonly state: 'outdated';
+      /**
+       * `domain-line`: the template's body, but with the domain line while `@ctxo/domain` is not installed, or
+       * without it while it is. `edited`: any other change at the current version.
+       */
+      readonly reason: 'unversioned' | 'older' | 'edited' | 'domain-line';
+      readonly tier: RulesTier | 'unknown';
+    }
   | { readonly state: 'newer'; readonly version: string; readonly tier: RulesTier | 'unknown' };
 
 /**
- * Outdated: no version, an older version, or the current version with an edited body. A body that
- * differs from the template only in formatting, line wrapping included (`comparableMarkdown`), is not
- * edited. A block from a newer template is never outdated.
+ * Outdated: no version, an older version, or the current version with a body other than the template's for
+ * `variant` (the domain line present exactly when `variant.domain`). A body that differs from the template
+ * only in formatting, line wrapping included (`comparableMarkdown`), is not edited. A block from a newer
+ * template is never outdated.
  */
-export function classifyRulesBlock(block: RulesBlockSpan): BlockStatus {
+export function classifyRulesBlock(block: RulesBlockSpan, variant: RulesVariant = {}): BlockStatus {
   const tier = blockTier(block.body);
   if (!block.marked || block.version === undefined) return { state: 'outdated', reason: 'unversioned', tier };
   const order = compareTemplateVersions(block.version, RULES_TEMPLATE_VERSION);
   if (order > 0) return { state: 'newer', version: block.version, tier };
   if (order < 0) return { state: 'outdated', reason: 'older', tier };
-  if (tier !== 'unknown' && comparableMarkdown(block.body) === COMPARABLE_BODIES[tier]) return { state: 'current', tier };
+  if (tier === 'unknown') return { state: 'outdated', reason: 'edited', tier };
+  const body = comparableMarkdown(block.body);
+  const domain = variant.domain === true;
+  if (body === COMPARABLE_BODIES[domain ? 'domain' : 'plain'][tier]) return { state: 'current', tier };
+  if (body === COMPARABLE_BODIES[domain ? 'plain' : 'domain'][tier]) return { state: 'outdated', reason: 'domain-line', tier };
   return { state: 'outdated', reason: 'edited', tier };
 }
 

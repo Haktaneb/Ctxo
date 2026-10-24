@@ -49,6 +49,8 @@ export class DoctorCommand {
 
   async run(options: DoctorOptions = {}): Promise<void> {
     console.error(`ctxo v${getVersion()} — health check\n`);
+    // A loaded @ctxo/domain adds the domain line to the expected rules block (#191).
+    const domain = (options.modules ?? []).some((module) => module.registration.id === 'domain');
 
     const checks: IHealthCheck[] = [
       new VersionsCheck(),
@@ -56,7 +58,7 @@ export class DoctorCommand {
       new GitBinaryCheck(),
       new GitRepoCheck(),
       new GitHooksCheck(),
-      new AiRulesCheck(),
+      new AiRulesCheck({ domain }),
       new SkillsCheck(),
       new ClaudeGuardHookCheck(),
       new InstallCopiesCheck(),
@@ -114,6 +116,7 @@ export class DoctorCommand {
         ctxoRoot: this.ctxoRoot,
         yes: options.yes,
         dryRun: options.dryRun,
+        domain,
       });
       console.error(formatFixReport(fixReport));
       if (fixReport.halted) {

@@ -22,6 +22,7 @@ import {
   type RulesBlockSpan,
   type RulesScan,
   type RulesTier,
+  type RulesVariant,
   type TextShape,
 } from '../core/agent-rules/rules-block.js';
 import { loadConfig } from '../core/config/load-config.js';
@@ -472,8 +473,8 @@ alwaysApply: true
 `;
 
 /** The content of a new rules file: the marked block (after the frontmatter for Cursor). */
-export function generateRules(platformId: string, tier: RulesTier = 'full'): string {
-  const block = renderRulesBlock(tier) + '\n';
+export function generateRules(platformId: string, tier: RulesTier = 'full', variant: RulesVariant = {}): string {
+  const block = renderRulesBlock(tier, variant) + '\n';
   return platformId === 'cursor' ? CURSOR_FRONTMATTER + block : block;
 }
 
@@ -527,9 +528,12 @@ export interface InstallResult {
 export function installRules(
   projectRoot: string,
   platformId: string,
-  options: { readonly tier?: RulesTier; readonly dryRun?: boolean } = {},
+  options: { readonly tier?: RulesTier; readonly dryRun?: boolean } & RulesVariant = {},
 ): InstallResult {
-  const { result, content } = planRules(projectRoot, platformId, { tier: options.tier });
+  const { result, content } = planRules(projectRoot, platformId, {
+    tier: options.tier,
+    ...(options.domain !== undefined ? { domain: options.domain } : {}),
+  });
   if (!options.dryRun && result.action !== 'skipped' && content !== undefined) {
     const filePath = join(projectRoot, result.file);
     if (result.action === 'created') mkdirSync(dirname(filePath), { recursive: true });
@@ -553,7 +557,7 @@ export interface RulesPlan {
 export function planRules(
   projectRoot: string,
   platformId: string,
-  options: { readonly tier?: RulesTier; readonly existing?: string } = {},
+  options: { readonly tier?: RulesTier; readonly existing?: string } & RulesVariant = {},
 ): RulesPlan {
   const platform = PLATFORMS.find(p => p.id === platformId);
   if (!platform) throw new Error(`Unknown platform: ${platformId}`);
@@ -561,11 +565,13 @@ export function planRules(
 
   // A file another platform also reads gets the full tier whatever the caller asked (doctor agrees).
   const tier = linkedRulesPlatforms(projectRoot, platformId).length > 0 ? 'full' : (options.tier ?? 'full');
+  // The domain line only when the caller knows @ctxo/domain is installed (#191).
+  const variant: RulesVariant = { domain: options.domain === true };
   const filePath = join(projectRoot, file);
 
   let existing = options.existing;
   if (existing === undefined) {
-    if (!existsSync(filePath)) return { result: { file, action: 'created' }, content: generateRules(platformId, tier) };
+    if (!existsSync(filePath)) return { result: { file, action: 'created' }, content: generateRules(platformId, tier, variant) };
     try {
       existing = readFileSync(filePath, 'utf-8');
     } catch (err) {
@@ -579,10 +585,10 @@ export function planRules(
 
   if (platformId === 'cursor' && textShape(existing).text.trim() === '') {
     // An empty Cursor file gets what a created one gets: the frontmatter, then the block.
-    return changed(textShape(existing).restore(generateRules(platformId, tier)));
+    return changed(textShape(existing).restore(generateRules(platformId, tier, variant)));
   }
 
-  const upsert = upsertRulesBlock(existing, renderRulesBlock(tier));
+  const upsert = upsertRulesBlock(existing, renderRulesBlock(tier, variant));
   if (upsert.kind === 'unterminated') {
     return { result: { file, action: 'skipped', warning: `${file}: ctxo rules start marker has no end marker; left unchanged` } };
   }
