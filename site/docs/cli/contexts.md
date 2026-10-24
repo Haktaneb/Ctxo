@@ -87,8 +87,8 @@ How stored procedures count:
 At the default `contextsView.weights.data` of 0, a `.sql` file joins a
 candidate only through co-change. Scripts that never change together with other
 files are listed as unclustered and lower `coverage`, so a SQL-heavy repository
-can show a noticeably lower ratio (0.91 instead of 0.99 on one production
-fixture, with the candidates unchanged). To leave such scripts out of the view,
+can show a noticeably lower ratio (as on one production fixture, with the
+candidates unchanged). To leave such scripts out of the view,
 add them to `contextsView.exclude`.
 
 ## Collisions and SQL tables

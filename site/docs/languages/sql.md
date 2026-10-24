@@ -195,8 +195,8 @@ the graph and appears as an external resource in the contexts view.
 - **Contexts view coverage.** At the default `contextsView.weights.data` of 0, a
   `.sql` file joins a candidate only through co-change. Scripts that never
   change together with other files stay unclustered and lower `coverage`; on one
-  production fixture, 48 such scripts took it from 0.99 to 0.91 without moving
-  any other file. Leave them out with `contextsView.exclude` if the number
+  production fixture, such scripts lowered it noticeably without moving any
+  other file. Leave them out with `contextsView.exclude` if the number
   matters. A table that shares its name with a C# class can also appear as a
   [collision](/cli/contexts#collisions-and-sql-tables).
 - **Search.** [`search_symbols`](/mcp-tools/search-symbols) and
