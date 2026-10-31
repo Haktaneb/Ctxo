@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CoChangeReader } from '../co-change-reader.js';
@@ -318,4 +318,54 @@ it('CoChangeReader accepts a matrix without window metadata, one with it, one wi
   const empty = reader.readCoChangeMap();
   expect(empty).toBeDefined();
   expect(empty?.size).toBe(0);
+});
+
+it('readEntries returns the validated entries as stored and re-reads after the mtime changes', () => {
+  const root = tempRoot();
+  const reader = new CoChangeReader(root);
+  const first = [entry('src/a.ts', 'src/b.ts', 0.8, 4), entry('src/a.ts', 'src/c.ts', 0.6, 3)];
+  writeMatrixFile(root, { ...matrix(first), extra: { future: true } }, 1);
+
+  // One entry per pair, in the stored order (readCoChangeMap lists each pair under both of its files).
+  const entries = reader.readEntries();
+  expect(entries).toEqual(first);
+  expect(Object.isFrozen(entries)).toBe(true);
+  expect(entries?.every((e) => Object.isFrozen(e))).toBe(true);
+
+  // The map and the entries come from one read, and both stay cached while the file is unchanged.
+  expect(reader.readCoChangeMap()?.get('src/a.ts')).toHaveLength(2);
+  expect(reader.readEntries()).toBe(entries);
+  expect(faults.matrixReads).toBe(1);
+  // The map lists the same frozen entry objects.
+  expect(reader.readCoChangeMap()?.get('src/b.ts')?.[0]).toBe(entries?.[0]);
+
+  // Rewritten with the same byte length and a newer mtime: only the mtime tells the versions apart.
+  const second = [entry('src/a.ts', 'src/b.ts', 0.7, 4), entry('src/a.ts', 'src/c.ts', 0.6, 3)];
+  const sizeBefore = statSync(matrixPath(root)).size;
+  writeMatrixFile(root, { ...matrix(second), extra: { future: true } }, 2);
+  expect(statSync(matrixPath(root)).size).toBe(sizeBefore);
+  expect(reader.readEntries()).toEqual(second);
+  expect(faults.matrixReads).toBe(2);
+
+  // A matrix without pairs is a matrix: no entries, not "no matrix".
+  writeMatrixFile(root, matrix([]), 3);
+  expect(reader.readEntries()).toEqual([]);
+});
+
+it('readEntries returns undefined for a missing or invalid file', () => {
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  const root = tempRoot();
+  const reader = new CoChangeReader(root);
+
+  expect(reader.readEntries()).toBeUndefined();
+
+  writeMatrixFile(root, '{ not json', 1);
+  expect(reader.readEntries()).toBeUndefined();
+  writeMatrixFile(root, matrix([entry('src/a.ts', 'src/b.ts', 1.5, 2)]), 2);
+  expect(reader.readEntries()).toBeUndefined();
+
+  writeMatrixFile(root, matrix([entry('src/a.ts', 'src/b.ts', 0.8, 4)]), 3);
+  expect(reader.readEntries()).toHaveLength(1);
+  rmSync(matrixPath(root));
+  expect(reader.readEntries()).toBeUndefined();
 });

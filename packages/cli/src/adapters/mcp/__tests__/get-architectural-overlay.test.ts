@@ -355,7 +355,7 @@ function withData(view: ContextsView, resources: DataResourceUsage[]): ContextsV
 }
 
 /**
- * Shaped like the fixture: 12 candidates of 40 files, 17 hubs (the last one unassigned) and 5 collisions, one of
+ * A realistically sized view: 12 candidates of 40 files, 17 hubs (the last one unassigned) and 5 collisions, one of
  * them with 120 occurrences of 20 members. Candidate 2 takes part in `entity0` and `entity4` only.
  */
 function fixtureView(): ContextsView {
@@ -413,7 +413,7 @@ describe('GetArchitecturalOverlayHandler mode contexts', () => {
     return JSON.parse((await handler(args)).content[0]!.text);
   }
 
-  it('the summary of a fixture-shaped view returns all 12 candidates at the default limit', async () => {
+  it('the summary of a realistically sized view returns all 12 candidates at the default limit', async () => {
     const view = fixtureView();
     const payload = await call(view, { mode: 'contexts' });
 
@@ -804,7 +804,7 @@ describe('GetArchitecturalOverlayHandler mode contexts', () => {
         return resource(`dbo.resource_${String(i).padStart(3, '0')}`, [...accessors], i % 10 === 9 ? 'external' : 'table');
       });
 
-    // Fixture-shaped summary: 12 candidates with PR 1A's hubs and collisions, plus 200 resources. The data adds
+    // Realistically sized summary: 12 candidates with PR 1A's hubs and collisions, plus 200 resources. The data adds
     // counts only, so every candidate still fits untruncated.
     const fixture = withData(fixtureView(), resources(12));
     const summary = await raw(fixture, { mode: 'contexts' });

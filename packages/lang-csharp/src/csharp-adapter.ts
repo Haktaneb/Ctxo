@@ -1,7 +1,12 @@
 import CSharpLanguage from 'tree-sitter-c-sharp';
 import type { SyntaxNode } from 'tree-sitter';
 import { TreeSitterAdapter } from './tree-sitter-adapter.js';
-import type { SymbolNode, GraphEdge, ComplexityMetrics, SymbolKind, SymbolAnnotation } from '@ctxo/plugin-api';
+import type { CodeFact, SymbolNode, GraphEdge, ComplexityMetrics, SymbolKind, SymbolAnnotation } from '@ctxo/plugin-api';
+import type { FactOptions } from './facts/fact-types.js';
+import { finishFacts } from './facts/finish-facts.js';
+import { annotationRouteEvidence } from './facts/annotation-endpoints.js';
+import { decodeCsharpStringLiteral } from './facts/csharp-string-literal.js';
+import { collectTreeSitterEvidence } from './facts/tree-sitter-evidence.js';
 
 const CSHARP_BRANCH_TYPES = [
   'if_statement', 'for_statement', 'foreach_statement',
@@ -25,8 +30,16 @@ const SIMPLE_ESCAPES: Record<string, string> = {
 export class CSharpAdapter extends TreeSitterAdapter {
   readonly extensions = ['.cs'] as const;
 
-  constructor() {
+  /** Namespaces of the plain `using` directives of the file whose edges are being extracted. */
+  private usings: readonly string[] = [];
+  /** Base type lookups of the current symbol registry, built on first use. */
+  private lookup: RegistryLookup | undefined;
+  /** Fact detector options; undefined when facts are off. */
+  readonly facts: FactOptions | undefined;
+
+  constructor(options: { readonly facts?: FactOptions } = {}) {
     super(CSharpLanguage);
+    this.facts = options.facts;
   }
 
   async extractSymbols(filePath: string, source: string): Promise<SymbolNode[]> {
@@ -49,6 +62,7 @@ export class CSharpAdapter extends TreeSitterAdapter {
       const firstSymbol = symbols.length > 0 ? symbols[0]!.symbolId : undefined;
       if (!firstSymbol) return edges;
 
+      this.usings = usingNamespaces(tree.rootNode);
       this.visitEdges(tree.rootNode, filePath, firstSymbol, '', edges);
       return edges;
     } catch (err) {
@@ -65,6 +79,23 @@ export class CSharpAdapter extends TreeSitterAdapter {
       return metrics;
     } catch (err) {
       console.error(`[ctxo:csharp] Complexity extraction failed for ${filePath}: ${(err as Error).message}`);
+      return [];
+    }
+  }
+
+  /**
+   * The file's facts in the syntax tier: tree-sitter evidence plus attribute routes, finished with the
+   * C# string literal decoder. [] without the facts option.
+   */
+  async extractFacts(filePath: string, source: string): Promise<CodeFact[]> {
+    if (!this.facts) return [];
+    try {
+      const tree = this.parse(source);
+      const symbols = await this.extractSymbols(filePath, source);
+      const evidence = [...collectTreeSitterEvidence(tree.rootNode, filePath, symbols, this.facts), ...annotationRouteEvidence(symbols)];
+      return finishFacts(filePath, evidence, symbols, this.facts, decodeCsharpStringLiteral);
+    } catch (err) {
+      console.error(`[ctxo:csharp] Fact extraction failed for ${filePath}: ${(err as Error).message}`);
       return [];
     }
   }
@@ -125,9 +156,15 @@ export class CSharpAdapter extends TreeSitterAdapter {
       return;
     }
 
-    // Recurse into compilation_unit and other containers
+    // Recurse into compilation_unit and other containers; a file-scoped namespace covers its later siblings.
+    let scope = namespace;
     for (let i = 0; i < node.childCount; i++) {
-      this.visitSymbols(node.child(i)!, filePath, namespace, symbols);
+      const child = node.child(i)!;
+      if (child.type === 'file_scoped_namespace_declaration') {
+        scope = fileScopedNamespace(child, namespace);
+        continue;
+      }
+      this.visitSymbols(child, filePath, scope, symbols);
     }
   }
 
@@ -220,8 +257,14 @@ export class CSharpAdapter extends TreeSitterAdapter {
       }
     }
 
+    let scope = namespace;
     for (let i = 0; i < node.childCount; i++) {
-      this.visitEdges(node.child(i)!, filePath, fromSymbol, namespace, edges);
+      const child = node.child(i)!;
+      if (child.type === 'file_scoped_namespace_declaration') {
+        scope = fileScopedNamespace(child, namespace);
+        continue;
+      }
+      this.visitEdges(child, filePath, fromSymbol, scope, edges);
     }
   }
 
@@ -274,8 +317,14 @@ export class CSharpAdapter extends TreeSitterAdapter {
       return;
     }
 
+    let scope = namespace;
     for (let i = 0; i < node.childCount; i++) {
-      this.visitComplexity(node.child(i)!, filePath, namespace, metrics);
+      const child = node.child(i)!;
+      if (child.type === 'file_scoped_namespace_declaration') {
+        scope = fileScopedNamespace(child, namespace);
+        continue;
+      }
+      this.visitComplexity(child, filePath, scope, metrics);
     }
   }
 
@@ -299,17 +348,101 @@ export class CSharpAdapter extends TreeSitterAdapter {
     return false;
   }
 
+  /**
+   * A base type's symbol id from the registry, in the order C# looks names up: (a) the file's own
+   * namespace, (b) each namespace of a `using` directive, (c) the global namespace, then (d) a name
+   * ending in `.<Base>` that only one C# class or interface of the registry has (a property, a method or
+   * another language's symbol never counts). Anything else (also an ambiguous suffix) falls back to
+   * `<namespace>.<Base>::<Base>::<kind>`. Each lookup is O(1) on maps built once per registry.
+   */
   private resolveBaseType(baseName: string, namespace: string, defaultKind: SymbolKind): string {
-    // Check symbol registry first
-    const prefix = namespace ? `${namespace}.${baseName}` : baseName;
-    for (const [id] of this.symbolRegistry) {
-      if (id.includes(`::${prefix}::`)) return id;
-      if (id.includes(`::${baseName}::`)) return id;
+    const lookup = this.registryLookup();
+    const candidates = [
+      namespace ? `${namespace}.${baseName}` : baseName,
+      ...this.usings.map(using => `${using}.${baseName}`),
+      baseName,
+    ];
+    for (const name of candidates) {
+      const id = lookup.byName.get(name);
+      if (id !== undefined) return id;
     }
+    const suffixMatches = lookup.typesBySuffix.get(baseName);
+    if (suffixMatches?.length === 1) return suffixMatches[0]!;
     // Fallback: assume same namespace
     const qualifiedName = namespace ? `${namespace}.${baseName}` : baseName;
     return `${qualifiedName}::${baseName}::${defaultKind}`;
   }
+
+  /** The lookup maps of the current registry; rebuilt when the registry is replaced or changes size. */
+  private registryLookup(): RegistryLookup {
+    const registry = this.symbolRegistry;
+    const cached = this.lookup;
+    if (cached && cached.registry === registry && cached.size === registry.size) return cached;
+    const built = buildRegistryLookup(registry);
+    this.lookup = built;
+    return built;
+  }
+}
+
+/** Registry lookups for base types, built in one pass over the registry. */
+interface RegistryLookup {
+  readonly registry: ReadonlyMap<string, SymbolKind>;
+  readonly size: number;
+  /** A name between `::` separators of an id, to the first id (registry order) that has it there. */
+  readonly byName: ReadonlyMap<string, string>;
+  /** Every dot suffix of the name of a C# class or interface (`.cs` file), to those ids in registry order. */
+  readonly typesBySuffix: ReadonlyMap<string, readonly string[]>;
+}
+
+/**
+ * `byName` answers what `id.includes(`::${name}::`)` over the registry in order answers: the key is any run
+ * of inner segments of the id (for `file::name::kind`, the name), first id wins.
+ */
+function buildRegistryLookup(registry: Map<string, SymbolKind>): RegistryLookup {
+  const byName = new Map<string, string>();
+  const typesBySuffix = new Map<string, string[]>();
+  for (const [id, kind] of registry) {
+    const parts = id.split('::');
+    for (let first = 1; first < parts.length - 1; first++) {
+      let key = parts[first]!;
+      for (let last = first; last < parts.length - 1; last++) {
+        if (last > first) key = `${key}::${parts[last]}`;
+        if (!byName.has(key)) byName.set(key, id);
+      }
+    }
+    if ((kind !== 'class' && kind !== 'interface') || !(parts[0] ?? '').toLowerCase().endsWith('.cs')) continue;
+    const name = parts[1] ?? '';
+    for (let dot = name.indexOf('.'); dot !== -1; dot = name.indexOf('.', dot + 1)) {
+      const suffix = name.slice(dot + 1);
+      const ids = typesBySuffix.get(suffix);
+      if (ids) {
+        if (ids[ids.length - 1] !== id) ids.push(id);
+      } else {
+        typesBySuffix.set(suffix, [id]);
+      }
+    }
+  }
+  return { registry, size: registry.size, byName, typesBySuffix };
+}
+
+/** Namespaces named by plain `using X.Y;` directives anywhere in the file (not aliases, not `using static`). */
+function usingNamespaces(root: SyntaxNode): string[] {
+  const namespaces: string[] = [];
+  for (const directive of root.descendantsOfType('using_directive')) {
+    if (directive.children.some(c => c.type === '=' || c.type === 'static')) continue;
+    const name = directive.children.find(c => c.type === 'identifier' || c.type === 'qualified_name');
+    if (name) namespaces.push(name.text.replace(/\s+/g, ''));
+  }
+  return namespaces;
+}
+
+/**
+ * The namespace a file-scoped `namespace X;` gives every later sibling, as Roslyn does
+ * (C# allows it only before the file's type declarations).
+ */
+function fileScopedNamespace(declaration: SyntaxNode, outer: string): string {
+  const name = (declaration.childForFieldName('name')?.text ?? '').replace(/\s+/g, '');
+  return outer ? `${outer}.${name}` : name;
 }
 
 // ── Attribute annotations (syntax tier) ─────────────────────────

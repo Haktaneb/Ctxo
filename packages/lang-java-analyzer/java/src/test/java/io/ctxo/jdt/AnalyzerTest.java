@@ -72,6 +72,32 @@ class AnalyzerTest {
   }
 
   @Test
+  void indexesMembersOfEnumConstantBodies(@org.junit.jupiter.api.io.TempDir Path root) throws Exception {
+    // The syntax tier and the fact evidence name a method in an enum constant body; so must the symbols.
+    Path file = root.resolve("Tier.java");
+    Files.writeString(file, String.join("\n",
+        "enum Tier {",
+        "  GOLD {",
+        "    @Deprecated int bonus = 1;",
+        "    void q(int x) { if (x == 8) {} }",
+        "  },",
+        "  SILVER;",
+        "  int rank() { return 0; }",
+        "}",
+        ""));
+    Dtos.FileResult fr = new Analyzer(root.toString(), new String[0]).analyze(List.of(file.toString())).get(0);
+    List<String> ids = new ArrayList<>();
+    for (Dtos.Sym s : fr.symbols) ids.add(s.symbolId.substring(s.symbolId.indexOf("::") + 2));
+    Collections.sort(ids);
+    assertEquals(List.of("Tier::type", "bonus::variable", "q::method", "rank::method"), ids);
+    Dtos.Sym q = fr.symbols.stream().filter(s -> s.name.equals("q")).findFirst().orElseThrow();
+    assertEquals(3, q.startLine);
+    assertEquals(3, q.endLine);
+    Dtos.Sym bonus = fr.symbols.stream().filter(s -> s.name.equals("bonus")).findFirst().orElseThrow();
+    assertEquals("Deprecated", bonus.annotations.get(0).name);
+  }
+
+  @Test
   void emitsImportEdgeWithFullPathTarget() throws Exception {
     Path root = fixtureDir();
     List<Dtos.FileResult> results = new Analyzer(root.toString(), new String[0])

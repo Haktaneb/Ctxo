@@ -1,0 +1,35 @@
+export const MAX_RETRIES = 3;
+export const settlementDays = 3;
+
+export function canBorrow(openLoans: number, member: string | null) {
+  if (member === null) return false;
+  if (openLoans >= 5 && member !== '') return false;
+  return true;
+}
+
+export function fee(tier: string) {
+  switch (tier) {
+    case 'gold':
+      return 0;
+    case '':
+      return 1;
+    default:
+      return 2.5;
+  }
+}
+
+export function key(email: string) {
+  return email.trim().toLowerCase();
+}
+
+export function remind(send: () => void) {
+  setTimeout(send, 30_000);
+}
+
+export const client = { timeout: 5000 };
+
+function label(days: number) {
+  return days > 14 ? 'late' : 'ok';
+}
+
+export const note = 'if (x > 5) timeout = 30';

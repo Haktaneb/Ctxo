@@ -18,6 +18,7 @@ import {
   linkedRulesPlatforms,
   planRules,
   resolveRulesTier,
+  rulesDomainLine,
   rulesFileHoldReasons,
   skillInstallWarnings,
   type InstallResult,
@@ -514,7 +515,10 @@ export class InitCommand {
       guard = result.warning === undefined;
     }
 
-    if (parts.has('rules')) {
+    /** The rows of the rules step, so a domain install later in the run can re-render them (#191). */
+    let rulesRows: { readonly at: number; readonly count: number; readonly domain: boolean } | undefined;
+    const applyRules = (domainLine: boolean): InitResult[] => {
+      const rows: InitResult[] = [];
       // Read once per run, so an invalid config warns once, not once per platform.
       const gate = gateEnabled(root);
       // A real run reads the tier from disk after the skills and guard steps; a dry run counts what it would install.
@@ -529,21 +533,31 @@ export class InitCommand {
       for (const id of toolIds) {
         // A file linked to a held one (an AGENTS.md that is CLAUDE.md) is held too: a write would go through the link.
         if (rulesFileHoldReasons(root, id, holdOptions) !== undefined) {
-          results.push(...this.heldRows(id));
+          rows.push(...this.heldRows(id));
           continue;
         }
         const tier = this.rulesTier(id, planned, gate);
         if (!dryRun) {
-          results.push(installRules(root, id, { tier }));
+          rows.push(installRules(root, id, { tier, domain: domainLine }));
           continue;
         }
         // The real run reads a linked name after the earlier name's write landed; plan it against that content.
         const sibling = linkedRulesPlatforms(root, id).find((other) => plannedContent.has(other));
         const existing = sibling !== undefined ? plannedContent.get(sibling) : undefined;
-        const plan = planRules(root, id, { tier, ...(existing !== undefined ? { existing } : {}) });
+        const plan = planRules(root, id, { tier, domain: domainLine, ...(existing !== undefined ? { existing } : {}) });
         if (plan.content !== undefined) plannedContent.set(id, plan.content);
-        results.push(plan.result);
+        rows.push(plan.result);
       }
+      return rows;
+    };
+
+    if (parts.has('rules')) {
+      // The domain line when the committed state sets up the domain layer or @ctxo/domain loads (#191), or (a
+      // dry run) when the domain part would set it up.
+      const domainLine = rulesDomainLine(root, await this.domainModuleLoaded()) || (dryRun && parts.has('domain'));
+      const rows = applyRules(domainLine);
+      rulesRows = { at: results.length, count: rows.length, domain: domainLine };
+      results.push(...rows);
     }
 
     if (parts.has('mcp')) {
@@ -569,6 +583,16 @@ export class InitCommand {
         results.push(...(await this.applyDomain(dryRun, domain)));
       } finally {
         domain.resume?.();
+      }
+      // The domain part set up the domain layer (its config, registry or package) after the rules step: render
+      // the rules again, with the domain line. A file the first pass created keeps its `created` row.
+      const before = rulesRows;
+      if (!dryRun && before !== undefined && !before.domain && rulesDomainLine(root, await this.domainModuleLoaded())) {
+        const first = results.slice(before.at, before.at + before.count);
+        const again = applyRules(true).map((row) =>
+          row.action === 'updated' && first.some((old) => old.file === row.file && old.action === 'created') ? { ...row, action: 'created' as const } : row,
+        );
+        results.splice(before.at, before.count, ...again);
       }
     }
 
@@ -619,6 +643,26 @@ export class InitCommand {
     } catch (err) {
       this.domainFailed = true;
       return [{ file: '@ctxo/domain', action: 'skipped', warning: `@ctxo/domain init failed: ${(err as Error).message}` }];
+    }
+  }
+
+  /**
+   * Whether @ctxo/domain is installed and loads (the module loader's answer, memoized; a `loadDomainInit(true)`
+   * after an install refreshes it). The rules block carries the domain line only then (#191).
+   */
+  private async domainModuleLoaded(): Promise<boolean> {
+    try {
+      const [{ DOMAIN_MODULE_PACKAGE, loadCtxoModules }, { resolvePackageCandidates }, { createModuleHost }] = await Promise.all([
+        import('../adapters/modules/module-loader.js'),
+        import('../adapters/language/plugin-discovery.js'),
+        import('./module-host.js'),
+      ]);
+      if (resolvePackageCandidates(DOMAIN_MODULE_PACKAGE, this.projectRoot, this.cliAnchor).length === 0) return false;
+      const host = createModuleHost({ projectRoot: this.projectRoot, mode: 'cli' });
+      const { modules } = await loadCtxoModules(host, { cliAnchor: this.cliAnchor });
+      return modules.some((module) => module.registration.id === 'domain');
+    } catch {
+      return false;
     }
   }
 

@@ -209,14 +209,18 @@ describe('domainInit', () => {
     const content = rec.skills[0]!.content;
     expect(content).toContain('name: ctxo-domain-fold');
     expect(content).toContain(
-      'description: Use BEFORE changing code under a named domain context and BEFORE finishing a branch, to read the context\'s card and fold behaviour changes back into it.',
+      'description: Use BEFORE changing code under a named domain context, BEFORE finishing a branch, and when adopting or tuning the domain config, to read the context\'s card, fold behaviour changes back into it and discover the repository\'s conventions.',
     );
+    // #191: the skill names the discovery command, dry run first, then hand edits or --write.
+    expect(content).toContain('## When adopting or tuning the domain config');
+    expect(content).toContain('Run `ctxo domain discover` first');
+    expect(content).toContain('ctxo domain discover --write');
     expect(content).toContain('## Before changing a context\'s code');
     expect(content).toContain('## When behaviour changes');
     expect(content).toContain('## At branch finish');
     expect(content).toContain('ctxo contexts-touched --since <base>');
     expect(content).toContain('Domain-Unchanged: <id> (reason)');
-    expect(content).toContain('<!-- ctxo-skill v0.14 -->');
+    expect(content).toContain('<!-- ctxo-skill v0.17 -->');
     expect(content).not.toContain(String.fromCharCode(0x2014));
     expect(rows).toContainEqual({ file: 'claude-code/ctxo-domain-fold', action: 'created' });
   });

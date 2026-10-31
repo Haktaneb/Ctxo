@@ -22,8 +22,10 @@ import {
   type RulesBlockSpan,
   type RulesScan,
   type RulesTier,
+  type RulesVariant,
   type TextShape,
 } from '../core/agent-rules/rules-block.js';
+import { parse as parseYaml } from 'yaml';
 import { loadConfig } from '../core/config/load-config.js';
 import type { CliInstallKind } from '../core/install/install-kind.js';
 import type { ClaudeHookEntry } from '../ports/i-ctxo-module.js';
@@ -403,6 +405,39 @@ export function gateEnabled(projectRoot: string): boolean {
   return loadConfig(join(projectRoot, '.ctxo')).config.gate?.enabled !== false;
 }
 
+/** The registry path `@ctxo/domain` reads when `domain.registry` is not set. */
+const DEFAULT_DOMAIN_REGISTRY = 'docs/domain/contexts.yaml';
+
+/**
+ * Whether the repository's committed state sets up the domain layer (#191): `.ctxo/config.yaml` has a
+ * `domain` key (even an empty one), or the default registry file exists. A configured `domain.registry` is
+ * inside the `domain` key, so it counts too. Never throws.
+ */
+export function domainLayerCommitted(projectRoot: string): boolean {
+  // The raw YAML, read quietly: `loadConfig` would warn a second time about an invalid config, and a schema
+  // problem elsewhere in the file does not change whether the domain layer is set up.
+  try {
+    const parsed: unknown = parseYaml(readFileSync(join(projectRoot, '.ctxo', 'config.yaml'), 'utf-8'));
+    if (typeof parsed === 'object' && parsed !== null && Object.prototype.hasOwnProperty.call(parsed, 'domain')) return true;
+  } catch {
+    // No config, or not valid YAML: only the registry file can say domain.
+  }
+  try {
+    return existsSync(join(projectRoot, DEFAULT_DOMAIN_REGISTRY));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether a rules block carries the domain line: the committed state says the domain layer is set up, or the
+ * `@ctxo/domain` module loads on this machine. Committed state first, so teammates with and without the package
+ * render the same block (#191); the module only adds the line where nothing is committed yet.
+ */
+export function rulesDomainLine(projectRoot: string, moduleLoaded: boolean): boolean {
+  return domainLayerCommitted(projectRoot) || moduleLoaded;
+}
+
 /**
  * The rules tier for a platform from what is on disk. `planned` counts a guard or skills that a dry
  * run would install as present. A skill counts only when its file is readable and current (or from a
@@ -472,8 +507,8 @@ alwaysApply: true
 `;
 
 /** The content of a new rules file: the marked block (after the frontmatter for Cursor). */
-export function generateRules(platformId: string, tier: RulesTier = 'full'): string {
-  const block = renderRulesBlock(tier) + '\n';
+export function generateRules(platformId: string, tier: RulesTier = 'full', variant: RulesVariant = {}): string {
+  const block = renderRulesBlock(tier, variant) + '\n';
   return platformId === 'cursor' ? CURSOR_FRONTMATTER + block : block;
 }
 
@@ -527,9 +562,12 @@ export interface InstallResult {
 export function installRules(
   projectRoot: string,
   platformId: string,
-  options: { readonly tier?: RulesTier; readonly dryRun?: boolean } = {},
+  options: { readonly tier?: RulesTier; readonly dryRun?: boolean } & RulesVariant = {},
 ): InstallResult {
-  const { result, content } = planRules(projectRoot, platformId, { tier: options.tier });
+  const { result, content } = planRules(projectRoot, platformId, {
+    tier: options.tier,
+    ...(options.domain !== undefined ? { domain: options.domain } : {}),
+  });
   if (!options.dryRun && result.action !== 'skipped' && content !== undefined) {
     const filePath = join(projectRoot, result.file);
     if (result.action === 'created') mkdirSync(dirname(filePath), { recursive: true });
@@ -553,7 +591,7 @@ export interface RulesPlan {
 export function planRules(
   projectRoot: string,
   platformId: string,
-  options: { readonly tier?: RulesTier; readonly existing?: string } = {},
+  options: { readonly tier?: RulesTier; readonly existing?: string } & RulesVariant = {},
 ): RulesPlan {
   const platform = PLATFORMS.find(p => p.id === platformId);
   if (!platform) throw new Error(`Unknown platform: ${platformId}`);
@@ -561,11 +599,13 @@ export function planRules(
 
   // A file another platform also reads gets the full tier whatever the caller asked (doctor agrees).
   const tier = linkedRulesPlatforms(projectRoot, platformId).length > 0 ? 'full' : (options.tier ?? 'full');
+  // The domain line only when the caller knows @ctxo/domain is installed (#191).
+  const variant: RulesVariant = { domain: options.domain === true };
   const filePath = join(projectRoot, file);
 
   let existing = options.existing;
   if (existing === undefined) {
-    if (!existsSync(filePath)) return { result: { file, action: 'created' }, content: generateRules(platformId, tier) };
+    if (!existsSync(filePath)) return { result: { file, action: 'created' }, content: generateRules(platformId, tier, variant) };
     try {
       existing = readFileSync(filePath, 'utf-8');
     } catch (err) {
@@ -579,10 +619,10 @@ export function planRules(
 
   if (platformId === 'cursor' && textShape(existing).text.trim() === '') {
     // An empty Cursor file gets what a created one gets: the frontmatter, then the block.
-    return changed(textShape(existing).restore(generateRules(platformId, tier)));
+    return changed(textShape(existing).restore(generateRules(platformId, tier, variant)));
   }
 
-  const upsert = upsertRulesBlock(existing, renderRulesBlock(tier));
+  const upsert = upsertRulesBlock(existing, renderRulesBlock(tier, variant));
   if (upsert.kind === 'unterminated') {
     return { result: { file, action: 'skipped', warning: `${file}: ctxo rules start marker has no end marker; left unchanged` } };
   }

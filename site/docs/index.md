@@ -18,7 +18,7 @@ anti-pattern warnings, and change health scores in under 500ms.
 
 ## MCP Tools
 
-All 14 tools exposed over MCP stdio:
+All 14 core tools (18 with `@ctxo/domain`) exposed over MCP stdio:
 
 - [get_logic_slice](/mcp-tools/get-logic-slice) — symbol + transitive deps
 
@@ -29,6 +29,7 @@ Real-world side-by-side evidence:
 - [Blast Radius Analysis](/comparisons/blast-radius) — ctxo vs manual dependency tracing
 - [Dead Code Analysis](/comparisons/dead-code) — ctxo vs knip / tsr / deadcode
 - [Core Refactor Impact](/comparisons/safe-refactor) - ctxo vs coding blind (Opus 4.8, ground-truth verified)
+- [Splitting a Core Table](/comparisons/table-impact) - ctxo vs coding blind on C# + T-SQL entry points (Opus 5.5, medium and xhigh, ground-truth verified)
 
 ## External
 

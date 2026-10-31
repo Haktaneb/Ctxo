@@ -24,6 +24,7 @@ const EDGES: GraphEdge[] = [
 const FACT: CodeFact = { kind: 'endpoint', symbolId: 'src/a.fake::dbo.usp_close::procedure', line: 5, text: 'POST /close' };
 
 const extractFacts = vi.hoisted(() => vi.fn());
+const noFactsMethod = vi.hoisted(() => ({ value: false }));
 
 vi.mock('../../adapters/language/plugin-discovery.js', () => {
   const plugin: CtxoLanguagePlugin = {
@@ -37,7 +38,7 @@ vi.mock('../../adapters/language/plugin-discovery.js', () => {
       extractSymbols: async () => SYMBOLS,
       extractEdges: async () => EDGES,
       extractComplexity: async () => [],
-      extractFacts,
+      ...(noFactsMethod.value ? {} : { extractFacts }),
       isSupported: () => true,
     }),
   };
@@ -119,5 +120,66 @@ describe('IndexCommand with a protocol v2 plugin', () => {
     expect(extractFacts).toHaveBeenCalled();
     const entries = new JsonIndexReader(join(dir, '.ctxo')).readAll();
     expect(entries[0]!.facts).toEqual([FACT]);
+  });
+
+  function turnFactsOn(): void {
+    mkdirSync(join(dir, '.ctxo'), { recursive: true });
+    writeFileSync(join(dir, '.ctxo', 'config.yaml'), 'version: "1.0"\nindex:\n  facts: true\n', 'utf-8');
+  }
+
+  it('a fact-capable adapter that finds nothing writes facts: []', async () => {
+    extractFacts.mockResolvedValue([]);
+    turnFactsOn();
+    await new IndexCommand(dir).run({ skipHistory: true });
+    const raw = readFileSync(join(dir, '.ctxo', 'index', 'src', 'a.fake.json'), 'utf-8');
+    expect(raw.replace(/\s+/g, '')).toContain('"facts":[]');
+    expect(new JsonIndexReader(join(dir, '.ctxo')).readAll()[0]!.facts).toEqual([]);
+  });
+
+  it('an adapter without extractFacts writes no facts key', async () => {
+    // The mocked adapter carries the method as a property; undefined stands for an adapter without it.
+    noFactsMethod.value = true;
+    try {
+      turnFactsOn();
+      await new IndexCommand(dir).run({ skipHistory: true });
+      const jsonFile = join(dir, '.ctxo', 'index', 'src', 'a.fake.json');
+      expect(Object.keys(JSON.parse(readFileSync(jsonFile, 'utf-8')))).not.toContain('facts');
+    } finally {
+      noFactsMethod.value = false;
+    }
+  });
+
+  // Characterization test (preflight Q14): green before the change, it pins that an incremental run
+  // rewrites only the re-indexed entries and leaves the facts of untouched files alone.
+  it('ctxo index --commit HEAD keeps facts of untouched files', async () => {
+    const factFor = (path: string, source: string): CodeFact => ({
+      kind: 'endpoint',
+      symbolId: `${path}::dbo.usp_close::procedure`,
+      line: 1,
+      text: source.includes('v2') ? 'POST /v2' : 'POST /v1',
+    });
+    extractFacts.mockImplementation(async (path: string, source: string) => [factFor(path, source)]);
+    writeFileSync(join(dir, 'src', 'b.fake'), 'create table dbo.b (id int);\n', 'utf-8');
+    execFileSync('git', [...IDENTITY, 'add', '.'], { cwd: dir, stdio: 'ignore' });
+    execFileSync('git', [...IDENTITY, 'commit', '-m', 'add b'], { cwd: dir, stdio: 'ignore' });
+    turnFactsOn();
+
+    await new IndexCommand(dir).run({ skipHistory: true });
+    const aJson = join(dir, '.ctxo', 'index', 'src', 'a.fake.json');
+    const bJson = join(dir, '.ctxo', 'index', 'src', 'b.fake.json');
+    const aFacts = JSON.parse(readFileSync(aJson, 'utf-8')).facts;
+    expect(aFacts).toEqual([
+      { kind: 'endpoint', symbolId: 'src/a.fake::dbo.usp_close::procedure', line: 1, text: 'POST /v1' },
+    ]);
+
+    writeFileSync(join(dir, 'src', 'b.fake'), 'create table dbo.b (id int); -- v2\n', 'utf-8');
+    execFileSync('git', [...IDENTITY, 'add', 'src/b.fake'], { cwd: dir, stdio: 'ignore' });
+    execFileSync('git', [...IDENTITY, 'commit', '-m', 'change b'], { cwd: dir, stdio: 'ignore' });
+    await new IndexCommand(dir).run({ commit: 'HEAD', skipHistory: true });
+
+    expect(JSON.parse(readFileSync(aJson, 'utf-8')).facts).toEqual(aFacts);
+    expect(JSON.parse(readFileSync(bJson, 'utf-8')).facts).toEqual([
+      { kind: 'endpoint', symbolId: 'src/b.fake::dbo.usp_close::procedure', line: 1, text: 'POST /v2' },
+    ]);
   });
 });

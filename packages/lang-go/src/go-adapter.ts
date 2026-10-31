@@ -3,7 +3,12 @@ import type { SyntaxNode } from 'tree-sitter';
 import { TreeSitterAdapter } from './tree-sitter-adapter.js';
 import { createLogger } from './logger.js';
 import { structTagAnnotations, type FieldTag } from './struct-tags.js';
-import type { SymbolNode, GraphEdge, ComplexityMetrics } from '@ctxo/plugin-api';
+import type { CodeFact, SymbolNode, GraphEdge, ComplexityMetrics } from '@ctxo/plugin-api';
+import type { FactOptions } from './facts/fact-types.js';
+import { collectTreeSitterEvidence } from './facts/tree-sitter-evidence.js';
+import { finishFacts } from './facts/finish-facts.js';
+import { decodeGoStringLiteral } from './facts/go-string-literal.js';
+import { receiverTypeName } from './receiver-type.js';
 
 const log = createLogger('ctxo:lang-go');
 
@@ -17,8 +22,12 @@ const GO_BRANCH_TYPES = [
 export class GoAdapter extends TreeSitterAdapter {
   readonly extensions = ['.go'] as const;
 
-  constructor() {
+  /** Fact detector options, set when the host requests facts (`capabilities.facts`); without them `extractFacts` returns `[]`. */
+  readonly facts: FactOptions | undefined;
+
+  constructor(options: { readonly facts?: FactOptions } = {}) {
     super(GoLanguage);
+    this.facts = options.facts;
   }
 
   async extractSymbols(filePath: string, source: string): Promise<SymbolNode[]> {
@@ -89,6 +98,20 @@ export class GoAdapter extends TreeSitterAdapter {
     }
   }
 
+  /**
+   * Code facts (protocol v2) from the CST, by names and import paths (see `collectTreeSitterEvidence`), finished by
+   * the shared rules with the Go string decoder. `[]` without the `facts` option. A failure propagates to the caller;
+   * `GoCompositeAdapter`, the plugin's adapter boundary, logs it and returns `[]` (B-M1).
+   */
+  async extractFacts(filePath: string, source: string): Promise<CodeFact[]> {
+    const options = this.facts;
+    if (!options) return [];
+    const tree = this.parse(source);
+    const symbols = await this.extractSymbols(filePath, source);
+    const evidence = collectTreeSitterEvidence(tree.rootNode, filePath, symbols, options);
+    return finishFacts(filePath, evidence, symbols, options, decodeGoStringLiteral);
+  }
+
   async extractComplexity(filePath: string, source: string): Promise<ComplexityMetrics[]> {
     try {
       const tree = this.parse(source);
@@ -141,10 +164,7 @@ export class GoAdapter extends TreeSitterAdapter {
       if (param.type === 'parameter_declaration') {
         // Find type identifier — may be pointer (*Type) or plain (Type)
         const typeNode = param.childForFieldName('type');
-        if (typeNode) {
-          const text = typeNode.text;
-          return text.replace(/^\*/, '');
-        }
+        if (typeNode) return receiverTypeName(typeNode.text);
       }
     }
     return undefined;

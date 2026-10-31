@@ -274,4 +274,19 @@ describe('SymbolTokenizer', () => {
       expect(tokens).toContain('contextassembler');
     });
   });
+
+  describe('tokenizeText', () => {
+    it('tokenizeText splits prose, camelCase words and rule IDs and keeps repeats', () => {
+      const tokenizer = new SymbolTokenizer();
+      expect(tokenizer.tokenizeText('A member holds at most five loans. LoanPolicy LEND-03 loans')).toEqual([
+        'member', 'holds', 'most', 'five', 'loans', 'loan', 'policy', 'lend', '03', 'loans',
+      ]);
+    });
+
+    it('tokenizeText returns nothing for empty or punctuation-only text', () => {
+      const tokenizer = new SymbolTokenizer();
+      expect(tokenizer.tokenizeText('')).toEqual([]);
+      expect(tokenizer.tokenizeText(' ... !? ')).toEqual([]);
+    });
+  });
 });

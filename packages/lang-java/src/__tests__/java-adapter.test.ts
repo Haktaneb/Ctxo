@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { JavaAdapter } from '../java-adapter.js';
+import { DEFAULT_FACT_OPTIONS } from '../facts/fact-options.js';
 
 const FILE = 'src/main/java/com/example/Foo.java';
 
@@ -33,6 +34,34 @@ describe('JavaAdapter.extractSymbols', () => {
     expect(fooMethods).toHaveLength(1); // the constructor
     expect(byName('count')).toMatchObject({ kind: 'variable' });
     expect(byName('run')).toMatchObject({ kind: 'method' });
+  });
+
+  it('indexes the members the JDT tier indexes: enum body declarations, interface constants, compact constructors, enum constant and anonymous class bodies', async () => {
+    const source = [
+      'interface Limits { int RETRY_LIMIT = 4, MAX = 5; void check(); }',
+      '@interface Cfg { int DEFAULT_TTL = 9; }',
+      'record Range(int a) { Range { } }',
+      'enum Tier {',
+      '  GOLD { void q() {} int bonus = 1; };',
+      '  private final int rank = 0;',
+      '  Tier() {}',
+      '  int rank() { return rank; }',
+      '}',
+      'class Host {',
+      '  Runnable r = new Runnable() { public void run() {} };',
+      '  void m() { new Object() { int seen; void z() {} }; }',
+      '}',
+    ].join('\n');
+    const symbols = await new JavaAdapter().extractSymbols(FILE, source);
+    const ids = symbols.map((s) => s.symbolId.slice(FILE.length + 2)).sort();
+    expect(ids).toEqual([
+      'Cfg::interface', 'DEFAULT_TTL::variable', 'Host::class', 'Limits::interface', 'MAX::variable',
+      'RETRY_LIMIT::variable', 'Range::class', 'Range::method', 'Tier::method', 'Tier::type', 'bonus::variable',
+      'check::method', 'm::method', 'q::method', 'r::variable', 'rank::method', 'rank::variable', 'run::method',
+      'seen::variable', 'z::method',
+    ]);
+    expect(symbols.find((s) => s.name === 'RETRY_LIMIT')).toMatchObject({ startLine: 0, endLine: 0 });
+    expect(symbols.find((s) => s.name === 'q')).toMatchObject({ kind: 'method', startLine: 4, endLine: 4 });
   });
 
   it('returns [] on unparseable source without throwing', async () => {
@@ -205,5 +234,25 @@ describe('JavaAdapter annotations (syntax tier)', () => {
     const d = await annotationsOf(source, 'd::method');
     expect(d![0]!.args![0]).toHaveLength(200);
     expect(d![1]!.named!.note).toHaveLength(200);
+  });
+});
+
+describe('JavaAdapter.extractFacts failure (B-M1)', () => {
+  it('an internal failure is warned on stderr and gives [] (warn-and-continue)', async () => {
+    const adapter = new JavaAdapter({ facts: DEFAULT_FACT_OPTIONS });
+    vi.spyOn(adapter as unknown as { parse(source: string): unknown }, 'parse').mockImplementation(() => {
+      throw new RangeError('Maximum call stack size exceeded');
+    });
+    const writes: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: string | Uint8Array) => {
+      writes.push(String(chunk));
+      return true;
+    });
+    try {
+      expect(await adapter.extractFacts('src/A.java', 'class A {}')).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(writes.join('')).toContain('[ctxo:lang-java] fact extraction failed for src/A.java: Maximum call stack size exceeded');
   });
 });

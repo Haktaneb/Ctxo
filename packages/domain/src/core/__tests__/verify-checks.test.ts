@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { createModuleHost } from '@ctxo/cli/internal';
 import { parseCard, type ParsedCard } from '../card-parser.js';
 import { DEFAULT_DOMAIN_CONFIG, type DomainConfig } from '../domain-config.js';
+import type { UnresolvedRef } from '../domain-graph.js';
 import { parseRegistry, type LoadedRegistry } from '../registry.js';
+import type { RuleRef } from '../rule-id-scan.js';
 import { contextMapRows, runVerifyChecks, VERIFY_CHECKS, type CheckOutcome, type VerifyCheckId, type VerifyInput } from '../verify-checks.js';
 
 const host = createModuleHost({ cliVersion: '0.0.0', mode: 'cli', projectRoot: process.cwd() });
@@ -231,6 +233,69 @@ describe('runVerifyChecks', () => {
     expect(finding.line).toBe(7);
   });
 
+  const CARD_PATH = 'docs/domain/lending/domain.md';
+  const problem = (field: 'Tests' | 'Code', value: string, reason: 'missing-file' | 'not-a-symbol', line = 11): UnresolvedRef => ({
+    rule: 'LEND-01',
+    field,
+    value,
+    at: { file: CARD_PATH, line },
+    reason,
+  });
+
+  it('check 6 fails for a Code: or Tests: file that does not exist', () => {
+    const card = ruleCard('### LEND-01 X\nTests: `src/Nope.test.ts`\nCode: `./src/Nope.ts::Nope::class`\n');
+    const out = outcome(
+      base({
+        ...card,
+        cardRefProblems: [problem('Tests', 'src/Nope.test.ts', 'missing-file', 10), problem('Code', './src/Nope.ts::Nope::class', 'missing-file')],
+      }),
+      '6',
+    );
+    expect(out.status).toBe('fail');
+    expect(out.findings.map((f) => [f.severity, f.message, f.file, f.line, f.context])).toEqual([
+      ['error', 'LEND-01: Tests file "src/Nope.test.ts" does not exist', CARD_PATH, 9, 'lending'],
+      ['error', 'LEND-01: Code file "src/Nope.ts" does not exist', CARD_PATH, 11, 'lending'],
+    ]);
+  });
+
+  it('check 6 fails once for a Tests: value that names a directory', () => {
+    const card = ruleCard('### LEND-01 X\nTests: `src/Lending`\n');
+    const input = base({
+      ...card,
+      fileExists: (p) => p === 'src/Lending' || p === 'docs/domain/lending/domain.md',
+      isRepoFile: (p) => p === 'docs/domain/lending/domain.md',
+      cardRefProblems: [problem('Tests', 'src/Lending', 'missing-file', 10)],
+    });
+    const out = outcome(input, '6');
+    expect(out.status).toBe('fail');
+    expect(out.findings.map((f) => [f.message, f.line])).toEqual([['LEND-01: Tests file "src/Lending" does not exist', 9]]);
+  });
+
+  it('check 6 warns for an unindexed symbol ID and accepts an indexed one', () => {
+    const gone = 'src/Lending/Loan.ts::Loan.Gone::method';
+    const test = 'src/Lending/Loan.test.ts::LoanTests.Gone::method';
+    const card = ruleCard(`### LEND-01 X\nTests: \`${test}\`\nCode: \`src/Lending/Loan.ts::Loan::class\`, \`${gone}\`\n`);
+    const warned = outcome(base({ ...card, cardRefProblems: [problem('Tests', test, 'not-a-symbol', 10), problem('Code', gone, 'not-a-symbol')] }), '6');
+    expect(warned.status).toBe('warn');
+    expect(warned.findings.map((f) => [f.severity, f.message, f.file, f.line])).toEqual([
+      ['warning', `LEND-01: Tests: "${test}" is not an indexed symbol; it links to its file`, CARD_PATH, 10],
+      ['warning', `LEND-01: Code: "${gone}" is not an indexed symbol; it links to its file`, CARD_PATH, 11],
+    ]);
+    expect(outcome(base({ ...card, cardRefProblems: [] }), '6').status).toBe('pass');
+  });
+
+  it('check 6 warns for a production rule: comment with a rule prefix and ignores other prefixes', () => {
+    const mk = (file: string, line: number, id: string): RuleRef => ({ file, line, raw: id, id, kind: 'rule-comment' });
+    const out = outcome(
+      base({ codeRuleRefs: [mk('src/Lending/Loan.ts', 4, 'LEND-99'), mk('tools/lint.py', 2, 'E-501'), mk('src/Lending/Loan.ts', 4, 'LEND-99')] }),
+      '6',
+    );
+    expect(out.status).toBe('warn');
+    expect(out.findings.map((f) => [f.severity, f.message, f.file, f.line])).toEqual([
+      ['warning', 'rule: comment names unknown rule LEND-99', 'src/Lending/Loan.ts', 4],
+    ]);
+  });
+
   it('check 7 skips external URLs and resolves URL-encoded paths and anchors', () => {
     const text =
       GOOD_CARD +
@@ -338,5 +403,96 @@ describe('runVerifyChecks', () => {
     expect(outcomes.filter((o) => o.status === 'fail')).toEqual([]);
     expect(outcomes.find((o) => o.id === '4b')!.status).toBe('warn');
     expect(outcomes.find((o) => o.id === '9')!.status).toBe('pass');
+  });
+});
+
+describe('check 12: shadow-spec resolutions', () => {
+  const FILE = 'docs/domain/lending/shadow-specs.yaml';
+  const STALE = 'literal-comparison | Loan.canBorrow | loans.length >= 9';
+  const UNKNOWN = 'literal-comparison | Loan.canBorrow | loans.length >= 5';
+
+  it('check 12 passes without shadow-specs files', () => {
+    expect(outcome(base(), '12')).toEqual({ id: '12', title: 'Shadow-spec resolutions', status: 'pass', findings: [] });
+    const empty = base({ shadowSpecs: [{ context: 'lending', path: FILE, stale: [], unknownRules: [] }], orphanShadowSpecs: [] });
+    expect(outcome(empty, '12').status).toBe('pass');
+  });
+
+  it('stale entries, unknown rules and orphan files warn', () => {
+    const out = outcome(
+      base({
+        shadowSpecs: [
+          {
+            context: 'lending',
+            path: FILE,
+            parsed: { entries: [], problems: [{ line: 7, severity: 'warning', message: 'repeated fingerprint; the first entry wins' }] },
+            stale: [{ fingerprint: STALE, resolution: { notARule: 'old' }, line: 1 }],
+            unknownRules: [{ fingerprint: UNKNOWN, resolution: { rule: 'LEND-99' }, line: 4 }],
+          },
+        ],
+        orphanShadowSpecs: ['docs/domain/gone/shadow-specs.yaml'],
+      }),
+      '12',
+    );
+    expect(out.status).toBe('warn');
+    expect(out.findings).toEqual([
+      { check: '12', severity: 'warning', message: 'repeated fingerprint; the first entry wins', file: FILE, line: 7, context: 'lending' },
+      {
+        check: '12',
+        severity: 'warning',
+        message: `stale resolution "${STALE}" matches no candidate of lending`,
+        file: FILE,
+        line: 1,
+        context: 'lending',
+      },
+      { check: '12', severity: 'warning', message: 'resolution names unknown rule LEND-99', file: FILE, line: 4, context: 'lending' },
+      { check: '12', severity: 'warning', message: 'docs/domain/gone/shadow-specs.yaml belongs to no context' },
+    ]);
+  });
+
+  it('an entry both stale and with an unknown rule gives two findings, never a sum', () => {
+    const entry = { fingerprint: UNKNOWN, resolution: { rule: 'LEND-99' }, line: 2 } as const;
+    const out = outcome(base({ shadowSpecs: [{ context: 'lending', path: FILE, stale: [entry], unknownRules: [entry] }] }), '12');
+    expect(out.findings.map((f) => f.message)).toEqual([
+      `stale resolution "${UNKNOWN}" matches no candidate of lending`,
+      'resolution names unknown rule LEND-99',
+    ]);
+  });
+
+  it('a broken file is an error', () => {
+    const message = 'the file must be a YAML list of { fingerprint, resolution } entries';
+    const out = outcome(
+      base({
+        shadowSpecs: [
+          { context: 'lending', path: FILE, parsed: { entries: [], problems: [{ line: 3, severity: 'error', message }] }, stale: [], unknownRules: [] },
+        ],
+      }),
+      '12',
+    );
+    expect(out.status).toBe('fail');
+    expect(out.findings).toEqual([{ check: '12', severity: 'error', message, file: FILE, line: 3, context: 'lending' }]);
+  });
+
+  it('candidates that could not be built give one warning when a file has entries', () => {
+    const REASON = 'The shadow-spec candidates could not be built: lexer tripped.';
+    const entry = { fingerprint: UNKNOWN, resolution: { notARule: 'x' }, line: 1 } as const;
+    const withEntry = { context: 'lending', path: FILE, parsed: { entries: [entry], problems: [] }, stale: [], unknownRules: [] };
+    const out = outcome(base({ shadowSpecs: [withEntry], candidatesUnavailable: REASON }), '12');
+    expect(out.status).toBe('warn');
+    expect(out.findings).toEqual([
+      { check: '12', severity: 'warning', message: `stale resolutions were not checked: ${REASON}` },
+    ]);
+    // Nothing to check without entries: no finding.
+    const empty = { ...withEntry, parsed: { entries: [], problems: [] } };
+    expect(outcome(base({ shadowSpecs: [empty], candidatesUnavailable: REASON }), '12').status).toBe('pass');
+  });
+
+  it('registry problems skip check 12', () => {
+    const outcomes = runVerifyChecks(base({ registry: loaded(BAD_REGISTRY), orphanShadowSpecs: ['x/shadow-specs.yaml'] }));
+    expect(outcomes.map((o) => o.id)).toEqual([...VERIFY_CHECKS]);
+    expect(outcomes.at(-1)).toEqual({ id: '12', title: 'Shadow-spec resolutions', status: 'skipped', findings: [] });
+  });
+
+  it('VERIFY_CHECKS ends with 12', () => {
+    expect(VERIFY_CHECKS).toEqual(['1', '2', '3', '4a', '4b', '5', '6', '7', '8', '9', '10', '11', '12']);
   });
 });

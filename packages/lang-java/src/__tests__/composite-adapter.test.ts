@@ -12,6 +12,7 @@ vi.mock('../analyzer/jar-resolve.js', () => ({
 }));
 
 import { JavaCompositeAdapter } from '../composite-adapter.js';
+import { DEFAULT_FACT_OPTIONS } from '../facts/fact-options.js';
 import { resolveAnalyzerJar, analyzerPackageVersion } from '../analyzer/jar-resolve.js';
 
 describe('JavaCompositeAdapter (syntax fallback)', () => {
@@ -28,6 +29,18 @@ describe('JavaCompositeAdapter (syntax fallback)', () => {
     expect(symbols.find((s) => s.name === 'A')?.kind).toBe('class');
     const complexity = await adapter.extractComplexity('A.java', 'class A { void m() { if (true) {} } }');
     expect(complexity.find((c) => c.symbolId === 'A.java::m::method')).toBeDefined();
+  });
+
+  it('the syntax tier gets the facts option (Q8) and gives facts only with it', async () => {
+    const source = 'class A { boolean m(int x) { return x > 7 ? true : false; } }';
+    const withFacts = new JavaCompositeAdapter({ facts: DEFAULT_FACT_OPTIONS });
+    await withFacts.initialize('/tmp/project');
+    expect(withFacts.getTier()).toBe('syntax');
+    expect((await withFacts.extractFacts('A.java', source)).map((f) => `${f.symbolId} ${f.text}`)).toEqual(['A.java::m::method x > 7']);
+
+    const withoutFacts = new JavaCompositeAdapter();
+    await withoutFacts.initialize('/tmp/project');
+    expect(await withoutFacts.extractFacts('A.java', source)).toEqual([]);
   });
 
   it('reports .java support', () => {

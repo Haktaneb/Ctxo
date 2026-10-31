@@ -1,15 +1,25 @@
+import { createHash } from 'node:crypto';
 import { relative } from 'node:path';
-import type { SymbolNode, GraphEdge, ComplexityMetrics, SymbolKind, ILanguageAdapter } from '@ctxo/plugin-api';
+import type { CodeFact, SymbolNode, GraphEdge, ComplexityMetrics, SymbolKind, ILanguageAdapter } from '@ctxo/plugin-api';
 import { createLogger } from '../logger.js';
 import { structTagAnnotations } from '../struct-tags.js';
 import { detectGoToolchain } from './toolchain-detect.js';
 import { discoverGoModule, findCtxoGoAnalyzerSource } from './module-discovery.js';
 import { ensureAnalyzerBinary } from './binary-build.js';
 import { sqlEdgesFromCallSites } from '../sql-edges.js';
-import { runBatchAnalyze, type AnalyzerFileResult, type AnalyzerBatchResult } from './analyzer-process.js';
+import { runBatchAnalyze, type AnalyzerFactEvidence, type AnalyzerFileResult, type AnalyzerBatchResult } from './analyzer-process.js';
+import type { DurationUnit, FactEvidence, FactOptions, LiteralKind } from '../facts/fact-types.js';
+import { finishFacts } from '../facts/finish-facts.js';
+import { decodeGoStringLiteral } from '../facts/go-string-literal.js';
+import { GoAdapter } from '../go-adapter.js';
 
 const log = createLogger('ctxo:lang-go');
 const VALID_SYMBOL_ID = /^.+::.+::.+$/;
+
+/** The syntax-tier fact source for files whose bytes differ from the batch's (see `extractFacts`). */
+export interface GoSyntaxFacts {
+  extractFacts(filePath: string, source: string): Promise<CodeFact[]>;
+}
 
 /**
  * Full-tier Go adapter. Owns the analyzer binary lifecycle and an
@@ -33,12 +43,20 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
   private timedOut = false;
   private batchFailed = false;
   private batchPromise: Promise<void> | null = null;
+  /** Set by `dispose`; a batch that finishes later is dropped. */
+  private disposed = false;
   private initialized = false;
   private readonly sqlCallSites: boolean;
   private sqlStats: { constant: number; nonConstant: number } | undefined;
+  /** Fact detector options: set when the host requests facts; without them `extractFacts` returns `[]`. */
+  readonly facts: FactOptions | undefined;
+  /** Facts of stale files: the composite's tree-sitter adapter, or one made on first use. */
+  private syntaxFacts: GoSyntaxFacts | undefined;
 
-  constructor(options: { readonly sqlCallSites?: boolean } = {}) {
+  constructor(options: { readonly sqlCallSites?: boolean; readonly facts?: FactOptions; readonly syntaxFacts?: GoSyntaxFacts } = {}) {
     this.sqlCallSites = options.sqlCallSites === true;
+    this.facts = options.facts;
+    this.syntaxFacts = options.syntaxFacts;
   }
 
   /**
@@ -59,6 +77,7 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
   }
 
   async initialize(rootDir: string): Promise<void> {
+    this.disposed = false;
     const toolchain = detectGoToolchain();
     if (!toolchain.available) {
       log.info(`Go analyzer unavailable: go ${toolchain.version ?? 'not found'} (>= 1.22 required)`);
@@ -166,6 +185,30 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
     return edges;
   }
 
+  /**
+   * Code facts (protocol v2, only with the `facts` option): the batch's evidence for the file, finished by
+   * the shared rules with the Go string literal decoder. When the source differs from the bytes the batch
+   * read (the analyzer's `factSourceHash`, for example after a `ctxo watch` save), the facts of that one file
+   * come from the tree-sitter collector instead (the tiers are built to agree), so stale evidence is never
+   * served and a save never reruns the analyzer on the whole module (B-I1). Go has no annotation routes.
+   */
+  async extractFacts(filePath: string, source: string): Promise<CodeFact[]> {
+    const options = this.facts;
+    if (!options || !this.isReady()) return [];
+    await this.ensureBatch();
+    const path = this.normalizePath(filePath);
+    const file = this.cache.get(path);
+    if (file && isStale(file, source)) {
+      this.syntaxFacts ??= new GoAdapter({ facts: options });
+      return this.syntaxFacts.extractFacts(path, source);
+    }
+    const evidence = (file?.factEvidence ?? []).map(toFactEvidence).filter((e): e is FactEvidence => e !== undefined);
+    if (evidence.length === 0) return [];
+    // The analyzer's symbol lines are 1-based; fact lines and the finisher's attribution are 0-based.
+    const symbols = (await this.extractSymbols(path, source)).map((s) => ({ ...s, startLine: s.startLine - 1, endLine: s.endLine - 1 }));
+    return finishFacts(path, evidence, symbols, options, decodeGoStringLiteral);
+  }
+
   async extractComplexity(_filePath: string, _source: string): Promise<ComplexityMetrics[]> {
     // Tree-sitter layer fills complexity — the binary intentionally emits []
     // so the composite adapter merges the two sources without contention.
@@ -173,6 +216,8 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
   }
 
   async dispose(): Promise<void> {
+    // A batch still in flight must not refill the cache after this.
+    this.disposed = true;
     this.cache.clear();
     this.deadSymbolIds.clear();
     this.batchPromise = null;
@@ -185,9 +230,14 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
     return this.batchPromise;
   }
 
+  /** The one analyzer batch of this adapter; a failure marks the analyzer as failed (the composite then uses tree-sitter). */
   private async runBatch(): Promise<void> {
     if (!this.binaryPath || !this.moduleRoot) return;
-    const result = await runBatchAnalyze(this.binaryPath, this.moduleRoot, { sqlCallSites: this.sqlCallSites });
+    const result = await runBatchAnalyze(this.binaryPath, this.moduleRoot, {
+      sqlCallSites: this.sqlCallSites,
+      ...(this.facts ? { facts: this.facts } : {}),
+    });
+    if (this.disposed) return;
     if (result.failed) {
       this.batchFailed = true;
       log.warn('Go analyzer run failed or timed out; these files fall back to the tree-sitter syntax tier');
@@ -204,6 +254,7 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
     log.info(`Go analyzer batch: ${result.totalFiles} files in ${result.elapsed}, ${result.dead.length} dead`);
   }
 
+  /** Caches the batch result. */
   private absorbBatch(result: AnalyzerBatchResult): void {
     this.cache.clear();
     this.deadSymbolIds.clear();
@@ -226,6 +277,13 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
         ...(file.sqlCallSites
           ? { sqlCallSites: file.sqlCallSites.map((s) => ({ ...s, symbolId: rewriteIdAcrossModule(s.symbolId, this.modulePathPrefix) })) }
           : {}),
+        ...(file.factEvidence
+          ? {
+              factEvidence: file.factEvidence.map((e) =>
+                e.symbolId ? { ...e, symbolId: rewriteId(e.symbolId, file.file, projectRel) } : e,
+              ),
+            }
+          : {}),
       });
     }
     if (result.sql) {
@@ -247,6 +305,46 @@ export class GoAnalyzerAdapter implements ILanguageAdapter {
     if (!this.modulePathPrefix) return (p) => p;
     const prefix = this.modulePathPrefix;
     return (p) => `${prefix}/${p}`;
+  }
+}
+
+/** True when the analyzer hashed the file and `source` is not those bytes. */
+function isStale(file: AnalyzerFileResult, source: string): boolean {
+  if (!file.factSourceHash) return false;
+  return createHash('sha256').update(source, 'utf8').digest('hex') !== file.factSourceHash;
+}
+
+const LITERAL_KINDS: ReadonlySet<string> = new Set(['number', 'string', 'char', 'boolean', 'null']);
+const DURATION_UNITS: ReadonlySet<string> = new Set(['ns', 'us', 'ms', 's', 'min', 'h', 'd']);
+
+/** The analyzer's wire record as shared `FactEvidence`, or undefined when a field its kind needs is missing. */
+function toFactEvidence(e: AnalyzerFactEvidence): FactEvidence | undefined {
+  const base = { ...(e.symbolId ? { symbolId: e.symbolId } : {}), line: e.line };
+  switch (e.kind) {
+    case 'comparison':
+      if (e.operator === undefined || e.literal === undefined || !LITERAL_KINDS.has(e.literalKind ?? '')) return undefined;
+      return { kind: 'comparison', ...base, text: e.text, operator: e.operator, literal: e.literal, literalKind: e.literalKind as LiteralKind };
+    case 'call':
+      if (e.method === undefined) return undefined;
+      return { kind: 'call', ...base, text: e.text, method: e.method, ...(e.qualifier !== undefined ? { qualifier: e.qualifier } : {}) };
+    case 'binding':
+      if (e.name === undefined || e.value === undefined) return undefined;
+      return { kind: 'binding', ...base, name: e.name, value: e.value };
+    case 'duration':
+      if (typeof e.constructor !== 'string' || e.amount === undefined || !DURATION_UNITS.has(e.unit ?? '')) return undefined;
+      return {
+        kind: 'duration',
+        ...base,
+        ...(e.name !== undefined ? { name: e.name } : {}),
+        constructor: e.constructor,
+        unit: e.unit as DurationUnit,
+        amount: e.amount,
+      };
+    case 'route':
+      if (e.verb === undefined || e.route === undefined) return undefined;
+      return { kind: 'route', ...base, verb: e.verb, route: e.route };
+    default:
+      return undefined;
   }
 }
 

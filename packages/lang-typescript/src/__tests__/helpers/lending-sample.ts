@@ -12,7 +12,10 @@ function collect(dir: string, prefix: string, out: string[]): void {
   }
 }
 
-/** 'src/x.ts' -> content ('.fixture' stripped), sorted by path in codepoint order. */
+/**
+ * 'src/x.ts' -> content ('.fixture' stripped), sorted by path in codepoint order. Line endings are LF on every OS
+ * (a Windows checkout with core.autocrlf gives CRLF), so offsets pinned by the goldens do not depend on the platform.
+ */
 export function readLendingSample(): Map<string, string> {
   const files: string[] = [];
   collect(SAMPLE_DIR, '', files);
@@ -20,7 +23,7 @@ export function readLendingSample(): Map<string, string> {
   const result = new Map<string, string>();
   for (const rel of files) {
     const target = rel.endsWith('.fixture') ? rel.slice(0, -'.fixture'.length) : rel;
-    result.set(target, readFileSync(join(SAMPLE_DIR, rel), 'utf-8'));
+    result.set(target, readFileSync(join(SAMPLE_DIR, rel), 'utf-8').replace(/\r\n/g, '\n'));
   }
   return result;
 }

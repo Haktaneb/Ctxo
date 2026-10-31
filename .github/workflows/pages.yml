@@ -9,6 +9,8 @@ on:
       - docs/public/**
       - .ctxo/index/**
       - .github/workflows/pages.yml
+      - llms.txt
+      - llms-full.txt
   workflow_dispatch:
 
 permissions:
@@ -48,6 +50,7 @@ jobs:
         run: |
           mkdir -p _site/ctxo-index
           cp -r pages/* _site/
+          cp llms.txt llms-full.txt _site/
           cp -r .ctxo/index/* _site/ctxo-index/
           touch _site/.nojekyll
           cd _site/ctxo-index && find . -name '*.json' -type f | sed 's|^\./||' | sort > manifest.txt

@@ -181,16 +181,16 @@ What you get:
 // get_architectural_overlay({ mode: "contexts" }) - summary of every candidate
 {
   "commitSha": "857052d",
-  "coverage": { "files": 515, "covered": 510, "ratio": 0.99 },
+  "coverage": { "files": 240, "covered": 236, "ratio": 0.983 },
   "candidates": [
-    { "id": 1, "label": "src/billing", "fingerprint": "9f2c1a7e04b3d856", "fileCount": 67, "cohesion": 0.81,
+    { "id": 1, "label": "src/billing", "fingerprint": "9f2c1a7e04b3d856", "fileCount": 42, "cohesion": 0.81,
       "topTerms": [{ "term": "invoice", "files": 21 }, { "term": "payment", "files": 14 }] }
   ],
   "hubs": [{ "file": "src/shared/db-factory.ts", "reasons": ["fan-in", "god-node"], "candidate": 1 }],
-  "hubsTotal": 17,
+  "hubsTotal": 6,
   "collisions": [{ "name": "Customer", "minJaccard": 0.1, "candidates": [1, 3], "occurrenceCount": 2 }],
-  "collisionsTotal": 5,
-  "unclustered": { "count": 5 },
+  "collisionsTotal": 3,
+  "unclustered": { "count": 4 },
   "hint": "Pass candidate: <id> for one candidate in full; run ctxo contexts --json for the whole view."
 }
 ```
@@ -201,7 +201,7 @@ What you get:
 
 **Refresh cadence.** The view is recomputed on every index run that re-indexes files (full or incremental) and on every post-commit hook run (`ctxo index --commit HEAD`); a run with nothing to re-index does not rewrite it. `--skip-community` skips it, and `ctxo watch` does not refresh it: run `ctxo index` before reading the view after a long watch session.
 
-**Tuning.** Defaults were validated on a private production repository (12 candidates, 99% coverage, 17 hubs, 5 collisions, a 0.85 s step in a 31 s warm index). `ctxo contexts` shows what the current config produces; change one `contextsView` setting at a time. Decisions and evidence are in [ADR-016's addendum](../architecture/ADR/adr-016-co-change-engine-and-snapshot-policy.md).
+**Tuning.** Defaults were validated on a private production repository, where coverage was close to complete and the step was a small part of a warm index. `ctxo contexts` shows what the current config produces; change one `contextsView` setting at a time. Decisions and evidence are in [ADR-016's addendum](../architecture/ADR/adr-016-co-change-engine-and-snapshot-policy.md).
 
 ## Differentiation
 

@@ -53,7 +53,7 @@ Source paths referenced below live under `packages/cli/src/`.
 
 ---
 
-## Tool Reference (14 tools)
+## Tool Reference (14 core tools, plus 4 with @ctxo/domain: 18)
 
 ### get_logic_slice
 Retrieve a symbol and all its transitive dependencies.
@@ -83,6 +83,8 @@ overallRiskScore = sum(riskScore) / (sum(riskScore) + 5) over all impacted symbo
 Also returns coChangedFiles (when co-change data exists): up to 10 files that co-change with the target's file at frequency >= 0.5 but have no graph path to it, each with file, frequency, sharedCommits. Informational: not counted in tiers, risk scores or the safe-edit gate.
 Every copy of a table, view or procedure that several files define, and its 2-part ID, reports the same dependents (those of the winning definition).
 
+With @ctxo/domain and a domain graph: `rulesAffected` (card rules linked to the target or an impacted symbol, target first; each `{ ruleId, title, context, card, via: [{ symbolId, link: code|test }] (up to 5), viaCount }`) and `cardsToUpdate` (`{ context, card }`, registry order). Capped at 50 with `<name>Total`.
+
 When to use: BEFORE modifying any symbol, including a SQL table, view or procedure.
 Instead of: get_logic_slice (forward deps), get_pr_impact (PR-level).
 
@@ -106,6 +108,8 @@ Parameters:
 - maxCommits (number, optional): Limit to N most recent commits
 
 Returns: commitHistory array + antiPatternWarnings (reverts, rollbacks, undo patterns), and driftSignals when a community snapshot exists. driftSignals carries confidence (low below 3 distinct commits, medium 3-6, high 7+), distinctCommits (different commits in the snapshot history, other than the current one), snapshotsAvailable (history entries passed in, kept for compatibility) and an optional hint.
+
+With @ctxo/domain and a domain graph: `decisions`, up to 5 dated card decisions of the symbol's context (those naming a rule linked to the symbol first, each group newest first; `decisionsTotal` when more), each `{ id, date, text, card, line, rules, provenance }`; provenance entries are `{ kind: "file", path, exists, label? }` or `{ kind: "external", value }` (never fetched). `[]` when the file has no single owning context.
 
 When to use: Understanding WHY code was written this way, checking for problem history.
 Pair with: get_change_intelligence (complexity/churn scores).
@@ -150,6 +154,8 @@ Task types:
 
 Context entries that depend on the symbol (its blast radius) carry an optional confidence tier (confirmed|likely|potential); co-change history can raise potential to likely. Entries carry no symbol annotations (use get_logic_slice level 4). A 2-part data ID (`dbo.loans::table`) is accepted.
 
+With @ctxo/domain and a domain graph: `cardExcerpt` `{ context?, card?, rules: [{ ruleId, title, linkedTo: target|neighbour, text? }], terms: [{ term, definition }], contracts?, tokens, omitted }`. Up to a quarter of tokenBudget is reserved before the code context is packed; the excerpt fills tokenBudget - totalTokens, so the sum never exceeds the budget. Left out only when even an empty excerpt does not fit.
+
 When to use: BEST starting point when you know the symbol AND your intent.
 
 ### get_ranked_context
@@ -161,7 +167,9 @@ Parameters:
 - strategy (enum: combined|dependency|importance, default combined): Ranking strategy
 - searchMode (enum: fts|legacy, default fts): "fts" is BM25 with camelCase splitting, trigram fallback and automatic typo correction (reported in `fuzzyCorrection`); "legacy" is substring matching
 
-Returns: Symbols ranked by BM25 relevance + PageRank importance, packed within budget.
+- scope (enum: code|domain, default code; only with @ctxo/domain): "domain" searches rules, terms, decisions, card sections and in-repo provenance files (BM25 k1 1.2, b 0.75, no PageRank; strategy and searchMode do not apply). Without the package the parameter does not exist.
+
+Returns: Symbols ranked by BM25 relevance + PageRank importance, packed within budget. With scope "domain": `{ query, scope, results: [{ id, kind: rule|term|decision|section|provenance, title, context?, path, line?, excerpt, relevanceScore, tokens }], totalTokens, tokenBudget, searchMetrics }`.
 
 When to use: Have a question/topic but don't know which symbol to look at.
 Instead of: search_symbols (exact name/regex search).
@@ -234,7 +242,51 @@ Parameters:
 Returns: changedFiles, changedSymbols, totalImpact, riskLevel (low|medium|high), per-file blast radius, co-change data (coChangedWith per file), boundaryViolations (confidence from distinctCommits) and clustersAffected.
 riskLevel comes from the highest per-symbol overallRiskScore = sum(riskScore) / (sum(riskScore) + 5) (see get_blast_radius): high > 0.7 (about 12 or more direct dependents), medium > 0.3 (about 3), else low. A symbol with one or two dependents is low.
 
+With @ctxo/domain and a domain graph: `contextsTouched` (`{ id, status, card?, cardChanged, acknowledged?, fileCount, files }` with up to 10 files; over the merge base of since and HEAD plus the working tree, while `files` stays `git diff <since>`), `cardsChanged` (registry cards changed in the range or the working tree) and `rulesWithoutTests` (rules of touched contexts without a test link, with `untested` reasons). Capped at 50 with `<name>Total`; left out when git cannot resolve since. An empty diff also carries `_meta`.
+
 When to use: FIRST tool when reviewing a PR or evaluating recent commits.
+
+### get_domain_context (with @ctxo/domain)
+The card of the named context that owns a symbol or file.
+
+Parameters:
+- symbolId (string, optional): Symbol ID; its file part selects the context (the symbol need not be indexed). Wins over path
+- path (string, optional): Repo-relative file path, or a context's card path
+
+Returns: `context` (id, name, rung, card, rulePrefix, paths), `terms` (definitions with origin card|glossary, up to 15 `identifiers`, `identifierCount`), `rules` (each with `untested?`, up to 10 `tests` and 10 `code` links with `sources`, `testCount`, `codeCount`), `contracts` (outbound, inbound, text, references), `decisions` (newest first, capped at 50) and `openQuestions`. With neither parameter: `contexts` with ruleCount, rulesWithTests, termCount, decisionCount. Misses: `{ found: false, hint }` (no registry, invalid or changed registry, no graph, no owning context, a path outside the project). After a card edit not yet indexed: `stale: true` and a hint.
+
+When to use: Before changing code in a named context; to learn the rules, terms and contracts behind it.
+
+### get_rule (with @ctxo/domain)
+One domain rule by ID.
+
+Parameters:
+- ruleId (string, required): e.g. LEND-03; LEND03, Lend03, lend_03 and the id of a domain-scope hit (rule:LEND-03) also match
+
+Returns: `rule` (ruleId, title, text, line, untested?, context, card), `tests` and `symbols` (each `{ file, symbolId?, testName?, fallback?, sources: [{ source, annotation?, file, line }] }`; test sources annotation|category|test-title|rule-comment|mention|card-tests, code sources card-code|rule-comment), `decisions` mentioning it, `provenance` (with the decision it came from) and `unresolved` card values when any. `{ found: false, hint: "No rule <ID> in any card." }` for an unknown ID.
+
+When to use: A change may affect a business rule; find the tests that pin it and the decisions behind it.
+
+### find_shadow_specs (with @ctxo/domain)
+Shadow-spec candidates of a named context: business-looking logic no card rule pins yet (the Deletion Test).
+
+Parameters:
+- context (string, required): context ID from the registry, e.g. lending
+- kinds (string[], optional): any of literal-comparison, normalization, retry-timeout, endpoint, data-resource, procedure, rule-without-tests; omitted or empty means all kinds
+- includeResolved (boolean, optional, default false): also return resolved candidates with their resolution
+
+Returns: `context` (id, name, rung), `counts` (`open`, `resolved`, `byKind: { <kind>: { open, resolved } }` for kinds with candidates), `shadowSpecs` (each `{ fingerprint, kind, file, line (1-based), symbolId? | ruleId?, text, detail?, source: native|text|index|card, resolution? }`; resolution `{ by: "rule-link", rules }`, `{ by: "untested", reason }`, `{ by: "shadow-specs", rule }` or `{ by: "shadow-specs", notARule }`), `resolutionFile` (the context's shadow-specs.yaml path), `staleResolutions` (`{ fingerprint, line }`), `unknownRules` (`{ fingerprint, rule, line }`), `resolutionProblems` (`{ line, severity, message }`); the last three capped at 50 with `<name>Total`, never summed (an unknown-rule entry matching nothing is in both). Fingerprint `kind | symbol | normalized text`: copy it verbatim into shadow-specs.yaml as a YAML single-quoted scalar (`fingerprint: '...'`, a `'` inside written `''`); `%7C` and `%25` in the kind and symbol parts are an encoded `|` and `%` (`%7c` matches too). Misses: `{ found: false, hint }` (no registry, registry problems, unknown context, no loop artifacts, also when the last ctxo index built the graph but not the candidates or maturity facts and removed both: run ctxo index). Stale artifacts: `stale: true` and a hint. Under ctxo watch, candidates refresh only on the next ctxo index.
+
+When to use: Running the Deletion Test on a context: for each open candidate, find or write the rule that pins it (get_rule), or record why it is not a rule in shadow-specs.yaml.
+
+### get_context_map (with @ctxo/domain)
+The map of named contexts with a suggested rung.
+
+Parameters: none.
+
+Returns: `contextMap` (per context in registry order: id, name, rung, suggestedRung, card { path?, present }, rules { count, withTests, share }, tests { characterization, contract }, crossContextEdges { in, out }, coChange { pairs, top }, drift (or null), boundaryViolations { total, errors, warnings }, shadowSpecs { open, resolved }, criteria { pinned, named, bounded, boring } each with `met` and its counts, boundariesKnown), `summary` (contexts, agree, suggestedAbove, suggestedBelow), `settings` (pinnedCoverage). Without boundaries.json: `boundariesKnown: false`, bounded not met, and a hint. While `domain.rules.trackerPrefixes`, `domain.tests.ruleTraitKeys`, `domain.tests.characterization` and `domain.tests.contract` are all at their defaults and the last `ctxo index` found that discovery would add something (`maturity.json` `discovery.addsSomething`), the hint also says to run `ctxo domain discover`; the "no registry" and "no domain graph" hints name it too. `contextMap` is truncatable; `ctxo domain map --json` prints it whole.
+
+When to use: How mature is each context, and what blocks its next rung?
 
 ---
 
@@ -283,6 +335,16 @@ Checking if safe to delete/rename?
 
 Working with class hierarchies?
   -> get_class_hierarchy (extends/implements tree)
+
+Need the business rules or decisions behind code? (with @ctxo/domain)
+  -> get_domain_context (the card of the context that owns the symbol or file)
+  -> then get_rule (one rule: tests, code, decisions)
+
+Running the Deletion Test? (with @ctxo/domain)
+  -> find_shadow_specs (business logic no rule pins yet), then get_rule
+
+How mature is each context? (with @ctxo/domain)
+  -> get_context_map (metrics, suggested rung, criteria)
 ```
 
 ---
@@ -400,7 +462,7 @@ Two services can look independent in the graph while both write the same table. 
 
 - Kinds: `SYMBOL_KINDS` adds `table`, `view`, `procedure`; `EDGE_KINDS` adds `reads`, `writes`, `executes`; `DATA_RESOURCE_KINDS = ['table', 'view']` is what core analyses use.
 - Annotations: `SymbolNode.annotations?: { name, args?, named? }[]`. Always on. Host-language attributes are capped at 20 per symbol, 10 positional entries and 10 named entries plus the reserved `type`, 200 characters per value; `named.type` is reserved for the fully qualified type name, and a source argument named `type` is not kept. lang-sql's `columns` annotation lists every column of a table. Core checks shape only; JSON index only.
-- Facts: `FACT_KINDS = ['literal-comparison', 'normalization', 'retry-timeout', 'endpoint']`, `CodeFact { kind, symbolId, line (0-based), text (single line, trimmed, max 200 chars), detail? }`, optional `ILanguageAdapter.extractFacts`. Called only when `index.facts: true`; results go to the file's index JSON under `facts`. No official plugin implements it yet.
+- Facts: `FACT_KINDS = ['literal-comparison', 'normalization', 'retry-timeout', 'endpoint']`, `CodeFact { kind, symbolId, line (0-based), text (single line, trimmed, max 200 chars), detail? }`, optional `ILanguageAdapter.extractFacts`. Called only on a fact request (`index.facts: true`, or an installed `@ctxo/domain` whose registry file exists); results go to the file's index JSON under `facts` (`[]` when a fact-capable plugin finds nothing). The TypeScript, C#, Java and Go plugins implement it since PR 4 (see Fact Detectors below).
 - Capabilities: `PluginContext.capabilities?: { facts?, sqlCallSites? }`, computed before any `createAdapter` call and offered to every plugin. `sqlCallSites` is set only when a plugin for `.sql` is installed.
 - Versioning: `SUPPORTED_API_VERSIONS = ['1', '2']`; plugins declare the lowest version they work on. Older CLIs skip `@ctxo/lang-sql` with a warning and drop the new kinds from a newer index with a warning.
 
@@ -428,7 +490,7 @@ With lang-sql installed and the Roslyn tier (.NET SDK 8+), the C# helper parses 
 - `reads`, `writes`, `executes` are confirmed blast-radius dependents, so the safe-edit gate also guards heavily used tables and procedures. Data edges stay out of symbol-level communities, god nodes, cross-cluster counts and boundary violations. `.sql` symbols are never dead code.
 - Contexts view artifact: top-level `dataResources` (`name`, `kind?`, `external`, `accesses` per candidate with `modes`, `writers`, `owner?` when exactly one candidate writes it) and per-candidate `sharedTables` (resources of two or more candidates). An `executes` edge to an indexed procedure adds that procedure's reads and writes, transitively; reading a view does not expand to its tables; unclustered files and test files are ignored and hubs count for their assigned candidate.
 - Procedure attribution: procedure bodies count only for the candidates that execute them, decided by canonical name (no copy of an executed procedure credits its own candidate). With several definitions, an executing candidate takes the union of the bodies of every production copy (outside test files and `docs`, `doc` or `documentation` folders), or the winner's body alone when no copy is production; docs and test copies of a procedure that has a production copy add nothing. A procedure that no candidate executes, directly or through other procedures, credits the candidate whose file holds it (with several copies, the candidate of each production copy, or of the winner when none is production); procedures that only execute each other each credit their own candidate. A procedure that only tests or unclustered files execute therefore still credits the script's candidate.
-- `contextsView.weights.data` (default 0) weights data edges between an accessing file and the defining `.sql` file in the file graph. At 0, a `.sql` file joins a candidate only through co-change, so scripts without a co-change partner stay unclustered and lower `coverage` (0.99 to 0.91 on one fixture, candidates unchanged); `contextsView.exclude` leaves them out. Table and view names and columns join the term harvest; tables take part in collisions with their columns, so a C# class and a same-name table can collide (often an entity mapped to its table: possible noise).
+- `contextsView.weights.data` (default 0) weights data edges between an accessing file and the defining `.sql` file in the file graph. At 0, a `.sql` file joins a candidate only through co-change, so scripts without a co-change partner stay unclustered and lower `coverage` (noticeably on one fixture, candidates unchanged); `contextsView.exclude` leaves them out. Table and view names and columns join the term harvest; tables take part in collisions with their columns, so a C# class and a same-name table can collide (often an entity mapped to its table: possible noise).
 - `ctxo index` appends `, <S> shared tables` to its contexts line; `ctxo contexts` prints the count and one `shared` line per shared resource (owner, several writers or read only).
 - Size: a table shared by k candidates is listed k times with k accesses each in the artifact (k squared growth); the MCP responses are capped.
 
@@ -499,7 +561,7 @@ Title path joined with ` > `; whitespace collapsed; runs of `:` collapsed and a 
 
 ---
 
-## Domain Knowledge Layer: `@ctxo/domain` (unreleased, #156 PR 2B)
+## Domain Knowledge Layer: `@ctxo/domain` (0.14.0, #156 PR 2B)
 
 An opt-in package that lets a team name its bounded contexts and keep markdown cards in step with code. Ctxo supplies structure, linkage, verification and retrieval; it never writes domain text or fetches external documentation. Feature doc: docs/features/domain-knowledge.md ("Named contexts and the domain package", "Ctxo domain conventions v1"). Design record: docs/architecture/ADR/adr-018-domain-knowledge-layer.md.
 
@@ -519,9 +581,9 @@ An opt-in package that lets a team name its bounded contexts and keep markdown c
 ### Commands
 
 - `ctxo contexts-touched [--since <ref>] [--committed | --staged] [--json] [--check]`: contexts whose paths hold a changed non-test file, with status `card-changed`, `acknowledged` (a `Domain-Unchanged` trailer in the range), `unresolved` or `no-card`. `--check` exits 1 on unresolved; 2 on registry problems, a missing base (CI needs `fetch-depth: 0`) or git failure.
-- `ctxo verify-domain [--since <ref>] [--boundaries by-rung|report] [--json]`: checks 1 registry and config, 2 cards present, 3 path globs match, 4a single owner, 4b unowned files, 5 card headings, 6 rule IDs and test links, 7 card links and anchors, 8 generated loader rules, 9 context map rungs, 10 boundaries, 11 fold since a ref (with `--since`). Exit 0 (warnings allowed), 1 errors, 2 missing index, git failure or internal error. `--json` writes `{ registry, checks, summary, exitCode }` to stdout; stdout is empty on exit 2 and with no registry.
+- `ctxo verify-domain [--since <ref>] [--boundaries by-rung|report] [--json]`: checks 1 registry and config, 2 cards present, 3 path globs match, 4a single owner, 4b unowned files, 5 card headings, 6 rule IDs and test links, 7 card links and anchors, 8 generated loader rules, 9 context map rungs, 10 boundaries, 11 fold since a ref (with `--since`), 12 shadow-spec resolutions (PR 4). Exit 0 (warnings allowed), 1 errors, 2 missing index, git failure or internal error. `--json` writes `{ registry, checks, summary, exitCode }` to stdout; stdout is empty on exit 2 and with no registry.
 - `ctxo domain rules --write | --check`: one pointer file per context with a card: `.claude/rules/ctxo-context-<id>.md` (front matter `paths`) and, when `.cursor/` exists, `.cursor/rules/ctxo-context-<id>.mdc`. Marker `<!-- generated by ctxo domain rules; do not edit -->`. `--check` exits 1 on missing, outdated, stale and blocked files (a hand-written file at a generated path; rename or delete it).
-- `ctxo domain discover [--json] [--write]`: card rule prefixes, tracker-like keys in commit subjects and branch names (5 or more is proposed as a tracker prefix), test trait keys, uncovered test folders; `--write` merges the proposal into `.ctxo/config.yaml`.
+- `ctxo domain discover [--json] [--write]`: run it first when adopting or tuning the domain config. Card rule prefixes, tracker-like keys in commit subjects and branch names (5 or more is proposed as a tracker prefix), external IDs (`ADR`, `BIP`, `CAPEC`, `CVE`, `CWE`, `EIP`, `GHSA`, `IEC`, `ISO`, `JSR`, `KEP`, `OWASP`, `PEP`, `RFC`: "references, not rule IDs; no config needed", counted, never proposed, flagged when equal to a card rule prefix; a plain mention never links as a rule ID since only card IDs link; no longer in `trackerKeys`), GitHub issues (issue references in subjects: `#N` at the start, `(#N)`, or after fixes, closes, refs and similar words, with their share and the squash-suffix count, plus `N-slug` branches; named as the issue tracker when at least 5 and the largest family; evidence only), other identifiers (lowercase `name-NN` branch families in 3 or more branches, runtime names left out, marked as a possible tracker key when their upper case is a known prefix; evidence only), test trait keys, uncovered test folders, and test-kind markers (Trait or Category values that equal or end with the kind as `Trait:<Key>=<Value>` annotations, custom attributes such as `StorageContractFact` as annotation names, test files named `*ContractTests`, `*CharacterizationTests`, `*.contract.test.ts` or `*_contract_test.go` as `paths` globs such as `**/*ContractTests.cs`, since `names` match test case names only; a file named after a non-test class is not proposed); `--write` merges the proposal into `.ctxo/config.yaml`, adding values and removing none (remove a wrong value by hand). `--json` adds `externalIds`, `githubIssues`, `otherIdentifiers`, `testKindMarkers`, `characterizationAnnotations` and `contractAnnotations`.
 - `ctxo init --domain [--boundaries <by-rung|report>]` or `--only domain`: config defaults, registry skeleton, discovery with confirmation, loader rules, guard hooks (SessionStart, Stop, TaskCompleted) and the `ctxo-domain-fold` skill (Claude Code and Cursor).
 
 ### Fold guard and trailer
@@ -547,6 +609,71 @@ An opt-in package that lets a team name its bounded contexts and keep markdown c
 ### Adoption ladder
 
 level 0: install and index; 1: registry with paths; 2: cards; 3: rule IDs and test links, through card `Tests:` lines, test names or framework tags; 4: contracts and shadow-spec resolutions. No level requires code changes.
+
+---
+
+## Domain Graph (0.15.0, #156 PR 3)
+
+With `@ctxo/domain` and a registry, `ctxo index` (and the post-commit hook, also for a card-only commit) writes `.ctxo/index/domain/graph.json` (`ctxoArtifact: "domain-graph"`, byte-identical for the same input). `ctxo watch` does not rebuild it. Code metrics never read it.
+
+### Nodes and links
+- Nodes: `context:<id>`, `rule:<ID>`, `term:<context>/<term-key>` (repo-wide glossary terms use `*`), `decision:<context>/<date>-<n>`; search-only `section:<card>:<line>`.
+- Links, each with `source` and the evidence location `at` (1-based): rule-test (`annotation`: xUnit Trait with a `domain.tests.ruleTraitKeys` key; `category`: NUnit Category, MSTest TestCategory, JUnit Tag; `test-title`; `rule-comment`; `mention`; `card-tests`), rule-symbol (`card-code`; `rule-comment` in indexed non-test files up to 1 MiB, linked to the symbol starting within three lines below when it sits inside the symbol containing the comment, else the innermost one), decision-provenance (`card-link`, `card-text`), decision-rule, term-identifier (`symbol-name`, `table-name`; contiguous token run with plural folding, own context only, at most 50 per term).
+- Card values that resolve to nothing are kept in `unresolved` (`missing-file`, `not-a-symbol`).
+
+### Card format additions (Ctxo domain conventions v1)
+- `Tests:` and `Code:` values: repo-relative paths or symbol IDs (anything with `::`); `file#Name` names a plain test. A symbol ID the index does not hold links to its file. C# symbol IDs differ between the Roslyn and tree-sitter tiers, so prefer file paths in C# `Code:` lines.
+- `**Term**` items in Language; glossary items anywhere in glossary.md, `(context: <id>)` ties one to a context.
+- Decision lines `- YYYY-MM-DD: text`; rule IDs written in them link the decision; relative links are provenance files, `#123`, URLs and tracker keys external strings (never fetched).
+- An H1 ends the Rules and invariants section. Shared cards: rules belong to the first context by id (warned once).
+
+### Staleness
+- Registry changed since the graph: no domain fields, tools answer the "run ctxo index" hint.
+- Cards or glossary changed: answers from the graph with `stale: true` and a hint.
+
+### verify-domain check 6
+- `<ID>: Code file "<file>" does not exist` (error, also for directories, like Tests).
+- `<ID>: <field>: "<value>" is not an indexed symbol; it links to its file` (warning).
+- `rule: comment names unknown rule <ID>` (warning, production code, only for a rule prefix).
+
+### Internal API (ADR-018 addendum)
+- Async enrichers (awaited by get_blast_radius, get_pr_impact, get_why_context; dropped with a warning by synchronous tools), get_context_for_task as the seventh enrich-seam tool, `reserveTaskContextTokens` (summed, capped at a quarter of tokenBudget), `rankedContextScopes`, host services `createDocumentSearch`, `splitIdentifier`, `dataResourceKinds`.
+- The ctxo-domain-fold skill marker was v0.15 in 0.15.0 (v0.16 since PR 4); `ctxo doctor` reports older copies as outdated until `ctxo init --only domain`.
+
+---
+
+## Fact Detectors, the Deletion Test Loop and the Context Map (unreleased, #156 PR 4)
+
+New in the next release. Feature doc: docs/features/domain-knowledge.md (Facts, The Deletion Test loop, The context map and rungs).
+
+### Fact kinds
+- `literal-comparison`: a comparison in a condition (if, while, do-while, for, ternary, switch case, when guards, Go tagless switch) with exactly one literal operand that is not trivial (`domain.facts.trivialLiterals`, default `[0, 1, -1, null, true, false, ""]`, typed: `"0"` is not `0`); detail `operator` (`case` for case labels), `literal`.
+- `normalization`: a call matching `domain.facts.normalizationMethods` (`Name`, `Name*` prefix, `q.Name` only when written `q.Name(...)`); detail `method`.
+- `retry-timeout`: a numeric constant (number literals and `+ - * /`) bound to a name whose ASCII tokens start with retry, retries, attempt, timeout, delay, backoff, ttl or expir (token boundaries: `settlementDays` does not match, a deliberate narrowing of the spec's substring wording), or a duration constructor (`TimeSpan.From*`, `Duration.of*`, `n * time.Second`, `setTimeout(fn, n)`) with units ns, us, ms, s, min, h, d; detail `name`, `value`; text `<name> = <value>`. Not produced in test files.
+- `endpoint`: C# `Http*` attributes with the class `[Route]` (`[controller]`, `[action]`, `/` and `~/` templates) and `MapGet`/`MapPost`/`MapPut`/`MapDelete`/`MapPatch`; Nest decorators in exported controllers, Express and Fastify calls on receivers traced to the module; Spring mappings and JAX-RS; `net/http` `HandleFunc`/`Handle` (`"GET /x"` patterns) and gin; detail `verb` (upper case, `ANY` when none), `route`.
+- A TypeScript `typeof` guard (`typeof x === 'string'`, `switch (typeof x)`) gives no fact. A fact extraction failure in an official plugin warns on stderr and gives `facts: []`; the detector lists reach plugins as one deep-frozen object (`config.facts`, never mutate it).
+- Text single-line, at most 200 code points; at most 500 facts per file; attribution to the innermost declaration or the module symbol `<file>::<basename>::variable`. Rules shared byte for byte by the four plugins (the `@ctxo/domain` copy differs only in its header and imports); `packages/plugin-api/conformance/fact-vectors.json` defines them.
+
+### Tiers
+- C#: Roslyn IOperation (`--facts=`) and tree-sitter; TypeScript: ts-morph; Java: JDT (`--facts=`; an older JAR prints `analyzer too old for facts`) and tree-sitter; Go: ctxo-go-analyzer (`--facts=`) and tree-sitter. Tiers agree; C#'s syntax-tier `(n)` suffix is ignored by fingerprints.
+- Text fallback (`@ctxo/domain`): indexed files with no `facts` key and tracked files with an extension in `domain.facts.textScanExtensions` (.dart, .ex, .exs, .groovy, .kt, .kts, .php, .py, .rb, .rs, .scala, .swift); single-line heuristics, `source: "text"`; lines over 20,000 UTF-16 code units skipped.
+- Upgrade: with `@ctxo/domain` and its registry file, or `index.facts: true`, C#, TypeScript, Java and Go files get `facts` (possibly empty) on the next re-index; without a registry `@ctxo/domain` requests no facts. Run a full `ctxo index` once, and again after adding the registry (old entries without the key get text candidates). The text scan follows a tracked symlink or junction only when its target stays inside the repository.
+
+### Candidates and resolutions
+- Candidates: facts of non-test files with one owner (`native` or `text`), owned tables, views and procedures (`index`), rules without tests (`card`). Several may share a fingerprint; counts are per candidate.
+- Fingerprint: `kind | symbol | normalized text`; symbol part = last two `.` segments of `<file basename without its last extension>.<symbol name>` without a `(...)` suffix, the file part one segment (`loan.service.ts::withRetry` gives `loan.service.withRetry`, `x.d.ts::x` gives `x.d.x`; the module symbol `<file>::<basename>::variable` gives the basename alone: `app.ts` gives `app`, `api.loan.service.ts` gives `api.loan.service`); a member whose name holds a dot keeps its containing type (`Loan.IComparable<Lending.Loan>.CompareTo`); `%` and `|` in kind and symbol parts are `%25` and `%7C`.
+- Resolution order: a rule link (card `Code:` lines, `rule:` comments), an `Untested:` line, then `<registry folder>/<context>/shadow-specs.yaml`: `- fingerprint: '...'` (single-quoted, a `'` written `''`) with `resolution: { rule: LEND-03 }` or `{ notARule: "reason" }`. Schema `packages/domain/schema/shadow-specs.schema.json`. Read on every call. A broken item is skipped (error), a repeated fingerprint warns.
+
+### Rungs and the context map
+- pinned: at least `domain.rungs.pinnedCoverage` (0.8) of the main paths (endpoint fact symbols plus contract symbols) reached from characterization tests over calls, uses, imports, extends, implements (no data edges, no HTTP-level reach); without main paths, one characterization test. named: a card whose Language terms (at least one) are all in the glossary. bounded: every contract symbol reached from a contract test and no violations (vacuous with no contract symbols; not met without boundaries.json). boring: every rule tested and no open candidate. Cumulative ladder; every criterion reported.
+- K13a conventions: `domain.tests.characterization` and `domain.tests.contract` with `annotations` (`Name`, `Name:value`, `Name:key=value`; defaults `Trait:Kind=Characterization`, `Tag:characterization`, `Trait:Kind=Contract`, `Tag:contract`), `paths` (`**/Characterization/**`; `**/Contract/**`, `**/Contracts.Tests/**`), `names` (`[characterization]`, `[contract]`). `ctxo domain discover` proposes uncovered Characterization and Contract folders; its printed config quotes every list value, so it is valid YAML.
+
+### Commands and artifacts
+- `ctxo domain map [--json]`, `ctxo domain shadow-specs <context> [--kinds <k,...>] [--all] [--json]`: the tool bodies without `_meta`; the human output prints each fingerprint single-quoted, ready to paste; exit 0 done (stale data prints a hint and still exits 0) or no registry, 1 bad arguments or unknown context, 2 registry problems, no index data, index data from another registry (`[ctxo] The domain registry changed since the last "ctxo index"; run it to rebuild the domain graph.`) or an internal error (`[ctxo] domain <name> failed: <message>`). Repeated `--kinds` options add up.
+- `ctxo verify-domain` check 12: unparsable shadow-specs.yaml error; stale entries, unknown rules, orphan files warn; computed from current inputs. When the candidates cannot be built and some file has entries: one warning `stale resolutions were not checked: <reason>` (exit stays 0).
+- `.ctxo/index/domain/shadow-candidates.json` and `maturity.json` (markers `domain-shadow-candidates`, `domain-maturity`), written by `ctxo index`, not by `ctxo watch`. Both written or both removed: when the graph builds but the candidates or maturity facts fail, both marked files are removed (with a warning) and the tools answer "run ctxo index"; when the graph build fails, graph.json and both files stay as they were.
+- Known limits (full list in the feature doc): evidence cap of 2,000 per file in every tier but TypeScript, counting trivial comparisons, in walk order (tiers can differ above it); Roslyn facts in a second field declarator have no symbol; TypeScript constructor parameter defaults give no fact; an old Java analyzer JAR gives only annotation endpoints; Go watch takes a saved file's facts from tree-sitter, a file created during watch gets `facts: []` until the next ctxo index; whitespace inside string literals is collapsed in fingerprints; incremental runs after installing @ctxo/domain, adding the registry or changing the fact lists mix native and text facts until a full ctxo index; a ctxo watch started before the registry existed keeps facts off until restarted; test-case classification is quadratic per test file; a domain graph build failure makes verify-domain exit 2 before checks 1 to 11.
+- Internal API: `indexCapabilities.factOptions` (handed to plugins as `PluginContext.config.facts`), host service `readCoChangeEntries(ctxoRoot)`; truncatable `shadowSpecs`, `contextMap`. Skill marker v0.16.
 
 ---
 
@@ -605,6 +732,7 @@ Three model-invoked skill files installed to `.claude/skills/` (Claude Code) and
 - Compact tier, Claude Code only (`CLAUDE.md`, 4 lines of text; at most 8 non-blank lines including the markers, 6 today): written when the guard hook is registered (`.claude/settings.json` or `.claude/settings.local.json`), all three skills are in `.claude/skills/`, and `gate.enabled` is not false. It says the repo has a ctxo index, to use the ctxo tools for structural questions before grepping, that the guard blocks the first edit to a high-impact symbol until get_blast_radius is called, and names the three skills.
 - Full tier: every other client, Claude Code without one of those three, and a rules file several clients share (an `AGENTS.md` or `GEMINI.md` that is a hard link or a symlink to `CLAUDE.md`). First rule: "For structural questions (dependencies, impact, history), use ctxo tools first; reading a file to see its contents needs no index call." Then the tool guide; its modification steps end with "Only then edit the source".
 - The tier follows the disk after the skills and guard steps; `--no-guard` and `--skip skills` give the full block unless the guard and skills are already installed (they remove nothing).
+- The domain line (#191): when the domain layer is set up (a `domain` key in `.ctxo/config.yaml` or the default registry `docs/domain/contexts.yaml`, both committed; otherwise a loaded `@ctxo/domain`), both tiers add "Adopting or tuning the domain layer? Run `ctxo domain discover` first (`--json` for the evidence, `--write` to merge the proposal)." (the compact block's last line, 7 non-blank lines with the markers; the full block's last bullet under "Orientation in Unfamiliar Areas"). Committed state decides first, so teammates with and without the package render the same block, and a machine where the module fails to load keeps the line. Without domain state and module the block is byte-identical to before and the template version stays 0.13 (a pre-#191 ctxo treats the line as an edit and removes it). `ctxo init --domain` renders the rules again when the domain step set the layer up; `ai_rules` warns on a block that lacks the line while the layer is set up, or has it while it is not, and `doctor --fix` re-renders it.
 - Re-runs replace the first ctxo block in place (versioned, unversioned `<!-- ctxo-rules-start -->`, or the old unmarked body), collapse later blocks into it, and keep every byte outside the blocks, including a UTF-8 BOM and CRLF line endings. Create-mode files (`.cursor/rules/ctxo.mdc`, `AGENTS.md` and the rest) keep user content. A block from a newer ctxo, a start marker without an end marker, or an end marker without a start marker leaves the file unchanged with a warning.
 - Formatter stable: blocks and skills are written in the layout Prettier prints, and blocks, the old unmarked body and skills are compared with formatting ignored (line endings, BOM, trailing whitespace, blank lines, table padding; blocks and skills also ignore line wrapping, so `proseWrap: always` or `never` is no edit). A block a formatter reshaped is current and `unchanged`, and the tier is read from the first non-blank line. The compact tier counts a skill only when it is readable and current. A rules file ctxo cannot read is left unchanged with one warning, and init goes on.
 - Held blocks: init (real run, dry run, `--only rules`, `--rules`) and `ctxo doctor --fix` leave `CLAUDE.md` or `.cursor/rules/ctxo.mdc` unchanged when its block is pre-tier or compact, the user has not declined the guard or skills (`--no-guard`, the guard question answered no, `gate.enabled: false`, `--skip skills`), and after the skills and guard steps they are still not on disk (an unreadable `.claude/settings.json` counts as no guard). Init warns `<file>: left unchanged until the guard and skills are installed; run "ctxo init --only rules,skills,guard" or "ctxo doctor --fix"`; the dry run prints `unchanged (held)`. A file linked to a held one is held too. A file without a ctxo block is never held.

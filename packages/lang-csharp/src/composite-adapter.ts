@@ -1,6 +1,7 @@
-import type { SymbolNode, GraphEdge, ComplexityMetrics, SymbolKind, ILanguageAdapter, IIncrementalReindex } from '@ctxo/plugin-api';
+import type { CodeFact, SymbolNode, GraphEdge, ComplexityMetrics, SymbolKind, ILanguageAdapter, IIncrementalReindex } from '@ctxo/plugin-api';
 import { RoslynAdapter } from './roslyn/roslyn-adapter.js';
 import { CSharpAdapter } from './csharp-adapter.js';
+import type { FactOptions } from './facts/fact-types.js';
 import { createLogger } from './logger.js';
 
 const log = createLogger('ctxo:lang-csharp');
@@ -8,6 +9,8 @@ const log = createLogger('ctxo:lang-csharp');
 export interface CSharpCompositeAdapterOptions {
   /** Ask the Roslyn helper for SQL call-site edges (the host's `sqlCallSites` capability). */
   readonly sqlCallSites?: boolean;
+  /** Fact detector options (the host's `facts` capability with `config.facts`); absent: no facts. */
+  readonly facts?: FactOptions;
 }
 
 /**
@@ -26,6 +29,8 @@ export interface CSharpCompositeAdapterOptions {
 export class CSharpCompositeAdapter implements ILanguageAdapter {
   /** The `sqlCallSites` option as constructed, whatever tier is active. */
   readonly sqlCallSites: boolean;
+  /** The fact detector options as constructed, whatever tier is active; undefined when facts are off. */
+  readonly facts: FactOptions | undefined;
 
   private delegate: ILanguageAdapter | null = null;
   private roslyn: RoslynAdapter | null = null;
@@ -35,11 +40,12 @@ export class CSharpCompositeAdapter implements ILanguageAdapter {
 
   constructor(options: CSharpCompositeAdapterOptions = {}) {
     this.sqlCallSites = options.sqlCallSites === true;
+    this.facts = options.facts;
   }
 
   async initialize(rootDir: string): Promise<void> {
     try {
-      const roslyn = new RoslynAdapter({ sqlCallSites: this.sqlCallSites });
+      const roslyn = new RoslynAdapter({ sqlCallSites: this.sqlCallSites, ...(this.facts ? { facts: this.facts } : {}) });
       await roslyn.initialize(rootDir);
       if (roslyn.isReady()) {
         this.roslyn = roslyn;
@@ -54,7 +60,7 @@ export class CSharpCompositeAdapter implements ILanguageAdapter {
     }
 
     try {
-      this.treeSitter = new CSharpAdapter();
+      this.treeSitter = new CSharpAdapter(this.treeSitterOptions());
       this.delegate = this.treeSitter;
       log.info('C# plugin: tree-sitter syntax-tier active (install .NET 8+ SDK for full tier)');
     } catch (err) {
@@ -79,6 +85,12 @@ export class CSharpCompositeAdapter implements ILanguageAdapter {
   extractComplexity(filePath: string, source: string): Promise<ComplexityMetrics[]> {
     this.fallBackIfRoslynFailed();
     return this.delegate ? this.delegate.extractComplexity(filePath, source) : Promise.resolve([]);
+  }
+
+  /** Forwards to the active delegate (Roslyn, or tree-sitter with the same options); `[]` without one. */
+  extractFacts(filePath: string, source: string): Promise<CodeFact[]> {
+    this.fallBackIfRoslynFailed();
+    return this.delegate?.extractFacts ? this.delegate.extractFacts(filePath, source) : Promise.resolve([]);
   }
 
   isSupported(filePath: string): boolean {
@@ -111,6 +123,11 @@ export class CSharpCompositeAdapter implements ILanguageAdapter {
     return 'unavailable';
   }
 
+  /** The tree-sitter adapter's options, the same at initialize and after a fallback: facts only when set. */
+  private treeSitterOptions(): { readonly facts?: FactOptions } {
+    return this.facts ? { facts: this.facts } : {};
+  }
+
   /**
    * Switches to the tree-sitter adapter the first time the Roslyn delegate reports a failure.
    * Warns once; never throws (a tree-sitter that cannot load leaves no delegate).
@@ -124,7 +141,7 @@ export class CSharpCompositeAdapter implements ILanguageAdapter {
     this.delegate = null;
     log.warn(`Roslyn helper failed (${failure}); C# falls back to the tree-sitter syntax tier. Run "ctxo doctor".`);
     try {
-      const treeSitter = new CSharpAdapter();
+      const treeSitter = new CSharpAdapter(this.treeSitterOptions());
       if (this.symbolRegistry) treeSitter.setSymbolRegistry(this.symbolRegistry);
       this.treeSitter = treeSitter;
       this.delegate = treeSitter;

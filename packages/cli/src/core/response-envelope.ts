@@ -69,6 +69,24 @@ const TRUNCATABLE_FIELDS: Record<string, string> = {
   candidates:
     'Use get_architectural_overlay with mode=contexts and candidate: <id> for one candidate in full, or ctxo contexts --json for the full contexts view.',
   clustersAffected: 'Use get_blast_radius on individual changed symbols for per-cluster impact.',
+  // The primary arrays of the @ctxo/domain tools (get_domain_context, get_rule). The additive domain lists
+  // on core tools (rulesAffected, cardsToUpdate, decisions, contextsTouched, cardsChanged, rulesWithoutTests)
+  // are capped at their source instead: listed here, a long one would take truncation over from the tool's
+  // primary array and `_meta.totalItems` would count the wrong list.
+  rules: "Use get_rule with a ruleId for one rule's tests, code and decisions.",
+  contexts: "Use get_domain_context with a symbolId or path for one context's card.",
+  terms: `Read the card's Language section, or use get_ranked_context with scope "domain".`,
+  openQuestions: "Read the card's Open questions section for the full list.",
+  tests: "Use search_symbols with a test file path as filePattern to list one file's tests.",
+  symbols: 'Use get_blast_radius on one linked symbol for its impact.',
+  provenance: 'Open the linked files directly; external references are never fetched.',
+  unresolved: 'Run "ctxo verify-domain --json" for every unresolved card reference.',
+  // The primary arrays of the @ctxo/domain loop tools (find_shadow_specs, get_context_map). The secondary
+  // find_shadow_specs lists (staleResolutions, unknownRules, resolutionProblems) are capped at their source
+  // with a `<name>Total`: listed here, a longer one would take truncation over from shadowSpecs.
+  shadowSpecs:
+    'Use find_shadow_specs with kinds to narrow the list, or run "ctxo domain shadow-specs <context> --json" for every candidate.',
+  contextMap: 'Run "ctxo domain map --json" for the full context map.',
 };
 
 /** The response limit in bytes: `CTXO_RESPONSE_LIMIT` when it is a positive integer, else 8192. */

@@ -6,6 +6,256 @@ From 0.7.0 onwards, Ctxo ships as a pnpm monorepo (ten packages today). Per-pack
 
 ## [Unreleased]
 
+**`ctxo domain discover` that agents find, with tracker kinds and test-kind markers beyond folders (#191).**
+
+### Added (discovery)
+
+- The rules block `ctxo init` writes (`@ctxo/cli`) adds one line when the domain layer is set up (a `domain` key in `.ctxo/config.yaml` or the default registry `docs/domain/contexts.yaml`, both committed; otherwise a loaded `@ctxo/domain`), in both tiers:
+  "Adopting or tuning the domain layer? Run `ctxo domain discover` first (`--json` for the evidence, `--write` to
+  merge the proposal)." Committed state decides first, so teammates with and without the package render the same
+  block. Without domain state and module the block is byte-identical to before, so `RULES_TEMPLATE_VERSION` stays
+  `0.13` and no block drifts (a pre-#191 ctxo treats the line as an edit and removes it). `ctxo init --domain`
+  renders the rules again when the domain step set the layer up; `ctxo doctor` (`ai_rules`) reports a block whose
+  line does not match that state, and `ctxo doctor --fix` re-renders it.
+- Agents adopting the domain layer did not find `ctxo domain discover` and reverse-engineered the config instead.
+  The `ctxo-domain-fold` skill (now v0.17) tells them to run it first, dry run then hand edits or `--write`, when
+  adopting or tuning the domain config. The `get_context_map` description and the "no registry" and "no domain
+  graph" hints name the command, and `get_context_map` and `ctxo domain map` add a hint while
+  `domain.rules.trackerPrefixes`, `domain.tests.ruleTraitKeys`, `domain.tests.characterization` and
+  `domain.tests.contract` are all at their defaults and the last `ctxo index` found that discovery would add
+  something (`maturity.json` gains `discovery: { addsSomething }`; a run without a change log keeps the last result).
+  Core tools are unchanged.
+- External IDs: keys of a well-known external family (`EXTERNAL_ID_FAMILIES`: ADR, BIP, CAPEC, CVE, CWE, EIP, GHSA,
+  IEC, ISO, JSR, KEP, OWASP, PEP, RFC) are reported as "references, not rule IDs; no config needed"
+  (`evidence.externalIds`, flagged with `overlapsRulePrefix` when a family equals a card rule prefix) and never
+  proposed. A plain mention never linked as a rule ID: only IDs that exist in a card link.
+- GitHub issues: issue references in commit subjects (`#N` at the start, `(#N)`, or after fixes, closes, refs and
+  similar words; not a bare `step #1`) and `N-slug` or `type/N-slug` branches, printed with the share of all
+  subjects and the `(#N)` squash count, and named as the issue tracker when there are at least 5 and they outnumber every tracker-key family
+  (`evidence.githubIssues`); evidence only.
+- Other identifiers: lowercase `name-NN` branch families in at least 3 branches, runtime names left out, marked as a
+  possible tracker key when their upper case is a card rule prefix, a tracker key or a configured prefix
+  (`evidence.otherIdentifiers`); evidence only, never proposed.
+- Test-kind markers beyond folders (`evidence.testKindMarkers`): `Trait`, `Category`, `TestCategory` and `Tag` values
+  (qualified names too) that equal the kind or end with it (`StorageContract`, not `ContractRenewal`), proposed as
+  `Trait:<Key>=<Value>` or `<Name>:<Value>` for `domain.tests.<kind>.annotations`; custom test attributes such as
+  `StorageContractFact`, proposed as annotation names; test source files named `*ContractTests`,
+  `*CharacterizationTests`, `*.contract.test.ts` or `*_contract_test.go`, proposed as `paths` globs such as
+  `**/*ContractTests.cs` (a `names` marker matches test case names only), unless a file is named after a non-test
+  class of the index. `--write` merges the annotations too and still adds values and removes none.
+
+### Changed (discovery)
+
+- `ctxo domain discover --json`: external ID families no longer appear in `evidence.trackerKeys`, and no longer reach
+  the proposed `trackerPrefixes`.
+
+**Fact detectors, the Deletion Test loop and the context map: `find_shadow_specs`, `get_context_map` (#156 Phase 4, PR 4).**
+
+### Added (agentic loop)
+
+- Fact detectors in the four official plugins, in every tier they have (both tiers of C#, Java and Go; ts-morph,
+  the only TypeScript tier): `literal-comparison`, `normalization`, `retry-timeout` and `endpoint` facts from
+  ts-morph (TypeScript), Roslyn IOperation and tree-sitter (C#), JDT and
+  tree-sitter (Java) and ctxo-go-analyzer and tree-sitter (Go). One shared rule set (identical `src/facts/` copies,
+  checked by a drift test) and the conformance vectors in `packages/plugin-api/conformance/fact-vectors.json` define
+  conditions, literal forms, the typed trivial-literal list, normalization patterns, retry and timeout names on
+  token boundaries, durations with units, endpoint routes per framework (ASP.NET attributes and minimal APIs,
+  Express, Fastify, Nest, Spring, JAX-RS, `net/http`, gin), attribution to the innermost declaration, 200-code-point
+  text and at most 500 facts per file. Both tiers give the same facts; analyzers collect evidence behind
+  `--facts=<base64>`.
+- The text fallback in `@ctxo/domain`: files whose plugin has no fact detector (no `facts` key) and tracked files
+  with an extension in `domain.facts.textScanExtensions` get facts from a light lexer and single-line heuristics,
+  finished by the same rules; their candidates carry `source: "text"`.
+- `find_shadow_specs({ context, kinds?, includeResolved? })`: shadow-spec candidates of a context (facts, owned
+  tables, views and procedures, and rules without tests), each with file, line, symbol, a line-independent
+  fingerprint (`kind | symbol | normalized text`; a multi-dot file name stays one segment, so `loan.service.ts::withRetry`
+  gives `loan.service.withRetry`, and code outside every declaration has the basename alone, `app.ts` gives `app`),
+  its source and its resolution (a rule link, an `Untested:` line,
+  or `shadow-specs.yaml`), plus `counts`, `staleResolutions`, `unknownRules` and `resolutionProblems` (each capped at
+  50 with `<name>Total`).
+- `get_context_map()`: per context its card, rules and the share with tests, characterization and contract test
+  counts, cross-context edges, co-change with other contexts, drift, boundary violations and open candidates, the
+  owner's rung, a suggested rung and the status of every criterion (pinned, named, bounded, boring). Ctxo now has
+  14 core tools, 18 with `@ctxo/domain`.
+- `ctxo domain map [--json]` and `ctxo domain shadow-specs <context> [--kinds <k,...>] [--all] [--json]`: the CLI
+  faces of the two tools (the same bodies without `_meta`; the human output prints each fingerprint as a YAML
+  single-quoted scalar, ready to paste); exit 0 done (stale data prints a hint and still exits 0) or no registry, 1 bad arguments or an
+  unknown context, 2 registry problems, no index data, index data built from another registry (the stale-registry
+  hint) or an internal error (`[ctxo] domain <name> failed: <message>`). Repeated `--kinds` options add up.
+- `<registry folder>/<context>/shadow-specs.yaml`: hand-written resolutions by fingerprint (`- fingerprint: '...'`,
+  single-quoted, with `{ rule: <ID> }` or `{ notARule: "<reason>" }`), with the JSON Schema `packages/domain/schema/shadow-specs.schema.json` in the npm
+  package. It is read on every call, so an edit needs no re-index.
+- `ctxo verify-domain` check 12, "Shadow-spec resolutions" (twelve checks now): a `shadow-specs.yaml` that does
+  not parse is an error; stale entries, unknown rules and a `shadow-specs.yaml` outside every context are warnings.
+  When the candidates cannot be built and some file has entries, one warning `stale resolutions were not checked:
+  <reason>` replaces the stale findings (exit stays 0).
+- `ctxo index` writes `.ctxo/index/domain/shadow-candidates.json` and `.ctxo/index/domain/maturity.json`
+  (`ctxoArtifact` markers, rewritten only when their content changed). Both are written or both removed: when the
+  graph builds but the candidates or the maturity facts fail, the pass removes both marked files with a warning, and
+  the tools answer "run ctxo index" instead of serving old data. A graph build failure keeps all three files.
+- Config: `domain.facts` (`trivialLiterals`, `normalizationMethods`, `textScanExtensions`), the K13a conventions
+  `domain.tests.characterization` and `domain.tests.contract` (`annotations`, `paths`, `names`) and
+  `domain.rungs.pinnedCoverage` (default 0.8).
+- Fact detector options: `CtxoModuleRegistration.indexCapabilities.factOptions` (`FactDetectorOptions`:
+  `trivialLiterals`, `normalizationMethods`), the types `TrivialLiteral`, `FactDetectorOptions` and `CodeFact` in
+  `@ctxo/cli/internal`, and `LoadPluginsOptions.factOptions`. The first module that declares options hands them to
+  every plugin as `PluginContext.config.facts`, only when facts are requested.
+- Host API: `CtxoHostServices.readCoChangeEntries(ctxoRoot)` (the validated `co-changes.json` entries, cached by
+  modification time, `ICoChangePort.readEntries`); `shadowSpecs` and `contextMap` join the truncatable fields.
+- The [ADR-017 addendum](docs/architecture/ADR/adr-017-plugin-protocol-v2-and-data-coupling.md#addendum-fact-detectors-pr-4)
+  (the evidence protocol, `--facts=`, `config.facts`, `facts: []`, the vectors) and the
+  [ADR-018 addendum](docs/architecture/ADR/adr-018-domain-knowledge-layer.md#addendum-pr-4-additions-156).
+
+### Changed (agentic loop)
+
+- With a fact request (an installed `@ctxo/domain` whose registry file exists, or `index.facts: true`), files of
+  fact-capable plugins carry `facts` (possibly empty) in their index JSON: C#, TypeScript, Java and Go repositories
+  with `@ctxo/domain` and a registry, or `index.facts: true`, get a `facts` array in every indexed file's JSON on the next re-index. An adapter without
+  `extractFacts` still writes no `facts` key. Run a full `ctxo index` once after upgrading: entries written by an
+  older CLI, or untouched by an incremental `--commit` run, carry no `facts` key and get `text` candidates until
+  then. This supersedes the PR 2B notes that no plugin implements `extractFacts` yet and that an installed
+  `@ctxo/domain` turns the request on whatever the repository holds: without a registry file it now requests no
+  facts, so the index is byte-identical to a run without the package. Run a full `ctxo index` after adding the
+  registry, and restart a running `ctxo watch`.
+- Fact extraction warns and continues: when it fails for a file, the TypeScript, C#, Java and Go plugins print a
+  warning on stderr and return `[]`, so the file gets `facts: []`. TypeScript `typeof` guards
+  (`typeof x === 'string'`, `switch (typeof x)`) give no facts. Plugins receive `config.facts` as one deep-frozen
+  object.
+- `ctxo watch` and the analyzers: a saved Go file takes its facts from the tree-sitter tier (the analyzer batch is
+  not rerun); a saved Java file reads the keep-alive JDT result, with no second JVM. Concurrent builds of the Go
+  analyzer binary each write a temp file and rename it into place.
+- The text scan (text-scan facts, unindexed files, `rule:` comments) reads files through the checked reader the
+  cards use: a tracked symlink or junction whose target leaves the repository is skipped.
+- `ctxo domain discover` quotes every list value of the printed proposed config, so the block is valid YAML.
+- The C# syntax tier's unique-suffix base type match takes only C# classes and interfaces, with lookups built once
+  per symbol registry.
+- `@ctxo/plugin-api` ships `conformance/fact-vectors.json` in its npm package.
+- The domain e2e determinism tests skip with `C# tier differs between the two indexes (...)` when the two indexes
+  ran on different C# tiers, and fail under `CTXO_REQUIRE_DOTNET=1`.
+- Known limits (evidence caps, watch, incremental runs, fingerprints of whitespace in literals and more) are listed
+  in [the feature doc](docs/features/domain-knowledge.md#known-limits-of-facts-and-the-loop).
+- `ctxo watch` gets the loaded modules from the router and requests facts and options exactly as `ctxo index`
+  does.
+- Test files get no `retry-timeout` facts: `ctxo index` and `ctxo watch` drop that kind for files the shared
+  test-file classifier marks as tests (the default test globs, `index.tests` and a test-framework annotation on one
+  of the file's symbols, as verify-domain and dead-code decide). The other fact kinds stay in test files, and
+  candidates never come from test files.
+- `ctxo domain discover` proposes Characterization and Contract folders that `domain.tests.characterization.paths`
+  and `domain.tests.contract.paths` do not cover; `--write` merges them, keeping the configured globs.
+- `ctxo verify-domain` reads cards, test files and production files once, through the same composition as the
+  index pass; its help line names shadow-spec resolutions.
+- The `ctxo-domain-fold` skill tells the agent to call `find_shadow_specs` for business logic no rule pins yet; its
+  marker is `v0.16`, so `ctxo doctor` reports copies installed by 0.15 as outdated until `ctxo init --only domain`
+  or `ctxo doctor --fix` reinstalls them.
+- One-time ID changes in the syntax tiers, so facts attribute to the IDs the full tiers give: C# file-scoped
+  namespaces, Java enum body members, interface constants, compact constructors and anonymous class members (and the
+  JDT tier the members of enum constant bodies), Go generic receivers without type parameters (see the plugin
+  changelogs).
+
+**Domain graph: rules linked to tests, code and decisions; `get_domain_context`, `get_rule` and the domain search scope (#156 Phase 3, PR 3).**
+
+### Added (domain graph)
+
+- The domain graph: with `@ctxo/domain` and a registry, `ctxo index` (and the post-commit hook, also for a commit
+  that changed only a card) writes `.ctxo/index/domain/graph.json` (`"ctxoArtifact": "domain-graph"`, rewritten only
+  when its content changed, byte-identical for the same input). Nodes are contexts, rules, terms and decisions
+  (`context:<id>`, `rule:<ID>`, `term:<context>/<term>`, `decision:<context>/<date>-<n>`) with the card text the
+  tools return. Code metrics (PageRank, communities, snapshots, dead code, gate percentiles) never read it, and
+  `ctxo watch` does not rebuild it.
+- The link families, each link with its source and the file and line of its evidence: rule to test (xUnit `Trait`
+  with a `domain.tests.ruleTraitKeys` key, NUnit `Category`, MSTest `TestCategory`, JUnit `Tag`; the text scan of
+  test files with ID variants and test titles; `rule:` comments; card `Tests:` lines), rule to symbol (card `Code:`
+  lines; `rule:` comments in indexed non-test files up to 1 MiB, linked to the declaration that starts within three
+  lines below and sits inside the symbol that contains the comment, else the innermost one), decision to provenance (relative links to repository files; `#123`, URLs and
+  tracker keys kept as strings, never fetched) and term to identifiers (symbol and table names that carry the
+  term's words, within the term's context, with plural folding, at most 50 per term with the count).
+- Card format additions, all optional and none needing a code change: `Code:` lines, `**Term**` items in
+  `Language`, glossary items with `(context: <id>)`, and dated decision lines whose rule IDs link the decision.
+- Seven additive fields on core tools, present (possibly empty) whenever a valid graph exists, capped at 50 at the
+  source (`decisions` at five) with `<name>Total`, never truncatable: `rulesAffected` and `cardsToUpdate` on
+  `get_blast_radius`; `decisions` on `get_why_context` (rule-linked first, then newest, with provenance);
+  `cardExcerpt` on `get_context_for_task` (rules, terms and contracts within `tokenBudget`); `contextsTouched`,
+  `cardsChanged` and `rulesWithoutTests` on `get_pr_impact`.
+- `get_domain_context({ symbolId?, path? })`: the card of the named context that owns a symbol or file (terms,
+  rules with tests and code links, contracts, decisions, open questions); with neither parameter, every context with
+  its counts. `get_rule({ ruleId })`: one rule (ID variants accepted, and the `rule:LEND-03` id of a domain-scope hit as is) with its tests and their link sources, the
+  symbols that implement it, decisions and provenance. Both answer `{ found: false, hint }` without a registry or a
+  graph, and add `stale: true` after a card edit not yet indexed. Ctxo now has 14 core tools, 16 with
+  `@ctxo/domain`.
+- `get_ranked_context` gains `scope` when a module provides one: `"code"` (default, unchanged) or, with
+  `@ctxo/domain`, `"domain"`: BM25 over rules, terms, decisions, card sections and the in-repo provenance files
+  decisions link to (read at query time, up to 256 KB each). Without the package the tool's schema and output are
+  unchanged.
+- Document search in the core BM25 engine: `SearchEngine.buildDocumentIndex` (`k1 1.2`, `b 0.75`, no PageRank
+  blend) and `SymbolTokenizer.tokenizeText`. Symbol search is unchanged.
+- Host API additions for the domain graph, all required `CtxoHostServices` members:
+  `dataResourceKinds` (plugin-api's `DATA_RESOURCE_KINDS`, `table` and `view`, one source),
+  `createDocumentSearch(documents)` (BM25 over documents with the core engine, via the new
+  `SearchEngine.buildDocumentIndex`, `DOCUMENT_SEARCH_CONFIG` and `SymbolTokenizer.tokenizeText`; the
+  `DocumentSearch` type) and `splitIdentifier(name)` (`SymbolTokenizer.splitName`). `@ctxo/cli/internal`
+  also exports the `SearchDocument`, `SearchResponse`, `SearchResult` and `SearchMetrics` types. Search
+  behaviour for symbols is unchanged. `createDocumentSearch` hands out only `search`.
+- Module API additions for the domain graph: `ResponseEnricher` may return a Promise.
+  `get_blast_radius`, `get_pr_impact` and `get_why_context` await it (new `applyEnricherAsync`, the
+  same plain-data guard); the synchronous tools drop a Promise result with the warning `<tool> enricher
+  returned a Promise; a synchronous tool cannot wait for it` and swallow its rejection. Several modules'
+  enrichers chain through a Promise. `get_context_for_task` joins the enrich seam as its seventh tool,
+  and the optional `CtxoModuleRegistration.reserveTaskContextTokens` (the `TokenReservation` type,
+  exported from `@ctxo/cli/internal`) keeps tokens back from its budget: the code context is packed into
+  `tokenBudget` minus the reservation (summed over modules, rounded, capped at a quarter of the budget,
+  0 when it throws or is not finite), and the payload still reports the requested `tokenBudget`.
+  With several modules, one whose reservation throws or is not finite is skipped with a warning (a
+  negative one counts as 0) and the others still add up.
+- Module API: the optional `CtxoModuleRegistration.rankedContextScopes` (the `RankedContextScope` type,
+  exported from `@ctxo/cli/internal`) adds scopes to `get_ranked_context`. Only when a module provides
+  one does the tool gain `scope` (`"code"`, the default symbol ranking, then the module scope names in
+  codepoint order); without a module scope its schema and output are unchanged. A module scope gets
+  the validated `query` and `tokenBudget` (at least 100, default 4000; `strategy` and `searchMode` do
+  not apply), its result goes through `_meta` and masking, and its calls are recorded under
+  `get_ranked_context`. `code` and a name already taken are skipped with a warning; an unknown scope
+  answers `{ error: true, message }`.
+- Truncatable fields for the domain tools' primary arrays (`rules`, `contexts`, `terms`,
+  `openQuestions`, `tests`, `symbols`, `provenance`, `unresolved`), each with its drill-in hint. The
+  additive domain lists on core tools stay out of truncation and are capped at their source.
+- The [ADR-018 addendum](docs/architecture/ADR/adr-018-domain-knowledge-layer.md#addendum-pr-3-additions-to-the-internal-api-156)
+  records the internal-API additions and the graph decisions.
+
+### Changed (domain graph)
+
+- `ctxo verify-domain` check 6 reads card lines the way the graph does: a `Code:` file that does not exist is an
+  error (`<ID>: Code file "<file>" does not exist`), as a `Tests:` file already was; a `Tests:` or `Code:` value
+  that names a directory is now an error too (`does not exist`); a value with `::` is a symbol ID, and one the
+  index does not hold is a warning (`<ID>: <field>: "<value>" is not an indexed symbol; it links to its file`).
+  In `@ctxo/domain` 0.14.0 a `Tests:` value could carry a `::name` suffix after the path; write `#name` for a plain
+  test name now, because `::` marks a symbol ID.
+- `ctxo verify-domain` check 6 warns about an unknown rule ID in a `rule:` comment in production code
+  (`rule: comment names unknown rule <ID>`), only when its prefix is a rule prefix (`# rule: E501` stays silent).
+- A `rule:` comment written above a declaration links to that declaration (the symbol that starts within three
+  lines below the comment and sits inside the symbol that contains it), not to the enclosing class; a comment
+  inside a method body stays with that method; the comment marker, `rule:` and the ID must be on one line,
+  and `/** rule: X */` counts.
+- Cards and the glossary are read the way provenance files are: only when their real path lies inside the
+  repository (a card symlinked outside it is not read), through a no-follow open, and up to 1 MiB. A skipped file
+  counts as a missing card, in the graph, in the stale-card check and in `ctxo verify-domain`, and is logged with
+  its reason.
+- An H1 heading now ends the "Rules and invariants" section of a card. A `### X-NN` heading after a stray H1 in
+  that section no longer defines a rule, so `verify-domain` check 6 results can change for such cards.
+- The asynchronous tools (`get_blast_radius`, `get_pr_impact`, `get_why_context`) await asynchronous module
+  enrichers; `@ctxo/domain` bounds its own at 5 seconds and leaves its fields out of a response that would wait
+  longer.
+- `get_pr_impact` with an empty `git diff <since>` goes through the module enrichers, the `_meta`
+  envelope and masking like every other `get_pr_impact` response; it gains `_meta`, and its other fields
+  are unchanged.
+- MCP tool descriptions of `get_blast_radius`, `get_why_context`, `get_context_for_task` and `get_pr_impact` name
+  the new domain fields.
+- The `ctxo-domain-fold` skill tells the agent to call `get_domain_context` and `get_rule` before changing a
+  context's code; its marker is `v0.15`, so `ctxo doctor` reports copies installed by 0.14 as outdated until
+  `ctxo init --only domain` or `ctxo doctor --fix` reinstalls them.
+- `@ctxo/cli` no longer ships source maps in its npm package (unpacked size about 2.1 MB to about 0.8 MB, so the release-packaging limit is 850 KB, it was 2150 KB); stack traces were never mapped without `--enable-source-maps`, so behaviour is unchanged.
+- `pnpm-workspace.yaml` sets `hoistWorkspacePackages: false`, so a workspace package is never resolved
+  through pnpm's hidden hoist; the setting moved out of the root `.npmrc`, so npm no longer warns
+  "Unknown project config".
+
 **Domain knowledge layer: `@ctxo/domain` (#156 Phase 2, PR 2B).**
 
 ### Added (domain knowledge layer)

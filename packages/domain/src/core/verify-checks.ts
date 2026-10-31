@@ -5,10 +5,13 @@ import { DEFAULT_DOMAIN_CONFIG, type ConfigProblem, type DomainConfig } from './
 import type { LoaderRulesDiff } from './loader-rules.js';
 import { createOwnership, type GlobMatcherFactory } from './ownership.js';
 import type { DomainContext, DomainRegistry, LoadedRegistry } from './registry.js';
-import type { RuleLinks } from './rule-id-scan.js';
+import type { UnresolvedRef } from './domain-graph.js';
+import type { RuleLinks, RuleRef } from './rule-id-scan.js';
+import { cardRefFile } from './rule-test-links.js';
+import type { ParsedShadowSpecs, ResolutionEntry } from './shadow-specs-file.js';
 import type { TouchedReport } from './touched.js';
 
-export const VERIFY_CHECKS = ['1', '2', '3', '4a', '4b', '5', '6', '7', '8', '9', '10', '11'] as const;
+export const VERIFY_CHECKS = ['1', '2', '3', '4a', '4b', '5', '6', '7', '8', '9', '10', '11', '12'] as const;
 export type VerifyCheckId = (typeof VERIFY_CHECKS)[number];
 
 export interface Finding {
@@ -37,14 +40,39 @@ export interface VerifyInput {
   /** By card path; undefined when the file is missing. */
   readonly cards: ReadonlyMap<string, ParsedCard | undefined>;
   readonly fileExists: (repoPath: string) => boolean;
+  /** A regular file, not a directory, for `Tests:` values (A39); defaults to `fileExists`. */
+  readonly isRepoFile?: (repoPath: string) => boolean;
   /** Anchors of a markdown target; undefined when the target is not markdown or unreadable. */
   readonly headingSlugs: (repoPath: string) => ReadonlySet<string> | undefined;
   readonly ruleLinks: RuleLinks;
+  /** P20: the unresolved card refs of `ruleTestLinks` and `ruleSymbolLinks`; defaults to none. */
+  readonly cardRefProblems?: readonly UnresolvedRef[];
+  /** P20: `resolveRuleRefs(...).unknown` of `scanRuleComments` over indexed non-test files; defaults to none. */
+  readonly codeRuleRefs?: readonly RuleRef[];
   readonly loaderDiff: LoaderRulesDiff;
   readonly contextMapText?: string;
   readonly boundaries: BoundaryResult;
   /** Only with --since. */
   readonly touched?: TouchedReport;
+  /** Check 12 (H6, W15): each context's `shadow-specs.yaml` with its resolutions applied; defaults to none. */
+  readonly shadowSpecs?: readonly ShadowSpecsCheckInput[];
+  /** Check 12: `shadow-specs.yaml` files whose folder names no context; defaults to none. */
+  readonly orphanShadowSpecs?: readonly string[];
+  /** Check 12: why the candidates could not be built, so staleness is unknown; absent when they were built. */
+  readonly candidatesUnavailable?: string;
+}
+
+/** One context's resolution file for check 12. */
+export interface ShadowSpecsCheckInput {
+  readonly context: string;
+  /** Repo-relative, posix. */
+  readonly path: string;
+  /** Absent: there is no file. */
+  readonly parsed?: ParsedShadowSpecs;
+  /** Entries matching no candidate of the context (`applyResolutions(...).stale`). */
+  readonly stale: readonly ResolutionEntry[];
+  /** Entries naming an unknown rule (`applyResolutions(...).unknownRules`). */
+  readonly unknownRules: readonly ResolutionEntry[];
 }
 
 const TITLES: Record<VerifyCheckId, string> = {
@@ -60,6 +88,7 @@ const TITLES: Record<VerifyCheckId, string> = {
   '9': 'Context map rungs',
   '10': 'Boundaries',
   '11': 'Fold since ref',
+  '12': 'Shadow-spec resolutions',
 };
 
 const UNOWNED_LIST_LIMIT = 20;
@@ -181,7 +210,7 @@ function testPath(value: string): string {
   return (cut === -1 ? value : value.slice(0, cut)).trim();
 }
 
-function check6(cards: readonly CardRef[], input: VerifyInput): CheckOutcome {
+function check6(registry: DomainRegistry, cards: readonly CardRef[], input: VerifyInput): CheckOutcome {
   const findings: Finding[] = [];
   const pattern = idRegExp(input.config.rules.idPattern);
   const seen = new Map<string, string>();
@@ -202,7 +231,7 @@ function check6(cards: readonly CardRef[], input: VerifyInput): CheckOutcome {
       }
       for (const test of rule.tests) {
         const file = testPath(test);
-        if (!input.fileExists(file)) findings.push(error('6', `${rule.id}: Tests file "${file}" does not exist`, at));
+        if (!(input.isRepoFile ?? input.fileExists)(file)) findings.push(error('6', `${rule.id}: Tests file "${file}" does not exist`, at));
       }
       const linked = (input.ruleLinks.links.get(rule.id)?.length ?? 0) > 0;
       if (!linked && rule.tests.length === 0 && rule.untested === undefined) {
@@ -216,7 +245,59 @@ function check6(cards: readonly CardRef[], input: VerifyInput): CheckOutcome {
   for (const ref of unknown) {
     findings.push(error('6', `${ref.id}: referenced as "${ref.raw}" but no card defines it`, { file: ref.file, line: ref.line }));
   }
+  findings.push(...cardRefFindings(cards, input.cardRefProblems ?? []));
+  findings.push(...codeRuleFindings(registry, cards, input.codeRuleRefs ?? []));
   return outcomeOf('6', findings);
+}
+
+const prefixOf = (id: string): string => {
+  const dash = id.indexOf('-');
+  return dash < 0 ? id : id.slice(0, dash);
+};
+
+/**
+ * F3 and P5: a `Code:` file that does not exist is an error; a symbol ID missing from the index is a warning (it
+ * links to its file). A missing `Tests:` file is already reported from the card above, with 2B's wording.
+ */
+function cardRefFindings(cards: readonly CardRef[], problems: readonly UnresolvedRef[]): Finding[] {
+  const contextOf = new Map(cards.map((c) => [c.path, c.context.id]));
+  const sorted = [...problems].sort(
+    (a, b) => compare(a.at.file, b.at.file) || a.at.line - b.at.line || compare(a.field, b.field) || compare(a.value, b.value) || compare(a.rule, b.rule),
+  );
+  const findings: Finding[] = [];
+  const seen = new Set<string>();
+  for (const p of sorted) {
+    if (p.reason === 'missing-file' && p.field === 'Tests') continue;
+    const message =
+      p.reason === 'missing-file'
+        ? `${p.rule}: ${p.field} file "${cardRefFile(p.value)}" does not exist`
+        : `${p.rule}: ${p.field}: "${p.value}" is not an indexed symbol; it links to its file`;
+    const key = `${p.at.file}\n${p.at.line}\n${message}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const context = contextOf.get(p.at.file);
+    const at = { file: p.at.file, line: p.at.line, ...(context === undefined ? {} : { context }) };
+    findings.push(p.reason === 'missing-file' ? error('6', message, at) : warning('6', message, at));
+  }
+  return findings;
+}
+
+/** F4: an unknown ID in a production `rule:` comment warns only when its prefix is a rule prefix (`# rule: E501` stays silent). */
+function codeRuleFindings(registry: DomainRegistry, cards: readonly CardRef[], refs: readonly RuleRef[]): Finding[] {
+  const prefixes = new Set<string>();
+  for (const { card } of cards) for (const rule of card.rules) prefixes.add(prefixOf(rule.id));
+  for (const context of registry.contexts) if (context.rulePrefix !== undefined) prefixes.add(context.rulePrefix);
+  const sorted = [...refs].sort((a, b) => compare(a.file, b.file) || a.line - b.line || compare(a.id, b.id));
+  const findings: Finding[] = [];
+  const seen = new Set<string>();
+  for (const ref of sorted) {
+    if (!prefixes.has(prefixOf(ref.id))) continue;
+    const key = `${ref.file}\n${ref.line}\n${ref.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    findings.push(warning('6', `rule: comment names unknown rule ${ref.id}`, { file: ref.file, line: ref.line }));
+  }
+  return findings;
 }
 
 const SCHEME = /^[a-z][a-z0-9+.-]*:/i;
@@ -379,7 +460,42 @@ function check11(touched: TouchedReport | undefined): CheckOutcome {
   return outcomeOf('11', findings);
 }
 
-/** Runs the eleven verify-domain checks (spec 10.5). Pure: every I/O result arrives in the input. */
+/**
+ * H6: each parse problem at its severity, each stale entry and each unknown rule a warning (an entry can be both:
+ * two findings, never summed), one warning when the candidates could not be built and a file has entries, each
+ * orphan file a warning. Day one, with no file, passes.
+ */
+function check12(input: VerifyInput): CheckOutcome {
+  const findings: Finding[] = [];
+  for (const spec of input.shadowSpecs ?? []) {
+    const extra = { context: spec.context };
+    for (const problem of spec.parsed?.problems ?? []) {
+      // Located like the other file findings: the human line prints `<path>:<line> <message>`.
+      const at = { file: spec.path, line: problem.line, ...extra };
+      findings.push(problem.severity === 'error' ? error('12', problem.message, at) : warning('12', problem.message, at));
+    }
+    for (const entry of spec.stale) {
+      findings.push(
+        warning('12', `stale resolution "${entry.fingerprint}" matches no candidate of ${spec.context}`, { file: spec.path, line: entry.line, ...extra }),
+      );
+    }
+    for (const entry of spec.unknownRules) {
+      if (!('rule' in entry.resolution)) continue;
+      findings.push(warning('12', `resolution names unknown rule ${entry.resolution.rule}`, { file: spec.path, line: entry.line, ...extra }));
+    }
+  }
+  // Without candidates no entry is called stale; one warning says the check did not run (only when there are entries).
+  const hasEntries = (input.shadowSpecs ?? []).some((spec) => (spec.parsed?.entries.length ?? 0) > 0);
+  if (input.candidatesUnavailable !== undefined && hasEntries) {
+    findings.push(warning('12', `stale resolutions were not checked: ${input.candidatesUnavailable}`));
+  }
+  for (const path of [...(input.orphanShadowSpecs ?? [])].sort(compare)) {
+    findings.push(warning('12', `${path} belongs to no context`));
+  }
+  return outcomeOf('12', findings);
+}
+
+/** Runs the twelve verify-domain checks (spec 10.5). Pure: every I/O result arrives in the input. */
 export function runVerifyChecks(input: VerifyInput): CheckOutcome[] {
   const first = check1(input);
   const registry = input.registry.registry;
@@ -395,11 +511,12 @@ export function runVerifyChecks(input: VerifyInput): CheckOutcome[] {
     fourA,
     fourB,
     check5(cards),
-    check6(cards, input),
+    check6(registry, cards, input),
     check7(cards, input),
     check8(input.loaderDiff),
     check9(registry, input),
     check10(input.boundaries),
     check11(input.touched),
+    check12(input),
   ];
 }

@@ -1,9 +1,12 @@
+import { createRequire } from 'node:module';
 import type { CtxoLanguagePlugin, PluginContext, ILanguageAdapter } from '@ctxo/plugin-api';
 import { TsMorphAdapter } from './ts-morph-adapter.js';
+import { readFactOptions } from './facts/fact-options.js';
 
 export { TsMorphAdapter } from './ts-morph-adapter.js';
 
-const VERSION = '0.7.0-alpha.0';
+// package.json sits one level above both src/ and dist/, so the same path resolves in dev and when published.
+const VERSION = (createRequire(import.meta.url)('../package.json') as { version: string }).version;
 
 export const plugin: CtxoLanguagePlugin = {
   apiVersion: '1',
@@ -13,7 +16,12 @@ export const plugin: CtxoLanguagePlugin = {
   extensions: ['.ts', '.tsx', '.js', '.jsx'],
   tier: 'full',
   createAdapter(ctx: PluginContext): ILanguageAdapter {
-    return new TsMorphAdapter({ sqlCallSites: ctx.capabilities?.sqlCallSites === true, projectRoot: ctx.projectRoot });
+    const facts = ctx.capabilities?.facts === true ? readFactOptions(ctx.config) : undefined;
+    return new TsMorphAdapter({
+      sqlCallSites: ctx.capabilities?.sqlCallSites === true,
+      projectRoot: ctx.projectRoot,
+      ...(facts ? { facts } : {}),
+    });
   },
 };
 

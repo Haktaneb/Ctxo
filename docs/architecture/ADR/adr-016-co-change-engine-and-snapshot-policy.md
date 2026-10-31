@@ -106,38 +106,26 @@ The canonical rename map walks the log newest first and relies on git's default 
 
 ## Evidence
 
-Validated against a private production repository (826 indexed source files plus 44 script files brought in through `cochange.include`, 1643 non-merge commits on the main line), with the dev build of this branch. The oracle is an independent script with the same filter rules, run on the same set of 553 files. Aggregate numbers only.
+Validated against a private production repository (indexed source files plus script files brought in through `cochange.include`, whole main-line history), with the dev build of this branch. The oracle is an independent script with the same filter rules, run on the same set of files. The repository's own figures are not published; the findings are described in words.
 
 ### Co-change matrix against the oracle
 
-| | Ctxo | Oracle |
-|---|---|---|
-| Commits scanned | 1643 (whole history from HEAD) | 1077 (pathspec-limited log) |
-| Commits used | 976 | 970 |
-| Mass commits skipped (more than 30 files) | 4 | 3 |
-| File pairs | 1431 | 1431 (same set) |
-| Unit pairs (the oracle's grouping) | 948 | 948 (same set) |
-
-- 1418 of 1431 file pairs have the same shared count and frequency. The 13 that differ are 2 with a shared count one higher and 11 with the same shared count but a different frequency, because a file's commit count changed. 947 of 948 unit pairs have the same shared count.
-- Every difference comes from 7 commits that only Ctxo sees: 6 touch only paths outside the oracle's pathspec (from before a folder restructure; their files were renamed into scope later, and Ctxo follows those renames) and 1 side-branch commit that git's default history simplification drops from the pathspec log.
-- Positive control: the oracle's logic with the old root added to its pathspec and `--full-history` reproduces Ctxo exactly (976 used, 4 skipped, the same 1431 entries with the same values).
+- Ctxo scans the whole history from HEAD; the oracle's pathspec-limited log scans fewer commits and therefore uses fewer of them and skips fewer mass commits.
+- Both find the same set of file pairs and the same set of unit pairs (the oracle's grouping). Almost every file pair has the same shared count and frequency; the few that differ have a shared count one higher or the same shared count with a different frequency, because a file's commit count changed. Almost every unit pair has the same shared count.
+- Every difference comes from a handful of commits that only Ctxo sees: most touch only paths outside the oracle's pathspec (from before a folder restructure; their files were renamed into scope later, and Ctxo follows those renames), and one is a side-branch commit that git's default history simplification drops from the pathspec log.
+- Positive control: the oracle's logic with the old root added to its pathspec and `--full-history` reproduces Ctxo exactly (the same commits used and skipped, the same entries with the same values).
 
 ### The post-commit hook (v2) and `--commit`
 
-- A commit that changed 3 source files re-indexed exactly 3 per-file entries, never the other 823. `co-changes.json` changed only in pairs that involve the commit's files: 47 of 1431 entries (3 pairs inside the commit gained one shared commit, 44 changed only their frequency), and the window moved from 976 to 977 used commits. A second and third run at the same commit left the file byte-identical.
-- One history entry per commit: the first run at the new commit archived the previous commit's snapshot as the one new entry, and six further runs at the same commit (a manual run, the hook script, three `--file` runs and one debug run) archived nothing. `distinctCommits` went from 0 to 1 after the new commit, equal to the number of distinct SHAs in `communities.history/` other than the current commit. Before the fix, history held 2 snapshots of HEAD and the artifacts reported `snapshotsAvailable: 2`; an earlier build had once reported 163 drift events against a snapshot of the same commit.
+- A commit that changed a few source files re-indexed exactly those per-file entries, never the others. `co-changes.json` changed only in pairs that involve the commit's files (pairs inside the commit gained one shared commit, the others changed only their frequency), and the window moved by one used commit. A second and third run at the same commit left the file byte-identical.
+- One history entry per commit: the first run at the new commit archived the previous commit's snapshot as the one new entry, and further runs at the same commit (a manual run, the hook script, several `--file` runs and one debug run) archived nothing. `distinctCommits` went from 0 to 1 after the new commit, equal to the number of distinct SHAs in `communities.history/` other than the current commit. Before the fix, history held duplicate snapshots of HEAD and `snapshotsAvailable` counted them; an earlier build had once reported drift events against a snapshot of the same commit.
 
 ### Timings (dev build, Windows)
 
-| Measurement | Time |
-|---|---|
-| Full `ctxo index` | 25.5 s cold, 19.4 s warm |
-| Co-change git calls alone (change log of all commits, HEAD read, `ls-files`) | 0.25 s |
-| Co-change phase inside a `--commit` run | at most 0.35 s |
-| `ctxo index --commit HEAD`, 3 changed files | 18.1 to 18.5 s |
-| Old per-file loop (`--file` once per changed file) | 55.2 s |
+- The co-change git calls alone (change log of all commits, HEAD read, `ls-files`) and the co-change phase inside a `--commit` run each take a fraction of a second.
+- `ctxo index --commit HEAD` for a commit with a few changed files is several times faster than the old per-file loop (`--file` once per changed file).
 
-The commit run is **3.0x faster** than the per-file loop. The gain does not come from the co-change pass; it comes from paying the full-tier analyzer's whole-project batch (about 16 s) **once per commit** instead of once per file. The co-change pass costs well under the 2 s budget that would have justified a `.ctxo/.cache/cochange-log.json` cache, so no cache was built.
+The gain does not come from the co-change pass; it comes from paying the full-tier analyzer's whole-project batch, which dominates the run, **once per commit** instead of once per file. The co-change pass costs well under the 2 s budget that would have justified a `.ctxo/.cache/cochange-log.json` cache, so no cache was built.
 
 ---
 
@@ -164,7 +152,7 @@ The commit run is **3.0x faster** than the per-file loop. The gain does not come
 
 ### Deferred
 
-- A co-change log cache keyed by SHA. Not needed at 0.25 s; add it if a repository's pass exceeds 2 s.
+- A co-change log cache keyed by SHA. Not needed while the pass stays at a fraction of a second; add it if a repository's pass exceeds 2 s.
 
 ---
 
@@ -209,31 +197,21 @@ The spec left these open; they are decided as follows and the owner may override
 - **`crossEdges` and `coChangePairs` count only candidate members.** Hub files assigned to a candidate do not add to its cross-candidate edges or pairs.
 - **Exact damping.** The graph uses exactly `1 / log2(2 + dependents)`. The displayed `damping` is that value rounded to 3 decimals and the weights are rounded to 6, so the file shows a rounded number while the graph uses the exact one.
 - **Symbols are sorted per file** before they enter the file graph, so the output does not depend on the order in which a plugin returns symbols.
-- **K32: hub damping stays on by default.** On the fixture it is neutral for the hub case, and agreement with the oracle's units is 0.794 with damping against 0.833 without. The synthetic acceptance case still needs it (two areas that share only a hub land in different candidates with damping and merge without it), and the fixture's own co-change blend already keeps the hub from merging the areas.
-- **K30: the strict reading is not met.** The acceptance wording "the shared hub no longer merges the four unrelated areas" passes: the four areas' majorities land in 3 distinct candidates, no candidate holds the majority of more than 2 areas, and cutting or damping the hub does not change their placement. The stricter reading "four areas, four candidates" is not met, because two areas share a candidate through their own direct links and cross-cutting technical co-change, not through the hub. A deferred roadmap item covers filtering cross-cutting technical change sets from the co-change signal.
-- **K35: the default test globs stay.** One default name-based test glob matched a production file on the fixture. No test folder escaped the defaults. Revisit in PR 1B with test-annotation detection; teams can already add globs with `index.tests`.
+- **K32: hub damping stays on by default.** On the fixture it is neutral for the hub case, and agreement with the oracle's units was slightly lower with damping than without. The synthetic acceptance case still needs it (two areas that share only a hub land in different candidates with damping and merge without it), and the fixture's own co-change blend already keeps the hub from merging the areas.
+- **K30: the strict reading is not met.** The acceptance wording "the shared hub no longer merges the four unrelated areas" passes: the four areas' majorities land in more than one candidate, no candidate holds the majority of more than two areas, and cutting or damping the hub does not change their placement. The stricter reading "four areas, four candidates" is not met, because two areas share a candidate through their own direct links and cross-cutting technical co-change, not through the hub. A deferred roadmap item covers filtering cross-cutting technical change sets from the co-change signal.
+- **K35: the default test globs stay.** A default name-based test glob matched a production file on the fixture. No test folder escaped the defaults. Revisit in PR 1B with test-annotation detection; teams can already add globs with `index.tests`.
 - **Surfaces.** `get_architectural_overlay({ mode: "contexts" })` is summary-first (K33): all candidates in brief, hubs and collisions capped at 50 with totals. `candidate: <id>` returns one candidate in full, with its files capped at 15, its hubs (50) and its collisions (10, each with at most 5 of its own occurrences and the first 5 members of each). `ctxo contexts --json` prints the full artifact. Only `candidates` is truncatable in the response envelope; hubs and collisions are capped at the source.
 - **Refresh cadence.** The view is recomputed on every full or incremental `ctxo index` run that re-indexes files and on every post-commit hook run, and skipped by `--skip-community`. `ctxo watch` does not refresh it.
 
 ### Evidence
 
-Validated on a private production repository (826 indexed files, 318 of them tests; full history, 976 co-change commits used, 1431 pairs), with the dev build of this branch and no `contextsView` section in the config, so every default applied. Aggregate numbers only.
+Validated on a private production repository (full history), with the dev build of this branch and no `contextsView` section in the config, so every default applied. The repository's own figures are not published; the findings are described in words.
 
-| Measure | Value |
-|---|---|
-| Candidates | 12 (sizes 67 down to 4) |
-| `coverage.ratio` | 510 / 515 = 0.990 (0.922 over the oracle's whole universe of 553 files, which includes 37 script files that are not nodes) |
-| Hubs | 17 (7 fan-in plus god node, 10 god node only), all assigned to a candidate; damping 0.154 to 0.387 |
-| Unclustered | 5 (each has no edge at all) |
-| Collisions | 5 (minimum Jaccard 0 to 0.111, each across 2 candidates) |
-| Cohesion | 0.624 to 0.838 |
-| Determinism | `contexts-view.json` byte-identical across 4 default index runs |
-| Contexts-view step in `ctxo index` | about 0.85 s of a 31 s warm index (76 s cold); the file-graph build is over 95% of the step |
-
-- **Hub case.** Before, in the symbol-level communities of the same run, the largest community (621 symbols, 124 files) held the shared factory interface and spanned all four areas. After, that interface is a hub (88 dependents, damping 0.154). The four areas' majorities land in 3 distinct candidates. Cutting the hub completely, or turning damping off, leaves the placement of all 83 area files unchanged: the remaining co-location of two areas (13 and 7 files) comes from 35 direct file pairs (co-change weight 12.3 against dependency weight 0.24).
-- **Against the oracle's 81 units** (folders or single endpoint files, 553 files): 53 units sit in one candidate and 25 are split; 0.794 of the covered files sit in their unit's majority candidate (homogeneity 0.541, completeness 0.794, V-measure 0.644). Most splits are shared or platform units scattered by design (12) and large features split along an internal seam (7); 3 are split by cross-cutting co-change through a shared base and 3 lose one file to its only dependency partner. Eleven of 12 candidates merge two or more units (6.75 on average), which is expected because the oracle's unit is small.
-- **Labels.** 9 of 12 labels were the project's source root: the longest common directory of a nested single project is that project folder, and the PageRank fallback only applied at the repo root. K34's refinement pass handles this case.
-- **Tuning** (one setting at a time, about 30 trials): coverage stayed at 0.977 or higher and collisions at 4 to 6 in every trial. Only `resolution` 2.5 or higher gives four distinct majorities, and only by a majority flip with 30 split units and 0.716 agreement. Lowering `weights.coChange` makes the hub case worse. Resolution 1.25, `weights.coChange` 0.5 and `weights.dependency` 2 each reach 0.822 to 0.825 agreement with the same hub outcome. No default changed.
+- **Shape.** About a dozen candidates. Coverage was close to complete; the few unclustered files have no edge at all. Every hub was assigned to a candidate. A handful of collisions, each across two candidates. `contexts-view.json` was byte-identical across repeated default index runs. The contexts-view step is a small part of a warm `ctxo index`, and the file-graph build is nearly all of the step.
+- **Hub case.** Before, in the symbol-level communities of the same run, the largest community held the shared factory interface and spanned all four areas. After, that interface is a hub with strong damping. The four areas' majorities no longer land in one candidate. Cutting the hub completely, or turning damping off, leaves the placement of every area file unchanged: the remaining co-location of two areas comes from direct file pairs whose co-change weight far exceeds their dependency weight.
+- **Against the oracle's units** (folders or single endpoint files): most units sit in one candidate and most covered files sit in their unit's majority candidate; completeness is higher than homogeneity. Most splits are shared or platform units scattered by design and large features split along an internal seam; a few are split by cross-cutting co-change through a shared base, and a few lose one file to its only dependency partner. Nearly every candidate merges two or more units, which is expected because the oracle's unit is small.
+- **Labels.** Most labels were the project's source root: the longest common directory of a nested single project is that project folder, and the PageRank fallback only applied at the repo root. K34's refinement pass handles this case.
+- **Tuning** (one setting at a time, a few dozen trials): coverage and the number of collisions stayed about the same in every trial. Only a much higher `resolution` gives four distinct majorities, and only by a majority flip with many more split units and lower agreement. Lowering `weights.coChange` makes the hub case worse. A slightly higher resolution, a lower `weights.coChange` or a higher `weights.dependency` each raise agreement a little with the same hub outcome. No default changed.
 
 ### Alternatives rejected
 
@@ -245,20 +223,21 @@ Validated on a private production repository (826 indexed files, 318 of them tes
 
 Spec section 7.4a proposed `cochange.unit: commit | merge`, where `merge` treats a merge commit and its first-parent diff as one change set. It was implemented with a default of `commit`, measured on both repositories, and **removed from PR 1A (K29)**. It is tracked in [#165](https://github.com/alperhankendi/Ctxo/issues/165).
 
-| Measure | Fixture, commit | Fixture, merge | Ctxo repo, commit | Ctxo repo, merge |
-|---|---|---|---|---|
-| Co-change pairs | 1431 | 1090 | 669 | 632 |
-| Change sets used | 976 | 517 | 273 | 233 |
-| Mass-skipped (more than 30 files) | 4 | 11 | 3 | 3 |
-| Candidates | 12 | 11 | 12 | 12 |
-| Files in their unit's majority candidate | 0.794 | 0.780 | 0.741 | 0.793 |
-| V-measure | 0.644 | 0.606 | 0.597 | 0.594 |
-| Hub case, area files in a candidate shared with another area | 27/83 | 64/83 | n/a | n/a |
-| Co-change pass (budget 3 s) | 0.42 s | 0.61 s | 0.30 s | 0.48 s |
+| Measure | Ctxo repo, commit | Ctxo repo, merge |
+|---|---|---|
+| Co-change pairs | 669 | 632 |
+| Change sets used | 273 | 233 |
+| Mass-skipped (more than 30 files) | 3 | 3 |
+| Candidates | 12 | 12 |
+| Files in their unit's majority candidate | 0.741 | 0.793 |
+| V-measure | 0.597 | 0.594 |
+| Co-change pass (budget 3 s) | 0.30 s | 0.48 s |
 
-- On the fixture, `merge` moves the hub case the wrong way: the areas change together through cross-cutting technical PRs, and one PR becomes one shared change set for every pair of areas it touches, so the co-change grows instead of shrinking (three of four areas share a candidate).
+The private fixture's figures are not published.
+
+- On the fixture, `merge` moves the hub case the wrong way: the areas change together through cross-cutting technical PRs, and one PR becomes one shared change set for every pair of areas it touches, so the co-change grows instead of shrinking (three of four areas share a candidate, and many more area files share a candidate with another area). Agreement with the oracle's units and V-measure both drop slightly, and fewer change sets are used while more are mass-skipped.
 - On the Ctxo repo the effect is small, because most PRs land as squash or direct commits (32 of 479 first-parent records are merges). Agreement with a proxy unit rule improves (0.741 to 0.793) but V-measure is flat.
-- `merge` costs a second git pass (0.19 s on both repositories) and lost one file's pre-rename history on the fixture.
+- `merge` costs a second git pass (0.19 s on the Ctxo repo, about the same on the fixture) and lost one file's pre-rename history on the fixture.
 - **Decision:** not shipped in PR 1A. If the goal is to weaken the cross-cutting co-change itself, filtering technical change sets is a different signal from the change-set unit and is on the roadmap.
 
 ### Release size

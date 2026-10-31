@@ -355,6 +355,27 @@ describe('IndexCommand module seams', () => {
     expect(seen).toHaveLength(3);
   });
 
+  it('a commit that changed no indexable file still runs module index passes', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    await new IndexCommand(tempDir).run({ skipHistory: true, modules: [] });
+
+    mkdirSync(join(tempDir, 'docs', 'domain', 'lending'), { recursive: true });
+    writeFileSync(join(tempDir, 'docs', 'domain', 'lending', 'domain.md'), '# Lending\n', 'utf-8');
+    const git = (...args: string[]): void => {
+      execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=Test', '-c', 'user.email=test@test.com', ...args], {
+        cwd: tempDir,
+        stdio: 'ignore',
+      });
+    };
+    git('add', 'docs/domain/lending/domain.md');
+    git('commit', '-m', 'docs: lending card');
+
+    const seen: PassRecord[] = [];
+    await new IndexCommand(tempDir).run({ commit: 'HEAD', modules: [recorder(seen)] });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ indices: 3 });
+  });
+
   it('module index passes run with --skip-community and --skip-history, and never with --check', async () => {
     const seen: PassRecord[] = [];
     vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -423,5 +444,49 @@ describe('IndexCommand module seams', () => {
     expect(capabilities.at(-1)?.facts).toBe(true);
     expect(extractFacts).toHaveBeenCalled();
     expect(JSON.parse(readFileSync(jsonFile, 'utf-8')).facts).toEqual([fact]);
+  });
+
+  it('ctxo index drops retry-timeout facts of test files and keeps the other kinds', async () => {
+    mkdirSync(join(tempDir, 'src', '__tests__'), { recursive: true });
+    writeFileSync(join(tempDir, 'src', 'policy.fake'), 'fake source\n', 'utf-8');
+    writeFileSync(join(tempDir, 'src', '__tests__', 'policy.test.fake'), 'fake source\n', 'utf-8');
+    const factsFor = (file: string): CodeFact[] => [
+      { kind: 'literal-comparison', symbolId: `${file}::a::function`, line: 1, text: 'n >= 5', detail: { operator: '>=', literal: '5' } },
+      { kind: 'retry-timeout', symbolId: `${file}::a::function`, line: 2, text: 'maxRetries = 3', detail: { name: 'maxRetries', value: '3' } },
+    ];
+    const plugin: CtxoLanguagePlugin = {
+      apiVersion: '2',
+      id: 'fake',
+      name: 'fake',
+      version: '0.0.1',
+      extensions: ['.fake'],
+      tier: 'syntax',
+      createAdapter: () => ({
+        extractSymbols: async (file: string) => [{ symbolId: `${file}::a::function`, name: 'a', kind: 'function', startLine: 0, endLine: 3 }],
+        extractEdges: async () => [],
+        extractComplexity: async () => [],
+        extractFacts: async (file: string) => factsFor(file),
+        isSupported: () => true,
+      }),
+    };
+    vi.spyOn(pluginDiscovery, 'discoverPlugins').mockResolvedValue({
+      plugins: [{ plugin, specifier: 'ctxo-lang-fake' }],
+      failures: [],
+    } as unknown as Awaited<ReturnType<typeof pluginDiscovery.discoverPlugins>>);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const asking: LoadedModule = {
+      name: '@ctxo/domain',
+      version: '0.0.0',
+      registration: { id: 'domain', indexCapabilities: { facts: true } },
+    };
+    const read = (file: string) => JSON.parse(readFileSync(join(tempDir, '.ctxo', 'index', `${file}.json`), 'utf-8')).facts;
+
+    await new IndexCommand(tempDir).run({ skipHistory: true, modules: [asking] });
+    expect(read('src/policy.fake')).toEqual(factsFor('src/policy.fake'));
+    expect(read('src/__tests__/policy.test.fake')).toEqual([factsFor('src/__tests__/policy.test.fake')[0]]);
+
+    // An incremental run applies the same rule.
+    await new IndexCommand(tempDir).run({ skipHistory: true, files: ['src/__tests__/policy.test.fake'], modules: [asking] });
+    expect(read('src/__tests__/policy.test.fake')).toEqual([factsFor('src/__tests__/policy.test.fake')[0]]);
   });
 });

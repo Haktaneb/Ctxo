@@ -1,5 +1,5 @@
 import type { z, ZodRawShape } from 'zod';
-import type { CommitChangeSet, FileIndex } from '../core/types.js';
+import type { CoChangeEntry, CommitChangeSet, FileIndex, SearchDocument, SearchResponse } from '../core/types.js';
 import type { CtxoConfig } from '../core/config/config-schema.js';
 import type { LoadedConfig } from '../core/config/load-config.js';
 import type { SymbolGraph } from '../core/graph/symbol-graph.js';
@@ -33,12 +33,36 @@ export type CoreToolName =
 
 /**
  * Adds fields to a core tool's payload before the envelope, truncation and masking see it. Additive only:
- * it returns the payload with its fields added and never removes or rewrites the core's fields.
+ * it returns the payload with its fields added and never removes or rewrites the core's fields. Seven core
+ * tools have the seam: `get_blast_radius`, `get_pr_impact` and `get_why_context` await a Promise result;
+ * the synchronous `search_symbols`, `find_importers`, `get_logic_slice` and `get_context_for_task` cannot,
+ * so for them a Promise result is dropped with a warning.
  */
 export type ResponseEnricher = (
   payload: Record<string, unknown>,
   args: Readonly<Record<string, unknown>>,
-) => Record<string, unknown>;
+) => Record<string, unknown> | Promise<Record<string, unknown>>;
+
+/**
+ * The tokens a module keeps back from `get_context_for_task`'s budget for the fields its enricher adds,
+ * given the tool's validated arguments. The core packs the code context into what is left; it rounds the
+ * value and caps it at a quarter of the budget, and reserves nothing when it throws or is not finite.
+ */
+export type TokenReservation = (args: Readonly<Record<string, unknown>>) => number;
+
+/**
+ * A scope of `get_ranked_context` a module contributes (`scope: "<name>"`). The tool gains its `scope`
+ * parameter only when a module provides one; `"code"`, the symbol ranking, stays the default. The CLI
+ * validates `query` and `tokenBudget` (at least 100, default 4000), then wraps the result in the `_meta`
+ * envelope and masks it. `strategy` and `searchMode` do not reach a module scope.
+ */
+export interface RankedContextScope {
+  /** The scope name, never `code`. */
+  readonly scope: string;
+  /** One sentence appended to the `scope` parameter description, such as `"domain": card sections.` */
+  readonly description: string;
+  search(args: { readonly query: string; readonly tokenBudget: number }): Promise<Record<string, unknown>> | Record<string, unknown>;
+}
 
 /** An MCP tool a module contributes. The CLI wraps the handler with the envelope, masking and recording. */
 export interface ModuleToolDefinition {
@@ -142,14 +166,33 @@ export interface InitContribution {
   apply(ctx: InitPartContext): Promise<readonly InitFileResult[]>;
 }
 
+/** A literal value a fact detector treats as trivial (not worth a fact on its own). */
+export type TrivialLiteral = number | string | boolean | null;
+
+/**
+ * Options a module hands the fact detectors of every plugin. The CLI passes them to each plugin as
+ * `PluginContext.config.facts`, and only when facts are requested.
+ */
+export interface FactDetectorOptions {
+  readonly trivialLiterals: readonly TrivialLiteral[];
+  readonly normalizationMethods: readonly string[];
+}
+
 /** What a module contributes. Every member is optional; the CLI uses the ones present. */
 export interface CtxoModuleRegistration {
   readonly id: 'domain';
-  /** Capabilities `ctxo index` requests from the plugins on the module's behalf. */
-  readonly indexCapabilities?: { readonly facts?: boolean };
+  /**
+   * Capabilities `ctxo index` and `ctxo watch` request from the plugins on the module's behalf. `factOptions`
+   * reaches the plugins only with a fact request; the first module (load order) that declares them wins.
+   */
+  readonly indexCapabilities?: { readonly facts?: boolean; readonly factOptions?: FactDetectorOptions };
   indexPass?(ctx: IndexPassContext): Promise<void>;
   registerTools?(registrar: ToolRegistrar): void;
   readonly enrich?: Partial<Record<CoreToolName, ResponseEnricher>>;
+  /** Tokens kept back from `get_context_for_task`'s budget for this module's enriched fields. */
+  readonly reserveTaskContextTokens?: TokenReservation;
+  /** Extra `get_ranked_context` scopes; a name already taken, or `code`, is skipped with a warning. */
+  readonly rankedContextScopes?: readonly RankedContextScope[];
   registerCommands?(registrar: CommandRegistrar): void;
   readonly init?: InitContribution;
   readonly doctorChecks?: readonly IHealthCheck[];
@@ -160,6 +203,11 @@ export interface LoadedModule {
   readonly name: string;
   readonly version: string;
   readonly registration: CtxoModuleRegistration;
+}
+
+/** A built document index. Hits carry the document `id` in `symbolId`, its `title` in `name`, its `kind` and `path`. */
+export interface DocumentSearch {
+  search(query: string, limit?: number): SearchResponse;
 }
 
 /** The runtime services a module gets from the CLI instead of importing them. */
@@ -175,10 +223,24 @@ export interface CtxoHostServices {
   buildGraph(indices: readonly FileIndex[]): SymbolGraph;
   /** The configured co-change window (`cochange.maxCommits`, `cochange.since`); undefined without git history. */
   readCoChangeWindow(projectRoot: string, config: CtxoConfig): Promise<CoChangeWindowCommits | undefined>;
+  /**
+   * The entries of `<ctxoRoot>/index/co-changes.json` as stored, one per file pair, validated and cached by
+   * mtime like every other co-change read. Frozen and shared; undefined when the file is missing or invalid.
+   */
+  readCoChangeEntries(ctxoRoot: string): readonly CoChangeEntry[] | undefined;
   /** The nearest directory at or above `dir` that holds `.git`. */
   findGitRoot(dir: string): string | undefined;
   /** Short names of the attributes that mark a test (`Fact`, `Test`, `TestMethod`, ...): the classifier's own list. */
   readonly testFrameworkAnnotations: readonly string[];
+  /** Symbol kinds that are data resources (`table`, `view`): plugin-api's own `DATA_RESOURCE_KINDS`, one source. */
+  readonly dataResourceKinds: readonly string[];
+  /**
+   * A BM25 search over documents (the core engine: camelCase-aware, trigram and fuzzy fallback), built once.
+   * Pass the documents in codepoint order (of `id`, say): equal scores keep the input order.
+   */
+  createDocumentSearch(documents: readonly SearchDocument[]): DocumentSearch;
+  /** Splits an identifier into its words: `ILoanRepository` gives `I`, `Loan`, `Repository`; `member_account_id` gives `member`, `account`, `id`. */
+  splitIdentifier(name: string): string[];
 }
 
 export interface CtxoHost {

@@ -208,6 +208,51 @@ describe.each(VARIANTS)('PR 2B acceptance, %s sample', (variant) => {
     expect([...domainArtifacts(first).entries()]).toEqual([...a.entries()]);
   });
 
+  it('the server lists the 14 core tools plus get_domain_context, get_rule, find_shadow_specs and get_context_map, which answer without a registry too', async () => {
+    const ws = prepared(variant);
+    let session = await ws.connect();
+    try {
+      const names = await session.listTools();
+      expect(names).toHaveLength(18);
+      expect(names).toEqual(expect.arrayContaining(['get_domain_context', 'get_rule', 'find_shadow_specs', 'get_context_map', 'get_blast_radius']));
+
+      const rule = (await session.call('get_rule', { ruleId: 'lend_03' })) as {
+        rule: { ruleId: string; context: { id: string } };
+        tests: { file: string; sources: { source: string }[] }[];
+        _meta?: unknown;
+      };
+      expect(rule.rule).toMatchObject({ ruleId: 'LEND-03', context: { id: 'lending' } });
+      expect(rule.tests.map((t) => t.file)).toContain(LOAN_LIMIT_TEST[variant]);
+      expect(rule.tests.flatMap((t) => t.sources.map((s) => s.source))).toContain('card-tests');
+      expect(rule._meta).toBeDefined();
+
+      const card = await session.call('get_domain_context', { path: LOAN_LIMIT[variant] });
+      expect(card['context']).toMatchObject({ id: 'lending', card: 'docs/domain/lending/domain.md' });
+      expect(card['_meta']).toBeDefined();
+    } finally {
+      await session.close();
+    }
+
+    ws.remove(REGISTRY);
+    session = await ws.connect();
+    try {
+      expect(await session.listTools()).toHaveLength(18);
+      const hint = 'No domain registry at docs/domain/contexts.yaml. Create one with "ctxo init --domain". To propose the domain config from this repository, run "ctxo domain discover".';
+      for (const [name, args] of [
+        ['get_rule', { ruleId: 'LEND-03' }],
+        ['get_domain_context', {}],
+        ['find_shadow_specs', { context: 'lending' }],
+        ['get_context_map', {}],
+      ] as const) {
+        const response = await session.call(name, args);
+        expect(response['error'], name).toBeUndefined();
+        expect(response, name).toMatchObject({ found: false, hint });
+      }
+    } finally {
+      await session.close();
+    }
+  });
+
   it('no registry: no new fields anywhere, and the commands print a hint and exit 0', async () => {
     const ws = SampleWorkspace.create(variant);
     ws.commitLoaderRules();
@@ -230,7 +275,7 @@ describe.each(VARIANTS)('PR 2B acceptance, %s sample', (variant) => {
     ws.remove(REGISTRY);
     ws.index();
     // The artifacts go; the folder itself may stay, since other files in it are not ours to delete.
-    for (const artifact of ['contexts.json', 'boundaries.json', 'history']) expect(ws.exists(`.ctxo/index/domain/${artifact}`), artifact).toBe(false);
+    for (const artifact of ['contexts.json', 'boundaries.json', 'history', 'shadow-candidates.json', 'maturity.json']) expect(ws.exists(`.ctxo/index/domain/${artifact}`), artifact).toBe(false);
 
     const symbolId = CANBORROW_ID[variant];
     session = await ws.connect();
@@ -242,13 +287,47 @@ describe.each(VARIANTS)('PR 2B acceptance, %s sample', (variant) => {
         await session.call('get_logic_slice', { symbolId }),
         await session.call('get_pr_impact', { since: 'HEAD~1' }),
         await session.call('get_why_context', { symbolId }),
+        await session.call('get_context_for_task', { symbolId, taskType: 'understand' }),
+      ];
+      const added = [
+        'rulesAffected',
+        'cardsToUpdate',
+        'cardExcerpt',
+        'decisions',
+        'contextsTouched',
+        'cardsChanged',
+        'rulesWithoutTests',
+        // PR 4: the loop tools' fields never reach a core response.
+        'shadowSpecs',
+        'contextMap',
+        'suggestedRung',
+        'criteria',
+        'fingerprint',
+        'resolution',
       ];
       responses.forEach((response, i) => {
         expect(response['error'], `response ${i}`).toBeUndefined();
         const keys = allKeys(response);
-        for (const key of ['context', 'contextBoundaryViolations', 'contextDrift']) expect(keys.has(key), `response ${i} has ${key}`).toBe(false);
+        for (const key of ['context', 'contextBoundaryViolations', 'contextDrift', ...added]) {
+          // get_context_for_task has its own `context` list of code symbols.
+          if (key === 'context' && i === 6) continue;
+          expect(keys.has(key), `response ${i} has ${key}`).toBe(false);
+        }
       });
       expect((responses[0] as { results: unknown[] }).results.length).toBeGreaterThan(0);
+
+      // The domain tools and the domain scope answer a graceful miss, never an error (spec 11.5).
+      for (const [name, args] of [
+        ['get_domain_context', { path: LOAN_LIMIT[variant] }],
+        ['get_rule', { ruleId: 'LEND-03' }],
+        ['get_ranked_context', { query: 'five loans', scope: 'domain' }],
+        ['find_shadow_specs', { context: 'lending' }],
+        ['get_context_map', {}],
+      ] as const) {
+        const response = await session.call(name, args);
+        expect(response['error'], name).toBeUndefined();
+        expect(response, name).toMatchObject({ found: false, hint: 'No domain registry at docs/domain/contexts.yaml. Create one with "ctxo init --domain". To propose the domain config from this repository, run "ctxo domain discover".' });
+      }
     } finally {
       await session.close();
     }
@@ -269,6 +348,23 @@ describe.each(VARIANTS)('PR 2B acceptance, %s sample', (variant) => {
     } finally {
       await session.close();
     }
+  });
+
+  it('no registry: the index asks no plugin for facts, so no index JSON gains a facts key', () => {
+    const ws = SampleWorkspace.create(variant);
+    ws.remove(REGISTRY);
+    ws.commit('chore: no registry');
+    ws.index();
+    const withFacts: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.name.endsWith('.json') && 'facts' in (JSON.parse(readFileSync(full, 'utf-8')) as object)) withFacts.push(full);
+      }
+    };
+    walk(ws.path('.ctxo/index'));
+    expect(withFacts).toEqual([]);
   });
 
   it.skipIf(variant !== 'csharp')('the guard blocks a sample session and lets it finish after a trailer commit', () => {

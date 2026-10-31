@@ -30,6 +30,15 @@ const PLUGINS: Record<Variant, readonly string[]> = {
   typescript: ['@ctxo/lang-typescript', '@ctxo/lang-sql'],
 };
 
+/** Options of `SampleWorkspace.create`. */
+export interface SampleOptions {
+  /**
+   * Fixture plugins from `test-fixtures/library-lending/plugins/`: each is listed in the copy's `package.json` next to
+   * the variant's official plugins and linked into its `node_modules` (a junction on Windows).
+   */
+  readonly fixturePlugins?: readonly string[];
+}
+
 export interface CliResult {
   readonly status: number | null;
   readonly stdout: string;
@@ -60,9 +69,29 @@ export function childEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv 
   delete env['DEBUG'];
   delete env['CI'];
   delete env['CTXO_HTTP_PORT'];
+  // A developer's own response limit would truncate responses the tests read in full.
+  delete env['CTXO_RESPONSE_LIMIT'];
   env['GIT_CONFIG_GLOBAL'] = gitConfig();
   env['GIT_CONFIG_NOSYSTEM'] = '1';
   return { ...env, ...extra };
+}
+
+export const TIER_MESSAGE = 'C# tier differs between the two indexes';
+
+/**
+ * E-M5 (W20): two indexes of the same input are compared only when both ran C# on the same tier. A cold Roslyn start
+ * can fall back to the syntax tier, whose symbol IDs differ, which is no nondeterminism: the comparison is skipped
+ * with the reason. Under `CTXO_REQUIRE_DOTNET=1` (the CI job that sets up .NET) a tier flip is a failure.
+ */
+export function requireSameTier(
+  a: { readonly resolvesEdges: boolean },
+  b: { readonly resolvesEdges: boolean },
+  skip: (note: string) => void,
+): void {
+  if (a.resolvesEdges === b.resolvesEdges) return;
+  const detail = `${TIER_MESSAGE} (${a.resolvesEdges ? 'full' : 'syntax'} tier, then ${b.resolvesEdges ? 'full' : 'syntax'} tier)`;
+  if (process.env['CTXO_REQUIRE_DOTNET'] === '1') throw new Error(`${detail}; CTXO_REQUIRE_DOTNET=1 needs the Roslyn tier on every index`);
+  skip(detail);
 }
 
 export function assertBuilt(): void {
@@ -100,14 +129,19 @@ export class SampleWorkspace {
   ) {}
 
   /** Copies the variant, makes it a git repository on `main` with one commit, and links `@ctxo/domain`. */
-  static create(variant: Variant): SampleWorkspace {
+  static create(variant: Variant, options: SampleOptions = {}): SampleWorkspace {
+    const fixturePlugins = options.fixturePlugins ?? [];
     const dir = tempDir(`ctxo-domain-sample-${variant}-`);
     cpSync(join(FIXTURES, variant), dir, { recursive: true });
     const workspace = new SampleWorkspace(dir, variant);
     workspace.write(
       'package.json',
       `${JSON.stringify(
-        { name: `library-lending-${variant}`, private: true, devDependencies: Object.fromEntries(PLUGINS[variant].map((name) => [name, '*'])) },
+        {
+          name: `library-lending-${variant}`,
+          private: true,
+          devDependencies: Object.fromEntries([...PLUGINS[variant], ...fixturePlugins].map((name) => [name, '*'])),
+        },
         null,
         2,
       )}\n`,
@@ -115,6 +149,7 @@ export class SampleWorkspace {
     workspace.write('.gitignore', 'node_modules/\nbin/\nobj/\n.ctxo/.cache/\n.ctxo/index/\n');
     mkdirSync(join(dir, 'node_modules', '@ctxo'), { recursive: true });
     symlinkSync(DOMAIN_DIR, join(dir, 'node_modules', '@ctxo', 'domain'), 'junction');
+    for (const name of fixturePlugins) symlinkSync(join(FIXTURES, 'plugins', name), join(dir, 'node_modules', name), 'junction');
     workspace.git('init', '-q', '-b', 'main');
     workspace.commit('init');
     return workspace;
@@ -205,10 +240,10 @@ export class SampleWorkspace {
     this.commit('chore: generated loader rules');
   }
 
-  /** Starts the built MCP server over stdio in the workspace. */
-  async connect(): Promise<McpSession> {
+  /** Starts the built MCP server over stdio in the workspace; `extraEnv` is added to the server's environment. */
+  async connect(extraEnv: Readonly<Record<string, string>> = {}): Promise<McpSession> {
     const env: Record<string, string> = {};
-    for (const [key, value] of Object.entries(childEnv())) if (value !== undefined) env[key] = value;
+    for (const [key, value] of Object.entries(childEnv({ ...extraEnv }))) if (value !== undefined) env[key] = value;
     const client = new Client({ name: 'domain-acceptance', version: '0.0.0' });
     await client.connect(new StdioClientTransport({ command: process.execPath, args: [CLI_BIN], cwd: this.dir, env, stderr: 'ignore' }));
     return new McpSession(client);
@@ -218,10 +253,26 @@ export class SampleWorkspace {
 export class McpSession {
   constructor(private readonly client: Client) {}
 
-  /** Calls a tool and returns the parsed JSON text of its response. */
+  /**
+   * Calls a tool and returns the parsed JSON of the last text content of its response: a staleness warning comes
+   * as an earlier text item and is skipped.
+   */
   async call(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const response = (await this.client.callTool({ name, arguments: args })) as { content: { type: string; text: string }[] };
-    return JSON.parse(response.content[0]!.text) as Record<string, unknown>;
+    const response = (await this.client.callTool({ name, arguments: args })) as { content: { type: string; text?: string }[] };
+    const texts = response.content.filter((item) => item.type === 'text' && typeof item.text === 'string');
+    const last = texts[texts.length - 1];
+    if (last === undefined) throw new Error(`${name} returned no text content`);
+    return JSON.parse(last.text!) as Record<string, unknown>;
+  }
+
+  /** The names of the tools the server lists. */
+  async listTools(): Promise<string[]> {
+    return (await this.listToolDefinitions()).map((tool) => tool.name);
+  }
+
+  /** The tools the server lists with their input schemas. */
+  async listToolDefinitions(): Promise<readonly { name: string; inputSchema: Record<string, unknown> }[]> {
+    return (await this.client.listTools()).tools.map((tool) => ({ name: tool.name, inputSchema: tool.inputSchema as Record<string, unknown> }));
   }
 
   async close(): Promise<void> {

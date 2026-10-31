@@ -101,10 +101,11 @@ describe('formatJson', () => {
   });
 });
 
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { UpdateCommand } from '../update-command.js';
+import { UpdateCommand, defaultDiscoverInstalled } from '../update-command.js';
+import { getVersion } from '../cli-paths.js';
 import type { HttpsFetcher } from '../../core/update/registry-client.js';
 
 interface Captured {
@@ -511,5 +512,49 @@ describe('UpdateCommand', () => {
       expect(cap.capture.stdout).not.toMatch(/@ctxo\/lang-typescript@0\.7\.1/);
       expect(cap.capture.runs).toHaveLength(0);
     } finally { cap.restore(); rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe('defaultDiscoverInstalled', () => {
+  // Fake consumer project: package.json versions are current, but the plugin
+  // module still self-reports a stale hardcoded version (the 0.10.0 regression).
+  function makeInstalledProject(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'ctxo-update-installed-'));
+    writeFileSync(
+      join(dir, 'package.json'),
+      JSON.stringify({ name: 'fixture', devDependencies: { '@ctxo/cli': '^9.9.0', '@ctxo/lang-fake': '^1.2.3' } }),
+    );
+    const cliDir = join(dir, 'node_modules', '@ctxo', 'cli');
+    mkdirSync(cliDir, { recursive: true });
+    writeFileSync(join(cliDir, 'package.json'), JSON.stringify({ name: '@ctxo/cli', version: '9.9.0' }));
+    const pluginDir = join(dir, 'node_modules', '@ctxo', 'lang-fake');
+    mkdirSync(pluginDir, { recursive: true });
+    writeFileSync(
+      join(pluginDir, 'package.json'),
+      JSON.stringify({ name: '@ctxo/lang-fake', version: '1.2.3', type: 'module', main: 'index.js' }),
+    );
+    writeFileSync(
+      join(pluginDir, 'index.js'),
+      "export default { apiVersion: '1', id: 'fake', name: 'Fake', version: '0.7.0-alpha.0', extensions: ['.fake'], tier: 'syntax', createAdapter() { return {}; } };\n",
+    );
+    return dir;
+  }
+
+  it('reports versions from installed package.json, not the plugin self-report or running binary', async () => {
+    const dir = makeInstalledProject();
+    try {
+      const installed = await defaultDiscoverInstalled(dir);
+      expect(installed).toContainEqual({ name: '@ctxo/cli', version: '9.9.0' });
+      expect(installed).toContainEqual({ name: '@ctxo/lang-fake', version: '1.2.3' });
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it('--global compares the running binary for @ctxo/cli', async () => {
+    const dir = makeInstalledProject();
+    try {
+      const installed = await defaultDiscoverInstalled(dir, { global: true });
+      expect(installed).toContainEqual({ name: '@ctxo/cli', version: getVersion() });
+      expect(installed).toContainEqual({ name: '@ctxo/lang-fake', version: '1.2.3' });
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });

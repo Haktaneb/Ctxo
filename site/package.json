@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vitepress dev docs",
-    "build": "vitepress build docs",
+    "dev": "node scripts/copy-llms.mjs && vitepress dev docs",
+    "build": "node scripts/copy-llms.mjs && vitepress build docs",
     "preview": "vitepress preview docs",
     "postbuild": "node scripts/copy-to-pages.mjs"
   },

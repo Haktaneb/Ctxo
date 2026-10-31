@@ -49,6 +49,9 @@ CLAUDE.local.md
 _site/
 headers.tmp
 pages/docs/
+# Copied from the root llms.txt and llms-full.txt by site/scripts/copy-llms.mjs
+site/docs/public/llms.txt
+site/docs/public/llms-full.txt
 
 # Brainstorming specs / design docs (local only, not committed)
 docs/superpowers/

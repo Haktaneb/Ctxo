@@ -132,13 +132,38 @@ Two `named` keys are reserved:
 **Facts.** Implement `extractFacts` only if you can report `CodeFact`s
 (`FACT_KINDS`: `literal-comparison`, `normalization`, `retry-timeout`,
 `endpoint`; `line` is 0-based; `text` is one trimmed line of at most 200
-characters). The CLI calls it only when the host asked for facts.
+code points). The CLI calls it only when the host asked for facts
+(`capabilities.facts`: `index.facts: true`, or an installed `@ctxo/domain`
+whose registry file exists).
+
+- Return `[]` when you find nothing: the CLI then writes `facts: []`, which
+  tells `@ctxo/domain` that the file was analysed. Without `extractFacts` the
+  CLI writes no `facts` key, and `@ctxo/domain` runs its line-based text scan
+  on the file instead (`source: "text"`), so a plugin without detectors still
+  gets candidates, only less precise ones.
+- Read the detector lists from `ctx.config.facts` in `createAdapter`:
+  `{ trivialLiterals, normalizationMethods }` (`FactDetectorOptions`), set by
+  the host only with a fact request, else `config` is `{}`. Fall back per field
+  to the defaults: `[0, 1, -1, null, true, false, ""]` and the spec's
+  normalization list. The object and its lists are deep-frozen and shared by
+  every plugin of the run: read them, never mutate them.
+- Warn and continue: when fact extraction fails for a file, write a warning
+  to stderr and return `[]`, as the official plugins do. If `extractFacts`
+  throws, the CLI reports the failure and writes no `facts` key for the file.
+- Follow the shared rules of the official plugins (their `src/facts/`
+  modules) and test against `packages/plugin-api/conformance/fact-vectors.json`
+  (shipped in the npm package as
+  `node_modules/@ctxo/plugin-api/conformance/fact-vectors.json`), so your facts
+  and fingerprints agree with the other languages. A fact
+  belongs to its innermost declaration's symbol; code outside every
+  declaration belongs to `<file>::<basename>::variable`. At most 500 facts per
+  file.
 
 **Capabilities.** `createAdapter` receives `ctx.capabilities` on v2 cores:
 
 ```ts
 export interface PluginCapabilities {
-  readonly facts?: boolean;         // index.facts: true, so extractFacts is called
+  readonly facts?: boolean;         // index.facts: true or @ctxo/domain with a registry, so extractFacts is called
   readonly sqlCallSites?: boolean;  // a plugin for .sql is installed
 }
 ```

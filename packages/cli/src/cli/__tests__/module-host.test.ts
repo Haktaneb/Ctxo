@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join, parse } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { createModuleHost } from '../module-host.js';
 import { getVersion } from '../cli-paths.js';
+import { DATA_RESOURCE_KINDS } from '@ctxo/plugin-api';
 import { TEST_FRAMEWORK_ANNOTATIONS } from '../../core/test-files/test-file-classifier.js';
 import { JsonIndexWriter } from '../../adapters/storage/json-index-writer.js';
 import { compareCodepoint } from '../../core/compare-codepoint.js';
@@ -126,6 +127,55 @@ describe('host services', () => {
     expect(services.testFrameworkAnnotations).toEqual(TEST_FRAMEWORK_ANNOTATIONS);
   });
 
+  it('dataResourceKinds is the plugin API constant', () => {
+    const { services } = createModuleHost({ projectRoot: tempDir(), mode: 'cli' });
+    expect(services.dataResourceKinds).toEqual(DATA_RESOURCE_KINDS);
+  });
+
+  it('createDocumentSearch returns BM25 hits over the documents', () => {
+    const { services } = createModuleHost({ projectRoot: tempDir(), mode: 'cli' });
+    const search = services.createDocumentSearch([
+      { id: 'rule:LEND-03', title: 'LEND-03 A member holds at most five loans', kind: 'rule', path: 'docs/domain/lending.md', text: 'The sixth loan is refused while five are open.' },
+      { id: 'term:lending/hold', title: 'Hold', kind: 'term', path: 'docs/domain/glossary.md', text: 'A reservation of a copy for a member.' },
+    ]);
+
+    const response = search.search('sixth loan');
+    expect(response.results[0]!.symbolId).toBe('rule:LEND-03');
+    expect(response.results[0]!.name).toBe('LEND-03 A member holds at most five loans');
+    expect(search.search('member', 1).results).toHaveLength(1);
+  });
+
+  it('createDocumentSearch hands out search only, not the engine', () => {
+    const { services } = createModuleHost({ projectRoot: tempDir(), mode: 'cli' });
+    const search = services.createDocumentSearch([
+      { id: 'term:lending/hold', title: 'Hold', kind: 'term', path: 'docs/domain/glossary.md', text: 'A reservation of a copy for a member.' },
+    ]);
+
+    expect(Object.keys(search)).toEqual(['search']);
+    const raw = search as unknown as Record<string, unknown>;
+    expect(raw['buildIndex']).toBeUndefined();
+    expect(raw['buildDocumentIndex']).toBeUndefined();
+    expect(raw['updateFile']).toBeUndefined();
+    expect(search.search('reservation').results[0]!.symbolId).toBe('term:lending/hold');
+  });
+
+  it('createDocumentSearch keeps the input order for equal scores', () => {
+    const { services } = createModuleHost({ projectRoot: tempDir(), mode: 'cli' });
+    const twin = (id: string) => ({ id, title: 'Hold', kind: 'term', path: 'docs/domain/glossary.md', text: 'A reservation of a copy.' });
+
+    const ab = services.createDocumentSearch([twin('a'), twin('b')]).search('reservation').results.map((r) => r.symbolId);
+    const ba = services.createDocumentSearch([twin('b'), twin('a')]).search('reservation').results.map((r) => r.symbolId);
+
+    expect(ab).toEqual(['a', 'b']);
+    expect(ba).toEqual(['b', 'a']);
+  });
+
+  it('splitIdentifier splits camelCase, PascalCase and snake_case', () => {
+    const { services } = createModuleHost({ projectRoot: tempDir(), mode: 'cli' });
+    expect(services.splitIdentifier('ILoanRepository')).toEqual(['I', 'Loan', 'Repository']);
+    expect(services.splitIdentifier('member_account_id')).toEqual(['member', 'account', 'id']);
+  });
+
   it('host services load config, match globs, classify test files and read the index', () => {
     const root = tempDir();
     const ctxoRoot = join(root, '.ctxo');
@@ -230,6 +280,41 @@ describe('host services', () => {
 
     expect(await services.readCoChangeWindow(notARepo, {})).toBeUndefined();
     expect(await services.readCoChangeWindow(missing, {})).toBeUndefined();
+  });
+
+  it('readCoChangeEntries returns the entries of co-changes.json once per pair and undefined for a missing or invalid file', () => {
+    const warn = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { services, ctxoRoot } = createModuleHost({ projectRoot: tempDir(), mode: 'cli' });
+      const matrixFile = join(ctxoRoot, 'index', 'co-changes.json');
+      const writeMatrix = (content: string, minute: number) => {
+        writeFileSync(matrixFile, content, 'utf-8');
+        // A fixed mtime per write, so two writes in one timer tick still look different to the reader.
+        const when = new Date(Date.UTC(2026, 0, 1, 0, minute));
+        utimesSync(matrixFile, when, when);
+      };
+
+      // No matrix yet.
+      expect(services.readCoChangeEntries(ctxoRoot)).toBeUndefined();
+
+      // One pair gives exactly one entry; flattening readCoChangeMap() would give it twice.
+      const pair = { file1: 'src/Lending/Loan.cs', file2: 'src/Members/Member.cs', sharedCommits: 3, frequency: 0.6 };
+      mkdirSync(join(ctxoRoot, 'index'), { recursive: true });
+      writeMatrix(JSON.stringify({ version: 1, timestamp: 1, entries: [pair] }), 1);
+      expect(services.readCoChangeEntries(ctxoRoot)).toEqual([pair]);
+
+      // Invalid content: undefined, never a throw.
+      writeMatrix('{ not json', 2);
+      expect(services.readCoChangeEntries(ctxoRoot)).toBeUndefined();
+      writeMatrix(JSON.stringify({ version: 2, timestamp: 1, entries: [pair] }), 3);
+      expect(services.readCoChangeEntries(ctxoRoot)).toBeUndefined();
+
+      // Gone again.
+      rmSync(matrixFile);
+      expect(services.readCoChangeEntries(ctxoRoot)).toBeUndefined();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('findGitRoot walks up to the repository root', () => {

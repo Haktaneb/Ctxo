@@ -6,7 +6,7 @@ import { Readable } from 'node:stream';
 vi.mock('node:child_process', () => ({ spawn: vi.fn() }));
 
 import { spawn } from 'node:child_process';
-import { buildAnalyzerArgs, runBatchIndex } from '../jdt-process.js';
+import { buildAnalyzerArgs, JdtKeepAlive, runBatchIndex } from '../jdt-process.js';
 
 const mockedSpawn = vi.mocked(spawn);
 
@@ -70,6 +70,92 @@ describe('buildAnalyzerArgs', () => {
     ]);
     expect(buildAnalyzerArgs('/app.jar', '/root', { sqlCallSites: false }).includes('--sql-call-sites')).toBe(false);
     expect(buildAnalyzerArgs('/app.jar', '/root', {}).includes('--sql-call-sites')).toBe(false);
+  });
+});
+
+const FACTS = { trivialLiterals: [0], normalizationMethods: ['trim', 'strings.ToLower'] };
+const FACTS_ARG = `--facts=${Buffer.from('{"normalizationMethods":["trim","strings.ToLower"]}', 'utf8').toString('base64')}`;
+
+/** A `--keep-alive` process that prints `ready` (or the given ready line) as soon as it is spawned. */
+function readyProcess(ready = '{"type":"ready"}'): void {
+  const proc = Object.assign(new EventEmitter(), {
+    stdout: new EventEmitter(),
+    stderr: new EventEmitter(),
+    stdin: { writable: true, end: vi.fn(), write: vi.fn() },
+    killed: false,
+    kill: vi.fn(),
+  });
+  mockedSpawn.mockImplementationOnce(() => {
+    queueMicrotask(() => proc.stdout.emit('data', Buffer.from(`${ready}\n`)));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return proc as any;
+  });
+}
+
+describe('fact options on the analyzer command line', () => {
+  beforeEach(() => {
+    mockedSpawn.mockReset();
+  });
+
+  it('buildAnalyzerArgs appends --facts= only with facts', () => {
+    // After the project root and every other flag: the analyzer reads it by prefix (Q9).
+    expect(buildAnalyzerArgs('/app.jar', '/root', { sqlCallSites: true, facts: FACTS })).toEqual([
+      '-jar', '/app.jar', '/root', '--sql-call-sites', FACTS_ARG,
+    ]);
+    expect(buildAnalyzerArgs('/app.jar', '/root', { facts: FACTS })).toEqual(['-jar', '/app.jar', '/root', FACTS_ARG]);
+    expect(buildAnalyzerArgs('/app.jar', '/root', {}).some((a) => a.startsWith('--facts'))).toBe(false);
+    expect(buildAnalyzerArgs('/app.jar', '/root', { sqlCallSites: true })).toEqual(['-jar', '/app.jar', '/root', '--sql-call-sites']);
+  });
+
+  it('the keep-alive gets the same argument', async () => {
+    readyProcess();
+    const withFacts = new JdtKeepAlive('java', '/app.jar', '/root', { sqlCallSites: true, facts: FACTS });
+    expect(await withFacts.start()).toBe(true);
+    await withFacts.shutdown();
+
+    readyProcess();
+    const without = new JdtKeepAlive('java', '/app.jar', '/root');
+    expect(await without.start()).toBe(true);
+    await without.shutdown();
+
+    expect(mockedSpawn.mock.calls.map((call) => call[1])).toEqual([
+      ['-jar', '/app.jar', '/root', '--keep-alive', '--sql-call-sites', FACTS_ARG],
+      ['-jar', '/app.jar', '/root', '--keep-alive'],
+    ]);
+  });
+
+  it('runBatchIndex reports facts only when the done line carries the marker', async () => {
+    fakeBatch('{"type":"done","totalFiles":0,"elapsed":"1ms","facts":true}\n');
+    expect((await runBatchIndex('java', '/app.jar', '/root', { facts: FACTS })).facts).toBe(true);
+    fakeBatch('{"type":"done","totalFiles":0,"elapsed":"1ms"}\n');
+    expect(await runBatchIndex('java', '/app.jar', '/root', { facts: FACTS })).not.toHaveProperty('facts');
+  });
+
+  it('the keep-alive reports facts only when the ready line carries the marker', async () => {
+    readyProcess('{"type":"ready","projectCount":1,"fileCount":2,"facts":true}');
+    const marked = new JdtKeepAlive('java', '/app.jar', '/root', { facts: FACTS });
+    expect(marked.reportsFacts()).toBe(false);
+    expect(await marked.start()).toBe(true);
+    expect(marked.reportsFacts()).toBe(true);
+    await marked.shutdown();
+
+    readyProcess();
+    const old = new JdtKeepAlive('java', '/app.jar', '/root', { facts: FACTS });
+    expect(await old.start()).toBe(true);
+    expect(old.reportsFacts()).toBe(false);
+    await old.shutdown();
+  });
+
+  it('runBatchIndex keeps the factEvidence records of a file line', async () => {
+    const evidence = { kind: 'binding', symbolId: 'src/A.java::MAX_RETRIES::variable', line: 3, name: 'MAX_RETRIES', value: '3' };
+    fakeBatch([
+      JSON.stringify({ type: 'file', file: 'src/A.java', symbols: [], edges: [], complexity: [], factEvidence: [evidence] }),
+      '{"type":"done","totalFiles":1,"elapsed":"1ms"}',
+      '',
+    ].join('\n'));
+    const result = await runBatchIndex('java', '/app.jar', '/root', { facts: FACTS });
+    expect(mockedSpawn.mock.calls[0]![1]).toEqual(['-jar', '/app.jar', '/root', FACTS_ARG]);
+    expect(result.files[0]!.factEvidence).toEqual([evidence]);
   });
 });
 

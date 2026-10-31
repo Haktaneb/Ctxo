@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Project } from 'ts-morph';
 import type { GraphEdge } from '@ctxo/plugin-api';
 import { TsMorphAdapter } from '../ts-morph-adapter.js';
+import { DEFAULT_FACT_OPTIONS } from '../facts/fact-options.js';
 import { readLendingSample, writeLendingSample } from './helpers/lending-sample.js';
 
 describe('lending sample decorators', () => {
@@ -136,4 +137,112 @@ describe('lending sample SQL call sites', () => {
       rmSync(tmp, { recursive: true, force: true });
     }
   });
+});
+
+describe('lending sample facts', () => {
+  const RULES = 'src/facts/loan-rules.ts';
+  const GOLDEN = join(import.meta.dirname, 'fixtures', 'lending-sample-facts-off.golden.json');
+  const projectFiles = (adapter: TsMorphAdapter): unknown[] =>
+    (adapter as unknown as { project: Project }).project.getSourceFiles();
+
+  it('a run with only loan-rules.ts preloaded gives the same facts', async () => {
+    const files = readLendingSample();
+    const source = files.get(RULES)!;
+    const full = new TsMorphAdapter({ facts: DEFAULT_FACT_OPTIONS });
+    full.loadProjectSources(files);
+    const expected = await full.extractFacts(RULES, source);
+    expect(expected.length).toBeGreaterThan(0);
+
+    const tmp = mkdtempSync(join(tmpdir(), 'ctxo-lending-facts-'));
+    try {
+      writeLendingSample(tmp);
+      const partial = new TsMorphAdapter({ facts: DEFAULT_FACT_OPTIONS, projectRoot: tmp });
+      partial.loadProjectSources(new Map([[RULES, source]]));
+      expect(await partial.extractFacts(RULES, source)).toEqual(expected);
+
+      const watch = new TsMorphAdapter({ facts: DEFAULT_FACT_OPTIONS, projectRoot: tmp });
+      expect(await watch.extractFacts(RULES, source)).toEqual(expected);
+      expect(projectFiles(watch)).toEqual([]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('a run with only http.ts and no projectRoot still traces express through the import', async () => {
+    const file = 'src/facts/http.ts';
+    const source = readLendingSample().get(file)!;
+    const watch = new TsMorphAdapter({ facts: DEFAULT_FACT_OPTIONS });
+    expect((await watch.extractFacts(file, source)).map((f) => f.text)).toEqual(['GET /holds/:id']);
+  });
+
+  it('without facts extractFacts returns [] and leaves the project as it was', async () => {
+    const files = readLendingSample();
+    const adapter = new TsMorphAdapter();
+    expect(adapter.facts).toBeUndefined();
+    expect(await adapter.extractFacts(RULES, files.get(RULES)!)).toEqual([]);
+    expect(projectFiles(adapter)).toEqual([]);
+  });
+
+  it('with facts off or on, symbols, complexity and edges of the pre-facts sample equal the tip golden', async () => {
+    const golden = JSON.parse(readFileSync(GOLDEN, 'utf-8')) as Record<string, Record<string, unknown>>;
+    const files = new Map([...readLendingSample()].filter(([path]) => Object.prototype.hasOwnProperty.call(golden['default'], path)));
+    expect([...files.keys()]).toEqual(Object.keys(golden['default']!));
+
+    // CTXO_UPDATE_GOLDEN=1 rewrites the golden from the facts-off run (the same file set), then compares as usual.
+    if (process.env['CTXO_UPDATE_GOLDEN'] === '1') {
+      const updated: Record<string, unknown> = {};
+      for (const sqlCallSites of [false, true]) {
+        const adapter = new TsMorphAdapter({ sqlCallSites });
+        const perFile: Record<string, { symbols: unknown; complexity: unknown; edges?: unknown }> = {};
+        for (const [path, source] of files) {
+          perFile[path] = { symbols: await adapter.extractSymbols(path, source), complexity: await adapter.extractComplexity(path, source) };
+        }
+        adapter.loadProjectSources(files);
+        for (const [path, source] of files) perFile[path]!.edges = await adapter.extractEdges(path, source);
+        adapter.clearProjectSources();
+        updated[sqlCallSites ? 'sqlCallSites' : 'default'] = perFile;
+      }
+      writeFileSync(GOLDEN, `${JSON.stringify(updated, null, 2)}\n`, 'utf-8');
+      golden['default'] = updated['default'] as Record<string, unknown>;
+      golden['sqlCallSites'] = updated['sqlCallSites'] as Record<string, unknown>;
+    }
+
+    for (const facts of [undefined, DEFAULT_FACT_OPTIONS]) {
+      for (const sqlCallSites of [false, true]) {
+        const adapter = new TsMorphAdapter({ sqlCallSites, ...(facts ? { facts } : {}) });
+        const perFile: Record<string, { symbols: unknown; complexity: unknown; edges?: unknown }> = {};
+        for (const [path, source] of files) {
+          perFile[path] = { symbols: await adapter.extractSymbols(path, source), complexity: await adapter.extractComplexity(path, source) };
+        }
+        adapter.loadProjectSources(files);
+        for (const [path, source] of files) perFile[path]!.edges = await adapter.extractEdges(path, source);
+        adapter.clearProjectSources();
+        expect(JSON.stringify(perFile, null, 2)).toBe(JSON.stringify(golden[sqlCallSites ? 'sqlCallSites' : 'default'], null, 2));
+      }
+    }
+  });
+
+  it('with the whole sample preloaded (fact fixtures included), the earlier files still equal the tip golden', async () => {
+    const golden = JSON.parse(readFileSync(GOLDEN, 'utf-8')) as Record<string, Record<string, unknown>>;
+    const all = readLendingSample();
+    const earlier = Object.keys(golden['default']!);
+    expect(all.size).toBeGreaterThan(earlier.length);
+
+    for (const facts of [undefined, DEFAULT_FACT_OPTIONS]) {
+      for (const sqlCallSites of [false, true]) {
+        const adapter = new TsMorphAdapter({ sqlCallSites, ...(facts ? { facts } : {}) });
+        const perFile: Record<string, { symbols: unknown; complexity: unknown; edges?: unknown }> = {};
+        for (const [path, source] of all) {
+          perFile[path] = { symbols: await adapter.extractSymbols(path, source), complexity: await adapter.extractComplexity(path, source) };
+        }
+        // As ctxo index runs it: edges, then facts, both while every file is preloaded.
+        adapter.loadProjectSources(all);
+        for (const [path, source] of all) perFile[path]!.edges = await adapter.extractEdges(path, source);
+        for (const [path, source] of all) await adapter.extractFacts(path, source);
+        adapter.clearProjectSources();
+        const earlierOnly = Object.fromEntries(earlier.map((path) => [path, perFile[path]]));
+        expect(JSON.stringify(earlierOnly, null, 2)).toBe(JSON.stringify(golden[sqlCallSites ? 'sqlCallSites' : 'default'], null, 2));
+      }
+    }
+  }, 60_000);
 });

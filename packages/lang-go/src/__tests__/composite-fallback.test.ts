@@ -8,6 +8,7 @@ vi.mock('../analyzer/analyzer-process.js', async (importOriginal) => ({
 import { runBatchAnalyze } from '../analyzer/analyzer-process.js';
 import { GoAnalyzerAdapter } from '../analyzer/analyzer-adapter.js';
 import { GoCompositeAdapter } from '../composite-adapter.js';
+import { DEFAULT_FACT_OPTIONS } from '../facts/fact-options.js';
 
 const mockedRun = vi.mocked(runBatchAnalyze);
 
@@ -63,5 +64,28 @@ describe('GoCompositeAdapter - failed analyzer run', () => {
 
     expect(symbols.map((s) => s.symbolId)).toEqual(['loans/close.go::Close::function']);
     expect(composite.getTier()).toBe('full');
+  });
+});
+
+describe('GoCompositeAdapter - fact extraction failure (B-M1)', () => {
+  it('an internal failure is warned on stderr and gives [] (warn-and-continue)', async () => {
+    const composite = new GoCompositeAdapter({ facts: DEFAULT_FACT_OPTIONS });
+    const treeSitter = (composite as unknown as { treeSitter: { parse(source: string): unknown } }).treeSitter;
+    vi.spyOn(treeSitter, 'parse').mockImplementation(() => {
+      throw new RangeError('Maximum call stack size exceeded');
+    });
+    const writes: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: string | Uint8Array) => {
+      writes.push(String(chunk));
+      return true;
+    });
+    let facts: unknown;
+    try {
+      facts = await composite.extractFacts('loans/close.go', SOURCE);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(facts).toEqual([]);
+    expect(writes.join('')).toContain('[ctxo:lang-go] Fact extraction failed for loans/close.go: Maximum call stack size exceeded');
   });
 });

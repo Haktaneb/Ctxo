@@ -439,7 +439,7 @@
   - `cochange.include: ["**/*.sql"]`.
 
   Run `node <worktree>/packages/cli/dist/index.js index`. Expected: success.
-- [ ] **Step 2:** Run the oracle in the clone with its output in the session scratchpad. Map Ctxo's file pairs to the oracle's units with a scratchpad-only script. Compare `commitsUsed` (oracle 970), `massSkipped` (oracle 3) and unit-pair shared counts. Expected: equal, or every difference explained.
+- [ ] **Step 2:** Run the oracle in the clone with its output in the session scratchpad. Map Ctxo's file pairs to the oracle's units with a scratchpad-only script. Compare `commitsUsed`, `massSkipped` and unit-pair shared counts. Expected: equal, or every difference explained.
 - [ ] **Step 3:** Measure the dev build, never the globally installed released ctxo (it predates `--commit` and the v2 hook, so it would write the old hook and run the old code).
   - Install the v2 hook in the clone only, with the dev build: `node <worktree>/packages/cli/dist/index.js init --tools claude-code -y`.
   - Make a `ctxo` shim: a script named `ctxo` in a scratchpad folder (for example `<scratchpad>/ctxo-shim/ctxo`, `#!/bin/sh` followed by `exec node "<worktree>/packages/cli/dist/index.js" "$@"`, plus a `ctxo.cmd` calling the same on Windows). Put that folder in front of PATH for every command below that commits or runs the hook, and check `command -v ctxo` resolves to the shim, so the hook's `ctxo index --commit HEAD` runs the dev build.

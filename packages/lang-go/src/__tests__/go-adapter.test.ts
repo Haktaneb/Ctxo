@@ -179,6 +179,52 @@ func (s Svc) Run() {}
     expect(method!.kind).toBe('method');
   });
 
+  it('drops one type parameter from a generic receiver, as the analyzer does', async () => {
+    const source = `package main
+
+type List[T any] struct{ items []T }
+
+func (l *List[T]) Get(i int) T {
+	if i > 0 {
+		return l.items[i]
+	}
+	return l.items[0]
+}
+`;
+    const symbols = await adapter.extractSymbols('cmd/list.go', source);
+    expect(symbols.filter((s) => s.kind === 'method').map((s) => s.symbolId)).toEqual(['cmd/list.go::List.Get::method']);
+    const metrics = await adapter.extractComplexity('cmd/list.go', source);
+    expect(metrics.find((m) => m.symbolId === 'cmd/list.go::List.Get::method')?.cyclomatic).toBe(2);
+  });
+
+  it('drops several type parameters from a generic receiver, pointer or value', async () => {
+    const source = `package main
+
+type Pair[K comparable, V any] struct {
+	key K
+	val V
+}
+
+func (p Pair[K, V]) Key() K { return p.key }
+
+func (p *Pair[K, V]) Set(v V) { p.val = v }
+
+func (Pair[_, _]) Kind() string { return "pair" }
+`;
+    const symbols = await adapter.extractSymbols('cmd/pair.go', source);
+    expect(symbols.filter((s) => s.kind === 'method').map((s) => s.symbolId)).toEqual([
+      'cmd/pair.go::Pair.Key::method',
+      'cmd/pair.go::Pair.Set::method',
+      'cmd/pair.go::Pair.Kind::method',
+    ]);
+    const metrics = await adapter.extractComplexity('cmd/pair.go', source);
+    expect(metrics.map((m) => m.symbolId).filter((id) => id.endsWith('::method'))).toEqual([
+      'cmd/pair.go::Pair.Key::method',
+      'cmd/pair.go::Pair.Set::method',
+      'cmd/pair.go::Pair.Kind::method',
+    ]);
+  });
+
   it('uses type_spec as first exported symbol for edge from', async () => {
     // File with no function — only an exported struct, then imports
     const source = `package models

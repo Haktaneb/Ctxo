@@ -1,11 +1,11 @@
 ---
 title: "MCP Tools Overview"
-description: "All 14 Ctxo MCP tools, grouped by purpose, with links to detailed specs and cross-cutting behavior."
+description: "All Ctxo MCP tools: 14 core tools, plus 4 with @ctxo/domain, grouped by purpose, with links to detailed specs and cross-cutting behavior."
 ---
 
 # MCP Tools Overview
 
-Ctxo ships **14 MCP tools** over stdio transport with **zero external network dependencies** — every tool reads from the local `.ctxo/` index and returns results in **under 500ms** on typical repositories. Tools are grouped into four categories matching the sidebar: Context & Search, Impact & Change, Structure & Deps, and History & Cleanup.
+Ctxo ships **14 core MCP tools, plus 4 with `@ctxo/domain`** over stdio transport with **zero external network dependencies**: every tool reads from the local `.ctxo/` index and returns results in **under 500ms** on typical repositories. Tools are grouped into the categories of the sidebar: Context & Search, Impact & Change, Structure & Deps, History & Cleanup, and Domain for the four tools of the opt-in `@ctxo/domain` package.
 
 See [the mandatory sequence](/mcp-tools/tool-selection-guide#modifying-existing-code) before editing.
 
@@ -43,9 +43,22 @@ See [the mandatory sequence](/mcp-tools/tool-selection-guide#modifying-existing-
 | [`get_why_context`](/mcp-tools/get-why-context) | Git commit intent + anti-pattern / revert warnings |
 | [`find_dead_code`](/mcp-tools/find-dead-code) | Unreachable symbols and files |
 
+## Domain (`@ctxo/domain`)
+
+Registered only when the opt-in [`@ctxo/domain`](/concepts/domain-knowledge) package is installed. They read the team's domain cards through the domain graph and the loop artifacts `ctxo index` builds; without a registry, a graph or the artifacts they answer `{ found: false, hint }`.
+
+| Tool | Purpose |
+| --- | --- |
+| [`get_domain_context`](/mcp-tools/get-domain-context) | The card of the named context that owns a symbol or file: terms, rules with their tests and code, contracts, decisions, open questions |
+| [`get_rule`](/mcp-tools/get-rule) | One rule by ID: its text, the tests and symbols linked to it with the source of each link, decisions and provenance |
+| [`find_shadow_specs`](/mcp-tools/find-shadow-specs) | The Deletion Test: business-looking code in a context that no rule pins yet (facts, owned data objects, rules without tests), with fingerprints and resolutions |
+| [`get_context_map`](/mcp-tools/get-context-map) | Every context with its metrics, the owner's rung, a suggested rung and the status of each criterion |
+
+With the package, [`get_ranked_context`](/mcp-tools/get-ranked-context#the-domain-scope) also takes `scope: "domain"`, and `get_blast_radius`, `get_context_for_task`, `get_why_context` and `get_pr_impact` gain additive domain fields.
+
 ## Cross-cutting Features
 
-All 14 tools share the same response envelope and behavior. See [Response Format](/mcp-tools/response-format) for full examples.
+All tools, the core 14 and the 4 domain tools, share the same response envelope and behavior. See [Response Format](/mcp-tools/response-format) for full examples.
 
 ### The `_meta` envelope
 

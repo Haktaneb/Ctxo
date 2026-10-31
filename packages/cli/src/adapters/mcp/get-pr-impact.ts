@@ -12,7 +12,7 @@ import type { ClusterLabelMasker } from '../../core/overlay/cluster-label-masker
 import { wrapResponse } from '../../core/response-envelope.js';
 import type { CommunitySnapshot } from '../../core/types.js';
 import type { ResponseEnricher } from '../../ports/i-ctxo-module.js';
-import { applyEnricher } from './enrich-payload.js';
+import { applyEnricherAsync } from './enrich-payload.js';
 
 export const InputSchema = z.object({
   since: z.string().optional().default('HEAD~1'),
@@ -66,8 +66,11 @@ export function handleGetPrImpact(
       // Step 1: Get changed files
       const changedPaths = await git.getChangedFiles(since);
       if (changedPaths.length === 0) {
+        // Same pipeline as the main path (enricher, envelope, masking), so module fields and `_meta` appear here too.
+        const empty: Record<string, unknown> = { since, changedFiles: 0, changedSymbols: 0, totalImpact: 0, riskLevel: 'low', files: [], summary: { confirmedTotal: 0, likelyTotal: 0, potentialTotal: 0, highRiskSymbols: [] } };
+        const enrichedEmpty = await applyEnricherAsync(enrich, empty, parsed.data, 'get_pr_impact');
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify({ since, changedFiles: 0, changedSymbols: 0, totalImpact: 0, riskLevel: 'low', files: [], summary: { confirmedTotal: 0, likelyTotal: 0, potentialTotal: 0, highRiskSymbols: [] } }) }],
+          content: [{ type: 'text' as const, text: masking.mask(JSON.stringify(wrapResponse(enrichedEmpty))) }],
         };
       }
 
@@ -235,7 +238,7 @@ export function handleGetPrImpact(
 
       const stalenessMeta = await buildSnapshotStaleness(storage, git);
       const extras = stalenessMeta ? { snapshotStaleness: stalenessMeta } : undefined;
-      const enriched = applyEnricher(enrich, body, parsed.data, 'get_pr_impact');
+      const enriched = await applyEnricherAsync(enrich, body, parsed.data, 'get_pr_impact');
       const payload = masking.mask(JSON.stringify(wrapResponse(enriched, extras)));
 
       const content: Array<{ type: 'text'; text: string }> = [];

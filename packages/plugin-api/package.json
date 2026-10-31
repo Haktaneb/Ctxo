@@ -1,6 +1,6 @@
 {
   "name": "@ctxo/plugin-api",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Plugin protocol contracts for Ctxo language plugins",
   "type": "module",
   "engines": {
@@ -17,6 +17,7 @@
   },
   "files": [
     "dist/",
+    "conformance/fact-vectors.json",
     "README.md"
   ],
   "scripts": {

@@ -70,6 +70,46 @@ public final class Dtos {
     public int nonConstant;
   }
 
+  /**
+   * One fact evidence record ({@code --facts=}, issue #156): {@code comparison}, {@code call},
+   * {@code binding} or {@code duration}. The plugin's shared finisher turns evidence into facts;
+   * the analyzer applies only the normalization patterns and the retry/timeout name rule. Members
+   * that do not apply to the kind stay null, so Gson omits them. {@code line} is 0-based.
+   */
+  public static final class Evidence {
+    public String kind;
+    public String symbolId;
+    public int line;
+    public String text, operator, literal, literalKind, method, qualifier, name, value, constructor, unit, amount, verb, route;
+    public Evidence(String kind, String symbolId, int line) { this.kind = kind; this.symbolId = symbolId; this.line = line; }
+  }
+
+  /** The {@code --facts=} value: standard base64 of the UTF-8 JSON {@code {"normalizationMethods":[...]}}. */
+  public static final class FactOptions {
+    public final List<String> normalizationMethods;
+    public FactOptions(List<String> normalizationMethods) { this.normalizationMethods = List.copyOf(normalizationMethods); }
+
+    /** The options, or null when the value is not base64 of such a JSON object (every entry a string). */
+    static FactOptions decode(String base64) {
+      if (base64 == null) return null;
+      try {
+        String json = new String(java.util.Base64.getDecoder().decode(base64), java.nio.charset.StandardCharsets.UTF_8);
+        com.google.gson.JsonElement root = com.google.gson.JsonParser.parseString(json);
+        if (!root.isJsonObject()) return null;
+        com.google.gson.JsonElement methods = root.getAsJsonObject().get("normalizationMethods");
+        if (methods == null || !methods.isJsonArray()) return null;
+        List<String> out = new ArrayList<>();
+        for (com.google.gson.JsonElement m : methods.getAsJsonArray()) {
+          if (!m.isJsonPrimitive() || !m.getAsJsonPrimitive().isString()) return null;
+          out.add(m.getAsString());
+        }
+        return new FactOptions(out);
+      } catch (RuntimeException e) {
+        return null;
+      }
+    }
+  }
+
   public static final class FileResult {
     public String type = "file";
     public String file;
@@ -81,6 +121,8 @@ public final class Dtos {
      * so Gson omits the key.
      */
     public List<SqlSite> sqlCallSites;
+    /** In walk order, at most {@link FactEvidence#MAX_EVIDENCE_PER_FILE}; null when the file has none or without {@code --facts=}. */
+    public List<Evidence> factEvidence;
     public FileResult(String file) { this.file = file; }
   }
 }

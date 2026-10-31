@@ -172,6 +172,16 @@ export default defineConfig({
                 { text: 'find_dead_code', link: '/mcp-tools/find-dead-code' },
               ],
             },
+            {
+              text: 'Domain (@ctxo/domain)',
+              collapsed: true,
+              items: [
+                { text: 'get_domain_context', link: '/mcp-tools/get-domain-context' },
+                { text: 'get_rule', link: '/mcp-tools/get-rule' },
+                { text: 'find_shadow_specs', link: '/mcp-tools/find-shadow-specs' },
+                { text: 'get_context_map', link: '/mcp-tools/get-context-map' },
+              ],
+            },
           ],
         },
         {
@@ -217,6 +227,7 @@ export default defineConfig({
             { text: 'Blast Radius — ctxo vs Manual', link: '/comparisons/blast-radius' },
             { text: 'Dead Code — ctxo vs knip/tsr/deadcode', link: '/comparisons/dead-code' },
             { text: 'Core Refactor - ctxo vs Coding Blind', link: '/comparisons/safe-refactor' },
+            { text: 'Table Split - ctxo vs Coding Blind', link: '/comparisons/table-impact' },
           ],
         },
         {

@@ -52,7 +52,7 @@ into `.continue/mcpServers/` and they work as-is.
 1. Reload the Continue extension (VS Code: `Continue: Reload` from the command
    palette).
 2. Open the **MCP** view in the Continue sidebar.
-3. `ctxo` should appear as a green-status server with 14 tools listed
+3. `ctxo` should appear as a green-status server with 14 tools (18 with `@ctxo/domain`) listed
    underneath, plus the `ctxo://status` resource.
 
 Smoke test, asked in the Continue chat:

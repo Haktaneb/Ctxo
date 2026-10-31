@@ -1,17 +1,23 @@
 import type { CtxoHost, FileIndex, IGitPort, ModuleCommand, ModuleCommandContext } from '@ctxo/cli/internal';
 import { GitChangeReader } from '../adapters/git-changes.js';
 import { loaderPlatforms, readExistingLoaderRules } from '../adapters/loader-rules-files.js';
+import { composeLoopInputs } from '../adapters/loop-inputs.js';
 import { readRegistry } from '../adapters/registry-reader.js';
-import { readRepoText, repoFileExists } from '../adapters/repo-files.js';
-import { readTestFiles } from '../adapters/test-file-source.js';
+import { readCardText, readRepoText, repoFileExists, repoIsFile } from '../adapters/repo-files.js';
+import { findOrphanShadowSpecs, readShadowSpecs } from '../adapters/shadow-specs-files.js';
 import { computeBoundaries } from '../core/boundaries.js';
-import { githubSlugs, parseCard, parseMarkdownHeadings, type ParsedCard } from '../core/card-parser.js';
-import { DEFAULT_DOMAIN_CONFIG, resolveDomainConfig, type BoundaryMode } from '../core/domain-config.js';
+import { githubSlugs, parseMarkdownHeadings, type ParsedCard } from '../core/card-parser.js';
+import { resolveDomainConfig, type BoundaryMode } from '../core/domain-config.js';
+import type { UnresolvedRef } from '../core/domain-graph.js';
+import { canonicalRuleId, indexGraph } from '../core/domain-graph-query.js';
 import { diffLoaderRules, renderLoaderRules, type LoaderRulesDiff } from '../core/loader-rules.js';
 import { createOwnership } from '../core/ownership.js';
-import { annotationRefs, resolveRuleRefs, scanTestText, type RuleRef, type ScanOptions } from '../core/rule-id-scan.js';
+import { registryHash } from '../core/registry.js';
+import type { RuleLinks, RuleRef } from '../core/rule-id-scan.js';
+import { candidatesOf } from '../core/shadow-candidates.js';
+import { applyResolutions } from '../core/shadow-specs-file.js';
 import { computeTouched, type TouchedReport } from '../core/touched.js';
-import { runVerifyChecks, type CheckOutcome, type Finding } from '../core/verify-checks.js';
+import { runVerifyChecks, type CheckOutcome, type Finding, type ShadowSpecsCheckInput } from '../core/verify-checks.js';
 
 const NAME = 'verify-domain';
 
@@ -25,7 +31,7 @@ const USAGE = [
   'Exit codes: 0 no errors, 1 errors, 2 missing index, git failure or an internal error.',
 ];
 
-const HELP_LINE = 'ctxo verify-domain        CI gate for the registry, cards, rule IDs and boundaries (--since, --boundaries, --json)';
+const HELP_LINE = 'ctxo verify-domain        CI gate for the registry, cards, rule IDs, boundaries and shadow-spec resolutions (--since, --boundaries, --json)';
 
 const GLYPH: Record<CheckOutcome['status'], string> = { pass: '✓', warn: '⚠', fail: '✗', skipped: '-' };
 
@@ -78,19 +84,6 @@ function printHuman(outcomes: readonly CheckOutcome[], errors: number, warnings:
     }
   }
   console.error(`[ctxo] verify-domain: ${errors} errors, ${warnings} warnings`);
-}
-
-function idRegExp(pattern: string): RegExp {
-  try {
-    return new RegExp(pattern);
-  } catch {
-    return new RegExp(DEFAULT_DOMAIN_CONFIG.rules.idPattern);
-  }
-}
-
-function prefixOf(id: string): string {
-  const dash = id.indexOf('-');
-  return dash < 0 ? id : id.slice(0, dash);
 }
 
 const MARKDOWN = /\.(?:md|markdown)$/i;
@@ -151,39 +144,63 @@ async function verify(host: CtxoHost, ctx: ModuleCommandContext, options: Option
     git = undefined;
   }
 
-  // Cards: only the ones the registry names, parsed once.
-  const cards = new Map<string, ParsedCard | undefined>();
-  for (const context of registry?.contexts ?? []) {
-    if (context.card === undefined || cards.has(context.card)) continue;
-    const text = readRepoText(projectRoot, context.card);
-    cards.set(context.card, text === undefined ? undefined : parseCard(text));
-  }
+  const warn = (message: string): void => services.createLogger('ctxo:domain').warn(message);
 
-  // K6: rule IDs in tests, by file text and by indexed annotations.
-  const ids = new Set<string>();
-  const prefixes = new Set<string>();
-  for (const card of cards.values()) {
-    for (const rule of card?.rules ?? []) {
-      ids.add(rule.id);
-      prefixes.add(prefixOf(rule.id));
-    }
-  }
-  for (const context of registry?.contexts ?? []) if (context.rulePrefix !== undefined) prefixes.add(context.rulePrefix);
-  const scanOptions: ScanOptions = {
-    rules: { ids, prefixes },
-    idPattern: idRegExp(config.rules.idPattern),
-    trackerPrefixes: new Set(config.rules.trackerPrefixes),
-    ruleTraitKeys: new Set(config.tests.ruleTraitKeys),
-  };
+  // Tracked files listed here, before the composition: a git failure is exit 2 in this CI gate, never a fallback.
   const tracked = (await git?.listTrackedFiles?.()) ?? indexedFiles;
-  const refs: RuleRef[] = [];
+
+  // A registry with problems runs check 1 only; the composition needs a valid registry and is never built for it.
+  let cards: ReadonlyMap<string, ParsedCard | undefined> = new Map();
+  let ruleLinks: RuleLinks = { links: new Map(), unknown: [] };
+  let cardRefProblems: readonly UnresolvedRef[] = [];
+  let codeRuleRefs: readonly RuleRef[] = [];
+  let shadowSpecs: ShadowSpecsCheckInput[] = [];
+  let orphanShadowSpecs: string[] = [];
+  let candidatesUnavailable: string | undefined;
   if (registry !== undefined) {
-    for (const test of readTestFiles(projectRoot, tracked, isTestFile, indices)) {
-      refs.push(...scanTestText(test.file, test.text, test.index, scanOptions));
-    }
-    for (const index of indices) if (isTestFile(index.file)) refs.push(...annotationRefs(index, scanOptions));
+    // The composition logs the candidate failure last, right before it returns without candidates.
+    let lastWarning: string | undefined;
+    // W10, E5: the index pass's composition over the current index and repo; every card, test file and production
+    // file is read once, and the stored graph and candidates are never read.
+    const loop = await composeLoopInputs(host, {
+      projectRoot,
+      indices,
+      isTestFile,
+      registry,
+      registryHash: registryHash(registryFile.text),
+      config,
+      ownership: createOwnership(registry, services.makeGlobMatcher),
+      files: indexedFiles,
+      tracked,
+      warn: (message) => {
+        lastWarning = message;
+        warn(message);
+      },
+    });
+    cards = loop.parsedCards;
+    ruleLinks = loop.testRefs;
+    codeRuleRefs = loop.codeRefs.unknown;
+    // F3 and F4: the unresolved Tests: and Code: references of the graph (ruleTestLinks, then ruleSymbolLinks).
+    cardRefProblems = loop.graph.unresolved;
+
+    // Check 12 (H6): the current shadow-specs.yaml files against the current candidates.
+    const contextIds = registry.contexts.map((context) => context.id);
+    const graphIndex = indexGraph(loop.graph);
+    const candidates = loop.candidates?.candidates;
+    if (candidates === undefined) candidatesUnavailable = lastWarning ?? 'the shadow-spec candidates could not be built.';
+    shadowSpecs = readShadowSpecs(projectRoot, registryFile.path, contextIds).map((spec) => {
+      const applied = applyResolutions(candidatesOf(candidates ?? [], spec.context), spec.parsed?.entries ?? [], (raw) =>
+        canonicalRuleId(graphIndex, raw),
+      );
+      return {
+        ...spec,
+        // Without candidates (a warning was logged) staleness is unknown: no entry is called stale.
+        stale: candidates === undefined ? [] : applied.stale,
+        unknownRules: applied.unknownRules,
+      };
+    });
+    orphanShadowSpecs = findOrphanShadowSpecs(projectRoot, registryFile.path, contextIds);
   }
-  const ruleLinks = resolveRuleRefs(refs, scanOptions);
 
   // Generated loader rules against disk, and the context map.
   const loaderDiff = registry
@@ -244,12 +261,18 @@ async function verify(host: CtxoHost, ctx: ModuleCommandContext, options: Option
     makeMatcher,
     cards,
     fileExists: (path) => repoFileExists(projectRoot, path),
+    isRepoFile: (path) => repoIsFile(projectRoot, path),
     headingSlugs: (path) => {
       if (!MARKDOWN.test(path)) return undefined;
-      const text = readRepoText(projectRoot, path);
+      const text = readCardText(projectRoot, path);
       return text === undefined ? undefined : githubSlugs(parseMarkdownHeadings(text));
     },
     ruleLinks,
+    cardRefProblems,
+    codeRuleRefs,
+    shadowSpecs,
+    orphanShadowSpecs,
+    ...(candidatesUnavailable !== undefined ? { candidatesUnavailable } : {}),
     loaderDiff,
     ...(contextMapText !== undefined ? { contextMapText } : {}),
     boundaries,

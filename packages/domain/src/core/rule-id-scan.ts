@@ -1,4 +1,6 @@
 import type { FileIndex, SymbolNode } from '@ctxo/cli/internal';
+import { DEFAULT_DOMAIN_CONFIG, type DomainConfig } from './domain-config.js';
+import type { DomainRegistry } from './registry.js';
 
 /** Card rule ids, and the prefixes of card ids and of registry `rulePrefix` values. */
 export interface RuleIndex {
@@ -17,6 +19,8 @@ export interface RuleRef {
   readonly kind: RuleRefKind;
   readonly testTitle?: string;
   readonly symbolId?: string;
+  /** The annotation name of 'annotation' and 'category' refs (Trait, Category, TestCategory, Tag). */
+  readonly annotation?: string;
 }
 
 export interface ScanOptions {
@@ -31,7 +35,8 @@ export interface RuleLinks {
   readonly unknown: readonly RuleRef[];
 }
 
-const RULE_COMMENT = /(?:\/\/|\/\*|#|--|^\s*\*)\s*rule:\s*([A-Za-z][A-Za-z0-9]*[-_]?\d+)(?![A-Za-z0-9])/gim;
+// P16: `[ \t]*`, never `\s*`, so a comment marker, `rule:` and its ID sit on one line. `\/\*+` covers `/** rule: X */`.
+const RULE_COMMENT = /(?:\/\/|\/\*+|#|--|^[ \t]*\*)[ \t]*rule:[ \t]*([A-Za-z][A-Za-z0-9]*[-_]?\d+)(?![A-Za-z0-9])/gim;
 const TEST_DECLARATION =
   /(?:\b(?:it|test|describe)(?:\.(?:only|skip))?\s*\(|\bt\.Run\s*\(|@DisplayName\s*\(|\[(?:Fact|Theory)\s*\(\s*DisplayName\s*=)\s*(['"`])((?:\\.|(?!\1).)*)\1/g;
 const SHAPED_TOKEN = /^([A-Za-z][A-Za-z0-9]*?)[-_]?(\d+)$/;
@@ -99,6 +104,68 @@ function innermostSymbol(index: FileIndex | undefined, line: number): SymbolNode
   return best;
 }
 
+/**
+ * How far below a `rule:` comment the symbol it introduces may start (F4). The window assumes attribute-inclusive
+ * spans, which is what Roslyn, tree-sitter and ts-morph report: a method under any number of stacked attributes or
+ * decorators starts at its first attribute, right below the comment.
+ */
+const LEADING_SYMBOL_LINES = 3;
+
+/**
+ * The symbol a `rule:` comment on the 1-based `line` belongs to (F4): the symbol starting within three lines below
+ * it (nearest start, then smallest span, then index order), else the innermost symbol spanning the line. A symbol
+ * below counts only when it sits inside the innermost symbol that spans the comment (or no symbol spans it), so a
+ * comment at the end of a short method body stays with that method and never links to the next declaration.
+ */
+export function leadingSymbol(index: FileIndex | undefined, line: number): string | undefined {
+  if (index === undefined) return undefined;
+  const spanning = innermostSymbol(index, line);
+  let best: SymbolNode | undefined;
+  for (const symbol of index.symbols) {
+    const start = symbol.startLine + 1;
+    if (start <= line || start > line + LEADING_SYMBOL_LINES) continue;
+    if (
+      spanning !== undefined &&
+      (symbol === spanning || symbol.startLine < spanning.startLine || symbol.endLine > spanning.endLine)
+    ) {
+      continue;
+    }
+    if (
+      best === undefined ||
+      symbol.startLine < best.startLine ||
+      (symbol.startLine === best.startLine && symbol.endLine - symbol.startLine < best.endLine - best.startLine)
+    ) {
+      best = symbol;
+    }
+  }
+  return (best ?? spanning)?.symbolId;
+}
+
+/** Scan options from the domain config, the card rule IDs and the registry `rulePrefix` values. */
+export function buildScanOptions(config: DomainConfig, ruleIds: Iterable<string>, registry: DomainRegistry | undefined): ScanOptions {
+  const ids = new Set<string>();
+  const prefixes = new Set<string>();
+  for (const id of ruleIds) {
+    ids.add(id);
+    prefixes.add(prefixOf(id));
+  }
+  for (const context of registry?.contexts ?? []) if (context.rulePrefix !== undefined) prefixes.add(context.rulePrefix);
+  return {
+    rules: { ids, prefixes },
+    idPattern: idRegExp(config.rules.idPattern),
+    trackerPrefixes: new Set(config.rules.trackerPrefixes),
+    ruleTraitKeys: new Set(config.tests.ruleTraitKeys),
+  };
+}
+
+function idRegExp(pattern: string): RegExp {
+  try {
+    return new RegExp(pattern);
+  } catch {
+    return new RegExp(DEFAULT_DOMAIN_CONFIG.rules.idPattern);
+  }
+}
+
 /** Structured references from `Trait` rule keys and category-like annotations, at the symbol's start line. */
 export function annotationRefs(index: FileIndex, options: ScanOptions): RuleRef[] {
   const variants = knownVariants(options.rules.prefixes);
@@ -118,7 +185,15 @@ export function annotationRefs(index: FileIndex, options: ScanOptions): RuleRef[
       if (kind === undefined || value === undefined) continue;
       const found = leadingId(value, variants, options);
       if (found === undefined) continue;
-      refs.push({ file: index.file, line: symbol.startLine + 1, raw: found.raw, id: found.id, kind, symbolId: symbol.symbolId });
+      refs.push({
+        file: index.file,
+        line: symbol.startLine + 1,
+        raw: found.raw,
+        id: found.id,
+        kind,
+        symbolId: symbol.symbolId,
+        annotation: annotation.name,
+      });
     }
   }
   return refs;
@@ -142,6 +217,34 @@ function lineOf(starts: readonly number[], offset: number): number {
   return lo + 1;
 }
 
+/** The `rule:` comments of a text: 1-based line, the raw ID and its normalised form. */
+function ruleCommentMatches(text: string, starts: readonly number[], options: ScanOptions): { line: number; raw: string; id: string }[] {
+  const out: { line: number; raw: string; id: string }[] = [];
+  for (const m of text.matchAll(new RegExp(RULE_COMMENT.source, RULE_COMMENT.flags))) {
+    const raw = m[1]!;
+    const id = normaliseShaped(raw, options);
+    if (id !== undefined) out.push({ line: lineOf(starts, m.index + m[0].length - raw.length), raw, id });
+  }
+  return out;
+}
+
+/**
+ * The `rule:` comments of a production (non-test) file (F4): 'rule-comment' refs only, each linked to the symbol
+ * `leadingSymbol` picks. Nothing else in a production file is a reference.
+ */
+export function scanRuleComments(file: string, text: string, index: FileIndex | undefined, options: ScanOptions): RuleRef[] {
+  const refs: RuleRef[] = [];
+  const seen = new Set<string>();
+  for (const { line, raw, id } of ruleCommentMatches(text, lineStarts(text), options)) {
+    const key = `${line}|${id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const symbolId = leadingSymbol(index, line);
+    refs.push(symbolId === undefined ? { file, line, raw, id, kind: 'rule-comment' } : { file, line, raw, id, kind: 'rule-comment', symbolId });
+  }
+  return refs.sort((a, b) => a.line - b.line || compare(a.id, b.id));
+}
+
 /** Scans one test file's text, plus its indexed annotations, for rule references. */
 export function scanTestText(file: string, text: string, index: FileIndex | undefined, options: ScanOptions): RuleRef[] {
   const starts = lineStarts(text);
@@ -153,15 +256,12 @@ export function scanTestText(file: string, text: string, index: FileIndex | unde
     const key = `${line}|${id}|${kind}`;
     if (seen.has(key)) return;
     seen.add(key);
-    const symbolId = innermostSymbol(index, line)?.symbolId;
+    // F4: a `rule:` comment introduces the declaration below it; every other ref sits inside its symbol.
+    const symbolId = kind === 'rule-comment' ? leadingSymbol(index, line) : innermostSymbol(index, line)?.symbolId;
     refs.push(symbolId === undefined ? { file, line, raw, id, kind } : { file, line, raw, id, kind, symbolId });
   };
 
-  for (const m of text.matchAll(new RegExp(RULE_COMMENT.source, RULE_COMMENT.flags))) {
-    const raw = m[1]!;
-    const id = normaliseShaped(raw, options);
-    if (id !== undefined) push(lineOf(starts, m.index + m[0].length - raw.length), raw, id, 'rule-comment');
-  }
+  for (const m of ruleCommentMatches(text, starts, options)) push(m.line, m.raw, m.id, 'rule-comment');
 
   for (const m of text.matchAll(new RegExp(TEST_DECLARATION.source, TEST_DECLARATION.flags))) {
     const title = m[2]!;
@@ -202,6 +302,54 @@ export function scanTestText(file: string, text: string, index: FileIndex | unde
   });
   out.sort((a, b) => a.line - b.line || compare(a.id, b.id) || KIND_ORDER[a.kind] - KIND_ORDER[b.kind]);
   return out;
+}
+
+/** A declared test title (`it`, `test`, `describe`, `t.Run`, `@DisplayName`, xUnit `DisplayName =`). */
+export interface TestTitle {
+  readonly file: string;
+  /** 1-based, like every line of this module (W16). */
+  readonly line: number;
+  readonly title: string;
+}
+
+/** Every test-declaration title of a text, in text order, with the 1-based line its declaration starts on. */
+export function scanTestTitles(file: string, text: string): TestTitle[] {
+  const starts = lineStarts(text);
+  const titles: TestTitle[] = [];
+  for (const m of text.matchAll(new RegExp(TEST_DECLARATION.source, TEST_DECLARATION.flags))) {
+    titles.push({ file, line: lineOf(starts, m.index), title: m[2]! });
+  }
+  return titles;
+}
+
+/** A tracked test file's text, with its index entry when it has one. */
+export interface TestText {
+  readonly file: string;
+  readonly text: string;
+  readonly index?: FileIndex;
+}
+
+/**
+ * P15: the one test scan of verify-domain and the index pass. Every test text goes through `scanTestText` (which
+ * folds in its annotations); indexed test files without a text add their `annotationRefs`.
+ */
+export function scanTestFiles(
+  texts: readonly TestText[],
+  indices: readonly FileIndex[],
+  isTestFile: (path: string) => boolean,
+  options: ScanOptions,
+): RuleRef[] {
+  const refs: RuleRef[] = [];
+  const scanned = new Set<string>();
+  for (const test of texts) {
+    scanned.add(test.file.replace(/\\/g, '/'));
+    refs.push(...scanTestText(test.file, test.text, test.index, options));
+  }
+  for (const index of indices) {
+    if (scanned.has(index.file.replace(/\\/g, '/')) || !isTestFile(index.file)) continue;
+    refs.push(...annotationRefs(index, options));
+  }
+  return refs;
 }
 
 function prefixOf(id: string): string {

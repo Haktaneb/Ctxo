@@ -216,6 +216,7 @@ describe('handleGetPrImpact', () => {
       readCoChangeMap: () => new Map([
         ['src/a.ts', [{ file1: 'src/a.ts', file2: 'src/c.ts', sharedCommits: 3, frequency: 0.6 }]],
       ]),
+      readEntries: () => undefined,
     };
     const git = createMockGit(['src/a.ts']);
     const handler = handleGetPrImpact(storage, git, new MaskingPipeline(), undefined, tempDir, undefined, port);
@@ -242,7 +243,7 @@ describe('handleGetPrImpact', () => {
     const strong = { file1: 'src/a.ts', file2: 'src/c.ts', sharedCommits: 6, frequency: 0.9 };
     const weak = { file1: 'src/a.ts', file2: 'src/b.ts', sharedCommits: 2, frequency: 0.3 };
     const shared = [weak, strong];
-    const port: ICoChangePort = { readCoChangeMap: () => new Map([['src/a.ts', shared]]) };
+    const port: ICoChangePort = { readCoChangeMap: () => new Map([['src/a.ts', shared]]), readEntries: () => undefined };
     const git = createMockGit(['src/a.ts']);
     const handler = handleGetPrImpact(storage, git, new MaskingPipeline(), undefined, tempDir, undefined, port);
     const result = await handler({ since: 'HEAD~1' });
@@ -385,5 +386,65 @@ describe('handleGetPrImpact', () => {
     expect(seen).toHaveLength(1);
     expect(seen[0]!.hadMeta).toBe(false);
     expect(seen[0]!.args).toMatchObject({ since: 'HEAD~1', maxFiles: 50 });
+  });
+
+  it('awaits an async enricher before the envelope', async () => {
+    const enrich: ResponseEnricher = async (payload) => ({ ...payload, enrichedBy: 'async', enrichedSecret: 'AKIAIOSFODNN7EXAMPLE' });
+    const git = createMockGit(['src/b.ts', 'src/c.ts']);
+    const handler = handleGetPrImpact(storage, git, new MaskingPipeline(), undefined, tempDir, undefined, undefined, enrich);
+
+    const result = await handler({ since: 'HEAD~1' });
+
+    const payload = JSON.parse(result.content[0]!.text);
+    expect(payload.enrichedBy).toBe('async');
+    expect(payload.enrichedSecret).toBe('[REDACTED:AWS_KEY]');
+    expect(payload._meta.totalItems).toBe(2);
+  });
+
+  it('an empty diff goes through the envelope like the main path: the core payload plus _meta, byte for byte', async () => {
+    const handler = handleGetPrImpact(storage, createMockGit([]), new MaskingPipeline(), undefined, tempDir);
+
+    const result = await handler({ since: 'main' });
+
+    const body = {
+      since: 'main',
+      changedFiles: 0,
+      changedSymbols: 0,
+      totalImpact: 0,
+      riskLevel: 'low',
+      files: [],
+      summary: { confirmedTotal: 0, likelyTotal: 0, potentialTotal: 0, highRiskSymbols: [] },
+    };
+    const meta = { totalItems: 0, returnedItems: 0, truncated: false, totalBytes: Buffer.byteLength(JSON.stringify(body), 'utf-8') };
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0]!.text).toBe(JSON.stringify({ ...body, _meta: meta }));
+  });
+
+  it('an empty diff runs the enricher before the envelope and masking', async () => {
+    const seen: Array<Readonly<Record<string, unknown>>> = [];
+    const enrich: ResponseEnricher = async (payload, args) => {
+      seen.push(args);
+      return { ...payload, enrichedBy: 'async', enrichedSecret: 'AKIAIOSFODNN7EXAMPLE', hadMeta: '_meta' in payload };
+    };
+    const handler = handleGetPrImpact(storage, createMockGit([]), new MaskingPipeline(), undefined, tempDir, undefined, undefined, enrich);
+
+    const result = await handler({});
+
+    const payload = JSON.parse(result.content[0]!.text);
+    expect(payload.changedFiles).toBe(0);
+    expect(payload.enrichedBy).toBe('async');
+    expect(payload.hadMeta).toBe(false);
+    expect(payload.enrichedSecret).toBe('[REDACTED:AWS_KEY]');
+    expect(payload._meta).toMatchObject({ totalItems: 0, truncated: false });
+    expect(seen).toEqual([{ since: 'HEAD~1', maxFiles: 50 }]);
+  });
+
+  it('without an enricher the main path keeps its fields and order', async () => {
+    const handler = handleGetPrImpact(storage, createMockGit(['src/b.ts']), new MaskingPipeline(), undefined, tempDir);
+
+    const result = await handler({ since: 'HEAD~1' });
+
+    const payload = JSON.parse(result.content[0]!.text);
+    expect(Object.keys(payload)).toEqual(['since', 'changedFiles', 'changedSymbols', 'totalImpact', 'riskLevel', 'files', 'summary', '_meta']);
   });
 });

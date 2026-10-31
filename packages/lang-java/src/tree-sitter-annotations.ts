@@ -9,13 +9,16 @@ import type { SymbolAnnotation } from '@ctxo/plugin-api';
  * other member to `named`; arrays flatten in `args` and join with `,` in `named`; `type` is reserved
  * and dropped (never counts toward the 10 entries); `member` is kept; the first of two same-named
  * members wins. The syntax tier keeps string literals only: text blocks, numbers, booleans, enum
- * constants, class literals, nested annotations and constant expressions are skipped.
+ * constants, class literals, nested annotations and constant expressions are skipped. One exception:
+ * a member named `method` also keeps enum constant names as written (`RequestMethod.POST`), as JDT
+ * gives them, so Spring `RequestMapping` verbs agree between the tiers.
  */
 const MAX_ANNOTATIONS = 20;
 const MAX_ENTRIES = 10;
 const MAX_VALUE_LENGTH = 200;
 const VALUE = 'value';
 const RESERVED_TYPE = 'type';
+const METHOD = 'method';
 
 const SIMPLE_ESCAPES: Record<string, string> = {
   b: '\b',
@@ -72,7 +75,7 @@ function toAnnotation(node: SyntaxNode): SymbolAnnotation | undefined {
         const valueNode = arg.childForFieldName('value');
         if (!key || !valueNode || seen.has(key)) continue;
         seen.add(key);
-        route(key, stringValues(valueNode));
+        route(key, key === METHOD ? methodValues(valueNode) : stringValues(valueNode));
       } else if (!seen.has(VALUE)) {
         seen.add(VALUE);
         route(VALUE, stringValues(arg));
@@ -98,6 +101,23 @@ function stringValues(node: SyntaxNode): string[] {
     return node.namedChildren.flatMap(stringValues);
   }
   return [];
+}
+
+/**
+ * Values of any annotation member named `method`, on any annotation (Spring
+ * `RequestMapping(method = RequestMethod.POST)` is the case it is for): string literals and enum
+ * constant names as written (`RequestMethod.POST`, `POST`), so the JDT and syntax tiers read the same
+ * verbs (PR 4, #156, Q11). Other members keep string values only.
+ */
+function methodValues(node: SyntaxNode): string[] {
+  if (node.type === 'identifier' || node.type === 'field_access') {
+    const name = node.text.replace(/\s+/g, '');
+    return /^[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*$/.test(name) ? [name] : [];
+  }
+  if (node.type === 'element_value_array_initializer') {
+    return node.namedChildren.flatMap(methodValues);
+  }
+  return stringValues(node);
 }
 
 function decode(raw: string): string {

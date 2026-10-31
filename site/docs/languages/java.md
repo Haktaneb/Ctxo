@@ -164,6 +164,29 @@ tier gives no SQL edges, and without `@ctxo/lang-sql` there are none.
 - **Counts:** non-constant SQL is counted in the analyzer's summary
   (`sql: { constant, nonConstant }`, debug log only), never guessed.
 
+## Facts
+
+When the host requests facts (`@ctxo/domain` installed with a registry file, or `index.facts: true`), the plugin reports
+`literal-comparison`, `normalization`, `retry-timeout` and `endpoint` facts into each file's index JSON
+(`facts: []` when it finds none), with the rules every official plugin shares (see [facts](https://github.com/alperhankendi/Ctxo/blob/master/docs/features/domain-knowledge.md#facts)). They
+feed [`find_shadow_specs`](/mcp-tools/find-shadow-specs). At most 500 facts per file, text at most 200 code
+points, and no `retry-timeout` facts in test files.
+
+| Kind | Java |
+| --- | --- |
+| `literal-comparison` | `if`, `while`, `do`, `for`, ternaries and `switch` labels (statements and expressions) |
+| `normalization` | `trim`, `toLowerCase`, `equalsIgnoreCase` and the other configured methods |
+| `retry-timeout` | Numeric constants bound to retry or timeout names (fields, locals, assignments, annotation members) and `Duration.of*(n)`, `Duration.of(n, ChronoUnit.X)` |
+| `endpoint` | Spring `@GetMapping`, `@PostMapping`, `@PutMapping`, `@DeleteMapping`, `@PatchMapping`, `@RequestMapping` (verbs from `method = RequestMethod.X`, the class mapping as prefix); JAX-RS `@GET` and friends with `@Path` on the class and the method |
+
+The JDT tier collects evidence behind `--facts=`; the tree-sitter tier gives the same facts and ids (it now indexes
+enum body members, interface constants, compact constructors and the members of anonymous and enum constant
+bodies, as JDT does). Text blocks are decoded as the JLS says. An `int` expression that overflows, and a comparison
+whose literal overflows `int`, give no fact. An analyzer JAR older than this release ignores `--facts=`: the plugin
+prints `analyzer too old for facts; run ctxo install java --full-tier` once, and until then the full tier gives only
+the endpoint facts it reads from annotations. In `ctxo watch` a save reads the keep-alive analyzer's result, with no
+second JVM. A syntax-tier fact failure warns on stderr and gives `facts: []`.
+
 ## Full tier and the analyzer package
 
 The full tier requires two things:

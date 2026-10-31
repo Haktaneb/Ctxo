@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { CtxoLanguagePlugin, PluginContext } from '@ctxo/plugin-api';
 
-const seen: Array<{ id: string; capabilities: PluginContext['capabilities'] }> = [];
+const seen: Array<{ id: string; capabilities: PluginContext['capabilities']; config: PluginContext['config'] }> = [];
 
 function fake(id: string, extensions: string[]): CtxoLanguagePlugin {
   return {
@@ -12,7 +12,7 @@ function fake(id: string, extensions: string[]): CtxoLanguagePlugin {
     extensions,
     tier: 'syntax',
     createAdapter: (ctx: PluginContext) => {
-      seen.push({ id, capabilities: ctx.capabilities });
+      seen.push({ id, capabilities: ctx.capabilities, config: ctx.config });
       return {
         extractSymbols: async () => [],
         extractEdges: async () => [],
@@ -34,6 +34,9 @@ vi.mock('../../adapters/language/plugin-discovery.js', () => ({
 }));
 
 import { loadPlugins } from '../plugin-loader.js';
+import type { FactDetectorOptions } from '../../ports/i-ctxo-module.js';
+
+const O: FactDetectorOptions = { trivialLiterals: [0, ''], normalizationMethods: ['trim'] };
 
 describe('loadPlugins capabilities', () => {
   it('loadPlugins hands the same capabilities to every createAdapter', async () => {
@@ -43,5 +46,17 @@ describe('loadPlugins capabilities', () => {
     expect(seen).toHaveLength(2);
     for (const s of seen) expect(s.capabilities).toEqual({ facts: true, sqlCallSites: true });
     expect(seen[0]!.capabilities).toBe(seen[1]!.capabilities);
+  });
+
+  it('loadPlugins hands config.facts to every plugin only with a fact request and options', async () => {
+    seen.length = 0;
+    await loadPlugins(process.cwd(), { facts: true, factOptions: O });
+    expect(seen.map((s) => s.config)).toEqual([{ facts: O }, { facts: O }]);
+
+    for (const options of [{ facts: false, factOptions: O }, { facts: true }]) {
+      seen.length = 0;
+      await loadPlugins(process.cwd(), options);
+      expect(seen.map((s) => s.config)).toEqual([{}, {}]);
+    }
   });
 });

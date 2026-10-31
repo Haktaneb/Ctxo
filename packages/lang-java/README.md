@@ -117,6 +117,26 @@ active, the analyzer reports constant SQL at known call sites and the plugin tur
   are not covered.
 - The tree-sitter tier gives no SQL edges, and without `@ctxo/lang-sql` there are none.
 
+## Facts
+
+When the host requests facts (`@ctxo/domain` installed, or `index.facts: true`), both tiers report
+`literal-comparison`, `normalization`, `retry-timeout` and `endpoint` facts with the shared rules
+(see [facts](https://github.com/alperhankendi/Ctxo/blob/master/docs/features/domain-knowledge.md#facts)):
+
+- The JDT tier collects evidence behind `--facts=`; the tree-sitter tier finds the same evidence
+  and gives the same facts and symbol ids.
+- Comparisons in `if`, `while`, `do`, `for`, ternaries and `switch` labels (statements and
+  expressions); `equalsIgnoreCase`, `trim` and the other configured normalization methods; numeric
+  constants bound to retry and timeout names, and `Duration.of*(n)` / `Duration.of(n, ChronoUnit.X)`.
+- Endpoints from Spring `@GetMapping`, `@PostMapping`, `@PutMapping`, `@DeleteMapping`,
+  `@PatchMapping` and `@RequestMapping` (verbs from `method = RequestMethod.X`, the class mapping as
+  prefix) and JAX-RS `@GET` and friends with `@Path` on the class and the method.
+- Text blocks are decoded as the JLS says (`stripIndent`, escapes); an `int` expression that
+  overflows, and a comparison whose literal overflows `int`, give no fact.
+- An analyzer JAR older than this release ignores `--facts=`; the plugin prints
+  `analyzer too old for facts; run ctxo install java --full-tier` once, and that run has no
+  full-tier facts.
+
 ## License
 
 MIT
